@@ -111,11 +111,9 @@ BUILTIN_CAPABILITIES = [
 ]
 
 
-async def seed() -> None:
-    await init_db()
-
+async def seed_operator_if_needed() -> None:
+    """Create the default admin operator if none exists. Called on startup."""
     async with async_session_factory() as db:
-        # Seed default operator
         result = await db.execute(select(Operator).where(Operator.username == "admin"))
         if result.scalar_one_or_none() is None:
             password_hash = bcrypt.hashpw(b"admin", bcrypt.gensalt()).decode()
@@ -123,7 +121,16 @@ async def seed() -> None:
                 username="admin", password_hash=password_hash, must_change_password=True
             )
             db.add(operator)
+            await db.commit()
             print("Created default operator: admin/admin (change password on first login)")
+
+
+async def seed() -> None:
+    await init_db()
+
+    async with async_session_factory() as db:
+        # Seed default operator
+        await seed_operator_if_needed()
 
         # Seed capabilities
         for cap_data in BUILTIN_CAPABILITIES:

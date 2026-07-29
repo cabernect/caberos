@@ -84,6 +84,7 @@ CaberOS is an open-source, local-first AI Agent Operating System. It hosts perso
 
 - **Baseline commit:** `c50e2a7` on `main` — spec, plans, design system, tickets.
 - **Ticket 01 (smoke test vertical slice):** IMPLEMENTED. All 23 tests pass, smoke script works end-to-end.
+- **Ticket 02 (dashboard chat with real model):** IMPLEMENTED. 37 tests pass. LiteLLM adapter, provider API, operator auth, chat channel (SSE), React frontend (login + agent list + conversation view with streaming). Frontend builds successfully.
 
 ## Build & test commands
 
@@ -104,6 +105,12 @@ cd backend && uv run python -m agentos.seed
 # Start dev server (backend on :8081)
 ./scripts/dev.sh
 
+# Frontend dev server (Vite on :5173, proxies /api to backend)
+cd frontend && npm run dev
+
+# Frontend build
+cd frontend && npm run build
+
 # Install/setup
 ./scripts/install.sh
 ```
@@ -119,12 +126,17 @@ backend/src/agentos/
 ├── secret_store.py      — Fernet encryption for provider keys
 ├── seed.py              — seed default operator + capabilities
 ├── pipeline.py          — D19's 13-step execution pipeline
-├── main.py              — FastAPI app entry point
+├── main.py              — FastAPI app entry point (routers, CORS, lifespan)
+├── auth.py              — operator auth (session+cookie, bcrypt, login/logout/me)
 ├── models/              — SQLAlchemy models (all v0.1 tables)
 ├── capabilities/        — capability registry + built-in tools
 │   ├── registry.py      — CapabilityDef, CapabilityRegistry
 │   ├── builtin.py       — register_builtin_capabilities()
 │   └── tools/           — file.read, file.write, file.list, shell.run
+├── api/                 — REST API routes (control plane)
+│   ├── agents.py        — list/get agents
+│   ├── chat.py          — dashboard chat channel (POST message, GET stream SSE, GET history)
+│   └── providers.py     — provider CRUD, model discovery, validation
 ├── sandbox/             — process-level sandbox
 │   ├── base.py          — SandboxBackend ABC, get_backend()
 │   ├── seatbelt.py      — macOS sandbox-exec
@@ -137,6 +149,7 @@ backend/src/agentos/
 └── harness/             — agent execution loop
     ├── context.py       — system prompt + tool schema assembly
     ├── scripted_model.py — ScriptedModel double (no real LLM needed)
+    ├── litellm_adapter.py — LiteLLM adapter (real model, D6/D39)
     └── loop.py          — Harness.run() — the agent loop
 ```
 

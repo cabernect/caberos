@@ -84,6 +84,7 @@ class Harness:
             # Step 8: Call model
             try:
                 response: ScriptedResponse = await self.model.complete(
+                    agent_model=agent_config.model,
                     messages=history,
                     tools=tool_schemas,
                 )

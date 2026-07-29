@@ -46,11 +46,14 @@ class ScriptedModel:
 
     async def complete(
         self,
-        messages: list[dict[str, str]],
+        agent_model: Any = None,
+        messages: list[dict[str, str]] | None = None,
         tools: list[dict[str, Any]] | None = None,
         **_kwargs: Any,
     ) -> ScriptedResponse:
         """Return the next scripted response."""
+        if messages is None:
+            messages = []
         if self._index >= len(self.responses):
             # Default: return a simple final answer
             return ScriptedResponse(content="Done.", tokens_in=10, tokens_out=1, cost=0.0)
