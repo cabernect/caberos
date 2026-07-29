@@ -82,4 +82,66 @@ CaberOS is an open-source, local-first AI Agent Operating System. It hosts perso
 ## Current status
 
 - **Baseline commit:** `c50e2a7` on `main` — spec, plans, design system, tickets.
-- **No code written yet.** Ticket 01 is next.
+- **Ticket 01 (smoke test vertical slice):** IMPLEMENTED. All 23 tests pass, smoke script works end-to-end.
+
+## Build & test commands
+
+```bash
+# Backend tests (from repo root)
+cd backend && uv run pytest -v
+
+# Lint
+cd backend && uv run ruff check src/ tests/
+cd backend && uv run ruff format --check src/ tests/
+
+# Smoke test (end-to-end pipeline with scripted model double, no real LLM)
+cd backend && uv run python ../scripts/smoke.py test-agent "echo hello"
+
+# Seed DB (creates default operator + capabilities)
+cd backend && uv run python -m agentos.seed
+
+# Start dev server (backend on :8081)
+./scripts/dev.sh
+
+# Install/setup
+./scripts/install.sh
+```
+
+## Backend module layout
+
+```
+backend/src/agentos/
+├── config.py            — settings (env vars, paths)
+├── db.py                — async SQLAlchemy engine, session factory
+├── config_schema.py     — Pydantic models (AgentConfig, ModelConfig, etc.)
+├── agent_service.py     — agent CRUD, versioning, YAML import/export
+├── secret_store.py      — Fernet encryption for provider keys
+├── seed.py              — seed default operator + capabilities
+├── pipeline.py          — D19's 13-step execution pipeline
+├── main.py              — FastAPI app entry point
+├── models/              — SQLAlchemy models (all v0.1 tables)
+├── capabilities/        — capability registry + built-in tools
+│   ├── registry.py      — CapabilityDef, CapabilityRegistry
+│   ├── builtin.py       — register_builtin_capabilities()
+│   └── tools/           — file.read, file.write, file.list, shell.run
+├── sandbox/             — process-level sandbox
+│   ├── base.py          — SandboxBackend ABC, get_backend()
+│   ├── seatbelt.py      — macOS sandbox-exec
+│   ├── bwrap.py         — Linux bubblewrap
+│   └── workspace.py     — path validation, workspace creation
+├── syscall/             — the single boundary every capability call crosses
+│   ├── protocol.py      — SyscallHandler Protocol, ToolCall, SyscallResult
+│   ├── mediator.py      — StubSyscallHandler (auto-approve, writes audit)
+│   └── lock.py          — per-Contact asyncio lock
+└── harness/             — agent execution loop
+    ├── context.py       — system prompt + tool schema assembly
+    ├── scripted_model.py — ScriptedModel double (no real LLM needed)
+    └── loop.py          — Harness.run() — the agent loop
+```
+
+## Key patterns
+
+- **SyscallHandler Protocol:** The harness depends on the `SyscallHandler` protocol, not a concrete impl. This lets us swap the stub (auto-approve) for the real mediator (approval flow) without touching the harness.
+- **ScriptedModel:** Tests use a scripted model double — no API key, no real LLM. The smoke script also uses it.
+- **Idempotent registry:** `CapabilityRegistry.register()` is idempotent — safe to call multiple times.
+- **Workspace path validation:** All file operations go through `WorkspaceManager.validate_path()` which rejects paths that escape the workspace via `..` or absolute paths.

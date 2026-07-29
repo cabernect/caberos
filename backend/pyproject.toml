@@ -1,0 +1,51 @@
+[project]
+name = "agentos"
+version = "0.1.0"
+description = "CaberOS — local-first AI Agent Operating System"
+readme = "README.md"
+authors = [
+    { name = "HoangPH25", email = "hoangph25@fpt.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "aiosqlite>=0.22.1",
+    "alembic>=1.18.5",
+    "bcrypt>=5.0.0",
+    "cryptography>=49.0.0",
+    "fastapi>=0.140.13",
+    "httpx>=0.28.1",
+    "litellm>=1.94.0",
+    "pydantic>=2.13.4",
+    "pydantic-ai>=2.20.0",
+    "pydantic-settings>=2.14.2",
+    "pyyaml>=6.0.3",
+    "sqlalchemy[asyncio]>=2.0.51",
+    "uvicorn[standard]>=0.51.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.9.6,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.16.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.agentos]
+# src layout: the package is at src/agentos
+

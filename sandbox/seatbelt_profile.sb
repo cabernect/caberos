@@ -1,0 +1,18 @@
+;; Seatbelt SBPL profile template (macOS)
+;; Used by sandbox-exec to isolate agent shell commands.
+;;
+;; Parameters:
+;;   {workspace} — the agent's workspace directory (read-write)
+;;
+;; This is a template; the actual profile is generated at runtime
+;; by backend/src/agentos/sandbox/seatbelt.py with the workspace path
+;; substituted in.
+
+(version 1)
+(deny file-write* (subpath "/"))
+(allow file-write* (subpath "{workspace}"))
+(deny file-read* (subpath "/Users"))
+(allow file-read* (subpath "{workspace}"))
+(allow file-read* (subpath "/usr/bin") (subpath "/bin") (subpath "/usr/lib") (subpath "/lib"))
+(allow process-exec (subpath "/bin") (subpath "/usr/bin"))
+(deny network*)
