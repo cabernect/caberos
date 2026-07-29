@@ -20,7 +20,7 @@ from .models.run import Message, Run
 from .models.session import Session
 from .sandbox.workspace import WorkspaceManager
 from .syscall.lock import contact_locks
-from .syscall.mediator import StubSyscallHandler
+from .syscall.mediator import SyscallHandler
 
 
 @dataclass
@@ -123,7 +123,7 @@ class Pipeline:
                     agent_config.workspace = str(workspace_path)
 
                 # Set up syscall handler
-                syscall_handler = StubSyscallHandler(
+                syscall_handler = SyscallHandler(
                     db=self.db,
                     workspace_path=str(workspace_path),
                 )

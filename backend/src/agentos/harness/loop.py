@@ -143,6 +143,19 @@ class Harness:
                             },
                         )
 
+                    # Emit tool_call running (before execution)
+                    if event_emitter:
+                        await self._emit(
+                            event_emitter,
+                            "tool_call",
+                            {
+                                "id": call.id,
+                                "capability": call.name,
+                                "args": call.args,
+                                "status": "running",
+                            },
+                        )
+
                     # Mediate
                     syscall_result: SyscallResult = await syscall_handler.mediate(
                         call=call,

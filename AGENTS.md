@@ -91,6 +91,7 @@ To test: start both servers (backend on :8081, frontend on :5173), then use Play
 - **Baseline commit:** `c50e2a7` on `main` — spec, plans, design system, tickets.
 - **Ticket 01 (smoke test vertical slice):** IMPLEMENTED. All 23 tests pass, smoke script works end-to-end.
 - **Ticket 02 (dashboard chat with real model):** IMPLEMENTED. 37 tests pass. LiteLLM adapter, provider API, operator auth, chat channel (SSE), React frontend (login + agent list + conversation view with streaming). Frontend builds successfully.
+- **Ticket 03 (file ops + tool call visibility):** IMPLEMENTED. 50 tests pass. Real syscall layer (subject injection, result reduction), tool call blocks (collapsible, state icons), thinking blocks (streaming, auto-collapse), per-turn cost badges. shadcn/ui components.
 
 ## Build & test commands
 

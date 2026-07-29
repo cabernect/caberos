@@ -1,13 +1,12 @@
 """Tests for operator authentication (D4)."""
 
-import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-pytest_asyncio_fixture = pytest_asyncio.fixture
-
 from agentos.db import get_db
-from agentos.main import app, _sessions
+from agentos.main import _sessions, app
+
+pytest_asyncio_fixture = pytest_asyncio.fixture
 
 
 @pytest_asyncio.fixture
@@ -34,14 +33,15 @@ async def client(db_engine):
 @pytest_asyncio.fixture
 async def seeded_client(client):
     """Client with a default operator seeded."""
-    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
     import bcrypt
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     factory = async_sessionmaker(client._transport.app.dependency_overrides[get_db].__wrapped__().__self__.__class__, class_=AsyncSession, expire_on_commit=False)  # noqa: E501
     # Simpler: just seed via the DB directly
     # Actually, let's seed via the API or DB
-    from agentos.models.operator import Operator
     import uuid
+
+    from agentos.models.operator import Operator
 
     async def seed_op():
         async with factory() as db:

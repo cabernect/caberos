@@ -5,6 +5,9 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { api, openStream } from "@/lib/api";
 import type { Message } from "@/lib/types";
+import { ToolCallBlock, type ToolCallData } from "@/components/ToolCallBlock";
+import { ThinkingBlock } from "@/components/ThinkingBlock";
+import { CostBadge } from "@/components/CostBadge";
 
 interface ChatMessage {
   id: string;
@@ -13,13 +16,30 @@ interface ChatMessage {
   created_at: string;
 }
 
+interface TurnCost {
+  turnNumber: number;
+  tokensIn: number;
+  tokensOut: number;
+  cost: number;
+}
+
+// A streaming response being built up from SSE events
+interface StreamingResponse {
+  thinking: string;
+  text: string;
+  toolCalls: Map<string, ToolCallData>;
+  toolCallOrder: string[];
+  thinkingStartTime: number | null;
+  turnCosts: TurnCost[];
+}
+
 export function Conversation() {
   const { id: agentId } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
-  const [streamingText, setStreamingText] = useState("");
+  const [streaming, setStreaming] = useState<StreamingResponse | null>(null);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -53,27 +73,86 @@ export function Conversation() {
 
     es.addEventListener("typing", () => {
       setIsStreaming(true);
+      setStreaming({
+        thinking: "",
+        text: "",
+        toolCalls: new Map(),
+        toolCallOrder: [],
+        thinkingStartTime: Date.now(),
+        turnCosts: [],
+      });
+    });
+
+    es.addEventListener("thinking", (e) => {
+      const data = JSON.parse(e.data);
+      setStreaming((prev) => {
+        if (!prev) return prev;
+        return { ...prev, thinking: prev.thinking + data.content };
+      });
     });
 
     es.addEventListener("token", (e) => {
       const data = JSON.parse(e.data);
-      setStreamingText((prev) => prev + data.content);
+      setStreaming((prev) => {
+        if (!prev) return prev;
+        return { ...prev, text: prev.text + data.content };
+      });
+    });
+
+    es.addEventListener("tool_call", (e) => {
+      const data = JSON.parse(e.data);
+      setStreaming((prev) => {
+        if (!prev) return prev;
+        const newToolCalls = new Map(prev.toolCalls);
+        newToolCalls.set(data.id, {
+          id: data.id,
+          capability: data.capability,
+          args: data.args,
+          status: data.status,
+          result: data.result,
+        });
+        const newOrder = prev.toolCallOrder.includes(data.id)
+          ? prev.toolCallOrder
+          : [...prev.toolCallOrder, data.id];
+        return { ...prev, toolCalls: newToolCalls, toolCallOrder: newOrder };
+      });
+    });
+
+    es.addEventListener("turn_complete", (e) => {
+      const data = JSON.parse(e.data);
+      setStreaming((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          turnCosts: [
+            ...prev.turnCosts,
+            {
+              turnNumber: data.turn_number,
+              tokensIn: data.tokens_in,
+              tokensOut: data.tokens_out,
+              cost: data.cost,
+            },
+          ],
+        };
+      });
     });
 
     es.addEventListener("message_complete", (e) => {
       const data = JSON.parse(e.data);
-      if (data.status === "completed" && streamingText) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: crypto.randomUUID(),
-            role: "assistant",
-            content: streamingText,
-            created_at: new Date().toISOString(),
-          },
-        ]);
-      }
-      setStreamingText("");
+      setStreaming((prev) => {
+        if (data.status === "completed" && prev && prev.text) {
+          setMessages((msgs) => [
+            ...msgs,
+            {
+              id: crypto.randomUUID(),
+              role: "assistant",
+              content: prev.text,
+              created_at: new Date().toISOString(),
+            },
+          ]);
+        }
+        return null;
+      });
       setIsStreaming(false);
     });
 
@@ -85,10 +164,9 @@ export function Conversation() {
       es.close();
       eventSourceRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentId]);
 
-  // Track scroll position to show/hide "jump to latest" button
+  // Track scroll position
   const handleScroll = () => {
     const container = scrollContainerRef.current;
     if (!container) return;
@@ -98,12 +176,12 @@ export function Conversation() {
     setShowJumpToLatest(!nearBottom);
   };
 
-  // Auto-scroll when new content arrives (only if user is at bottom)
+  // Auto-scroll
   useEffect(() => {
     if (autoScrollRef.current) {
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }
-  }, [messages, streamingText, isStreaming]);
+  }, [messages, streaming, isStreaming]);
 
   const handleJumpToLatest = () => {
     autoScrollRef.current = true;
@@ -116,7 +194,6 @@ export function Conversation() {
     const text = input.trim();
     setInput("");
 
-    // Add user message immediately
     setMessages((prev) => [
       ...prev,
       {
@@ -127,7 +204,7 @@ export function Conversation() {
       },
     ]);
 
-    setStreamingText("");
+    setStreaming(null);
     setIsStreaming(true);
     autoScrollRef.current = true;
 
@@ -158,11 +235,7 @@ export function Conversation() {
     <div className="flex h-screen flex-col bg-background">
       {/* Top bar */}
       <header className="flex items-center justify-between border-b border-border px-6 py-3">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => navigate("/")}
-        >
+        <Button variant="ghost" size="sm" onClick={() => navigate("/")}>
           <ArrowLeft className="h-4 w-4" />
           Back
         </Button>
@@ -183,24 +256,16 @@ export function Conversation() {
             <MessageBubble key={msg.id} message={msg} />
           ))}
 
-          {/* Streaming response */}
-          {isStreaming && (
-            <div className="max-w-[80%]">
-              {streamingText ? (
-                <div className="text-foreground">
-                  {streamingText}
-                  <span className="streaming-cursor" />
-                </div>
-              ) : (
-                <TypingIndicator />
-              )}
-            </div>
+          {/* Streaming response with tool calls and thinking */}
+          {isStreaming && streaming && (
+            <StreamingMessage streaming={streaming} />
           )}
+          {isStreaming && !streaming && <TypingIndicator />}
 
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Jump to latest button */}
+        {/* Jump to latest */}
         {showJumpToLatest && (
           <Button
             variant="secondary"
@@ -235,6 +300,58 @@ export function Conversation() {
           </Button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function StreamingMessage({ streaming }: { streaming: StreamingResponse }) {
+  const hasContent = streaming.text || streaming.toolCallOrder.length > 0;
+  const thinkingDuration = streaming.thinkingStartTime
+    ? Math.round((Date.now() - streaming.thinkingStartTime) / 1000)
+    : undefined;
+
+  return (
+    <div className="max-w-[80%] space-y-2">
+      {/* Thinking block (above response) */}
+      {(streaming.thinking || streaming.thinkingStartTime) && (
+        <ThinkingBlock
+          content={streaming.thinking}
+          isStreaming={!!streaming.thinking && !streaming.text}
+          durationSec={streaming.text ? thinkingDuration : undefined}
+        />
+      )}
+
+      {/* Tool call blocks (inline, in order) */}
+      {streaming.toolCallOrder.map((id) => {
+        const tc = streaming.toolCalls.get(id);
+        if (!tc) return null;
+        return <ToolCallBlock key={id} call={tc} />;
+      })}
+
+      {/* Streaming text */}
+      {streaming.text && (
+        <div className="text-foreground">
+          {streaming.text}
+          <span className="streaming-cursor" />
+        </div>
+      )}
+
+      {/* Typing indicator when no content yet */}
+      {!hasContent && !streaming.thinking && <TypingIndicator />}
+
+      {/* Per-turn cost badges */}
+      {streaming.turnCosts.length > 0 && (
+        <div className="flex flex-wrap gap-2 pt-1">
+          {streaming.turnCosts.map((tc) => (
+            <CostBadge
+              key={tc.turnNumber}
+              tokensIn={tc.tokensIn}
+              tokensOut={tc.tokensOut}
+              cost={tc.cost}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

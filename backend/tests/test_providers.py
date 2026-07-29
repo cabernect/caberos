@@ -1,13 +1,12 @@
 """Tests for provider management API (D39, D40)."""
 
-import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-pytest_asyncio_fixture = pytest_asyncio.fixture
-
 from agentos.db import get_db
 from agentos.main import app
+
+pytest_asyncio_fixture = pytest_asyncio.fixture
 
 
 @pytest_asyncio_fixture
