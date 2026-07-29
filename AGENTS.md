@@ -54,6 +54,12 @@ CaberOS is an open-source, local-first AI Agent Operating System. It hosts perso
 - **09** — Observability + spend
 - **10** — Testing hardening
 
+## Testing the frontend
+
+Use the **Playwright MCP server** (`mcp-playwright`) to test the frontend in a real browser. Available tools include: `browser_navigate`, `browser_click`, `browser_type`, `browser_snapshot`, `browser_console_messages`, `browser_evaluate`, etc. List tools with `mcp_list_tools` before calling.
+
+To test: start both servers (backend on :8081, frontend on :5173), then use Playwright to navigate, click, type, and verify the UI.
+
 ## How to implement
 
 1. **Read the ticket** (`.scratch/caberos-v0.1/issues/NN-*.md`) for what to build and acceptance criteria.

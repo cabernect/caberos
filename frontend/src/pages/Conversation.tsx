@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, Settings, Send } from "lucide-react";
-import { api, openStream } from "../lib/api";
-import type { Message } from "../lib/types";
+import { ArrowLeft, Settings, Send, ArrowDown } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { api, openStream } from "@/lib/api";
+import type { Message } from "@/lib/types";
 
 interface ChatMessage {
   id: string;
@@ -18,13 +20,17 @@ export function Conversation() {
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingText, setStreamingText] = useState("");
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const autoScrollRef = useRef(true);
 
   // Load history
   useEffect(() => {
     if (!agentId) return;
-    api.getHistory(agentId)
+    api
+      .getHistory(agentId)
       .then((msgs) => {
         setMessages(
           msgs.map((m: Message) => ({
@@ -82,10 +88,28 @@ export function Conversation() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentId]);
 
-  // Auto-scroll
+  // Track scroll position to show/hide "jump to latest" button
+  const handleScroll = () => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const nearBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight < 100;
+    autoScrollRef.current = nearBottom;
+    setShowJumpToLatest(!nearBottom);
+  };
+
+  // Auto-scroll when new content arrives (only if user is at bottom)
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (autoScrollRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
   }, [messages, streamingText, isStreaming]);
+
+  const handleJumpToLatest = () => {
+    autoScrollRef.current = true;
+    setShowJumpToLatest(false);
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
 
   const handleSend = async () => {
     if (!input.trim() || !agentId) return;
@@ -105,6 +129,7 @@ export function Conversation() {
 
     setStreamingText("");
     setIsStreaming(true);
+    autoScrollRef.current = true;
 
     try {
       await api.sendMessage(agentId, text);
@@ -130,26 +155,29 @@ export function Conversation() {
   };
 
   return (
-    <div className="flex h-screen flex-col bg-[var(--color-background)]">
+    <div className="flex h-screen flex-col bg-background">
       {/* Top bar */}
-      <header className="flex items-center justify-between border-b border-[var(--color-border)] px-6 py-3">
-        <button
+      <header className="flex items-center justify-between border-b border-border px-6 py-3">
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={() => navigate("/")}
-          className="flex cursor-pointer items-center gap-2 text-sm text-[var(--color-secondary)] transition hover:text-[var(--color-text)]"
         >
           <ArrowLeft className="h-4 w-4" />
           Back
-        </button>
-        <span className="text-lg font-semibold text-[var(--color-text)]">
-          {agentId}
-        </span>
-        <button className="cursor-pointer rounded-[var(--radius-md)] p-2 text-[var(--color-secondary)] transition hover:bg-[var(--color-surface)]">
+        </Button>
+        <span className="text-lg font-semibold text-foreground">{agentId}</span>
+        <Button variant="ghost" size="icon-lg">
           <Settings className="h-5 w-5" />
-        </button>
+        </Button>
       </header>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-6 py-8">
+      <div
+        ref={scrollContainerRef}
+        onScroll={handleScroll}
+        className="relative flex-1 overflow-y-auto px-6 py-8"
+      >
         <div className="mx-auto max-w-3xl space-y-4">
           {messages.map((msg) => (
             <MessageBubble key={msg.id} message={msg} />
@@ -159,7 +187,7 @@ export function Conversation() {
           {isStreaming && (
             <div className="max-w-[80%]">
               {streamingText ? (
-                <div className="text-[var(--color-text)]">
+                <div className="text-foreground">
                   {streamingText}
                   <span className="streaming-cursor" />
                 </div>
@@ -171,27 +199,40 @@ export function Conversation() {
 
           <div ref={messagesEndRef} />
         </div>
+
+        {/* Jump to latest button */}
+        {showJumpToLatest && (
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={handleJumpToLatest}
+            className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full shadow-lg"
+          >
+            <ArrowDown className="h-4 w-4" />
+            Jump to latest
+          </Button>
+        )}
       </div>
 
       {/* Chat input */}
-      <div className="border-t border-[var(--color-border)] px-6 py-4">
+      <div className="border-t border-border px-6 py-4">
         <div className="mx-auto flex max-w-3xl items-end gap-2">
-          <textarea
+          <Textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Ask your agent..."
             rows={1}
-            className="flex-1 resize-none rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3 text-[var(--color-text)] outline-none focus:border-[var(--color-cta)]"
-            style={{ minHeight: "48px", maxHeight: "200px" }}
+            className="min-h-[48px] max-h-[200px] resize-none"
           />
-          <button
+          <Button
             onClick={handleSend}
             disabled={!input.trim()}
-            className="flex h-12 w-12 cursor-pointer items-center justify-center rounded-[var(--radius-lg)] bg-[var(--color-cta)] text-white transition hover:opacity-90 disabled:opacity-50"
+            size="icon-lg"
+            className="h-12 w-12 shrink-0"
           >
             <Send className="h-5 w-5" />
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -202,7 +243,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
   if (message.role === "user") {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[80%] rounded-[var(--radius-lg)] bg-[var(--color-surface)] px-4 py-3 text-[var(--color-text)]">
+        <div className="max-w-[80%] rounded-lg bg-card px-4 py-3 text-foreground">
           {message.content}
         </div>
       </div>
@@ -211,7 +252,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
 
   if (message.role === "heartbeat") {
     return (
-      <div className="border-l-2 border-[var(--color-heartbeat)] pl-4 text-sm text-[var(--color-secondary)]">
+      <div className="border-l-2 border-[var(--color-heartbeat)] pl-4 text-sm text-muted-foreground">
         {message.content}
       </div>
     );
@@ -219,26 +260,22 @@ function MessageBubble({ message }: { message: ChatMessage }) {
 
   if (message.role === "system") {
     return (
-      <div className="text-center text-xs text-[var(--color-secondary)]">
+      <div className="text-center text-xs text-muted-foreground">
         {message.content}
       </div>
     );
   }
 
   // assistant
-  return (
-    <div className="max-w-[80%] text-[var(--color-text)]">
-      {message.content}
-    </div>
-  );
+  return <div className="max-w-[80%] text-foreground">{message.content}</div>;
 }
 
 function TypingIndicator() {
   return (
     <div className="flex gap-1 py-2">
-      <div className="typing-dot h-2 w-2 rounded-full bg-[var(--color-secondary)]" />
-      <div className="typing-dot h-2 w-2 rounded-full bg-[var(--color-secondary)]" />
-      <div className="typing-dot h-2 w-2 rounded-full bg-[var(--color-secondary)]" />
+      <div className="typing-dot h-2 w-2 rounded-full bg-muted-foreground" />
+      <div className="typing-dot h-2 w-2 rounded-full bg-muted-foreground" />
+      <div className="typing-dot h-2 w-2 rounded-full bg-muted-foreground" />
     </div>
   );
 }

@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Bot } from "lucide-react";
-import { api } from "../lib/api";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { api } from "@/lib/api";
 
 export function Login() {
   const [username, setUsername] = useState("admin");
@@ -25,52 +27,36 @@ export function Login() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[var(--color-background)]">
+    <div className="flex min-h-screen items-center justify-center bg-background">
       <div className="w-full max-w-sm space-y-6 p-8">
         <div className="flex flex-col items-center gap-3">
-          <div className="flex h-14 w-14 items-center justify-center rounded-[var(--radius-lg)] bg-[var(--color-surface)]">
-            <Bot className="h-7 w-7 text-[var(--color-cta)]" />
+          <div className="flex h-14 w-14 items-center justify-center rounded-lg bg-card">
+            <Bot className="h-7 w-7 text-primary" />
           </div>
-          <h1 className="text-[var(--text-2xl)] font-bold text-[var(--color-text)]">
-            CaberOS
-          </h1>
-          <p className="text-sm text-[var(--color-secondary)]">
-            Sign in to your agents
-          </p>
+          <h1 className="text-2xl font-bold text-foreground">CaberOS</h1>
+          <p className="text-sm text-muted-foreground">Sign in to your agents</p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <input
-              type="text"
-              placeholder="Username"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              className="w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3 text-[var(--color-text)] outline-none focus:border-[var(--color-cta)]"
-            />
-          </div>
-          <div>
-            <input
-              type="password"
-              placeholder="Password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3 text-[var(--color-text)] outline-none focus:border-[var(--color-cta)]"
-            />
-          </div>
-          {error && (
-            <p className="text-sm text-[var(--color-danger)]">{error}</p>
-          )}
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full cursor-pointer rounded-[var(--radius-md)] bg-[var(--color-cta)] px-4 py-3 font-medium text-white transition hover:opacity-90 disabled:opacity-50"
-          >
+          <Input
+            type="text"
+            placeholder="Username"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+          />
+          <Input
+            type="password"
+            placeholder="Password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+          {error && <p className="text-sm text-destructive">{error}</p>}
+          <Button type="submit" disabled={loading} className="w-full" size="lg">
             {loading ? "Signing in..." : "Sign in"}
-          </button>
+          </Button>
         </form>
 
-        <p className="text-center text-xs text-[var(--color-secondary)]">
+        <p className="text-center text-xs text-muted-foreground">
           Default: admin / admin
         </p>
       </div>

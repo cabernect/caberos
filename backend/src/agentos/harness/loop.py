@@ -82,12 +82,24 @@ class Harness:
             result.total_turns += 1
 
             # Step 8: Call model
+            # Use streaming if the adapter supports it (LiteLLMAdapter);
+            # fall back to non-streaming for ScriptedModel
             try:
-                response: ScriptedResponse = await self.model.complete(
-                    agent_model=agent_config.model,
-                    messages=history,
-                    tools=tool_schemas,
-                )
+                if hasattr(self.model, "complete_stream"):
+                    response = await self._call_streaming(
+                        agent_config, history, tool_schemas, event_emitter
+                    )
+                else:
+                    response: ScriptedResponse = await self.model.complete(
+                        agent_model=agent_config.model,
+                        messages=history,
+                        tools=tool_schemas,
+                    )
+                    # Emit thinking if present (non-streaming path)
+                    if response.thinking and event_emitter:
+                        await self._emit(
+                            event_emitter, "thinking", {"content": response.thinking}
+                        )
             except Exception as e:
                 result.status = "failed"
                 result.error = str(e)
@@ -103,10 +115,6 @@ class Harness:
                         },
                     )
                 return result
-
-            # Emit thinking if present
-            if response.thinking and event_emitter:
-                await self._emit(event_emitter, "thinking", {"content": response.thinking})
 
             # Accumulate tokens/cost
             result.tokens_in += response.tokens_in
@@ -210,10 +218,12 @@ class Harness:
             # No tool calls → this is the final answer
             result.final_answer = response.content
 
-            # Emit tokens for the final turn
+            # Emit turn_complete for the final turn
+            # (tokens were already streamed via _call_streaming if streaming)
             if event_emitter:
-                # Stream the final answer as token events
-                await self._emit(event_emitter, "token", {"content": response.content})
+                if not hasattr(self.model, "complete_stream"):
+                    # Non-streaming path: emit the full content as one token event
+                    await self._emit(event_emitter, "token", {"content": response.content})
                 await self._emit(
                     event_emitter,
                     "turn_complete",
@@ -260,3 +270,28 @@ class Harness:
         result = emitter(event_type, payload)
         if hasattr(result, "__await__"):
             await result
+
+    async def _call_streaming(
+        self,
+        agent_config: AgentConfig,
+        history: list[dict[str, str]],
+        tool_schemas: list[dict[str, Any]],
+        event_emitter: EventEmitter,
+    ) -> ScriptedResponse:
+        """Call the model with streaming, emitting token/thinking events as they arrive."""
+        response: ScriptedResponse | None = None
+        async for delta_type, content in self.model.complete_stream(
+            agent_model=agent_config.model,
+            messages=history,
+            tools=tool_schemas,
+        ):
+            if delta_type == "token" and event_emitter:
+                await self._emit(event_emitter, "token", {"content": content})
+            elif delta_type == "thinking" and event_emitter:
+                await self._emit(event_emitter, "thinking", {"content": content})
+            elif delta_type == "done":
+                response = content
+
+        if response is None:
+            raise RuntimeError("Streaming ended without a 'done' event")
+        return response

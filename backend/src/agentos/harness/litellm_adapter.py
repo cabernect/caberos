@@ -162,6 +162,144 @@ class LiteLLMAdapter:
             cost=cost,
         )
 
+    async def complete_stream(
+        self,
+        agent_model: ModelConfig | None = None,
+        messages: list[dict[str, str]] | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        **_kwargs: Any,
+    ):
+        """Call the model with streaming. Yields (delta_type, content) tuples.
+
+        delta_type is one of:
+            "token" — a chunk of output text
+            "thinking" — a chunk of reasoning text
+            "tool_call" — a complete tool call (accumulated from deltas)
+            "done" — final signal with usage/cost info
+
+        The final "done" event carries the full ScriptedResponse.
+        """
+        if agent_model is None:
+            raise ValueError("agent_model is required for LiteLLMAdapter")
+        if messages is None:
+            messages = []
+
+        provider = await self._load_provider(agent_model.provider_id)
+        model_str = f"{provider['type']}/{agent_model.name}"
+
+        kwargs: dict[str, Any] = {
+            "model": model_str,
+            "messages": messages,
+            "temperature": agent_model.temperature,
+            "stream": True,
+        }
+
+        if provider["api_key"]:
+            kwargs["api_key"] = provider["api_key"]
+        if provider["base_url"]:
+            kwargs["api_base"] = provider["base_url"]
+        if provider["org_id"]:
+            kwargs["organization"] = provider["org_id"]
+        kwargs.update(provider["extra_params"])
+
+        if agent_model.max_tokens:
+            kwargs["max_tokens"] = agent_model.max_tokens
+
+        if tools:
+            kwargs["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": t["name"],
+                        "description": t.get("description", ""),
+                        "parameters": t.get(
+                            "parameters", {"type": "object", "properties": {}}
+                        ),
+                    },
+                }
+                for t in tools
+            ]
+
+        # Call LiteLLM with streaming
+        stream = await litellm.acompletion(**kwargs)
+
+        full_content = ""
+        full_thinking = ""
+        tool_calls_map: dict[int, dict[str, Any]] = {}
+        tokens_in = 0
+        tokens_out = 0
+        cost = 0.0
+
+        async for chunk in stream:
+            if not chunk.choices:
+                # Usage info sometimes comes in a separate chunk
+                if hasattr(chunk, "usage") and chunk.usage:
+                    tokens_in = chunk.usage.prompt_tokens or 0
+                    tokens_out = chunk.usage.completion_tokens or 0
+                continue
+
+            delta = chunk.choices[0].delta
+
+            # Reasoning/thinking tokens (some models)
+            if hasattr(delta, "reasoning_content") and delta.reasoning_content:
+                full_thinking += delta.reasoning_content
+                yield ("thinking", delta.reasoning_content)
+
+            # Content tokens
+            if delta.content:
+                full_content += delta.content
+                yield ("token", delta.content)
+
+            # Tool call deltas (accumulated)
+            if delta.tool_calls:
+                for tc_delta in delta.tool_calls:
+                    idx = tc_delta.index or 0
+                    if idx not in tool_calls_map:
+                        tool_calls_map[idx] = {
+                            "id": tc_delta.id or str(uuid.uuid4()),
+                            "name": "",
+                            "args": "",
+                        }
+                    if tc_delta.function:
+                        if tc_delta.function.name:
+                            tool_calls_map[idx]["name"] = tc_delta.function.name
+                        if tc_delta.function.arguments:
+                            tool_calls_map[idx]["args"] += tc_delta.function.arguments
+
+        # Parse accumulated tool calls
+        tool_calls: list[dict[str, Any]] = []
+        for idx in sorted(tool_calls_map):
+            tc = tool_calls_map[idx]
+            args = {}
+            if tc["args"]:
+                try:
+                    args = json.loads(tc["args"])
+                except (json.JSONDecodeError, TypeError):
+                    args = {}
+            tool_calls.append({"id": tc["id"], "name": tc["name"], "args": args})
+
+        # Get cost from the stream's hidden params
+        try:
+            cost = float(stream.cost) if hasattr(stream, "cost") and stream.cost else 0.0
+        except (TypeError, ValueError):
+            cost = 0.0
+
+        # If we didn't get usage from streaming, estimate
+        if tokens_in == 0:
+            tokens_in = sum(len(m.get("content", "")) for m in messages) // 4
+        if tokens_out == 0:
+            tokens_out = len(full_content) // 4
+
+        final = ScriptedResponse(
+            tool_calls=tool_calls,
+            content=full_content,
+            thinking=full_thinking,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            cost=cost,
+        )
+        yield ("done", final)
+
     async def validate_model(self, provider_id: str, model_name: str) -> bool:
         """Cheap 1-token completion to validate the model config at save time."""
         provider = await self._load_provider(provider_id)
