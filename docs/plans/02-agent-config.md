@@ -9,7 +9,7 @@ Define the Pydantic models that validate agent configurations, implement YAML im
 - **D1** — Agents are configuration, not code
 - **D25** — Agent configuration lives in the database (version rows, active_version pointer, YAML for import/export)
 - **D8** — Contact has optional binding to an internal record
-- **D9** — One capability concept, five kinds (v0.1: tool, sub_agent, memory, connector_action)
+- **D9** — One capability concept, four kinds (v0.1: tool, sub_agent, memory, mcp_tool)
 - **D12** — Sub-agents: no channel, no session, no min_role fields
 - **Stories 1-11** — create, task, capabilities, scope, model, limits, versioning, diff, rollback, disable
 - **Stories 31-32** — duplicate agent, export/import

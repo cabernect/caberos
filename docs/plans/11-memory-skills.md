@@ -59,14 +59,20 @@ Already handled by the harness ([03-harness.md](03-harness.md)). No new work in 
 - The `recall` capability checks config at runtime and routes accordingly
 - Only used as fallback when MEMORY.md and graph don't have the answer
 
-### Agent Skills (Decision 11b, 11c)
+### Agent Skills (Decision 11b, 11c, D36)
 
-- Markdown files (`SKILL.md`) that inject instructions into the agent's context when triggered
-- Two locations: system-level `skills/` directory (shared, ship defaults) and per-agent `workspace/skills/{agent_id}/` (skills are working artifacts, live in the workspace — D36)
-- Format: YAML frontmatter (name, description, triggers) + markdown body
-- Loading: at context assembly, scan skills, match triggers against user message, inject matching skill body into context
+- Self-contained directories that inject instructions into the agent's context when triggered
+- Each skill is a directory: `skills/{skill-name}/`
+  - `SKILL.md` — YAML frontmatter (name, description, triggers) + markdown body with instructions
+  - `assets/` — optional supporting files (templates, checklists, examples, reference docs) that the skill body references
+  - Any other files the skill needs (data files, reference material)
+- Two locations: system-level `skills/` directory (shared, ship defaults, agent-read-only) and per-agent `workspace/skills/{agent_id}/` (agent-specific, lives in the workspace — D36). The agent can create and update skills in its per-agent directory during a run via `file.write`; system-level skills are read-only for the agent.
+- Loading: at context assembly, scan skill directories, read each `SKILL.md`, match triggers against user message, inject matching skill body into context
+- Agent-created skills: when the agent discovers a workflow worth repeating, it writes a `SKILL.md` (and optional `assets/`) to `workspace/skills/{agent_id}/{skill-name}/`. The skill is picked up on the next context assembly. This is the agent taking notes for itself — transparent (the user can read what it wrote), auditable (it's a file write syscall), and reversible (the user can delete it).
+- Asset access: when a skill is triggered, its `assets/` directory is made readable to the agent for the duration of the run. The skill body can reference assets by relative path (e.g. "Use the template in `assets/email-template.md`"). Asset reads are scoped to the triggered skill's directory — the agent cannot read another skill's assets.
 - Skills don't add capabilities — they're instructions only. A "research" skill that says "search the web" only works if the agent already has a `web.search` capability.
 - $0 cost, file reads only
+- This is the same model as Devin/Claude Code skills and the agentskills.io open standard
 
 ### Agent identity — soul, persona, task (Decision 35)
 
@@ -118,10 +124,42 @@ MEMORY.md (Layer 2 above) is the exception: it's agent-managed and lives as a fi
 
 `backend/src/agentos/memory/skills.py`:
 - Scan system-level `skills/` directory and per-agent `workspace/skills/{agent_id}/`
+- Each skill is a directory: `skills/{skill-name}/` containing `SKILL.md` + optional `assets/` + other files
 - Parse `SKILL.md` files: YAML frontmatter (name, description, triggers) + markdown body
 - Trigger matching: match triggers against user message at context assembly
 - Return matching skill bodies for injection into context
+- Asset handling: when a skill is triggered, register its directory as readable for the duration of the run. The skill body can reference assets by relative path (e.g. `assets/template.md`). Asset reads are scoped to the triggered skill's directory.
 - $0 cost, file reads only
+
+Example skill directory structure:
+```
+skills/                           # system-level (shared, agent-read-only)
+  research/
+    SKILL.md                      # frontmatter + instructions
+    assets/
+      search-template.md          # template the skill body references
+      sources-checklist.md
+  summarize-email/
+    SKILL.md
+    assets/
+      summary-format.md
+
+workspace/skills/{agent_id}/      # per-agent (agent can create/update)
+  weekly-report/
+    SKILL.md                      # agent wrote this after learning the workflow
+    assets/
+      report-template.md          # agent created this template
+```
+
+### 4a. Agent-created skills
+
+The agent can create skills in its per-agent workspace during a run:
+- The agent uses `file.write` to create `workspace/skills/{agent_id}/{skill-name}/SKILL.md` (and optional `assets/`)
+- This is a normal file write syscall — audited, scoped to the workspace, no special permission needed
+- The skill is picked up on the next context assembly (next run)
+- System-level `skills/` directory is agent-read-only — the agent cannot modify shared defaults
+- The user can read, edit, or delete agent-created skills at any time (they're just files)
+- Prompt instruction in `task`: "When you discover a workflow worth repeating, write a skill to your workspace so you remember it next time."
 
 ### 5. Register memory capabilities
 

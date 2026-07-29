@@ -152,7 +152,7 @@ Everything below is a *choice for this release*, replaceable without touching an
 | Slot | v0.1 binding | Replaceable by |
 |---|---|---|
 | Channels | Dashboard chat | Zalo Bot, Telegram, web widget, email |
-| Capability kinds | Tool, sub-agent, memory, connector action | MCP |
+| Capability kinds | Tool, sub-agent, memory, MCP tool | Native connectors |
 | Harness | One conversational harness (Pydantic AI) | A scheduled or batch harness |
 | Store | SQLite (WAL) via SQLAlchemy | Postgres |
 | Model access | LiteLLM via Pydantic AI adapter | A direct SDK, a native Pydantic AI model |
@@ -161,14 +161,14 @@ Everything below is a *choice for this release*, replaceable without touching an
 | Dashboard | Conversation-first (agent list → full conversation view), single operator (React + Vite) | Multi-operator, remote, SSO, Canvas/A2UI |
 | Clients | React dashboard (v0.1). API is client-agnostic (D33). `scripts/smoke.py` dev tool for pipeline testing. | CLI/TUI (`caber`), native macOS app, mobile app (v0.2+) |
 | Sandbox | Process-level: sandbox-exec (macOS), bwrap (Linux), clean env | Docker, Podman, OpenSandbox |
-| Connectors | Outlook/email/calendar, loopback OAuth redirect | Any OAuth or API-key service |
+| Connectors | MCP servers (email, Notion, GitHub, …), loopback OAuth redirect, encrypted credential custody | Native connectors (removed — see D13) |
 | Heartbeat | Per-agent asyncio scheduler, dashboard channel delivery, consecutive-failure alert | Cron, external schedulers, multi-agent coordination |
 | Frontend protocol | REST + per-conversation SSE (client-agnostic, D33) | WebSocket |
 | Memory | Three-layer: working memory, MEMORY.md (agent home dir), knowledge graph. FTS5 default, embeddings configurable (D34) | Vector DB, external memory services |
 | Agent identity | `soul`, `persona`, `task` — versioned config fields (D35). MEMORY.md is an agent-owned file, agent-managed (D34) | Hardcoded identity, model fine-tuning |
 | Skills | Markdown prompt injection, system + per-agent (D36) | Executable plugins, MCP tools (v0.2) |
 | Workspace | Shared workspace for working files only (D37). Identity is in the DB; MEMORY.md lives in the agent home dir, not the workspace. | Isolated workspaces only |
-| Capabilities | `tool`, `sub_agent`, `memory`, `connector_action` (D38) | `mcp_tool` (v0.2) |
+| Capabilities | `tool`, `sub_agent`, `memory`, `mcp_tool` (D38) | `connector_action` (removed) |
 
 ### Vocabulary notes
 
@@ -217,7 +217,7 @@ Normative. These are the only nouns the implementation may use for these concept
 | Term | Definition |
 |---|---|
 | **Agent** | A declarative configuration: soul, persona, task, capabilities, limits, channel bindings, workspace, heartbeat config. Not a process. |
-| **Capability** | A named, permission-checked operation an agent may call. Kinds: `tool`, `sub_agent`, `memory`, `connector_action`. (`mcp_tool` is v0.2 — D38.) |
+| **Capability** | A named, permission-checked operation an agent may call. Kinds: `tool`, `sub_agent`, `memory`, `mcp_tool`. (D9, D38.) |
 | **Sub-agent** | A capability whose implementation is a model loop. Lives in a shared pool, callable by many agents. Owns no Session, Contact, or channel binding. Invisible to the end user. |
 | **Connector** | A configured external integration: one stored credential plus the set of capabilities it exposes. Shared across agents. |
 | **Provider** | A configured model provider: type, encrypted key, optional base_url. Agents reference one by id. Shared across agents (D39). |
@@ -260,12 +260,12 @@ Normative. These are the only nouns the implementation may use for these concept
 13. As an operator, I want the test chat to show each syscall, its result, and its cost inline, so that I can see why the agent answered as it did.
 14. As an operator, I want test conversations kept separate from real ones, so that they do not pollute history or spend reports.
 
-### Connectors
+### Connectors (MCP)
 
-15. As an operator, I want to connect my Outlook or Gmail account once and have its capabilities become available to any agent, so that I do not store the same credential twice.
+15. As an operator, I want to connect my Outlook or Gmail account once via an MCP server and have its tools become available to any agent, so that I do not store the same credential twice.
 16. As an operator, I want the OAuth token stored encrypted and never displayed again after saving, so that a screen-share does not leak it.
-17. As an operator, I want to see which agents use a given connector, so that I know the blast radius before revoking it.
-18. As an operator, I want to revoke a connector in one place, so that every agent loses that access at once.
+17. As an operator, I want to see which agents use a given MCP server, so that I know the blast radius before revoking it.
+18. As an operator, I want to revoke an MCP server in one place, so that every agent loses that access at once.
 
 ### Workspace and shell
 
@@ -430,13 +430,15 @@ Subject-scoped capabilities (D10) resolve *whose* data to touch from the Session
 
 *Consequence:* the sensitive path (your email, your calendar) is safe by default — it is unreachable until an operator has deliberately bound the Contact.
 
-#### D9 — One capability concept, five kinds
+#### D9 — One capability concept, four kinds
 
-Everything an agent can call is a `Capability` with a `kind`: `tool`, `sub_agent`, `memory`, `connector_action`. v0.1 implements all four. (`mcp_tool` is v0.2 — D38.)
+Everything an agent can call is a `Capability` with a `kind`: `tool`, `sub_agent`, `memory`, `mcp_tool`. v0.1 implements all four.
 
 Kinds differ only in how the call is executed. Registration, permission checking, subject injection, credential injection, approval, auditing, and cost accounting are identical for all of them.
 
-*Rationale:* this is the decision that keeps the system small as it grows. A new integration is a row in the capability registry, not a new subsystem, a new permission model, or a new place to look during an incident.
+*Rationale:* this is the decision that keeps the system small as it grows. A new integration is an MCP server config plus a row in the capability registry, not a new subsystem, a new permission model, or a new place to look during an incident.
+
+*Revision note:* the original spec had `connector_action` as a kind and deferred `mcp_tool` to v0.2. The MCP ecosystem matured (32,600+ servers, 8+ production Outlook servers) and both OpenClaw and Hermes Agent ship MCP as their sole integration path. `connector_action` is removed; `mcp_tool` is in v0.1. See D13 and D38.
 
 #### D10 — The syscall layer injects the subject; the agent cannot name it
 
@@ -471,13 +473,17 @@ Rules:
 7. **Output is data, never instructions.** The returned text enters the caller's context as an untrusted result, treated exactly like any other capability result. A pooled sub-agent reachable from many agents is a high-value injection target precisely because it is shared.
 8. **Audit records carry both** `agent_id` and `sub_agent_id`.
 
-#### D13 — Connectors hold credentials; secrets are referenced, never inlined
+#### D13 — CaberOS owns credential custody; MCP servers receive credentials at runtime
 
-A `Connector` is a configured integration: one encrypted credential plus the capabilities it exposes. Connecting Outlook once makes `email.read`, `email.send`, `calendar.read`, and `calendar.create` grantable to any agent.
+An MCP server is a configured integration: a process (stdio) or endpoint (HTTP) that exposes tools. CaberOS owns the credentials — OAuth tokens, API keys — encrypted in the DB (Fernet). At call time, the syscall layer decrypts the credential and injects it as an env var or header into the MCP server. The MCP server holds the credential in memory for the call; CaberOS owns it at rest.
 
 Configuration holds `secret://` references. Values live encrypted, are decrypted only at call time inside the syscall layer, and are never returned to the dashboard, written to logs, or placed in model context.
 
-*Consequence:* one credential backs many agents, revocation is one edit, and the dashboard can show blast radius before revoking (stories 17–18).
+- **OAuth flow:** CaberOS runs the loopback redirect itself (`http://localhost:8081/api/mcp/oauth/callback`), exchanges the auth code, stores the token encrypted. The MCP server never sees the OAuth flow.
+- **Token refresh:** CaberOS refreshes expired tokens using the stored refresh token, updates the encrypted value, and injects the fresh token on the next call.
+- **One credential backs many agents.** Connecting Outlook once makes its tools grantable to any agent. Revocation is one edit. The dashboard shows blast radius before revoking (stories 17–18).
+
+*Revision note:* the original spec had a native `Connector` abstraction that held credentials and executed API calls directly. This is replaced by MCP servers — CaberOS owns credential custody, the MCP server handles the external API. See plan 10 for the full rationale.
 
 ### Sandbox and workspace
 
@@ -509,7 +515,7 @@ Properties enforced by both backends:
 - **No host secrets.** The sandbox sees no host environment variables, no SSH keys, no OAuth tokens. Credentials are injected by the syscall layer only when a connector capability is called — not into the shell environment.
 - **Process timeout.** Seatbelt and bwrap do not provide CPU/memory cgroups. A runaway process is bounded by a timeout (D18), not by resource limits. This is acceptable for a personal agent; container-based backends with cgroups are a later option (see below).
 
-*Why process-level instead of containers:* a personal agent on a Mac does not need container isolation or resource quotas. Process-level sandboxing is instant (subprocess fork, no container startup), has zero install on macOS, and near-zero concurrency overhead. Most users will never use `shell.run` — they use connectors (email, calendar) and MCP tools. The sandbox is a power-user capability, not a core dependency.
+*Why process-level instead of containers:* a personal agent on a Mac does not need container isolation or resource quotas. Process-level sandboxing is instant (subprocess fork, no container startup), has zero install on macOS, and near-zero concurrency overhead. Most users will never use `shell.run` — they use MCP tools (email, calendar, Notion). The sandbox is a power-user capability, not a core dependency.
 
 *Why not OpenSandbox:* OpenSandbox is a full platform — a separate server process, an HTTP API, an in-sandbox daemon, egress sidecars, and Kubernetes support. It solves container lifecycle at scale, which is a problem v0.1 does not have. It would add a server process and four network hops for what is a subprocess call.
 
@@ -651,14 +657,14 @@ task: |
   manage my calendar, work with files in my workspace,
   and run shell commands when I ask...
 capabilities:
-  - name: email.read            # kind: connector_action (Outlook)
+  - name: mcp.outlook.email_read    # kind: mcp_tool (Outlook MCP server)
     subject: self
-  - name: email.send            # kind: connector_action
+  - name: mcp.outlook.email_send    # kind: mcp_tool
     subject: self
     require_approval: true
-  - name: calendar.read         # kind: connector_action
+  - name: mcp.outlook.calendar_read  # kind: mcp_tool
     subject: self
-  - name: calendar.create       # kind: connector_action
+  - name: mcp.outlook.calendar_create # kind: mcp_tool
     subject: self
   - name: file.read             # kind: tool
     scope: workspace
@@ -773,16 +779,21 @@ An agent's context is assembled from three separate concerns, all three are **ve
 
 #### D36 — Agent Skills (markdown prompt injection)
 
-Skills are markdown files (`SKILL.md`) that inject instructions into the agent's context when triggered. No code, no new capabilities, no security surface. Pure prompt enrichment.
+Skills are self-contained directories that inject instructions into the agent's context when triggered. No code, no new capabilities, no security surface. Pure prompt enrichment.
 
-- **Format:** YAML frontmatter (`name`, `description`, `triggers`) + markdown body with instructions.
+- **Format:** each skill is a directory `skills/{skill-name}/` containing:
+  - `SKILL.md` — YAML frontmatter (`name`, `description`, `triggers`) + markdown body with instructions
+  - `assets/` — optional supporting files the skill body references (templates, checklists, examples, reference docs)
+  - Any other files the skill needs (data files, reference material)
 - **Two locations:** system-level `skills/` directory (shared, ships defaults like `research`, `summarize`, `code-review`) and per-agent `workspace/skills/{agent_id}/` (agent-specific, lives in the workspace since skills are working artifacts, not identity).
-- **Loading:** at context assembly, the harness scans skills, matches `triggers` against the user's message (keyword match or model decision), and injects matching skill bodies into context.
+- **Loading:** at context assembly, the harness scans skill directories, reads each `SKILL.md`, matches `triggers` against the user's message (keyword match or model decision), and injects matching skill bodies into context.
+- **Asset access:** when a skill is triggered, its `assets/` directory is made readable to the agent for the duration of the run. The skill body can reference assets by relative path (e.g. "Use the template in `assets/email-template.md`"). Asset reads are scoped to the triggered skill's directory — the agent cannot read another skill's assets.
 - **Skills don't add capabilities.** A `research` skill that says "search the web" only works if the agent already has a `web.search` capability granted. The skill is instructions; the capability is permission. Separate concerns.
 - **$0 cost** — file reads only. No API calls, no code execution.
 - **User-editable** — the user can read, write, and tweak skills directly. Transparent.
+- **Agent-editable** — the agent can create and update skills in its per-agent workspace (`workspace/skills/{agent_id}/`) during a run, using `file.write`. This is how the agent learns reusable instructions: when it discovers a workflow worth repeating, it writes a `SKILL.md` to its workspace. The skill is picked up on the next context assembly. System-level skills (`skills/`) are agent-read-only — the agent cannot modify shared defaults, only its own per-agent skills. Agent-created skills are still just prompt fragments — no new capabilities, no security surface.
 
-*Why:* this is the same model as Devin/Claude Code skills, adapted for a personal agent. It lets the user customize agent behavior without code, without new capabilities, and without security review. A skill is just a prompt fragment.
+*Why:* this is the same model as Devin/Claude Code skills (and the agentskills.io open standard), adapted for a personal agent. It lets both the user and the agent customize behavior without code, without new capabilities, and without security review. A skill is a prompt fragment plus its supporting files. The agent creating a skill is the agent taking notes for itself — transparent, auditable (it's a file write), and reversible (the user can read and delete what the agent wrote).
 
 #### D37 — Shared workspaces (working files only)
 
@@ -800,11 +811,11 @@ The workspace holds only working files. Agent identity (`soul`, `persona`, `task
 
 *Why shared workspaces:* a personal agent ecosystem is more useful when agents can collaborate on files. The risk is accepted for v0.1's single-user model and mitigated by approval gates and audit trails.
 
-#### D38 — MCP tools and CLI/TUI moved to v0.2
+#### D38 — MCP tools in v0.1; CLI/TUI moved to v0.2
 
-Two subsystems are deferred to v0.2:
+1. **MCP tools.** The `mcp_tool` capability kind is in v0.1. v0.1 ships with four capability kinds: `tool`, `sub_agent`, `memory`, `mcp_tool`. MCP (Model Context Protocol) tool support — connecting external MCP servers, discovering their tools, and registering them as capabilities — is the integration layer for v0.1. The native `connector_action` kind from the original spec is removed; MCP replaces it.
 
-1. **MCP tools.** The `mcp_tool` capability kind is removed from v0.1. v0.1 ships with four capability kinds: `tool`, `sub_agent`, `memory`, `connector_action`. MCP (Model Context Protocol) tool support — dynamic capability registration from external MCP servers — is a v0.2 concern. It requires an MCP client, server discovery, and dynamic capability registration, which is a whole subsystem not justified for v0.1's personal agent scope.
+   *Revision note:* the original spec deferred MCP to v0.2 and shipped native connectors. The MCP ecosystem matured (32,600+ servers, 8+ production Outlook servers as of mid-2026) and both OpenClaw and Hermes Agent ship MCP as their sole integration path. Native connectors would be a parallel abstraction for a problem the ecosystem already solves. See plan 10 for the full design.
 
 2. **CLI/TUI (`caber`).** v0.1 ships the React dashboard as the only client. The `caber` CLI/TUI — a terminal interface for chatting with agents, managing config, and approving syscalls — is v0.2. The API is client-agnostic (D33), so the CLI will consume the same HTTP + SSE endpoints as the dashboard. v0.1 includes only `scripts/smoke.py`, a development tool for testing the pipeline end-to-end before the frontend exists (not a product CLI).
 

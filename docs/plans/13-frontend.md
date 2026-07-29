@@ -2,7 +2,7 @@
 
 ## Goal
 
-Build the React frontend — conversation-first, not a management console with a chat widget. Two-level navigation: agent list (landing) → click an agent → full-screen conversation view. Management features (settings, connectors, observability, approvals, spend) are accessible from the conversation view, not the main screen.
+Build the React frontend — conversation-first, not a management console with a chat widget. Two-level navigation: agent list (landing) → click an agent → full-screen conversation view. Management features (settings, MCP servers, observability, approvals, spend) are accessible from the conversation view, not the main screen.
 
 The frontend is **one client of the API** (D33), not a special one. It has no privileged access, no back-channel, no direct database reads. Everything it does goes through the same HTTP + SSE API that a future CLI, TUI, or native app would use. The frontend is a reference client.
 
@@ -49,7 +49,7 @@ Key design decisions:
 - `App.tsx` — router with two levels:
   - Level 1: `/` — agent list (landing page, per `design-system/caberos/pages/agent-list.md`)
   - Level 2: `/agents/:id/chat` — full-screen conversation view (per `design-system/caberos/pages/conversation.md`)
-  - Secondary routes: `/agents/:id/settings`, `/connectors`, `/observability`, `/approvals`, `/spend`
+  - Secondary routes: `/agents/:id/settings`, `/mcp-servers`, `/observability`, `/approvals`, `/spend`
 - `lib/api.ts` — TanStack Query client, fetch wrapper with auth cookie. This is the **only** way the frontend talks to the backend (D33).
 - `lib/sse.ts` — SSE client for streaming agent responses
 - `lib/types.ts` — TypeScript types matching backend Pydantic models
@@ -139,7 +139,7 @@ Key design decisions:
 - **Identity fields (Decision 35):** `soul`, `persona`, and `task` are config fields on `AgentConfig`, edited as markdown text areas in the settings sidebar. Saving any of them creates a new `AgentVersion` (diff and rollback apply to identity changes, not just task changes). They are NOT workspace files.
 - **MEMORY.md editing (Decision 34):** a separate markdown editor for MEMORY.md, read/written via `GET/PUT /api/agents/{id}/memory`. This is NOT a config field — editing it does not create a new version. It's the agent's living notebook (a file in the agent home dir, not the workspace, not the DB); the user can edit it directly, and the agent updates it via the `memory.update` syscall during runs.
 - **Model config (Decision 17, 18):** a provider dropdown (populated from configured providers) + a model selector. When a provider is selected, call `GET /api/providers/{id}/models`. If `discovery == "dynamic"` → show a dropdown of discovered models (Ollama shows locally pulled models; OpenAI/Google show live lists) with a "type your own" override. If `discovery == "unavailable"` (e.g. Anthropic) → show a free-text input. Save validates the model with a 1-token completion.
-- Capabilities list: grouped by kind (tools, sub-agents, memory, connectors), with scope and approval toggles per grant
+- Capabilities list: grouped by kind (tools, sub-agents, memory, MCP tools), with scope and approval toggles per grant
 - Heartbeat config: enable/disable, interval, task prompt, cost budget (D31)
 - **Skills management:** list skills, create/upload a skill, delete a skill. Skills are workspace files (`workspace/skills/{agent_id}/`) shown in a list with create/upload and delete actions.
 - Version history: list of versions, diff view between two versions, rollback button
@@ -147,13 +147,16 @@ Key design decisions:
 - YAML export/import buttons
 - Uses shadcn/ui Form + React Hook Form (per shadcn best practices)
 
-### 5. Build the Connectors page (stories 15-18)
+### 5. Build the MCP Servers page (stories 15-18, plan 10)
 
-`pages/Connectors.tsx`:
-- List connected services: name, type, capabilities, connected status
-- Connect button → starts OAuth flow (redirect)
-- Revoke button → confirms, revokes
-- Per-connector: list of agents using it (blast radius)
+`pages/McpServers.tsx` (was `Connectors.tsx`):
+- List configured MCP servers: name, transport (stdio/http), tools discovered, connected status
+- Add server button → form: name, transport, command/args (stdio) or URL/headers (http), env template, tool filter
+- Connect button → starts OAuth flow (loopback redirect, for servers that need it) or test connection (for API-key servers)
+- Server detail: list of discovered tools (name, description, egress, require_approval, subject_scoped), tool filter toggle
+- Revoke button → confirms, revokes (deletes credentials, unregisters tools, disconnects)
+- Per-server: list of agents using it (blast radius, story 17)
+- Subject bindings: bind a Contact to an MCP server instance (whose mailbox/calendar)
 
 ### 6. Build the Observability page (stories 38-44)
 
@@ -231,7 +234,7 @@ frontend/src/
 ├── pages/
 │   ├── AgentList.tsx                  # Landing page
 │   ├── Conversation.tsx               # Full-screen conversation
-│   ├── Connectors.tsx
+│   ├── McpServers.tsx
 │   ├── Observability.tsx
 │   ├── RunDetail.tsx
 │   ├── SyscallLog.tsx
@@ -261,7 +264,7 @@ frontend/src/
 - Skills management: list skills, create/upload a skill, delete a skill
 - Edit task → save → new version created, diff visible
 - Enable heartbeat → set interval + task prompt → save → next heartbeat run appears in conversation
-- Connectors page → connect Outlook → OAuth redirect → returns connected
+- MCP Servers page → add Outlook MCP server → OAuth redirect → returns connected, tools discovered
 - Observability → run list → filter by trigger (user/heartbeat) → open run → see messages, syscalls, costs
 - Approvals → pending approval → approve → run resumes
 - Spend → today's total matches sum of runs, breakdown by trigger

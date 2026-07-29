@@ -2,11 +2,11 @@
 
 ## Goal
 
-Build the capability registry and the implementations for each capability kind in v0.1: `tool`, `sub_agent`, `memory`, and `connector_action`. Each capability is a named, registered operation with a schema, an egress flag, and an execution function. All are invoked through the syscall layer.
+Build the capability registry and the implementations for each capability kind in v0.1: `tool`, `sub_agent`, `memory`, and `mcp_tool`. Each capability is a named, registered operation with a schema, an egress flag, and an execution function. All are invoked through the syscall layer.
 
 ## Spec references
 
-- **D9** — One capability concept, four kinds (v0.1: tool, sub_agent, memory, connector_action)
+- **D9** — One capability concept, four kinds (v0.1: tool, sub_agent, memory, mcp_tool)
 - **D12** — Sub-agents are pooled capabilities
 - **D18** — Declared egress per capability
 - **Stories 3, 34-37** — tick capabilities, create sub-agents, see which agents call a sub-agent, sub-agent warnings
@@ -27,7 +27,7 @@ Build the capability registry and the implementations for each capability kind i
 @dataclass
 class CapabilityDef:
     name: str                          # e.g. "file.read", "shell.run"
-    kind: Literal["tool", "sub_agent", "memory", "connector_action"]
+    kind: Literal["tool", "sub_agent", "memory", "mcp_tool"]
     description: str
     parameters_schema: dict            # JSON schema for the model
     egress: bool                       # does this leave the machine?
@@ -79,12 +79,13 @@ class CapabilityRegistry:
 - `memory.recall(query)` and `memory.store(key, value, tags)` are registered as capabilities of kind `memory`
 - Both are subject-scoped (resolve the Contact from the session)
 
-### 5. Implement connector action capability kind
+### 5. Implement MCP tool capability kind
 
-- See [10-connectors.md](10-connectors.md) for the connector implementation
-- Connector actions (e.g. `email.read`, `calendar.create`) are registered as capabilities of kind `connector_action`
-- The connector provides the `execute` function; the registry wraps it
+- See [10-connectors.md](10-connectors.md) for the MCP integration implementation
+- MCP tools (e.g. `mcp.outlook.email_read`, `mcp.notion.create_page`) are registered as capabilities of kind `mcp_tool`
+- The MCP client provides the `execute` function; the registry wraps it
 - Credentials are injected by the syscall layer, not by the capability
+- Tools are discovered at startup from connected MCP servers
 
 ### 6. Create API routes for capability management
 

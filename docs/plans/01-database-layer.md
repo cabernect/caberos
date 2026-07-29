@@ -7,7 +7,7 @@ Define all SQLAlchemy models, set up Alembic migrations, and create the SQLite d
 ## Spec references
 
 - **D5** — SQLite (WAL) via SQLAlchemy, single source of truth
-- **Domain Model** — all nouns that need tables: Agent, Capability, Sub-agent, Connector, Channel, Contact, Session, Run, Workspace, Memory, Approval Request, Audit Record
+- **Domain Model** — all nouns that need tables: Agent, Capability, Sub-agent, McpServer, Channel, Contact, Session, Run, Workspace, Memory, Approval Request, Audit Record
 - **D25** — Agent configuration lives in the database (immutable version rows, `active_version` pointer)
 - **D8** — Contact has optional binding to an internal record
 - **D30** — Memory is per-Contact, namespaced
@@ -45,8 +45,8 @@ Define all SQLAlchemy models, set up Alembic migrations, and create the SQLite d
   - Each save creates a new immutable version row; `active_version` pointer advances
 
 **`capability.py`** — Capability registry
-- `Capability`: id, name, kind (enum: tool/sub_agent/memory/connector_action), description, schema (JSON), egress (bool), require_approval (bool, default false)
-  - Note: `mcp_tool` kind removed — MCP moved to v0.2 (Decision 11a)
+- `Capability`: id, name, kind (enum: tool/sub_agent/memory/mcp_tool), description, schema (JSON), egress (bool), require_approval (bool, default false)
+  - Note: `connector_action` kind removed — replaced by `mcp_tool` (MCP is in v0.1, see D38 revised)
 - `AgentCapability`: agent_version_id, capability_id, subject_scope (self/any/none), require_approval_override
   - Many-to-many between agent versions and capabilities, with per-grant settings
 
@@ -54,9 +54,12 @@ Define all SQLAlchemy models, set up Alembic migrations, and create the SQLite d
 - `SubAgent`: id, name, task (D35), model (optional), capabilities (JSON list)
 - Config load rejects channel or session fields (D12 rule 1)
 
-**`connector.py`** — Connectors and credentials
-- `Connector`: id, name, type (outlook/gmail/calendar/...), credential_ref (secret:// path), created_at
-- `ConnectorCapability`: connector_id, capability_name (e.g. "email.read", "calendar.create")
+**`mcp.py`** — MCP servers and credentials (replaces `connector.py`)
+- `McpServer`: id, name, transport (stdio/http), command, args, url, headers, env_template, tool_filter, connected, created_at
+- `McpServerCredential`: id, mcp_server_id, credential_type (oauth_token/api_key/bearer), encrypted_value, created_at
+- `ContactMcpBinding`: id, contact_id, mcp_server_id, credential_id, created_at
+- `McpTool`: id, mcp_server_id, tool_name, capability_name (namespaced: `mcp.{server}.{tool}`), parameters_schema, description, egress, require_approval, subject_scoped, created_at
+- See plan 10 for the full MCP integration design
 
 **`provider.py`** — Model providers (Decision 17)
 - `Provider`: id, name, type (openai/anthropic/google/ollama/azure/...), credential_ref (secret:// path, encrypted API key, null for local), base_url (optional), org_id (optional), extra_params (JSON), created_at
@@ -123,7 +126,7 @@ uv run alembic init alembic
 - `backend/src/agentos/models/agent.py`
 - `backend/src/agentos/models/capability.py`
 - `backend/src/agentos/models/sub_agent.py`
-- `backend/src/agentos/models/connector.py`
+- `backend/src/agentos/models/mcp.py`
 - `backend/src/agentos/models/provider.py`
 - `backend/src/agentos/models/contact.py`
 - `backend/src/agentos/models/session.py`
@@ -149,7 +152,7 @@ uv run alembic init alembic
 - Plan 07 — Pipeline (new)
 - Plan 08 — Channels (was plan 09)
 - Plan 09 — Observability (was plan 12)
-- Plan 10 — Connectors (was plan 07)
+- Plan 10 — Connectors (MCP integration)
 - Plan 11 — Memory (was plan 08)
 - Plan 12 — Control plane (was plan 10)
 - Plan 14 — Testing (was plan 13)

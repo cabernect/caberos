@@ -17,7 +17,7 @@ The goal: one agent, seeded from a config file, reachable through the dashboard 
 | 3 | [02-agent-config.md](02-agent-config.md) | Pydantic config models, YAML load, versioning — seed one agent from file |
 | 4 | [03-harness.md](03-harness.md) | Pydantic AI + LiteLLM adapter, the agent loop, context assembly (soul, persona, task, MEMORY.md, skills), compaction |
 | 5 | [04-syscall-layer.md](04-syscall-layer.md) | Subject injection, scope, approval (asyncio Event), audit — the mediation boundary |
-| 6 | [05-capabilities.md](05-capabilities.md) | Capability registry, tool + sub-agent kinds (no MCP — moved to v0.2) |
+| 6 | [05-capabilities.md](05-capabilities.md) | Capability registry, tool + sub-agent kinds (MCP tools added in plan 10) |
 | 7 | [06-sandbox.md](06-sandbox.md) | Process-level sandbox (sandbox-exec/bwrap), clean env, workspace, shell.run + file tools |
 | 8 | [07-pipeline.md](07-pipeline.md) | D19's 13-step execution pipeline — the central orchestrator. Both channels and heartbeat call it. |
 | 9 | [08-channels.md](08-channels.md) | Dashboard chat channel — the one v0.1 channel. Per-conversation SSE. |
@@ -29,7 +29,7 @@ The goal: one agent, seeded from a config file, reachable through the dashboard 
 
 | Order | Plan | What it delivers |
 |---|---|---|
-| 11 | [10-connectors.md](10-connectors.md) | OAuth (loopback redirect), Fernet encryption, Outlook/email/calendar connectors |
+| 11 | [10-connectors.md](10-connectors.md) | MCP integration layer: connect external MCP servers (email, Notion, GitHub), encrypted credential custody, OAuth loopback, subject binding via instance-per-Contact |
 | 12 | [11-memory-skills.md](11-memory-skills.md) | Three-layer memory (MEMORY.md, knowledge graph, semantic recall) + Agent Skills (markdown prompt injection) + identity config fields (soul/persona/task) |
 | 13 | [12-control-plane.md](12-control-plane.md) | FastAPI admin API (read side), session auth, operator audit trail, heartbeat scheduler (D31), approval endpoints |
 
