@@ -21,13 +21,46 @@ async def file_read(args: dict[str, Any], workspace_path: str, **_kwargs: Any) -
 
 
 async def file_write(args: dict[str, Any], workspace_path: str, **_kwargs: Any) -> dict[str, Any]:
-    """Write a file to the workspace."""
+    """Write a file to the workspace. Returns a unified diff if the file existed."""
+    import difflib
+
     wm = WorkspaceManager()
     path = wm.validate_path(workspace_path, args["path"])
     os.makedirs(os.path.dirname(path), exist_ok=True) if os.path.dirname(path) else None
+
+    # Capture before content for diff (if file exists)
+    before_content = None
+    if os.path.isfile(path):
+        with open(path, encoding="utf-8", errors="replace") as f:
+            before_content = f.read()
+
+    # Write the new content
     with open(path, "w", encoding="utf-8") as f:
         f.write(args["content"])
-    return {"success": True, "path": args["path"], "bytes": len(args["content"])}
+
+    result: dict[str, Any] = {
+        "success": True,
+        "path": args["path"],
+        "bytes": len(args["content"]),
+    }
+
+    # Generate unified diff if the file existed and changed
+    if before_content is not None:
+        if before_content != args["content"]:
+            diff_lines = list(difflib.unified_diff(
+                before_content.splitlines(keepends=True),
+                args["content"].splitlines(keepends=True),
+                fromfile=f"a/{args['path']}",
+                tofile=f"b/{args['path']}",
+            ))
+            result["diff"] = "".join(diff_lines)
+            result["action"] = "modified"
+        else:
+            result["action"] = "unchanged"
+    else:
+        result["action"] = "created"
+
+    return result
 
 
 async def file_list(args: dict[str, Any], workspace_path: str, **_kwargs: Any) -> dict[str, Any]:
