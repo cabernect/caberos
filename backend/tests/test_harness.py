@@ -5,9 +5,167 @@ import uuid
 import pytest
 
 from agentos.config_schema import AgentConfig, CapabilityGrant, ModelConfig
+from agentos.harness.context import assemble_system_prompt
 from agentos.harness.loop import Harness
 from agentos.harness.scripted_model import ScriptedModel, ScriptedResponse
 from agentos.syscall.mediator import StubSyscallHandler
+
+
+def test_base_system_prompt_present():
+    """Every agent's system prompt starts with the base platform instructions."""
+    config = AgentConfig(
+        id="test",
+        name="Test",
+        model=ModelConfig(provider_id="test", name="scripted"),
+        soul="I am a test agent.",
+        capabilities=[],
+    )
+    prompt = assemble_system_prompt(config)
+    # Base prompt is always first
+    assert "CaberOS Agent Operating Instructions" in prompt
+    # Soul comes after the base prompt
+    assert "I am a test agent." in prompt
+    # Base prompt sections are present
+    assert "Workspace" in prompt
+    assert "Capabilities" in prompt
+    assert "Output Rules" in prompt
+    assert "agent.ask_user" in prompt
+
+
+def test_base_prompt_present_even_without_identity():
+    """The base prompt is injected even if soul/persona/task are all empty."""
+    config = AgentConfig(
+        id="test",
+        name="Test",
+        model=ModelConfig(provider_id="test", name="scripted"),
+        capabilities=[],
+    )
+    prompt = assemble_system_prompt(config)
+    assert "CaberOS Agent Operating Instructions" in prompt
+    assert "Workspace" in prompt
+
+
+def test_base_prompt_before_soul():
+    """The base prompt comes before the soul in the assembled prompt."""
+    config = AgentConfig(
+        id="test",
+        name="Test",
+        model=ModelConfig(provider_id="test", name="scripted"),
+        soul="MY_UNIQUE_SOUL_MARKER",
+        capabilities=[],
+    )
+    prompt = assemble_system_prompt(config)
+    base_pos = prompt.index("CaberOS Agent Operating Instructions")
+    soul_pos = prompt.index("MY_UNIQUE_SOUL_MARKER")
+    assert base_pos < soul_pos, "Base prompt must come before soul"
+
+
+def test_multimodal_message_with_image():
+    """When attachments are present, the user message is a multimodal content array."""
+    from agentos.harness.context import build_message_history
+    from agentos.pipeline import Attachment
+
+    attachments = [
+        Attachment(
+            type="image",
+            mime_type="image/png",
+            data="iVBORw0KGgoAAAANSUhEUg==",
+            filename="screenshot.png",
+        )
+    ]
+    history = build_message_history("system prompt", [], "What's in this image?", attachments)
+
+    # System message is plain text
+    assert history[0]["role"] == "system"
+    assert history[0]["content"] == "system prompt"
+
+    # User message is a content array
+    user_msg = history[1]
+    assert user_msg["role"] == "user"
+    assert isinstance(user_msg["content"], list)
+
+    # First part is text, second is image_url
+    parts = user_msg["content"]
+    assert parts[0]["type"] == "text"
+    assert parts[0]["text"] == "What's in this image?"
+    assert parts[1]["type"] == "image_url"
+    assert "data:image/png;base64," in parts[1]["image_url"]["url"]
+
+
+def test_multimodal_message_with_url():
+    """URL attachments are sent as image_url with the URL directly."""
+    from agentos.harness.context import build_message_history
+    from agentos.pipeline import Attachment
+
+    attachments = [
+        Attachment(
+            type="url",
+            mime_type="image/jpeg",
+            data="https://example.com/photo.jpg",
+            filename="",
+        )
+    ]
+    history = build_message_history("sys", [], "Describe this", attachments)
+    user_msg = history[1]
+    parts = user_msg["content"]
+    assert parts[1]["type"] == "image_url"
+    assert parts[1]["image_url"]["url"] == "https://example.com/photo.jpg"
+
+
+def test_multimodal_message_with_text_file():
+    """Text file attachments are appended to the message content."""
+    from agentos.harness.context import build_message_history
+    from agentos.pipeline import Attachment
+
+    attachments = [
+        Attachment(
+            type="file",
+            mime_type="text/plain",
+            data="Hello world from the file!",
+            filename="notes.txt",
+        )
+    ]
+    history = build_message_history("sys", [], "Read this file", attachments)
+    user_msg = history[1]
+    parts = user_msg["content"]
+    # Should have text part + file content part
+    assert len(parts) == 2
+    assert parts[0]["type"] == "text"
+    assert "Read this file" in parts[0]["text"]
+    assert parts[1]["type"] == "text"
+    assert "Hello world from the file!" in parts[1]["text"]
+    assert "notes.txt" in parts[1]["text"]
+
+
+def test_no_attachments_plain_text():
+    """Without attachments, the user message is a plain string (saves tokens)."""
+    from agentos.harness.context import build_message_history
+
+    history = build_message_history("sys", [], "Hello", None)
+    user_msg = history[1]
+    assert user_msg["role"] == "user"
+    assert isinstance(user_msg["content"], str)
+    assert user_msg["content"] == "Hello"
+
+
+def test_multimodal_multiple_attachments():
+    """Multiple attachments produce multiple content parts."""
+    from agentos.harness.context import build_message_history
+    from agentos.pipeline import Attachment
+
+    attachments = [
+        Attachment(type="image", mime_type="image/png", data="abc123==", filename="a.png"),
+        Attachment(type="image", mime_type="image/jpeg", data="def456==", filename="b.jpg"),
+        Attachment(type="url", mime_type="image/gif", data="https://x.com/c.gif", filename=""),
+    ]
+    history = build_message_history("sys", [], "Compare these", attachments)
+    parts = history[1]["content"]
+    # 1 text + 3 attachments = 4 parts
+    assert len(parts) == 4
+    assert parts[0]["type"] == "text"
+    assert parts[1]["type"] == "image_url"
+    assert parts[2]["type"] == "image_url"
+    assert parts[3]["type"] == "image_url"
 
 
 @pytest.mark.asyncio

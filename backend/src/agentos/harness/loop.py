@@ -13,6 +13,7 @@ from typing import Any
 from ..config_schema import AgentConfig
 from ..syscall.protocol import SyscallHandler, SyscallResult, ToolCall
 from .context import assemble_system_prompt, assemble_tool_schemas, build_message_history
+from .guardrails import apply_guardrails
 from .scripted_model import ScriptedModel, ScriptedResponse
 
 
@@ -28,6 +29,8 @@ class RunResult:
     tool_calls_made: list[dict[str, Any]] = field(default_factory=list)
     status: str = "completed"  # completed, failed, limit_exceeded
     error: str | None = None
+    guardrail_warnings: list[str] = field(default_factory=list)
+    guardrail_redactions: list[str] = field(default_factory=list)
 
 
 # SSE event emitter type: async callable that takes (event_type: str, payload: dict)
@@ -51,6 +54,7 @@ class Harness:
         recent_messages: list[Any] | None = None,
         trigger: str = "user_message",
         event_emitter: EventEmitter = None,
+        attachments: list[Any] | None = None,
     ) -> RunResult:
         """Execute the agent loop (D19 steps 7-11).
 
@@ -63,7 +67,9 @@ class Harness:
         # Step 7: Assemble context
         system_prompt = assemble_system_prompt(agent_config)
         tool_schemas = assemble_tool_schemas(agent_config)
-        history = build_message_history(system_prompt, recent_messages or [], message)
+        history = build_message_history(
+            system_prompt, recent_messages or [], message, attachments
+        )
 
         # Emit typing event
         if event_emitter:
@@ -229,14 +235,35 @@ class Harness:
                 continue
 
             # No tool calls → this is the final answer
-            result.final_answer = response.content
+            # Apply guardrails before emitting to the user (D2)
+            guardrail_result = apply_guardrails(response.content)
+            result.final_answer = guardrail_result.content
+            result.guardrail_warnings = guardrail_result.warnings
+            result.guardrail_redactions = guardrail_result.redactions
 
             # Emit turn_complete for the final turn
             # (tokens were already streamed via _call_streaming if streaming)
             if event_emitter:
                 if not hasattr(self.model, "complete_stream"):
-                    # Non-streaming path: emit the full content as one token event
-                    await self._emit(event_emitter, "token", {"content": response.content})
+                    # Non-streaming path: emit the guardrailed content as one token event
+                    await self._emit(event_emitter, "token", {"content": guardrail_result.content})
+                else:
+                    # Streaming path: tokens were already emitted raw during streaming.
+                    # If guardrails modified the content, emit a correction event so
+                    # the frontend can replace the streamed output with the clean version.
+                    if guardrail_result.content != response.content:
+                        await self._emit(
+                            event_emitter,
+                            "guardrail_correction",
+                            {"content": guardrail_result.content},
+                        )
+                # Emit guardrail warnings (if any) so the UI can show a notice
+                if guardrail_result.warnings:
+                    await self._emit(
+                        event_emitter,
+                        "guardrail_warning",
+                        {"warnings": guardrail_result.warnings},
+                    )
                 await self._emit(
                     event_emitter,
                     "turn_complete",

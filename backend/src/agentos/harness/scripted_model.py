@@ -5,8 +5,10 @@ and final answers, so the tracer bullet (ticket 01) can test the full
 pipeline without an API key or a real LLM.
 """
 
+import asyncio
+
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, AsyncIterator
 
 
 @dataclass
@@ -67,3 +69,50 @@ class ScriptedModel:
         if resp.cost == 0.0:
             resp.cost = (resp.tokens_in + resp.tokens_out) * 0.00001  # fake cost
         return resp
+
+    async def complete_stream(
+        self,
+        agent_model: Any = None,
+        messages: list[dict[str, str]] | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        **_kwargs: Any,
+    ) -> AsyncIterator[tuple[str, Any]]:
+        """Streaming variant — emits thinking chunks, then token chunks, then done.
+
+        Yields tuples of (delta_type, content):
+          - ("thinking", str) — thinking text chunk
+          - ("token", str) — output token chunk
+          - ("done", ScriptedResponse) — final response object
+        """
+        if self._index >= len(self.responses):
+            resp = ScriptedResponse(content="Done.", tokens_in=10, tokens_out=1, cost=0.0)
+            yield "done", resp
+            return
+
+        resp = self.responses[self._index]
+        self._index += 1
+        # Fill in fake token counts
+        if resp.tokens_in == 0:
+            resp.tokens_in = sum(len(m.get("content", "")) for m in (messages or [])) // 4
+        if resp.tokens_out == 0:
+            resp.tokens_out = (len(resp.content) + sum(len(str(tc)) for tc in resp.tool_calls)) // 4
+        if resp.cost == 0.0:
+            resp.cost = (resp.tokens_in + resp.tokens_out) * 0.00001
+
+        # Stream thinking word-by-word
+        if resp.thinking:
+            words = resp.thinking.split(" ")
+            for i, w in enumerate(words):
+                chunk = w + (" " if i < len(words) - 1 else "")
+                yield "thinking", chunk
+                await asyncio.sleep(0.04)
+
+        # Stream content word-by-word (only if no tool calls — tool calls are handled separately)
+        if resp.content and not resp.tool_calls:
+            words = resp.content.split(" ")
+            for i, w in enumerate(words):
+                chunk = w + (" " if i < len(words) - 1 else "")
+                yield "token", chunk
+                await asyncio.sleep(0.06)
+
+        yield "done", resp
