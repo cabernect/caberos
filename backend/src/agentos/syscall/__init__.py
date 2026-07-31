@@ -1,6 +1,6 @@
 """Syscall package."""
 
-from .lock import ContactLockManager, contact_locks
+from .lock import SessionLockManager, session_locks
 from .mediator import StubSyscallHandler
 from .protocol import SyscallHandler, SyscallResult, ToolCall
 
@@ -9,6 +9,6 @@ __all__ = [
     "SyscallResult",
     "ToolCall",
     "StubSyscallHandler",
-    "ContactLockManager",
-    "contact_locks",
+    "SessionLockManager",
+    "session_locks",
 ]

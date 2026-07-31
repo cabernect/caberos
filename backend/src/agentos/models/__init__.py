@@ -7,6 +7,7 @@ from .base import Base, IdMixin, TimestampMixin
 from .capability import AgentCapability, Capability
 from .connector import Connector, ConnectorCapability
 from .contact import Contact
+from .elicitation import ElicitationRequest
 from .memory import MemoryEntry, MemoryTriple
 from .operator import Operator, OperatorAuditLog
 from .provider import Provider
@@ -32,6 +33,7 @@ __all__ = [
     "Message",
     "AuditRecord",
     "ApprovalRequest",
+    "ElicitationRequest",
     "MemoryEntry",
     "MemoryTriple",
     "Operator",
