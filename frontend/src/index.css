@@ -1,61 +1,67 @@
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap");
 @import "tailwindcss";
 @import "tw-animate-css";
 
 @custom-variant dark (&:is(.dark *));
 
 /*
- * CaberOS design system — dark-only (D8).
- * Colors from design-system/caberos/MASTER.md mapped to shadcn/ui variables.
- * The app is always dark, so we set the dark palette on :root directly.
+ * CaberOS design system — warm light theme.
+ * Inspired by Claude/Linear aesthetics: warm off-white surfaces,
+ * olive accent, JetBrains Mono for labels and code.
  */
 :root {
-  /* CaberOS design system palette */
-  --background: #0a0a0a;
-  --foreground: #f8fafc;
-  --card: #171717;
-  --card-foreground: #f8fafc;
-  --popover: #171717;
-  --popover-foreground: #f8fafc;
-  --primary: #6366f1;          /* AI accent (indigo) */
-  --primary-foreground: #ffffff;
-  --secondary: #262626;
-  --secondary-foreground: #f8fafc;
-  --muted: #262626;
-  --muted-foreground: #94a3b8;  /* secondary text */
-  --accent: #262626;
-  --accent-foreground: #f8fafc;
-  --destructive: #ef4444;       /* danger */
-  --border: #262626;
-  --input: #262626;
-  --ring: #6366f1;              /* AI accent for focus rings */
-  --radius: 0.5rem;
+  --surface:    #F5F5F3;
+  --sidebar:    #EFEFED;
+  --border:     #E0DFDC;
+  --ink:        #111110;
+  --ink-2:      #6B6B68;
+  --ink-3:      #9B9B97;
+  --accent:     #6A8216;
+  --accent-bg:  #F0F2E2;
+  --tool-bg:    #F0EDE8;
+  --thinking-bg:#FFFBF0;
+  --thinking-border: #FDE68A;
+  --success:    #16A34A;
+  --danger:     #DC2626;
+  --warning:    #D97706;
+  --white:      #FFFFFF;
+  --brand:      #6A8216;   /* olive — light mode */
+  --brand-2:    #A8C04A;   /* lifted olive — for dark mode */
 
-  /* CaberOS-specific colors (not part of shadcn's default set) */
-  --surface: #171717;
-  --surface-hover: #262626;
-  --cta: #6366f1;
-  --success: #10b981;
-  --warning: #f59e0b;
-  --danger: #ef4444;
-  --heartbeat: #8b5cf6;
+  /* shadcn mapping */
+  --background: var(--surface);
+  --foreground: var(--ink);
+  --card: var(--white);
+  --card-foreground: var(--ink);
+  --popover: var(--white);
+  --popover-foreground: var(--ink);
+  --primary: var(--accent);
+  --primary-foreground: var(--white);
+  --secondary: var(--sidebar);
+  --secondary-foreground: var(--ink);
+  --muted: var(--sidebar);
+  --muted-foreground: var(--ink-2);
+  --accent-foreground: var(--white);
+  --destructive: var(--danger);
+  --border: var(--border);
+  --input: var(--border);
+  --ring: var(--accent);
+  --radius: 0.375rem;
 
-  /* Charts (unused in v0.1 but required by shadcn) */
-  --chart-1: #6366f1;
-  --chart-2: #8b5cf6;
-  --chart-3: #10b981;
-  --chart-4: #f59e0b;
-  --chart-5: #ef4444;
+  --sidebar-bg: var(--sidebar);
+  --sidebar-foreground: var(--ink);
+  --sidebar-primary: var(--accent);
+  --sidebar-primary-foreground: var(--white);
+  --sidebar-accent: var(--accent-bg);
+  --sidebar-accent-foreground: var(--accent);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--accent);
 
-  /* Sidebar (unused in v0.1 but required by shadcn) */
-  --sidebar: #171717;
-  --sidebar-foreground: #f8fafc;
-  --sidebar-primary: #6366f1;
-  --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #262626;
-  --sidebar-accent-foreground: #f8fafc;
-  --sidebar-border: #262626;
-  --sidebar-ring: #6366f1;
+  --chart-1: var(--accent);
+  --chart-2: var(--warning);
+  --chart-3: var(--success);
+  --chart-4: var(--danger);
+  --chart-5: var(--ink-3);
 }
 
 @theme inline {
@@ -83,14 +89,19 @@
   --color-ring: var(--ring);
 
   --color-surface: var(--surface);
-  --color-surface-hover: var(--surface-hover);
-  --color-cta: var(--cta);
+  --color-sidebar: var(--sidebar);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-accent-bg: var(--accent-bg);
+  --color-tool-bg: var(--tool-bg);
+  --color-thinking-bg: var(--thinking-bg);
   --color-success: var(--success);
   --color-warning: var(--warning);
   --color-danger: var(--danger);
-  --color-heartbeat: var(--heartbeat);
+  --color-white: var(--white);
 
-  --color-sidebar: var(--sidebar);
+  --color-sidebar-bg: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar-primary: var(--sidebar-primary);
   --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
@@ -122,50 +133,113 @@
     @apply bg-background text-foreground;
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
+    height: 100vh;
+    overflow: hidden;
   }
   html {
     @apply font-sans;
   }
 }
 
-/* Typing indicator animation */
-@keyframes typing-pulse {
-  0%, 60%, 100% { opacity: 0.3; transform: scale(0.8); }
-  30% { opacity: 1; transform: scale(1); }
-}
+/* Thin scrollbars */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--ink-3); }
 
-.typing-dot {
-  animation: typing-pulse 1.4s infinite ease-in-out;
+/* Pulse animation (for thinking dots, running tools) */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
-.typing-dot:nth-child(2) { animation-delay: 0.2s; }
-.typing-dot:nth-child(3) { animation-delay: 0.4s; }
+.pulse { animation: pulse 1.5s ease-in-out infinite; }
 
-@media (prefers-reduced-motion: reduce) {
-  .typing-dot { animation: none; opacity: 0.5; }
+/* Bounce dots (typing indicator) */
+@keyframes bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
 }
+.bounce-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--ink-3);
+  animation: bounce 1s ease-in-out infinite;
+}
+.bounce-dot:nth-child(2) { animation-delay: 0.15s; }
+.bounce-dot:nth-child(3) { animation-delay: 0.30s; }
 
 /* Streaming cursor */
 @keyframes blink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0; }
 }
-
 .streaming-cursor {
   display: inline-block;
   width: 2px;
   height: 1em;
-  background: var(--color-primary);
+  background: var(--accent);
   margin-left: 2px;
   vertical-align: text-bottom;
   animation: blink 1s infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .streaming-cursor { animation: none; }
+  .pulse, .bounce-dot, .streaming-cursor { animation: none; }
 }
 
-/* Scrollbar */
-::-webkit-scrollbar { width: 8px; }
-::-webkit-scrollbar-track { background: var(--background); }
-::-webkit-scrollbar-thumb { background: var(--surface-hover); border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: var(--muted-foreground); }
+/* Markdown rendering for assistant messages */
+.markdown-body > *:first-child { margin-top: 0; }
+.markdown-body > *:last-child { margin-bottom: 0; }
+.markdown-body p { margin: 0.5em 0; }
+.markdown-body ul, .markdown-body ol { margin: 0.5em 0; padding-left: 1.5em; }
+.markdown-body li { margin: 0.25em 0; }
+.markdown-body ul li { list-style: disc; }
+.markdown-body ol li { list-style: decimal; }
+.markdown-body strong { font-weight: 600; }
+.markdown-body em { font-style: italic; }
+.markdown-body code {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.875em;
+  background: var(--tool-bg);
+  padding: 0.15em 0.35em;
+  border-radius: 3px;
+}
+.markdown-body pre {
+  background: var(--tool-bg);
+  padding: 0.75em 1em;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 0.75em 0;
+}
+.markdown-body pre code {
+  background: none;
+  padding: 0;
+  font-size: 0.85em;
+}
+.markdown-body blockquote {
+  border-left: 3px solid var(--border);
+  padding-left: 1em;
+  margin: 0.75em 0;
+  color: var(--ink-2);
+}
+.markdown-body a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.markdown-body h1, .markdown-body h2, .markdown-body h3 {
+  font-weight: 600;
+  margin: 1em 0 0.5em;
+}
+.markdown-body h1 { font-size: 1.25em; }
+.markdown-body h2 { font-size: 1.15em; }
+.markdown-body h3 { font-size: 1.05em; }
+.markdown-body table {
+  border-collapse: collapse;
+  margin: 0.75em 0;
+}
+.markdown-body th, .markdown-body td {
+  border: 1px solid var(--border);
+  padding: 0.4em 0.7em;
+  text-align: left;
+}
+.markdown-body th { font-weight: 600; background: var(--sidebar); }

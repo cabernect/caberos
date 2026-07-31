@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef } from "react";
-import { ChevronRight, ChevronDown, Brain } from "lucide-react";
 
 interface ThinkingBlockProps {
   content: string;
@@ -7,11 +6,14 @@ interface ThinkingBlockProps {
   durationSec?: number;
 }
 
-export function ThinkingBlock({ content, isStreaming, durationSec }: ThinkingBlockProps) {
+export function ThinkingBlock({
+  content,
+  isStreaming,
+  durationSec,
+}: ThinkingBlockProps) {
   const [expanded, setExpanded] = useState(true);
   const contentRef = useRef<HTMLDivElement>(null);
 
-  // Auto-expand during streaming, auto-collapse when done
   useEffect(() => {
     if (isStreaming) {
       setExpanded(true);
@@ -20,7 +22,6 @@ export function ThinkingBlock({ content, isStreaming, durationSec }: ThinkingBlo
     }
   }, [isStreaming]);
 
-  // Auto-scroll to bottom while streaming
   useEffect(() => {
     if (expanded && isStreaming && contentRef.current) {
       contentRef.current.scrollTop = contentRef.current.scrollHeight;
@@ -33,28 +34,35 @@ export function ThinkingBlock({ content, isStreaming, durationSec }: ThinkingBlo
     <div className="mb-2">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition"
+        className="flex items-center gap-1.5 bg-none p-0"
+        style={{ border: "none", cursor: "pointer" }}
       >
-        {expanded ? (
-          <ChevronDown className="h-3 w-3" />
-        ) : (
-          <ChevronRight className="h-3 w-3" />
-        )}
-        <Brain className="h-3 w-3" />
-        <span>
-          {isStreaming ? "thinking..." : `thinking${durationSec ? ` · ${durationSec}s` : ""}`}
+        <span
+          className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${isStreaming ? "pulse" : ""}`}
+          style={{ background: "#FBBF24" }}
+        />
+        <span className="font-mono text-[11px] text-[var(--ink-2)] transition group-hover:text-[var(--ink)]">
+          {isStreaming
+            ? "thinking…"
+            : `thinking${durationSec ? ` · ${durationSec}s` : ""}`}
+        </span>
+        <span className="font-mono text-[11px] text-[var(--ink-3)]">
+          {expanded ? "▲" : "▼"}
         </span>
       </button>
 
       {expanded && (
         <div
           ref={contentRef}
-          className="mt-1 max-h-48 overflow-y-auto pl-6"
+          className="mb-3 mt-2 max-h-48 overflow-y-auto rounded-[5px] border p-2 px-3 py-2 text-[13px] italic leading-[1.6]"
+          style={{
+            borderColor: "#FDE68A",
+            background: "var(--thinking-bg)",
+            color: "var(--ink-2)",
+          }}
         >
-          <p className="font-mono text-xs italic text-muted-foreground whitespace-pre-wrap">
-            {content}
-            {isStreaming && <span className="streaming-cursor" />}
-          </p>
+          {content}
+          {isStreaming && <span className="streaming-cursor" />}
         </div>
       )}
     </div>

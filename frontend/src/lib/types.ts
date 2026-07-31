@@ -40,6 +40,15 @@ export interface Message {
   run_id: string;
 }
 
+export interface SessionInfo {
+  id: string;
+  title: string;
+  status: string;
+  started_at: string;
+  last_activity_at: string;
+  message_count: number;
+}
+
 // SSE event payloads
 export interface TypingEvent {
   // empty
@@ -57,8 +66,9 @@ export interface ToolCallEvent {
   id: string;
   capability: string;
   args: Record<string, unknown>;
-  status: "pending" | "running" | "complete" | "denied";
+  status: "pending" | "pending_approval" | "running" | "complete" | "denied";
   result?: unknown;
+  approval_id?: string;
 }
 
 export interface TurnCompleteEvent {
@@ -74,4 +84,16 @@ export interface MessageCompleteEvent {
   total_cost?: number;
   total_turns?: number;
   error?: string;
+}
+
+export interface Approval {
+  id: string;
+  run_id: string;
+  agent_id: string;
+  capability_name: string;
+  args: Record<string, unknown>;
+  status: string;
+  created_at: string;
+  decided_by: string | null;
+  decided_at: string | null;
 }
