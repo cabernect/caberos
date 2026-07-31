@@ -133,11 +133,24 @@ The `messages.attachments` column stores attachment metadata (type, mime_type, f
 - **Ticket 03 (file ops + tool call visibility):** IMPLEMENTED. 50 tests pass. Real syscall layer (subject injection, result reduction), tool call blocks (collapsible, state icons), thinking blocks (streaming, auto-collapse), per-turn cost badges. shadcn/ui components.
 - **Ticket 04 (approval flow + elicitation):** IMPLEMENTED. Two human-in-the-loop mechanisms:
   - **Approval gate:** Syscall mediator pauses run on `require_approval=true` capabilities, creates ApprovalRequest, emits `pending_approval` SSE event with approval_id. Frontend shows inline Approve/Deny buttons with "Remember for this session" checkbox (session-scoped auto-allow for same capability+args). Approval API (`GET /api/approvals`, `POST approve/reject`) resolves asyncio.Event via process-global registry. Agent continues after denial (tries alternative approach).
-  - **Elicitation (clarifying question):** New capability `agent.ask_user(question, options?)`. When the agent calls it, the mediator creates an ElicitationRequest, emits `clarifying_question` SSE event, and pauses the run. Frontend shows the question with option buttons (if `options` provided) or a free-text input field. User responds via `POST /api/elicitation/{id}/respond`, which resolves the asyncio.Event. The user's response becomes the tool call result — the agent continues with that context (same run, same context, not a new message). ElicitationRequest model, elicitation_registry, 5 tests. Demo exercises the full flow with a 3-option question.
+  - **Elicitation (clarifying question):** Capability `agent.ask_user(question, options?, multi_select?)`. Options support `{label, description}` format. When the agent calls it, the mediator creates an ElicitationRequest, emits `clarifying_question` SSE event (with `multi_select`), and pauses the run. The **chat bar transforms** into the elicitation input — shows numbered options with descriptions, single/multi-select, number key shortcuts (1-9), free-text fallback. Q&A pair added to chat history after answering. Configurable timeout (`hitl_timeout`, default 5 min) — auto-responds on timeout. User responds via `POST /api/elicitation/{id}/respond`.
 - **Guardrails (D2):** IMPLEMENTED. Both input and output guardrails.
   - **Input guardrails** (run on user message before storage/processing): secret redaction (don't persist API keys in message history), prompt injection detection (warns but doesn't block — the message still goes through, logged for audit). Does NOT check context leakage (users are allowed to reference their own file paths).
   - **Output guardrails** (run on model's final answer before it reaches the user): secret redaction (`[REDACTED]`), prompt injection detection (flags "ignore previous instructions", role reset tags, ChatML markers — warns but doesn't remove, operator should see what the agent tried to echo), context leakage check (redacts home paths to `[PATH]`, flags agent home dir paths, system prompt fragments, 3+ internal UUIDs).
-  - 81 tests pass. SSE events: `guardrail_correction` (replaces streamed content with clean version), `guardrail_warning` (shows warnings in UI, with `direction: "input"` or `"output"`). Input warnings show in a separate yellow box before the streaming response.
+  - SSE events: `guardrail_correction` (replaces streamed content with clean version), `guardrail_warning` (shows warnings in UI, with `direction: "input"` or `"output"`). Input warnings show in a separate yellow box before the streaming response.
+- **Run manager + SSE refactor:** IMPLEMENTED. Runs are first-class entities with managed lifecycle.
+  - `RunContext` dataclass tracks asyncio.Task, event buffer, and status per run.
+  - `POST /message` returns `{run_id, session_id}` immediately (no SSE on the response).
+  - `GET /runs/{id}/events` — reconnectable SSE stream with event buffer + `Last-Event-ID` support.
+  - `GET /runs/{id}` — poll run status. `POST /runs/{id}/stop` — cancel a run.
+  - **Per-session lock** (not per-contact) — concurrent runs for different sessions of the same agent.
+  - Stuck run cleanup on server startup. Finished runs cleaned from `_active_runs` after TTL.
+  - Frontend: `POST` message → get `run_id` → connect to `GET /runs/{id}/events` SSE stream. Reconnect logic on disconnect.
+- **File write diffs:** IMPLEMENTED. `file.write` reads before content, generates unified diff via `difflib`. Returns `{action: created|modified|unchanged, diff: "..."}`. Frontend `DiffBlock` renders collapsible diff with green/red coloring and +N/-N counts.
+- **Streaming UX fixes:** IMPLEMENTED. Completed runs keep thinking blocks, tool calls, and costs visible (`completed` flag on `StreamingResponse`). Cost badges aggregated into single "N turns · M tokens · $X" line. Thinking animation stops on run completion (not just when text starts).
+- **Session timezone fix:** IMPLEMENTED. `_iso_utc()` helper in `chat.py` appends `Z` to naive SQLite UTC datetimes. Fixes 7h offset bug where browser parsed UTC as local time.
+- **LLM session titles:** IMPLEMENTED. After first run, generates 3-5 word title from conversation via LLM. Falls back to first-message title if LLM call fails (demo mode).
+- **112 backend tests pass.** Frontend type-checks cleanly.
 
 ## Build & test commands
 
@@ -178,26 +191,30 @@ cd frontend && npm run build
 
 ```
 backend/src/agentos/
-├── config.py            — settings (env vars, paths)
+├── config.py            — settings (env vars, paths, hitl_timeout)
 ├── db.py                — async SQLAlchemy engine, session factory, init_db (create_all + schema patches)
 ├── config_schema.py     — Pydantic models (AgentConfig, ModelConfig, etc.)
 ├── agent_service.py     — agent CRUD, versioning, YAML import/export
 ├── secret_store.py      — Fernet encryption for provider keys
 ├── seed.py              — seed default operator + capabilities
-├── runner.py            — run_agent() — universal entry point (CLI, API, gateway, native app)
-├── pipeline.py          — D19's 13-step execution pipeline
+├── runner.py            — run_agent() + ScriptedModel demo (7-turn workspace check)
+├── run_manager.py       — RunContext, _active_runs registry, start/stop/get run
+├── pipeline.py          — D19's 13-step execution pipeline + LLM title generation
 ├── main.py              — FastAPI app entry point (routers, CORS, lifespan)
 ├── auth.py              — operator auth (session+cookie, bcrypt, login/logout/me)
 ├── models/              — SQLAlchemy models (all v0.1 tables)
+│   └── elicitation.py   — ElicitationRequest model
 ├── capabilities/        — capability registry + built-in tools
 │   ├── registry.py      — CapabilityDef, CapabilityRegistry
-│   ├── builtin.py       — register_builtin_capabilities()
-│   └── tools/           — file.read, file.write, file.list, file.search, file.glob,
+│   ├── builtin.py       — register_builtin_capabilities() (10 tools)
+│   └── tools/           — file.read, file.write (with diff), file.list, file.search, file.glob,
 │                         shell.run, datetime.now, web.search, web.fetch
 ├── api/                 — REST API routes (control plane)
 │   ├── agents.py        — list/get agents
-│   ├── chat.py          — dashboard chat channel (calls run_agent(), broadcasts SSE)
-│   └── providers.py     — provider CRUD, model discovery, validation
+│   ├── chat.py          — chat channel (POST /message, GET /runs/{id}/events SSE, run management)
+│   ├── providers.py     — provider CRUD, model discovery, validation
+│   ├── approvals.py     — approval list/approve/reject API
+│   └── elicitation.py   — elicitation respond API
 ├── sandbox/             — process-level sandbox
 │   ├── base.py          — SandboxBackend ABC, get_backend()
 │   ├── seatbelt.py      — macOS sandbox-exec
@@ -205,13 +222,16 @@ backend/src/agentos/
 │   └── workspace.py     — path validation, workspace creation
 ├── syscall/             — the single boundary every capability call crosses
 │   ├── protocol.py      — SyscallHandler Protocol, ToolCall, SyscallResult
-│   ├── mediator.py      — StubSyscallHandler (auto-approve, writes audit)
-│   └── lock.py          — per-Contact asyncio lock
+│   ├── mediator.py      — SyscallHandler (approval gate, elicitation, audit)
+│   ├── lock.py          — per-Session asyncio lock (concurrent sessions)
+│   ├── approval_registry.py — asyncio.Event registry for approval resolution
+│   └── elicitation_registry.py — asyncio.Event registry for elicitation resolution
 └── harness/             — agent execution loop
     ├── base_prompt.py   — static platform system prompt (same for every agent)
     ├── context.py       — system prompt + tool schema assembly + multimodal message building
     ├── scripted_model.py — ScriptedModel double (no real LLM needed)
-    ├── litellm_adapter.py — LiteLLM adapter (real model, D6/D39)
+    ├── litellm_adapter.py — LiteLLM adapter (real model, streaming, reasoning tokens)
+    ├── guardrails.py    — input/output guardrails (secret redaction, injection detection)
     └── loop.py          — Harness.run() — the agent loop
 ```
 
