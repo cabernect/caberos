@@ -1,19 +1,23 @@
-"""Per-Contact lock — at most one Run per Contact at a time (D19 step 6)."""
+"""Per-Session lock — at most one Run per Session at a time (D19 step 6).
+
+Different sessions for the same agent run concurrently.
+Same session serializes (don't interleave turns in one conversation).
+"""
 
 import asyncio
 
 
-class ContactLockManager:
-    """In-process asyncio lock keyed by contact_id."""
+class SessionLockManager:
+    """In-process asyncio lock keyed by session_id."""
 
     def __init__(self) -> None:
         self._locks: dict[str, asyncio.Lock] = {}
 
-    def get_lock(self, contact_id: str) -> asyncio.Lock:
-        if contact_id not in self._locks:
-            self._locks[contact_id] = asyncio.Lock()
-        return self._locks[contact_id]
+    def get_lock(self, session_id: str) -> asyncio.Lock:
+        if session_id not in self._locks:
+            self._locks[session_id] = asyncio.Lock()
+        return self._locks[session_id]
 
 
 # Global instance
-contact_locks = ContactLockManager()
+session_locks = SessionLockManager()

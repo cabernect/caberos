@@ -69,10 +69,11 @@ async def test_pipeline_full_run(db, workspace, tmp_path, monkeypatch):
     # Verify messages were written
     result = await db.execute(select(Message).where(Message.run_id == run.id))
     messages = result.scalars().all()
-    assert len(messages) == 2  # user + assistant
+    assert len(messages) == 3  # user + tool_call + assistant
     roles = [m.role for m in messages]
     assert "user" in roles
     assert "assistant" in roles
+    assert "tool_call" in roles
 
     # Verify audit record was written
     result = await db.execute(select(AuditRecord).where(AuditRecord.run_id == run.id))

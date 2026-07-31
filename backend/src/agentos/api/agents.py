@@ -45,8 +45,17 @@ async def get_agent(
     operator: Operator = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Get a single agent's active config."""
+    """Get a single agent's active config (flat format, same as list endpoint)."""
     config = await get_active_config(db, agent_id)
     if config is None:
         raise HTTPException(status_code=404, detail="Agent not found")
-    return config.to_dict()
+    return {
+        "id": agent_id,
+        "name": config.name,
+        "enabled": True,
+        "model": config.model.name,
+        "provider_id": config.model.provider_id,
+        "soul": config.soul,
+        "persona": config.persona,
+        "task": config.task,
+    }

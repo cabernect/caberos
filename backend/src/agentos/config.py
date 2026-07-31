@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     # Sandbox defaults
     sandbox_timeout: int = 30
 
+    # HITL timeout — how long (seconds) to wait for human approval/elicitation
+    # before auto-rejecting. 0 = wait forever (not recommended for production).
+    hitl_timeout: int = 300  # 5 minutes
+
     @property
     def db_url(self) -> str:
         return f"sqlite+aiosqlite:///{self.db_path}"
