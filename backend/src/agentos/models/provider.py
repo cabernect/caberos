@@ -19,3 +19,6 @@ class Provider(Base, IdMixin, TimestampMixin):
     base_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
     org_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     extra_params: Mapped[str] = mapped_column(Text, default="{}")  # JSON
+    custom_models: Mapped[str] = mapped_column(
+        Text, default="[]", nullable=False
+    )  # JSON array of user-added model names

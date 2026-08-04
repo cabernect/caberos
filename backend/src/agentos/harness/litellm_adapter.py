@@ -7,6 +7,7 @@ Supports OpenAI, Anthropic, Google, Ollama, and any provider LiteLLM supports.
 Implements the same interface as ScriptedModel so the Harness can use either.
 """
 
+import asyncio
 import json
 import uuid
 from dataclasses import dataclass, field
@@ -16,6 +17,7 @@ import litellm
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..config import settings
 from ..config_schema import ModelConfig
 from ..models.provider import Provider
 from ..secret_store import decrypt
@@ -85,7 +87,6 @@ class LiteLLMAdapter:
         kwargs: dict[str, Any] = {
             "model": model_str,
             "messages": messages,
-            "temperature": agent_model.temperature,
         }
 
         # Provider-specific params
@@ -100,19 +101,9 @@ class LiteLLMAdapter:
         if agent_model.max_tokens:
             kwargs["max_tokens"] = agent_model.max_tokens
 
-        # Convert tool schemas to LiteLLM format
+        # Tools are already in OpenAI format: {"type": "function", "function": {...}}
         if tools:
-            kwargs["tools"] = [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": t["name"],
-                        "description": t.get("description", ""),
-                        "parameters": t.get("parameters", {"type": "object", "properties": {}}),
-                    },
-                }
-                for t in tools
-            ]
+            kwargs["tools"] = tools
 
         # Call LiteLLM
         response = await litellm.acompletion(**kwargs)
@@ -184,13 +175,19 @@ class LiteLLMAdapter:
         if messages is None:
             messages = []
 
+        # DEBUG: print message roles
+        import sys as _sys, json as _json
+        print(f"[DEBUG stream] messages:", file=_sys.stderr)
+        for i, m in enumerate(messages):
+            tc = bool(m.get('tool_calls'))
+            print(f"  {i}: role={m['role']} tool_calls={tc} content={str(m.get('content',''))[:60]}", file=_sys.stderr)
+
         provider = await self._load_provider(agent_model.provider_id)
         model_str = f"{provider['type']}/{agent_model.name}"
 
         kwargs: dict[str, Any] = {
             "model": model_str,
             "messages": messages,
-            "temperature": agent_model.temperature,
             "stream": True,
         }
 
@@ -206,22 +203,16 @@ class LiteLLMAdapter:
             kwargs["max_tokens"] = agent_model.max_tokens
 
         if tools:
-            kwargs["tools"] = [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": t["name"],
-                        "description": t.get("description", ""),
-                        "parameters": t.get(
-                            "parameters", {"type": "object", "properties": {}}
-                        ),
-                    },
-                }
-                for t in tools
-            ]
+            # Tools are already in OpenAI format
+            kwargs["tools"] = tools
+
+        # Request usage info in streaming responses (OpenAI-compatible)
+        kwargs["stream_options"] = {"include_usage": True}
 
         # Call LiteLLM with streaming
-        stream = await litellm.acompletion(**kwargs)
+        stream = await asyncio.wait_for(
+            litellm.acompletion(**kwargs), timeout=settings.model_request_timeout
+        )
 
         full_content = ""
         full_thinking = ""
@@ -230,7 +221,19 @@ class LiteLLMAdapter:
         tokens_out = 0
         cost = 0.0
 
-        async for chunk in stream:
+        stream_iterator = aiter(stream)
+        while True:
+            try:
+                chunk = await asyncio.wait_for(
+                    anext(stream_iterator), timeout=settings.model_stream_idle_timeout
+                )
+            except StopAsyncIteration:
+                break
+            except TimeoutError as exc:
+                raise TimeoutError(
+                    f"Model stream was idle for {settings.model_stream_idle_timeout}s"
+                ) from exc
+
             if not chunk.choices:
                 # Usage info sometimes comes in a separate chunk
                 if hasattr(chunk, "usage") and chunk.usage:
@@ -288,7 +291,7 @@ class LiteLLMAdapter:
         if tokens_in == 0:
             tokens_in = sum(len(m.get("content", "")) for m in messages) // 4
         if tokens_out == 0:
-            tokens_out = len(full_content) // 4
+            tokens_out = (len(full_content) + len(full_thinking)) // 4
 
         final = ScriptedResponse(
             tool_calls=tool_calls,

@@ -45,3 +45,6 @@ class Message(Base, IdMixin):
     # Does NOT store base64 data — too large for SQLite. Images are sent to the model
     # at runtime from the InboundMessage; only metadata is persisted for history display.
     attachments: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Sub-agent messages: tagged with subagent_id so the frontend can nest them
+    # under the parent's run_subagent tool call. Null for parent-level messages.
+    subagent_id: Mapped[str | None] = mapped_column(String(36), nullable=True)

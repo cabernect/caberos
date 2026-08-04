@@ -10,20 +10,28 @@ class ChannelBinding(BaseModel):
 
 
 class ModelConfig(BaseModel):
-    provider_id: str
-    name: str
-    temperature: float = 0.3
+    # Empty string = no model configured. The agent can't run until the user
+    # assigns a provider + model in Settings. This happens when a provider is
+    # deleted out from under an agent.
+    provider_id: str = ""
+    name: str = ""
     max_tokens: int | None = None
+
+    @property
+    def is_configured(self) -> bool:
+        """True when both provider_id and name are set."""
+        return bool(self.provider_id and self.name)
 
 
 class CapabilityGrant(BaseModel):
     name: str
+    enabled: bool = True
     subject: Literal["self", "any", "none"] = "none"
     require_approval: bool = False
 
 
 class Limits(BaseModel):
-    max_turns_per_run: int = 12
+    max_turns_per_run: int = 15
     max_cost_per_run: float = 500.0
     session_idle_timeout_min: int = 60
     max_context_tokens: int = 24000
@@ -53,10 +61,11 @@ class AgentConfig(BaseModel):
     soul: str = ""
     persona: str = ""
     task: str = ""
-    capabilities: list[CapabilityGrant] = Field(default_factory=list)
+    capabilities: list[CapabilityGrant] | None = None  # None = all tools, [] = none
     limits: Limits = Field(default_factory=Limits)
     fallback: Fallback = Field(default_factory=Fallback)
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
+    sandbox_mode: Literal["strict", "open"] = "strict"  # strict=workspace only, open=any path
 
     def to_dict(self) -> dict[str, Any]:
         return self.model_dump()

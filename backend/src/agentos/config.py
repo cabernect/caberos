@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     # Sandbox defaults
     sandbox_timeout: int = 30
 
+    model_request_timeout: int = 120
+    model_stream_idle_timeout: int = 30
+
     # HITL timeout — how long (seconds) to wait for human approval/elicitation
     # before auto-rejecting. 0 = wait forever (not recommended for production).
     hitl_timeout: int = 300  # 5 minutes

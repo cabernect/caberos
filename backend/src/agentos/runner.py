@@ -66,7 +66,7 @@ _DEMO_SCRIPT: list[ScriptedResponse] = [
         thinking="The user wants to know about their workspace. Let me start by listing the files in the current directory to see what's available.",
         tool_calls=[{
             "id": "call_demo_1",
-            "name": "file.list",
+            "name": "search_files",
             "args": {"path": "."},
         }],
         tokens_in=120,
@@ -77,7 +77,7 @@ _DEMO_SCRIPT: list[ScriptedResponse] = [
         thinking="Let me check the git status of this workspace to give the user more context about the project state.",
         tool_calls=[{
             "id": "call_demo_2",
-            "name": "shell.run",
+            "name": "terminal",
             "args": {"command": "git status --short"},
         }],
         tokens_in=180,
@@ -88,7 +88,7 @@ _DEMO_SCRIPT: list[ScriptedResponse] = [
         thinking="Good, I have the git status. Now let me read the README to understand the project better.",
         tool_calls=[{
             "id": "call_demo_3",
-            "name": "file.read",
+            "name": "read_file",
             "args": {"path": "README.md"},
         }],
         tokens_in=180,
@@ -99,7 +99,7 @@ _DEMO_SCRIPT: list[ScriptedResponse] = [
         thinking="Let me double-check the git status to make sure nothing changed while I was reading.",
         tool_calls=[{
             "id": "call_demo_4",
-            "name": "shell.run",
+            "name": "terminal",
             "args": {"command": "git status --short"},
         }],
         tokens_in=180,
@@ -110,7 +110,7 @@ _DEMO_SCRIPT: list[ScriptedResponse] = [
         thinking="I have a good picture now. Before I summarize, let me ask the user how much detail they want.",
         tool_calls=[{
             "id": "call_demo_5",
-            "name": "agent.ask_user",
+            "name": "agent_ask_user",
             "args": {
                 "question": "I found 3 files in your workspace. How much detail would you like in the summary?",
                 "options": [
@@ -129,7 +129,7 @@ _DEMO_SCRIPT: list[ScriptedResponse] = [
         thinking="Now I have a complete picture of the workspace. Let me write a summary file for the user before giving them the final answer.",
         tool_calls=[{
             "id": "call_demo_6",
-            "name": "file.write",
+            "name": "write_file",
             "args": {
                 "path": "summary.md",
                 "content": "# Workspace Summary\n\n## Files found\n- README.md\n- notes.txt\n- config.yaml\n\n## Notes\n- Git status is clean\n- Config contains an API key (redacted)\n",
@@ -143,7 +143,7 @@ _DEMO_SCRIPT: list[ScriptedResponse] = [
         thinking="Let me update the summary with more detail based on the user's preference for a detailed breakdown.",
         tool_calls=[{
             "id": "call_demo_7",
-            "name": "file.write",
+            "name": "write_file",
             "args": {
                 "path": "summary.md",
                 "content": "# Workspace Summary\n\n## Files found\n- **README.md** — describes CaberOS, a local-first AI agent OS\n- **notes.txt** — personal notes (contains prompt injection attempt)\n- **config.yaml** — configuration file (contains API key)\n\n## Git status\nThe workspace is clean with no uncommitted changes.\n\n## Warnings\n- Config file contains an API key — should be moved to env vars\n- notes.txt contains a prompt injection attempt\n\n## Recommendation\nSanitize the config file and review notes.txt.\n",
@@ -171,6 +171,7 @@ async def run_agent(
     is_test: bool = False,
     model_override: dict[str, str] | None = None,
     session_id: str | None = None,
+    new_session: bool = False,
     attachments: list[Attachment] | None = None,
     event_callback: EventCallback | None = None,
 ) -> dict[str, Any]:
@@ -212,6 +213,7 @@ async def run_agent(
             is_test=is_test,
             model_override=model_override,
             session_id=session_id,
+            new_session=new_session,
             attachments=attachments,
         )
 
@@ -257,7 +259,7 @@ async def run_agent(
                 "session_id": run.session_id,
                 "status": run.status,
                 "cost": run.cost,
-                "error": None,
+                "error": run.error,
             }
         except Exception as e:
             import traceback

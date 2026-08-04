@@ -13,8 +13,10 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..agent_service import get_active_config, save_agent
 from ..db import get_db
 from ..harness.litellm_adapter import LiteLLMAdapter
+from ..models.agent import Agent, AgentVersion
 from ..models.provider import Provider
 from ..secret_store import encrypt
 
@@ -46,6 +48,7 @@ class ProviderOut(BaseModel):
     base_url: str | None = None
     org_id: str | None = None
     extra_params: dict = {}
+    custom_models: list[str] = []
 
     @classmethod
     def from_model(cls, p: Provider) -> "ProviderOut":
@@ -57,6 +60,7 @@ class ProviderOut(BaseModel):
             base_url=p.base_url,
             org_id=p.org_id,
             extra_params=json.loads(p.extra_params) if p.extra_params else {},
+            custom_models=json.loads(p.custom_models) if p.custom_models else [],
         )
 
 
@@ -130,9 +134,22 @@ async def delete_provider(provider_id: str, db: AsyncSession = Depends(get_db)) 
     provider = result.scalar_one_or_none()
     if provider is None:
         raise HTTPException(status_code=404, detail="Provider not found")
+
+    # Find all agents whose active config references this provider.
+    # Clear their model config so they don't point to a deleted provider.
+    affected_agents: list[str] = []
+    agent_result = await db.execute(select(Agent))
+    for agent in agent_result.scalars().all():
+        config = await get_active_config(db, agent.id)
+        if config and config.model.provider_id == provider_id:
+            config.model.provider_id = ""
+            config.model.name = ""
+            await save_agent(db, config)
+            affected_agents.append(agent.id)
+
     await db.delete(provider)
     await db.commit()
-    return {"status": "deleted"}
+    return {"status": "deleted", "affected_agents": affected_agents}
 
 
 @router.get("/{provider_id}/models")
@@ -175,3 +192,48 @@ async def validate_model(
         return {"valid": True}
     except Exception as e:
         return {"valid": False, "error": str(e)}
+
+
+class CustomModelIn(BaseModel):
+    model_name: str
+
+
+@router.post("/{provider_id}/models")
+async def add_custom_model(
+    provider_id: str,
+    body: CustomModelIn,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Add a custom model name to a provider (for providers without discovery)."""
+    result = await db.execute(select(Provider).where(Provider.id == provider_id))
+    provider = result.scalar_one_or_none()
+    if provider is None:
+        raise HTTPException(status_code=404, detail="Provider not found")
+
+    models = json.loads(provider.custom_models) if provider.custom_models else []
+    name = body.model_name.strip()
+    if name and name not in models:
+        models.append(name)
+        provider.custom_models = json.dumps(models)
+        await db.commit()
+    return {"custom_models": models}
+
+
+@router.delete("/{provider_id}/models/{model_name:path}")
+async def remove_custom_model(
+    provider_id: str,
+    model_name: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Remove a custom model from a provider."""
+    result = await db.execute(select(Provider).where(Provider.id == provider_id))
+    provider = result.scalar_one_or_none()
+    if provider is None:
+        raise HTTPException(status_code=404, detail="Provider not found")
+
+    models = json.loads(provider.custom_models) if provider.custom_models else []
+    if model_name in models:
+        models.remove(model_name)
+        provider.custom_models = json.dumps(models)
+        await db.commit()
+    return {"custom_models": models}

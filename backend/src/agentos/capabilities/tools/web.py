@@ -1,7 +1,7 @@
-"""Web capabilities — web.search and web.fetch.
+"""Web capabilities — web_search and web_fetch.
 
-web.search uses DuckDuckGo's HTML endpoint (free, no API key required).
-web.fetch retrieves a URL and returns the text content.
+web_search uses DuckDuckGo's HTML endpoint (free, no API key required).
+web_fetch retrieves a URL and returns the text content.
 
 Both are egress capabilities — they access the network, so they require approval
 by default (the operator can disable this per-agent).
@@ -88,28 +88,21 @@ async def web_fetch(args: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
     except httpx.HTTPError as e:
         return {"error": f"Fetch failed: {e}"}
 
-    content_type = resp.headers.get("content-type", "")
+    # Parse HTML and extract text
+    soup = BeautifulSoup(resp.text, "html.parser")
 
-    # For HTML, extract text
-    if "text/html" in content_type:
-        soup = BeautifulSoup(resp.text, "html.parser")
-        # Remove script and style elements
-        for tag in soup(["script", "style", "nav", "footer", "header"]):
-            tag.decompose()
-        text = soup.get_text(separator="\n", strip=True)
-        # Collapse multiple blank lines
-        text = re.sub(r"\n{3,}", "\n\n", text)
-    else:
-        text = resp.text
+    # Remove script and style elements
+    for script in soup(["script", "style"]):
+        script.decompose()
 
-    truncated = len(text) > max_chars
-    if truncated:
-        text = text[:max_chars] + "\n\n[... truncated]"
+    text = soup.get_text(separator="\n", strip=True)
+
+    # Truncate to max_chars
+    if len(text) > max_chars:
+        text = text[:max_chars] + "\n... [truncated]"
 
     return {
         "url": url,
-        "content_type": content_type,
-        "text": text,
-        "truncated": truncated,
-        "chars": len(text),
+        "content": text,
+        "title": soup.title.string if soup.title else "",
     }

@@ -1,6 +1,6 @@
 // API client — the only way the frontend talks to the backend (D33)
 
-import type { Agent, Approval, Message, ModelInfo, Operator, Provider, SessionInfo } from "./types";
+import type { Agent, AgentVersion, Approval, CapabilityGrant, HeartbeatConfig, Limits, Message, ModelInfo, Operator, Provider, SessionInfo, Skill, WorkspaceEntry } from "./types";
 
 const BASE = ""; // same origin via Vite proxy
 
@@ -34,6 +34,76 @@ export const api = {
   // Agents
   listAgents: () => request<Agent[]>("/api/agents"),
   getAgent: (id: string) => request<Agent>(`/api/agents/${id}`),
+  listCapabilities: () => request<{ name: string; kind: string; description: string; egress: boolean; require_approval: boolean }[]>("/api/agents/capabilities"),
+  createAgent: (data: { name: string; provider_id?: string; model_name?: string; soul?: string; persona?: string; task?: string }) =>
+    request<{ id: string; name: string; enabled: boolean }>("/api/agents", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  updateAgent: (id: string, data: {
+    name?: string;
+    provider_id?: string;
+    model_name?: string;
+    soul?: string;
+    persona?: string;
+    task?: string;
+    capabilities?: CapabilityGrant[] | null;
+    limits?: Limits;
+    heartbeat?: HeartbeatConfig;
+  }) =>
+    request<{ id: string; version: number; version_id: string }>(`/api/agents/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+  disableAgent: (id: string) =>
+    request<{ id: string; enabled: boolean }>(`/api/agents/${id}/disable`, { method: "POST" }),
+  enableAgent: (id: string) =>
+    request<{ id: string; enabled: boolean }>(`/api/agents/${id}/enable`, { method: "POST" }),
+  duplicateAgent: (id: string, newId: string, newName: string) =>
+    request<{ id: string; name: string; enabled: boolean }>(`/api/agents/${id}/duplicate`, {
+      method: "POST",
+      body: JSON.stringify({ new_id: newId, new_name: newName }),
+    }),
+  exportAgent: (id: string) =>
+    request<{ yaml: string }>(`/api/agents/${id}/export`),
+  importAgent: (yaml: string) =>
+    request<{ id: string; name: string; enabled: boolean }>("/api/agents/import", {
+      method: "POST",
+      body: JSON.stringify({ yaml }),
+    }),
+  listVersions: (id: string) =>
+    request<AgentVersion[]>(`/api/agents/${id}/versions`),
+  getVersion: (id: string, versionId: string) =>
+    request<{ id: string; version_number: number; is_active: boolean; config: Record<string, unknown> }>(
+      `/api/agents/${id}/versions/${versionId}`,
+    ),
+  rollbackAgent: (id: string, versionId: string) =>
+    request<{ id: string; version_number: number; is_active: boolean }>(
+      `/api/agents/${id}/rollback/${versionId}`,
+      { method: "POST" },
+    ),
+
+  // Agent files — MEMORY.md, skills, workspace
+  getMemory: (id: string) =>
+    request<{ content: string; exists: boolean }>(`/api/agents/${id}/memory`),
+  updateMemory: (id: string, content: string) =>
+    request<{ ok: boolean; bytes: number }>(`/api/agents/${id}/memory`, {
+      method: "PUT",
+      body: JSON.stringify({ content }),
+    }),
+  listSkills: (id: string) =>
+    request<Skill[]>(`/api/agents/${id}/skills`),
+  createSkill: (id: string, name: string, content?: string) =>
+    request<{ name: string; path: string }>(`/api/agents/${id}/skills`, {
+      method: "POST",
+      body: JSON.stringify({ name, content: content || "" }),
+    }),
+  deleteSkill: (id: string, skillName: string) =>
+    request<{ ok: boolean }>(`/api/agents/${id}/skills/${skillName}`, { method: "DELETE" }),
+  listWorkspace: (id: string, path?: string) =>
+    request<{ type: "dir" | "file"; path: string; entries?: WorkspaceEntry[]; content?: string; size?: number }>(
+      `/api/agents/${id}/workspace${path ? `?path=${encodeURIComponent(path)}` : ""}`,
+    ),
 
   // Chat — POST /message starts a run, returns {run_id, session_id}
   sendMessage: (
@@ -43,6 +113,7 @@ export const api = {
     modelOverride?: { provider_id: string; name: string },
     sessionId?: string,
     attachments?: { type: string; mime_type: string; data: string; filename: string }[],
+    newSession = false,
   ) =>
     request<{ run_id: string; session_id: string; status: string }>(
       `/api/chat/${agentId}/message`,
@@ -53,6 +124,7 @@ export const api = {
           is_test: isTest,
           model_override: modelOverride,
           session_id: sessionId,
+          new_session: newSession,
           attachments: attachments || [],
         }),
       },
@@ -143,10 +215,21 @@ export const api = {
   listProviders: () => request<Provider[]>("/api/providers"),
   createProvider: (data: Partial<Provider> & { api_key?: string }) =>
     request<Provider>("/api/providers", { method: "POST", body: JSON.stringify(data) }),
+  updateProvider: (id: string, data: Partial<Provider> & { api_key?: string }) =>
+    request<Provider>(`/api/providers/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteProvider: (id: string) =>
     request<{ status: string }>(`/api/providers/${id}`, { method: "DELETE" }),
   listModels: (id: string) =>
     request<{ discovery: string; models: ModelInfo[] }>(`/api/providers/${id}/models`),
+  addCustomModel: (id: string, modelName: string) =>
+    request<{ custom_models: string[] }>(`/api/providers/${id}/models`, {
+      method: "POST",
+      body: JSON.stringify({ model_name: modelName }),
+    }),
+  removeCustomModel: (id: string, modelName: string) =>
+    request<{ custom_models: string[] }>(`/api/providers/${id}/models/${encodeURIComponent(modelName)}`, {
+      method: "DELETE",
+    }),
 
   // Approvals
   listApprovals: (status = "pending") =>

@@ -11,7 +11,7 @@ export function ThinkingBlock({
   isStreaming,
   durationSec,
 }: ThinkingBlockProps) {
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {

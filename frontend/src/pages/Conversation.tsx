@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowDown, PanelLeft } from "lucide-react";
+import { ArrowDown, PanelLeft, AlertCircle } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api } from "@/lib/api";
-import type { Agent, Message, SessionInfo } from "@/lib/types";
-import { ToolCallBlock, type ToolCallData } from "@/components/ToolCallBlock";
+import type { Agent, Message, Provider, SessionInfo } from "@/lib/types";
+import { ToolCallBlock, type ToolCallData, type SubAgentStreamData } from "@/components/ToolCallBlock";
 import { ThinkingBlock } from "@/components/ThinkingBlock";
 import { ChatSidebar } from "@/components/ChatSidebar";
 import { ChatInputBar, type ContextItem } from "@/components/ChatInputBar";
@@ -16,6 +16,12 @@ interface ChatMessage {
   role: string;
   content: string;
   created_at: string;
+  run_id?: string;
+  run_status?: string;
+  tokens_in?: number;
+  tokens_out?: number;
+  cost?: number;
+  subagent_id?: string | null;
 }
 
 interface TurnCost {
@@ -25,15 +31,36 @@ interface TurnCost {
   cost: number;
 }
 
-interface StreamingResponse {
+interface ThinkingBlockData {
+  content: string;
+  durationSec: number | null;
+}
+
+type StreamItem =
+  | { type: "thinking"; id: string; data: ThinkingBlockData }
+  | { type: "text"; id: string; data: { content: string } }
+  | { type: "tool"; id: string; data: ToolCallData };
+
+interface SubAgentStream {
   thinking: string;
+  items: StreamItem[];
   text: string;
   toolCalls: Map<string, ToolCallData>;
-  toolCallOrder: string[];
   thinkingStartTime: number | null;
+  completed: boolean;
+}
+
+interface StreamingResponse {
+  thinking: string;          // current turn's thinking (accumulating)
+  items: StreamItem[];       // ordered list of completed thinking blocks + tool calls
+  text: string;
+  toolCalls: Map<string, ToolCallData>;
+  thinkingStartTime: number | null;
+  thinkingEndTime: number | null;
   turnCosts: TurnCost[];
   guardrailWarnings: string[];
   completed: boolean;  // true when run is done — hides cursor, keeps content visible
+  subagents: Map<string, SubAgentStream>;  // subagent_id -> nested stream
 }
 
 interface ElicitationOption {
@@ -70,6 +97,27 @@ export function Conversation() {
   const activeSessionRef = useRef<string | null>(null);
   const streamingRef = useRef<StreamingResponse | null>(null);
 
+  // Support multiple concurrent runs — one per session.
+  // Each entry tracks the run's streaming state, runId, and lastEventId.
+  // The "active" run is the one the user is currently viewing.
+  interface RunEntry {
+    runId: string;
+    sessionId: string;
+    lastEventId: number;
+    streaming: StreamingResponse | null;
+  }
+  const runEntriesRef = useRef<Map<string, RunEntry>>(new Map()); // keyed by sessionId
+
+  // The session that has the run the user is currently viewing (for UI sync)
+  const [runningSessionId, setRunningSessionId] = useState<string | null>(null);
+
+  // Convenience getters for the currently-viewed run entry
+  const getCurrentRunEntry = (): RunEntry | null => {
+    const sid = activeSessionRef.current;
+    if (!sid) return null;
+    return runEntriesRef.current.get(sid) || null;
+  };
+
   useEffect(() => {
     activeSessionRef.current = activeSessionId;
   }, [activeSessionId]);
@@ -78,10 +126,20 @@ export function Conversation() {
     streamingRef.current = streaming;
   }, [streaming]);
 
-  useEffect(() => {
+  const [providers, setProviders] = useState<Provider[]>([]);
+
+  const reloadAgent = useCallback(() => {
     if (!agentId) return;
     api.getAgent(agentId).then(setAgent).catch(() => {});
   }, [agentId]);
+
+  useEffect(() => {
+    reloadAgent();
+  }, [reloadAgent]);
+
+  useEffect(() => {
+    api.listProviders().then(setProviders).catch(() => {});
+  }, []);
 
   const loadSessions = useCallback(() => {
     if (!agentId) return;
@@ -100,14 +158,29 @@ export function Conversation() {
     api
       .getSessionMessages(agentId, activeSessionId)
       .then((msgs) => {
-        setMessages(
-          msgs.map((m: Message) => ({
-            id: m.id,
-            role: m.role,
-            content: m.content,
-            created_at: m.created_at,
-          })),
-        );
+        let mapped = msgs.map((m: Message) => ({
+          id: m.id,
+          role: m.role,
+          content: m.content,
+          created_at: m.created_at,
+          run_id: m.run_id,
+          run_status: m.run_status,
+          tokens_in: m.tokens_in,
+          tokens_out: m.tokens_out,
+          cost: m.cost,
+          subagent_id: m.subagent_id,
+        }));
+        // If this session has an active run that we're streaming, drop the
+        // run's non-user messages (thinking, tool_call, assistant) — they're
+        // shown by the streaming block. Keep the user message.
+        const runEntry = runEntriesRef.current.get(activeSessionId);
+        if (runEntry) {
+          const runId = runEntry.runId;
+          mapped = mapped.filter(
+            (m) => m.role === "user" || m.run_id !== runId,
+          );
+        }
+        setMessages(mapped);
       })
       .catch(() => {});
   }, [agentId, activeSessionId]);
@@ -116,29 +189,138 @@ export function Conversation() {
   // POST /message starts a run → GET /runs/{id}/events streams events.
   // The run survives disconnects — reconnect with Last-Event-ID to resume.
 
-  // Track the active run so we can reconnect or stop it
-  const activeRunRef = useRef<{ runId: string; lastEventId: number } | null>(null);
+  // Helper: update the streaming state for a specific session's run.
+  // Updates the ref (source of truth) and syncs to React state only if
+  // the user is currently viewing that session.
+  const updateStreamingForSession = (
+    sessionId: string,
+    updater: (prev: StreamingResponse | null) => StreamingResponse | null,
+  ) => {
+    const entry = runEntriesRef.current.get(sessionId);
+    if (!entry) return;
+    const next = updater(entry.streaming);
+    entry.streaming = next;
+    // Only update the UI state if the user is viewing this session
+    if (activeSessionRef.current === sessionId) {
+      setStreaming(next);
+      streamingRef.current = next;
+    }
+  };
 
-  // Handle a single SSE event — shared between initial stream and reconnects
-  const handleEvent = (event: string, data: any) => {
+  // Handle a single SSE event — shared between initial stream and reconnects.
+  // `sessionId` identifies which run this event belongs to.
+  const handleEvent = (event: string, data: any, sessionId: string) => {
+    // Route sub-agent events to nested subagent streams
+    if (data.subagent_id) {
+      updateStreamingForSession(sessionId, (prev) => {
+        if (!prev) return prev;
+        const subagents = new Map(prev.subagents);
+        let sub = subagents.get(data.subagent_id);
+        if (!sub) {
+          sub = {
+            thinking: "",
+            items: [],
+            text: "",
+            toolCalls: new Map(),
+            thinkingStartTime: Date.now(),
+            completed: false,
+          };
+        }
+
+        switch (event) {
+          case "thinking":
+            sub = { ...sub, thinking: sub.thinking + data.content };
+            break;
+          case "token": {
+            let items = sub.items;
+            let thinking = sub.thinking;
+            if (thinking) {
+              const durationSec = sub.thinkingStartTime
+                ? Math.round((Date.now() - sub.thinkingStartTime) / 1000)
+                : null;
+              items = [...items, { type: "thinking" as const, id: `sub-thinking-${items.length}`, data: { content: thinking, durationSec } }];
+              thinking = "";
+            }
+            sub = { ...sub, items, thinking, text: sub.text + data.content };
+            break;
+          }
+          case "tool_call": {
+            let items = sub.items;
+            let thinking = sub.thinking;
+            if (thinking) {
+              const durationSec = sub.thinkingStartTime
+                ? Math.round((Date.now() - sub.thinkingStartTime) / 1000)
+                : null;
+              items = [...items, { type: "thinking" as const, id: `sub-thinking-${items.length}`, data: { content: thinking, durationSec } }];
+              thinking = "";
+            }
+            const newToolCalls = new Map(sub.toolCalls);
+            const toolData: ToolCallData = {
+              id: data.id,
+              capability: data.capability,
+              args: data.args,
+              status: data.status,
+              result: data.result,
+            };
+            newToolCalls.set(data.id, toolData);
+            const exists = items.some(i => i.type === "tool" && i.id === data.id);
+            const newItems = exists
+              ? items.map(i => i.type === "tool" && i.id === data.id ? { ...i, data: toolData } : i)
+              : [...items, { type: "tool" as const, id: data.id, data: toolData }];
+            sub = { ...sub, toolCalls: newToolCalls, items: newItems, thinking };
+            break;
+          }
+          case "turn_complete": {
+            const durationSec = sub.thinkingStartTime
+              ? Math.round((Date.now() - sub.thinkingStartTime) / 1000)
+              : null;
+            const newItems = sub.thinking
+              ? [...sub.items, { type: "thinking" as const, id: `sub-thinking-${sub.items.length}`, data: { content: sub.thinking, durationSec } }]
+              : sub.items;
+            sub = { ...sub, items: newItems, thinking: "", thinkingStartTime: Date.now() };
+            break;
+          }
+          case "message_complete":
+            sub = { ...sub, completed: true };
+            break;
+        }
+
+        subagents.set(data.subagent_id, sub);
+        return { ...prev, subagents };
+      });
+      return;
+    }
+
     switch (event) {
       case "typing":
         break;
 
       case "thinking":
-        setStreaming((prev) =>
+        updateStreamingForSession(sessionId, (prev) =>
           prev ? { ...prev, thinking: prev.thinking + data.content } : prev,
         );
         break;
 
       case "token":
-        setStreaming((prev) =>
-          prev ? { ...prev, text: prev.text + data.content } : prev,
-        );
+        // Flush buffered thinking into items before the text appears,
+        // so thinking is shown above the text (not below).
+        updateStreamingForSession(sessionId, (prev) => {
+          if (!prev) return prev;
+          let items = prev.items;
+          let thinking = prev.thinking;
+          if (thinking) {
+            const durationSec = prev.thinkingStartTime
+              ? Math.round((Date.now() - prev.thinkingStartTime) / 1000)
+              : null;
+            items = [...items, { type: "thinking" as const, id: `thinking-${items.length}`, data: { content: thinking, durationSec } }];
+            thinking = "";
+          }
+          return { ...prev, items, thinking, text: prev.text + data.content };
+        });
         break;
 
       case "guardrail_correction":
-        setStreaming((prev) =>
+        updateStreamingForSession(sessionId, (prev) =>
           prev ? { ...prev, text: data.content } : prev,
         );
         break;
@@ -147,22 +329,24 @@ export function Conversation() {
         if (data.direction === "input") {
           setInputWarnings(data.warnings);
         } else {
-          setStreaming((prev) =>
+          updateStreamingForSession(sessionId, (prev) =>
             prev ? { ...prev, guardrailWarnings: data.warnings } : prev,
           );
         }
         break;
 
       case "clarifying_question":
-        // Set active elicitation — the chat bar transforms into the elicitation input
-        setActiveElicitation({
-          id: data.id,
-          question: data.question,
-          options: data.options,
-          multiSelect: data.multi_select || false,
-        });
+        // Set active elicitation — only if viewing this session
+        if (activeSessionRef.current === sessionId) {
+          setActiveElicitation({
+            id: data.id,
+            question: data.question,
+            options: data.options,
+            multiSelect: data.multi_select || false,
+          });
+        }
         // Mark the tool call as pending_input so the ToolCallBlock shows "waiting"
-        setStreaming((prev) => {
+        updateStreamingForSession(sessionId, (prev) => {
           if (!prev) return prev;
           const newToolCalls = new Map(prev.toolCalls);
           const existing = newToolCalls.get(data.tool_call_id);
@@ -178,11 +362,27 @@ export function Conversation() {
         break;
 
       case "tool_call":
-        setStreaming((prev) => {
+        updateStreamingForSession(sessionId, (prev) => {
           if (!prev) return prev;
+          // Flush buffered thinking AND text into items before the tool call,
+          // so they appear above the tool call (not below).
+          let items = prev.items;
+          let thinking = prev.thinking;
+          let text = prev.text;
+          if (thinking) {
+            const durationSec = prev.thinkingStartTime
+              ? Math.round((Date.now() - prev.thinkingStartTime) / 1000)
+              : null;
+            items = [...items, { type: "thinking" as const, id: `thinking-${items.length}`, data: { content: thinking, durationSec } }];
+            thinking = "";
+          }
+          if (text) {
+            items = [...items, { type: "text" as const, id: `text-${items.length}`, data: { content: text } }];
+            text = "";
+          }
           const newToolCalls = new Map(prev.toolCalls);
           const existing = newToolCalls.get(data.id);
-          newToolCalls.set(data.id, {
+          const toolData: ToolCallData = {
             id: data.id,
             capability: data.capability,
             args: data.args,
@@ -190,19 +390,37 @@ export function Conversation() {
             result: data.result,
             approval_id: data.approval_id,
             elicitation_id: existing?.elicitation_id,
-          });
-          const newOrder = prev.toolCallOrder.includes(data.id)
-            ? prev.toolCallOrder
-            : [...prev.toolCallOrder, data.id];
-          return { ...prev, toolCalls: newToolCalls, toolCallOrder: newOrder };
+          };
+          newToolCalls.set(data.id, toolData);
+          // Add to items list if not already there
+          const exists = items.some(i => i.type === "tool" && i.id === data.id);
+          const newItems = exists
+            ? items.map(i => i.type === "tool" && i.id === data.id ? { ...i, data: toolData } : i)
+            : [...items, { type: "tool" as const, id: data.id, data: toolData }];
+          return { ...prev, toolCalls: newToolCalls, items: newItems, thinking, text };
         });
         break;
 
       case "turn_complete":
-        setStreaming((prev) => {
+        updateStreamingForSession(sessionId, (prev) => {
           if (!prev) return prev;
+          // Push the current turn's thinking into the items list, then reset
+          const durationSec = prev.thinkingStartTime
+            ? Math.round((Date.now() - prev.thinkingStartTime) / 1000)
+            : null;
+          let newItems = prev.items;
+          if (prev.thinking) {
+            newItems = [...newItems, { type: "thinking" as const, id: `thinking-${newItems.length}`, data: { content: prev.thinking, durationSec } }];
+          }
+          if (prev.text) {
+            newItems = [...newItems, { type: "text" as const, id: `text-${newItems.length}`, data: { content: prev.text } }];
+          }
           return {
             ...prev,
+            thinking: "",
+            text: "",
+            items: newItems,
+            thinkingStartTime: Date.now(),  // reset for next turn
             turnCosts: [
               ...prev.turnCosts,
               {
@@ -220,42 +438,93 @@ export function Conversation() {
         if (data.session_id && !activeSessionRef.current) {
           setActiveSessionId(data.session_id);
         }
-        // Mark streaming as completed — keep all thinking/tool calls/costs visible
-        // The streaming block stays rendered with completed=true (no cursor)
-        setStreaming((prev) => prev ? { ...prev, completed: true } : prev);
-        setIsStreaming(false);
-        activeRunRef.current = null;
+        // Mark streaming as completed — push final turn's thinking, freeze timer
+        updateStreamingForSession(sessionId, (prev) => {
+          if (!prev) return prev;
+          const durationSec = prev.thinkingStartTime
+            ? Math.round((Date.now() - prev.thinkingStartTime) / 1000)
+            : null;
+          let newItems = prev.items;
+          if (prev.thinking) {
+            newItems = [...newItems, { type: "thinking" as const, id: `thinking-${newItems.length}`, data: { content: prev.thinking, durationSec } }];
+          }
+          if (prev.text) {
+            newItems = [...newItems, { type: "text" as const, id: `text-${newItems.length}`, data: { content: prev.text } }];
+          }
+          return {
+            ...prev,
+            thinking: "",
+            text: "",
+            items: newItems,
+            completed: true,
+            thinkingEndTime: prev.thinkingEndTime || Date.now(),
+          };
+        });
+        // Remove the run entry and update spinner state
+        runEntriesRef.current.delete(sessionId);
+        const remaining = Array.from(runEntriesRef.current.keys());
+        setRunningSessionId(remaining.length > 0 ? remaining[0] : null);
+        // Reload messages from the API so the response becomes a proper
+        // MessageRow (with hover/copy/cost) instead of staying as a
+        // StreamingMessage block. Also clears the streaming UI.
+        if (activeSessionRef.current === sessionId && agentId) {
+          api.getSessionMessages(agentId, sessionId).then((msgs) => {
+            setMessages(
+              msgs.map((m: Message) => ({
+                id: m.id,
+                role: m.role,
+                content: m.content,
+                created_at: m.created_at,
+                run_id: m.run_id,
+                run_status: m.run_status,
+                tokens_in: m.tokens_in,
+                tokens_out: m.tokens_out,
+                cost: m.cost,
+                subagent_id: m.subagent_id,
+              })),
+            );
+            setStreaming(null);
+            streamingRef.current = null;
+            setIsStreaming(false);
+          }).catch(() => {});
+        }
         loadSessions();
         break;
     }
   };
 
   // Stream events from a run, with reconnect support
-  const streamRun = async (agentId: string, runId: string, fromSeq = 0) => {
+  const streamRun = async (agentId: string, runId: string, sessionId: string, fromSeq = 0) => {
     let lastEventId = fromSeq;
     try {
       for await (const { event, data, id } of api.streamRunEvents(agentId, runId, lastEventId)) {
         if (id > lastEventId) lastEventId = id;
-        handleEvent(event, data);
+        // Update the run entry's lastEventId
+        const entry = runEntriesRef.current.get(sessionId);
+        if (entry) entry.lastEventId = lastEventId;
+        handleEvent(event, data, sessionId);
       }
     } catch {
       // Stream disconnected — try to reconnect if the run is still active
-      if (activeRunRef.current?.runId === runId) {
-        activeRunRef.current.lastEventId = lastEventId;
+      const entry = runEntriesRef.current.get(sessionId);
+      if (entry?.runId === runId) {
+        entry.lastEventId = lastEventId;
         // Reconnect after a short delay
         await new Promise((r) => setTimeout(r, 1000));
-        if (activeRunRef.current?.runId === runId) {
+        if (runEntriesRef.current.get(sessionId)?.runId === runId) {
           // Check if run is still active before reconnecting
           try {
             const status = await api.getRunStatus(agentId, runId);
             if (status.status === "running" || status.status === "awaiting_approval") {
-              await streamRun(agentId, runId, lastEventId);
+              await streamRun(agentId, runId, sessionId, lastEventId);
             }
           } catch {
             // Run gone — stop streaming
-            setStreaming(null);
-            setIsStreaming(false);
-            activeRunRef.current = null;
+            if (activeSessionRef.current === sessionId) {
+              setStreaming(null);
+              setIsStreaming(false);
+            }
+            runEntriesRef.current.delete(sessionId);
           }
         }
       }
@@ -287,6 +556,10 @@ export function Conversation() {
   const handleNewChat = () => {
     // Just deselect — the empty state IS the new chat view.
     // A session is created automatically when the first message is sent.
+    // NOTE: do NOT clear runEntriesRef here — a run may still be active
+    // may still be active in the previous session. The spinner stays so the
+    // user can see it, and the streaming state survives for when they switch back.
+    activeSessionRef.current = null;
     setActiveSessionId(null);
     setMessages([]);
     setStreaming(null);
@@ -294,26 +567,55 @@ export function Conversation() {
   };
 
   const handleSelectSession = (id: string) => {
-    // Save completed streaming text before switching
-    if (streamingRef.current?.completed && streamingRef.current.text) {
+    // Save completed streaming text before switching (only for the session we're leaving)
+    const leavingEntry = activeSessionRef.current ? runEntriesRef.current.get(activeSessionRef.current) : null;
+    if (leavingEntry?.streaming?.completed && leavingEntry.streaming.text) {
       setMessages((prev) => [
         ...prev,
         {
           id: crypto.randomUUID(),
           role: "assistant",
-          content: streamingRef.current!.text,
+          content: leavingEntry.streaming!.text,
           created_at: new Date().toISOString(),
         },
       ]);
     }
-    setStreaming(null);
-    setIsStreaming(false);
+
+    // Update the ref immediately so SSE events route to the right session
+    activeSessionRef.current = id;
+
+    // If switching to a session that has an active run, restore its streaming state
+    const entry = runEntriesRef.current.get(id);
+    if (entry?.streaming) {
+      setStreaming(entry.streaming);
+      setIsStreaming(!entry.streaming.completed);
+      streamingRef.current = entry.streaming;
+    } else {
+      // Switching to a session with no active run — hide streaming UI
+      setStreaming(null);
+      setIsStreaming(false);
+      streamingRef.current = null;
+    }
     setActiveSessionId(id);
   };
 
   const handleDeleteSession = async (id: string) => {
     if (!agentId) return;
     try {
+      // If this session has an active run, stop it first
+      const entry = runEntriesRef.current.get(id);
+      if (entry) {
+        try {
+          await api.stopRun(agentId, entry.runId);
+        } catch {}
+        runEntriesRef.current.delete(id);
+        if (activeSessionId === id) {
+          setStreaming(null);
+          setIsStreaming(false);
+        }
+        const remaining = Array.from(runEntriesRef.current.keys());
+        setRunningSessionId(remaining.length > 0 ? remaining[0] : null);
+      }
       await api.deleteSession(agentId, id);
       if (activeSessionId === id) {
         setActiveSessionId(null);
@@ -373,18 +675,9 @@ export function Conversation() {
   ) => {
     if (!agentId) return;
 
-    // If no active session, create one first
-    let sessionId = activeSessionId;
-    if (!sessionId) {
-      try {
-        const session = await api.createSession(agentId);
-        sessionId = session.id;
-        setActiveSessionId(sessionId);
-        loadSessions();
-      } catch {
-        return;
-      }
-    }
+    // Don't create a session upfront — let the backend auto-resume or create one.
+    // The response will contain the session_id, which we set below.
+    const sessionId = activeSessionId;
 
     // If there's a completed streaming block, save its final text to messages
     // before starting a new run (so the history persists)
@@ -411,16 +704,20 @@ export function Conversation() {
     ]);
 
     setInputWarnings([]);
-    setStreaming({
+    const newStreaming: StreamingResponse = {
       thinking: "",
+      items: [],
       text: "",
       toolCalls: new Map(),
-      toolCallOrder: [],
       thinkingStartTime: Date.now(),
+      thinkingEndTime: null,
       turnCosts: [],
       guardrailWarnings: [],
       completed: false,
-    });
+      subagents: new Map(),
+    };
+    setStreaming(newStreaming);
+    streamingRef.current = newStreaming;
     setIsStreaming(true);
     autoScrollRef.current = true;
 
@@ -429,7 +726,7 @@ export function Conversation() {
       const result = await api.sendMessage(
         agentId,
         text,
-        true, // demo mode — uses ScriptedModel
+        false, // never use demo mode from the UI — real model only
         modelOverride || undefined,
         sessionId || undefined,
         attachments?.map((a) => ({
@@ -438,15 +735,32 @@ export function Conversation() {
           data: a.data,
           filename: a.filename,
         })),
+        !sessionId, // new_session=true when no active session (don't auto-resume old ones)
       );
 
-      // Track the active run for reconnect/stop
-      activeRunRef.current = { runId: result.run_id, lastEventId: 0 };
+      const runSessionId = result.session_id || sessionId || "";
+
+      // Set the session ID from the response (backend auto-resumed or created one)
+      if (result.session_id && result.session_id !== activeSessionId) {
+        activeSessionRef.current = result.session_id;
+        setActiveSessionId(result.session_id);
+        loadSessions();
+      }
+
+      // Register this run in the multi-run map
+      runEntriesRef.current.set(runSessionId, {
+        runId: result.run_id,
+        sessionId: runSessionId,
+        lastEventId: 0,
+        streaming: newStreaming,
+      });
+      setRunningSessionId(runSessionId);
 
       // Step 2: Stream events from GET /runs/{id}/events
-      await streamRun(agentId, result.run_id, 0);
+      await streamRun(agentId, result.run_id, runSessionId, 0);
     } catch {
       setStreaming(null);
+      streamingRef.current = null;
       setIsStreaming(false);
     }
   };
@@ -483,6 +797,7 @@ export function Conversation() {
       <ChatSidebar
         sessions={sessions}
         activeSessionId={activeSessionId}
+        runningSessionId={runningSessionId}
         collapsed={sidebarCollapsed}
         onNewChat={handleNewChat}
         onSelectSession={handleSelectSession}
@@ -550,9 +865,34 @@ export function Conversation() {
               </div>
             )}
 
-            {messages.map((msg) => (
-              <MessageRow key={msg.id} message={msg} />
-            ))}
+            {messages
+              .filter((msg) => !msg.subagent_id)  // sub-agent messages are nested inside their run_subagent tool call
+              .map((msg, i, filtered) => {
+                // Find sub-agent messages for run_subagent tool calls
+                let subagentMessages: ChatMessage[] | undefined;
+                if (msg.role === "tool_call") {
+                  try {
+                    const tcData = JSON.parse(msg.content) as ToolCallData;
+                    if (tcData.capability === "run_subagent") {
+                      // Find all messages with the same run_id that have subagent_id
+                      subagentMessages = messages.filter(
+                        (m) => m.subagent_id && m.run_id === msg.run_id
+                      );
+                    }
+                  } catch { /* ignore */ }
+                }
+                return (
+                  <MessageRow
+                    key={msg.id}
+                    message={msg}
+                    isLastInRun={
+                      i === filtered.length - 1 ||
+                      filtered[i + 1].run_id !== msg.run_id
+                    }
+                    subagentMessages={subagentMessages}
+                  />
+                );
+              })}
 
             {inputWarnings.length > 0 && (
               <div
@@ -594,11 +934,43 @@ export function Conversation() {
           )}
         </div>
 
+        {/* No model configured banner */}
+        {agent && (!agent.provider_id || !agent.model) && (
+          <div
+            className="flex items-center justify-between gap-3 px-4 py-3"
+            style={{
+              background: "var(--sidebar)",
+              borderTop: "1px solid var(--border)",
+            }}
+          >
+            <div className="flex items-center gap-2 text-[13px] text-[var(--ink-2)]">
+              <AlertCircle className="h-4 w-4 shrink-0 text-[var(--accent)]" />
+              <span>
+                No model configured. Add a provider in Settings and assign a
+                model to start chatting.
+              </span>
+            </div>
+            <button
+              onClick={() => setSettingsOpen(true)}
+              className="shrink-0 rounded-md px-3 py-1.5 text-[12px] font-medium"
+              style={{
+                background: "var(--accent)",
+                color: "var(--white)",
+              }}
+            >
+              Configure
+            </button>
+          </div>
+        )}
+
         {/* Input bar */}
         <ChatInputBar
           defaultProviderId={agent?.provider_id || null}
           defaultModelName={agent?.model || null}
-          disabled={isStreaming && !activeElicitation}
+          disabled={
+            (isStreaming && !activeElicitation) ||
+            (!!agent && (!agent.provider_id || !agent.model))
+          }
           onSend={handleSend}
           activeElicitation={activeElicitation}
           onElicitationRespond={handleElicitationRespond}
@@ -610,32 +982,66 @@ export function Conversation() {
         agent={agent}
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
+        onSaved={() => reloadAgent()}
+        providers={providers}
       />
     </div>
   );
 }
 
 function StreamingMessage({ streaming }: { streaming: StreamingResponse }) {
-  const hasContent = streaming.text || streaming.toolCallOrder.length > 0;
-  const thinkingDuration = streaming.thinkingStartTime
-    ? Math.round((Date.now() - streaming.thinkingStartTime) / 1000)
+  const hasContent = streaming.text || streaming.items.length > 0;
+  const endTime = streaming.thinkingEndTime ?? Date.now();
+  const currentThinkingDuration = streaming.thinkingStartTime
+    ? Math.round((endTime - streaming.thinkingStartTime) / 1000)
     : undefined;
+  const isThinkingStreaming = !!streaming.thinking && !streaming.text && !streaming.completed;
 
   return (
     <div className="mb-6">
-      {(streaming.thinking || streaming.thinkingStartTime) && (
+      {/* Render items in order: thinking blocks and tool calls interleaved */}
+      {streaming.items.map((item) => {
+        if (item.type === "thinking") {
+          return (
+            <ThinkingBlock
+              key={item.id}
+              content={item.data.content}
+              isStreaming={false}
+              durationSec={item.data.durationSec ?? undefined}
+            />
+          );
+        }
+        if (item.type === "text") {
+          return (
+            <div key={item.id} className="markdown-body text-[14px] leading-[1.65] text-[var(--ink)]">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.data.content}</ReactMarkdown>
+            </div>
+          );
+        }
+        return <ToolCallBlock
+          key={item.id}
+          call={item.data}
+          subagentStream={
+            item.data.capability === "run_subagent" && streaming.subagents.size > 0
+              ? Array.from(streaming.subagents.entries()).map(([id, s]) => ({
+                  thinking: s.thinking,
+                  items: s.items,
+                  text: s.text,
+                  completed: s.completed,
+                }))[0]
+              : undefined
+          }
+        />;
+      })}
+
+      {/* Current turn's thinking (live — not yet in items) */}
+      {(streaming.thinking || (isThinkingStreaming && streaming.thinkingStartTime)) && (
         <ThinkingBlock
           content={streaming.thinking}
-          isStreaming={!!streaming.thinking && !streaming.text && !streaming.completed}
-          durationSec={(streaming.text || streaming.completed) ? thinkingDuration : undefined}
+          isStreaming={isThinkingStreaming}
+          durationSec={(streaming.text || streaming.completed) ? currentThinkingDuration : undefined}
         />
       )}
-
-      {streaming.toolCallOrder.map((id) => {
-        const tc = streaming.toolCalls.get(id);
-        if (!tc) return null;
-        return <ToolCallBlock key={id} call={tc} />;
-      })}
 
       {streaming.text && (
         <div className="markdown-body text-[14px] leading-[1.65] text-[var(--ink)]">
@@ -660,13 +1066,12 @@ function StreamingMessage({ streaming }: { streaming: StreamingResponse }) {
       {streaming.turnCosts.length > 0 && (
         <div className="mt-2 flex items-center gap-2 font-mono text-[11px]" style={{ color: "var(--ink-3)" }}>
           {(() => {
-            const totalIn = streaming.turnCosts.reduce((s, t) => s + t.tokensIn, 0);
             const totalOut = streaming.turnCosts.reduce((s, t) => s + t.tokensOut, 0);
             const totalCost = streaming.turnCosts.reduce((s, t) => s + t.cost, 0);
             const turns = streaming.turnCosts.length;
             return (
               <span>
-                {turns} turn{turns !== 1 ? "s" : ""} · {totalIn + totalOut} tokens · ${totalCost.toFixed(3)}
+                {turns} turn{turns !== 1 ? "s" : ""} · {totalOut} tokens · ${totalCost.toFixed(3)}
               </span>
             );
           })()}
@@ -676,7 +1081,7 @@ function StreamingMessage({ streaming }: { streaming: StreamingResponse }) {
   );
 }
 
-function MessageRow({ message }: { message: ChatMessage }) {
+function MessageRow({ message, isLastInRun, subagentMessages }: { message: ChatMessage; isLastInRun?: boolean; subagentMessages?: ChatMessage[] }) {
   if (message.role === "user") {
     return (
       <div className="mb-6 flex justify-end">
@@ -704,9 +1109,28 @@ function MessageRow({ message }: { message: ChatMessage }) {
   if (message.role === "tool_call") {
     try {
       const data = JSON.parse(message.content) as ToolCallData;
+      // Build subagent stream from persisted sub-agent messages
+      let subagentStream: SubAgentStreamData | undefined;
+      if (data.capability === "run_subagent" && subagentMessages && subagentMessages.length > 0) {
+        const items: { type: "thinking" | "tool"; id: string; data: ThinkingBlockData | ToolCallData }[] = [];
+        let text = "";
+        for (const sm of subagentMessages) {
+          if (sm.role === "thinking") {
+            items.push({ type: "thinking", id: sm.id, data: { content: sm.content, durationSec: null } });
+          } else if (sm.role === "tool_call") {
+            try {
+              const tcData = JSON.parse(sm.content) as ToolCallData;
+              items.push({ type: "tool", id: sm.id, data: tcData });
+            } catch { /* skip */ }
+          } else if (sm.role === "assistant") {
+            text += sm.content;
+          }
+        }
+        subagentStream = { thinking: "", items, text, completed: true };
+      }
       return (
         <div className="mb-4">
-          <ToolCallBlock call={data} />
+          <ToolCallBlock call={data} subagentStream={subagentStream} />
         </div>
       );
     } catch {
@@ -734,9 +1158,18 @@ function MessageRow({ message }: { message: ChatMessage }) {
   }
 
   // assistant — left-aligned, no bubble, markdown rendered
+  // Cost badge only on the last message of the run (tokens_out/cost are run-level)
+  const hasCost = isLastInRun && (message.tokens_out || message.cost);
   return (
-    <div className="markdown-body mb-6 text-[14px] leading-[1.65] text-[var(--ink)]">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+    <div className="mb-6">
+      <div className="markdown-body text-[14px] leading-[1.65] text-[var(--ink)]">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+      </div>
+      {hasCost && (
+        <div className="mt-1.5 font-mono text-[11px]" style={{ color: "var(--ink-3)" }}>
+          {message.tokens_out || 0} tokens · ${(message.cost || 0).toFixed(3)}
+        </div>
+      )}
     </div>
   );
 }

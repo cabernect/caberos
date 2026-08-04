@@ -34,7 +34,7 @@ async def test_pipeline_full_run(db, workspace, tmp_path, monkeypatch):
         name="Pipeline Test",
         model=ModelConfig(provider_id="test", name="scripted"),
         soul="Test soul.",
-        capabilities=[CapabilityGrant(name="shell.run", require_approval=False)],
+        capabilities=[CapabilityGrant(name="terminal", require_approval=False)],
     )
     await create_agent(db, config)
 
@@ -42,7 +42,7 @@ async def test_pipeline_full_run(db, workspace, tmp_path, monkeypatch):
     model = ScriptedModel(
         [
             ScriptedResponse(
-                tool_calls=[{"id": "c1", "name": "shell.run", "args": {"command": "echo hello"}}],
+                tool_calls=[{"id": "c1", "name": "terminal", "args": {"command": "echo hello"}}],
             ),
             ScriptedResponse(content="The output is: hello"),
         ]
@@ -79,7 +79,7 @@ async def test_pipeline_full_run(db, workspace, tmp_path, monkeypatch):
     result = await db.execute(select(AuditRecord).where(AuditRecord.run_id == run.id))
     audits = result.scalars().all()
     assert len(audits) == 1
-    assert audits[0].capability_name == "shell.run"
+    assert audits[0].capability_name == "terminal"
     assert audits[0].allowed is True
 
 
@@ -96,7 +96,7 @@ async def test_pipeline_deduplication(db, tmp_path, monkeypatch):
         id="pipe-test-2",
         name="Dedup Test",
         model=ModelConfig(provider_id="test", name="scripted"),
-        capabilities=[CapabilityGrant(name="shell.run", require_approval=False)],
+        capabilities=[CapabilityGrant(name="terminal", require_approval=False)],
     )
     await create_agent(db, config)
 

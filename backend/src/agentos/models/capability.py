@@ -12,7 +12,7 @@ class Capability(Base, IdMixin, TimestampMixin):
     name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     kind: Mapped[str] = mapped_column(
         String(50), nullable=False
-    )  # tool, sub_agent, memory, connector_action
+    )  # tool, memory, mcp_tool
     description: Mapped[str] = mapped_column(Text, default="")
     parameters_schema: Mapped[str] = mapped_column(Text, default="{}")  # JSON schema
     egress: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

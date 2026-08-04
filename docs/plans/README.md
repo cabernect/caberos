@@ -44,6 +44,7 @@ The goal: one agent, seeded from a config file, reachable through the dashboard 
 | Order | Plan | What it delivers |
 |---|---|---|
 | 15 | [14-testing.md](14-testing.md) | Coverage hardening: real-infrastructure tests, integration tests, edge cases. (Pytest setup is in plan 00.) |
+| 16 | [15-automation-tests.md](15-automation-tests.md) | Regression tests for recent bug fixes: model config, multi-run streaming, session switching, IME, token display. Backend pytest + frontend Playwright E2E. |
 
 ## How to read a plan
 

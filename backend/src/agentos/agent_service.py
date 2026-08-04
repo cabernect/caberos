@@ -145,3 +145,22 @@ async def import_agent(db: AsyncSession, yaml_str: str) -> Agent:
         await save_agent(db, config)
         return existing
     return await create_agent(db, config)
+
+
+async def duplicate_agent(db: AsyncSession, agent_id: str, new_id: str, new_name: str) -> Agent:
+    """Duplicate an agent's active config to a new agent with a different ID."""
+    config = await get_active_config(db, agent_id)
+    if config is None:
+        raise ValueError(f"Agent {agent_id} not found")
+    config.id = new_id
+    config.name = new_name
+    return await create_agent(db, config)
+
+
+async def enable_agent(db: AsyncSession, agent_id: str) -> None:
+    """Re-enable a disabled agent."""
+    agent = await get_agent(db, agent_id)
+    if agent is None:
+        raise ValueError(f"Agent {agent_id} not found")
+    agent.enabled = True
+    await db.commit()

@@ -1,6 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { api } from "@/lib/api";
 import { DiffBlock } from "@/components/DiffBlock";
+import { ThinkingBlock } from "@/components/ThinkingBlock";
 
 export interface ToolCallData {
   id: string;
@@ -12,23 +13,30 @@ export interface ToolCallData {
   elicitation_id?: string;
 }
 
-interface ToolCallBlockProps {
-  call: ToolCallData;
+export interface SubAgentStreamData {
+  thinking: string;
+  items: { type: "thinking" | "tool"; id: string; data: ThinkingBlockData | ToolCallData }[];
+  text: string;
+  completed: boolean;
 }
 
-export function ToolCallBlock({ call }: ToolCallBlockProps) {
+interface ThinkingBlockData {
+  content: string;
+  durationSec: number | null;
+}
+
+interface ToolCallBlockProps {
+  call: ToolCallData;
+  subagentStream?: SubAgentStreamData;
+}
+
+export function ToolCallBlock({ call, subagentStream }: ToolCallBlockProps) {
   const [expanded, setExpanded] = useState(false);
+  const [subExpanded, setSubExpanded] = useState(false);
   const [remember, setRemember] = useState(false);
   const [approvalState, setApprovalState] = useState<
     "pending" | "approved" | "rejected" | "error"
   >(call.status === "pending_approval" ? "pending" : "pending");
-
-  // Auto-expand during execution, approval, or elicitation
-  useEffect(() => {
-    if (call.status === "pending" || call.status === "running" || call.status === "pending_approval" || call.status === "pending_input") {
-      setExpanded(true);
-    }
-  }, [call.status]);
 
   const statusConfig = {
     pending: { symbol: "⋯", color: "var(--ink-3)", label: "waiting" },
@@ -44,6 +52,8 @@ export function ToolCallBlock({ call }: ToolCallBlockProps) {
   const hasResult =
     call.status === "complete" && call.result != null ||
     call.status === "denied";
+
+  const isSubagent = call.capability === "run_subagent";
 
   const handleApprove = async () => {
     if (!call.approval_id) return;
@@ -67,26 +77,27 @@ export function ToolCallBlock({ call }: ToolCallBlockProps) {
 
   return (
     <div>
-      {/* Compact single-line tool call */}
-      <div
-        onClick={() => hasResult && setExpanded(!expanded)}
-        className="mb-2 flex items-center gap-2 rounded-[5px] border px-2.5 py-1.5"
-        style={{
-          background: "var(--tool-bg)",
-          borderColor: call.status === "pending_approval" ? "var(--warning)" : "var(--border)",
-          cursor: hasResult ? "pointer" : "default",
-        }}
-      >
-        <span className="font-mono text-[11px] text-[var(--ink-2)]">
-          {call.capability}({argsStr})
-        </span>
-        <span
-          className={`ml-auto font-mono text-[11px] ${call.status === "running" ? "pulse" : ""}`}
-          style={{ color: config.color }}
+      {!isSubagent && (
+        <div
+          onClick={() => hasResult && setExpanded(!expanded)}
+          className="mb-2 flex items-center gap-2 rounded-[5px] border px-2.5 py-1.5"
+          style={{
+            background: "var(--tool-bg)",
+            borderColor: call.status === "pending_approval" ? "var(--warning)" : "var(--border)",
+            cursor: hasResult ? "pointer" : "default",
+          }}
         >
-          {config.symbol}
-        </span>
-      </div>
+          <span className="font-mono text-[11px] text-[var(--ink-2)]">
+            {`${call.capability}(${argsStr})`}
+          </span>
+          <span
+            className={`ml-auto font-mono text-[11px] ${call.status === "running" ? "pulse" : ""}`}
+            style={{ color: config.color }}
+          >
+            {config.symbol}
+          </span>
+        </div>
+      )}
 
       {/* Approval buttons */}
       {call.status === "pending_approval" && call.approval_id && (
@@ -146,8 +157,8 @@ export function ToolCallBlock({ call }: ToolCallBlockProps) {
         </div>
       )}
 
-      {/* Diff block for file.write results */}
-      {call.status === "complete" && call.capability === "file.write" && call.result &&
+      {/* Diff block for write_file results */}
+      {call.status === "complete" && call.capability === "write_file" && call.result &&
         typeof call.result === "object" && call.result !== null &&
         "action" in (call.result as Record<string, unknown>) && (
         <DiffBlock
@@ -157,8 +168,11 @@ export function ToolCallBlock({ call }: ToolCallBlockProps) {
         />
       )}
 
-      {/* Expanded result — hidden for file.write (diff block replaces it) */}
-      {expanded && hasResult && !(call.capability === "file.write" && call.status === "complete" && typeof call.result === "object" && call.result !== null && "action" in (call.result as Record<string, unknown>)) && (
+      {/* Expanded result — hidden for write_file (diff block replaces it)
+          and run_subagent (the nested sub-agent stream replaces it) */}
+      {expanded && hasResult &&
+        !(call.capability === "write_file" && call.status === "complete" && typeof call.result === "object" && call.result !== null && "action" in (call.result as Record<string, unknown>)) &&
+        !(isSubagent && subagentStream && (subagentStream.items.length > 0 || subagentStream.text)) && (
         <div
           className="mb-2 overflow-x-auto whitespace-pre-wrap break-words rounded-[5px] p-2 font-mono text-[11px]"
           style={{
@@ -174,6 +188,57 @@ export function ToolCallBlock({ call }: ToolCallBlockProps) {
             : formatResult(call.result)}
         </div>
       )}
+
+      {isSubagent && (
+        <div
+          className="mb-2 rounded-[5px] border p-2.5"
+          style={{ borderColor: "var(--border)", background: "var(--surface)", marginLeft: "12px" }}
+        >
+          <button
+            onClick={() => setSubExpanded(!subExpanded)}
+            className="flex w-full items-center gap-1.5 bg-none p-0 text-left"
+            style={{ border: "none", cursor: "pointer" }}
+          >
+            <span className="font-mono text-[10px] uppercase tracking-wider text-[var(--ink-3)]">
+              sub-agent {subagentStream?.completed ? "✓ done" : "running…"}
+            </span>
+            <span className="ml-auto font-mono text-[10px] text-[var(--ink-3)]">{subExpanded ? "▲" : "▼"}</span>
+            <span
+              className={`font-mono text-[11px] ${call.status === "running" ? "pulse" : ""}`}
+              style={{ color: config.color }}
+            >
+              {config.symbol}
+            </span>
+          </button>
+
+          {subExpanded && (
+            <>
+              <div
+                className="mb-2 mt-2 overflow-x-auto whitespace-pre-wrap break-words rounded-[5px] p-2 font-mono text-[11px]"
+                style={{ background: "var(--white)", border: "1px solid var(--border)", color: "var(--ink-2)" }}
+              >
+                Task: {String(call.args.task || "No task provided")}
+              </div>
+              {subagentStream?.items.map((item) => {
+                if (item.type === "thinking") {
+                  const td = item.data as ThinkingBlockData;
+                  return <ThinkingBlock key={item.id} content={td.content} isStreaming={false} durationSec={td.durationSec ?? undefined} />;
+                }
+                const td = item.data as ToolCallData;
+                return <ToolCallBlock key={item.id} call={td} />;
+              })}
+              {subagentStream?.thinking && (
+                <ThinkingBlock content={subagentStream.thinking} isStreaming={!subagentStream.completed} />
+              )}
+              {subagentStream?.text && (
+                <div className="whitespace-pre-wrap break-words text-[12px] text-[var(--ink-1)]">
+                  {subagentStream.text}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -182,7 +247,7 @@ function formatArgs(
   capability: string,
   args: Record<string, unknown>,
 ): string {
-  if (capability === "shell.run" && args.command) {
+  if (capability === "terminal" && args.command) {
     return `"${args.command}"`;
   }
   if (capability.startsWith("file.")) {

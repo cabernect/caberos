@@ -18,14 +18,26 @@ class WorkspaceManager:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    def validate_path(self, workspace_root: str, rel_path: str) -> str:
-        """Resolve a path relative to the workspace root. Reject if it escapes.
+    def validate_path(self, workspace_root: str, rel_path: str, sandbox_mode: str = "strict") -> str:
+        """Resolve a path and validate it against the sandbox policy.
+
+        - strict mode: path must stay within workspace_root
+        - open mode: absolute paths are allowed anywhere; relative paths
+          resolve against workspace_root
 
         Returns the safe absolute path.
-        Raises ValueError if the path escapes the workspace.
+        Raises ValueError if the path escapes the workspace in strict mode.
         """
+        # In open mode, allow absolute paths anywhere
+        if sandbox_mode == "open":
+            p = Path(rel_path)
+            if p.is_absolute():
+                return str(p.resolve())
+            # Relative paths still resolve against workspace
+            return str((Path(workspace_root) / rel_path).resolve())
+
+        # Strict mode — enforce workspace boundary
         root = Path(workspace_root).resolve()
-        # Join and resolve — if the result is not under root, it escaped
         target = (root / rel_path).resolve()
         if not str(target).startswith(str(root)):
             raise ValueError(f"Path escapes workspace: {rel_path}")

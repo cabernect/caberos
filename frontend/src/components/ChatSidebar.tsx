@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { Plus, Settings, Trash2, ArrowLeft } from "lucide-react";
+import { Plus, Settings, Trash2, ArrowLeft, Loader2, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { SessionInfo } from "@/lib/types";
 
 interface ChatSidebarProps {
   sessions: SessionInfo[];
   activeSessionId: string | null;
+  runningSessionId: string | null;
   collapsed: boolean;
   onNewChat: () => void;
   onSelectSession: (id: string) => void;
@@ -17,6 +18,7 @@ interface ChatSidebarProps {
 export function ChatSidebar({
   sessions,
   activeSessionId,
+  runningSessionId,
   collapsed,
   onNewChat,
   onSelectSession,
@@ -67,6 +69,7 @@ export function ChatSidebar({
           <SessionList
             sessions={sessions}
             activeSessionId={activeSessionId}
+            runningSessionId={runningSessionId}
             onSelect={onSelectSession}
             onDelete={onDeleteSession}
           />
@@ -115,11 +118,13 @@ export function ChatSidebar({
 function SessionList({
   sessions,
   activeSessionId,
+  runningSessionId,
   onSelect,
   onDelete,
 }: {
   sessions: SessionInfo[];
   activeSessionId: string | null;
+  runningSessionId: string | null;
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
 }) {
@@ -139,6 +144,7 @@ function SessionList({
               key={s.id}
               session={s}
               active={s.id === activeSessionId}
+              running={s.id === runningSessionId}
               onSelect={() => onSelect(s.id)}
               onDelete={() => onDelete(s.id)}
             />
@@ -152,11 +158,13 @@ function SessionList({
 function SessionItem({
   session,
   active,
+  running,
   onSelect,
   onDelete,
 }: {
   session: SessionInfo;
   active: boolean;
+  running: boolean;
   onSelect: () => void;
   onDelete: () => void;
 }) {
@@ -175,6 +183,12 @@ function SessionItem({
       )}
     >
       <span className="flex-1 truncate">· {session.title}</span>
+      {running && !hovering && (
+        <Loader2
+          className="h-3.5 w-3.5 shrink-0 animate-spin"
+          style={{ color: active ? "var(--white)" : "var(--accent)" }}
+        />
+      )}
       {hovering && (
         <button
           onClick={(e) => {

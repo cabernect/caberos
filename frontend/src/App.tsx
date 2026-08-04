@@ -4,6 +4,7 @@ import { api } from "./lib/api";
 import { Login } from "./pages/Login";
 import { AgentList } from "./pages/AgentList";
 import { Conversation } from "./pages/Conversation";
+import { ProvidersSettings } from "./pages/ProvidersSettings";
 
 export default function App() {
   const [authed, setAuthed] = useState<boolean | null>(null);
@@ -25,11 +26,16 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/login" element={authed ? <Navigate to="/" /> : <Login />} />
-        <Route path="/" element={authed ? <AgentList /> : <Navigate to="/login" />} />
+        <Route path="/login" element={authed ? <Navigate to="/agents" /> : <Login />} />
+        <Route path="/" element={<Navigate to="/agents" />} />
+        <Route path="/agents" element={authed ? <AgentList /> : <Navigate to="/login" />} />
         <Route
           path="/agents/:id/chat"
           element={authed ? <Conversation /> : <Navigate to="/login" />}
+        />
+        <Route
+          path="/settings"
+          element={authed ? <ProvidersSettings /> : <Navigate to="/login" />}
         />
       </Routes>
     </BrowserRouter>

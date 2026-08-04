@@ -1,18 +1,25 @@
-"""Register built-in capabilities in the registry."""
+"""Register built-in capabilities in the registry.
+
+All capabilities are kind="tool". The old sub_agent kind is removed —
+run_subagent is just another tool.
+"""
 
 from .registry import CapabilityDef, registry
 from .tools.datetime_tool import datetime_now
-from .tools.file import file_list, file_read, file_write
-from .tools.search import file_glob, file_search
+from .tools.file import read_file, search_files, write_file
 from .tools.shell import shell_run
+from .tools.subagent import register_subagent_tools
 from .tools.web import web_fetch, web_search
 
 
 def register_builtin_capabilities() -> None:
     """Register all built-in capabilities. Called at startup."""
+
+    # --- File ops ---
+
     registry.register(
         CapabilityDef(
-            name="file.read",
+            name="read_file",
             kind="tool",
             description="Read a file from the agent's workspace",
             parameters_schema={
@@ -25,13 +32,13 @@ def register_builtin_capabilities() -> None:
             egress=False,
             require_approval=False,
             subject_scoped=False,
-            execute=file_read,
+            execute=read_file,
         )
     )
 
     registry.register(
         CapabilityDef(
-            name="file.write",
+            name="write_file",
             kind="tool",
             description="Write a file to the agent's workspace",
             parameters_schema={
@@ -45,41 +52,83 @@ def register_builtin_capabilities() -> None:
             egress=False,
             require_approval=False,
             subject_scoped=False,
-            execute=file_write,
+            execute=write_file,
         )
     )
 
     registry.register(
         CapabilityDef(
-            name="file.list",
+            name="search_files",
             kind="tool",
-            description="List files in a directory within the workspace",
+            description=(
+                "Search files in the workspace. Three modes: "
+                "'content' (grep-like content search, default), "
+                "'name' (find files by glob pattern), "
+                "'list' (list directory contents)."
+            ),
             parameters_schema={
                 "type": "object",
                 "properties": {
+                    "mode": {
+                        "type": "string",
+                        "enum": ["content", "name", "list"],
+                        "description": "Search mode: 'content' (grep), 'name' (glob), 'list' (dir listing)",
+                        "default": "content",
+                    },
+                    "pattern": {
+                        "type": "string",
+                        "description": "Search pattern. Required for 'content' (regex) and 'name' (glob) modes.",
+                    },
                     "path": {
                         "type": "string",
-                        "description": "Relative directory path",
+                        "description": "Directory to search in (default: workspace root)",
                         "default": ".",
-                    }
+                    },
+                    "glob": {
+                        "type": "string",
+                        "description": "File pattern filter for content mode (e.g. '*.py')",
+                        "default": "*",
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum results to return",
+                        "default": 50,
+                    },
+                    "ignore_case": {
+                        "type": "boolean",
+                        "description": "Case-insensitive search (content mode only)",
+                        "default": False,
+                    },
                 },
             },
             egress=False,
             require_approval=False,
             subject_scoped=False,
-            execute=file_list,
+            execute=search_files,
         )
     )
 
+    # --- Shell ops ---
+
     registry.register(
         CapabilityDef(
-            name="shell.run",
+            name="terminal",
             kind="tool",
-            description="Execute a shell command in the sandbox",
+            description=(
+                "Execute a shell command in the sandbox. By default, blocks until "
+                "the command finishes and returns stdout/stderr. Set async=true to "
+                "run the command in the background — returns a terminal_id you can "
+                "poll with read_terminal and close with close_terminal."
+            ),
             parameters_schema={
                 "type": "object",
                 "properties": {
-                    "command": {"type": "string", "description": "Shell command to execute"}
+                    "command": {"type": "string", "description": "Shell command to execute"},
+                    "async": {
+                        "type": "boolean",
+                        "description": "If true, run in background and return terminal_id immediately",
+                        "default": False,
+                    },
                 },
                 "required": ["command"],
             },
@@ -90,12 +139,98 @@ def register_builtin_capabilities() -> None:
         )
     )
 
-    # agent.ask_user — elicitation capability (human-in-the-loop)
-    # This capability is intercepted by the mediator (no normal execute function).
-    # When the agent calls it, the run pauses and the user is asked to provide input.
     registry.register(
         CapabilityDef(
-            name="agent.ask_user",
+            name="read_terminal",
+            kind="tool",
+            description="Read output from a background terminal session. Returns current stdout/stderr and whether the command is still running.",
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "terminal_id": {"type": "string", "description": "Terminal session ID from terminal(async=true)"},
+                },
+                "required": ["terminal_id"],
+            },
+            egress=False,
+            require_approval=False,
+            subject_scoped=False,
+            execute=None,  # handled by terminal registry
+        )
+    )
+
+    registry.register(
+        CapabilityDef(
+            name="close_terminal",
+            kind="tool",
+            description="Close a background terminal session and return its final output.",
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "terminal_id": {"type": "string", "description": "Terminal session ID to close"},
+                },
+                "required": ["terminal_id"],
+            },
+            egress=False,
+            require_approval=False,
+            subject_scoped=False,
+            execute=None,  # handled by terminal registry
+        )
+    )
+
+    # --- Web ops ---
+
+    registry.register(
+        CapabilityDef(
+            name="web_search",
+            kind="tool",
+            description="Search the web using DuckDuckGo. Returns titles, URLs, and snippets. "
+            "Use this to find current information, look up documentation, or research topics.",
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query"},
+                    "max_results": {"type": "integer", "description": "Maximum results to return", "default": 5},
+                },
+                "required": ["query"],
+            },
+            egress=True,
+            require_approval=True,
+            subject_scoped=False,
+            execute=web_search,
+        )
+    )
+
+    registry.register(
+        CapabilityDef(
+            name="web_fetch",
+            kind="tool",
+            description="Fetch a URL and return its text content. For HTML pages, extracts "
+            "readable text (removes scripts, styles, navigation). Use this to read web pages "
+            "found via web_search.",
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "The URL to fetch"},
+                    "max_chars": {"type": "integer", "description": "Maximum characters to return", "default": 8000},
+                },
+                "required": ["url"],
+            },
+            egress=True,
+            require_approval=True,
+            subject_scoped=False,
+            execute=web_fetch,
+        )
+    )
+
+    # --- Sub-agent ops ---
+
+    register_subagent_tools()
+
+    # --- Interaction ---
+
+    registry.register(
+        CapabilityDef(
+            name="agent_ask_user",
             kind="tool",
             description="Ask the user a clarifying question and wait for their response. "
             "Use this when you need more information to proceed — e.g. 'which file?' "
@@ -105,10 +240,7 @@ def register_builtin_capabilities() -> None:
             parameters_schema={
                 "type": "object",
                 "properties": {
-                    "question": {
-                        "type": "string",
-                        "description": "The question to ask the user",
-                    },
+                    "question": {"type": "string", "description": "The question to ask the user"},
                     "options": {
                         "type": "array",
                         "items": {
@@ -129,101 +261,23 @@ def register_builtin_capabilities() -> None:
                     },
                     "multi_select": {
                         "type": "boolean",
-                        "description": "If true, the user can select multiple options. "
-                        "Default is false (single select).",
+                        "description": "If true, the user can select multiple options. Default is false.",
                     },
                 },
                 "required": ["question"],
             },
             egress=False,
-            require_approval=False,  # asking a question is never dangerous
+            require_approval=False,
             subject_scoped=False,
             execute=None,  # intercepted by mediator — never called directly
         )
     )
 
-    # file.search — grep within workspace files
-    registry.register(
-        CapabilityDef(
-            name="file.search",
-            kind="tool",
-            description="Search file contents within the workspace (like grep). "
-            "Returns matching lines with file paths and line numbers.",
-            parameters_schema={
-                "type": "object",
-                "properties": {
-                    "pattern": {
-                        "type": "string",
-                        "description": "Regular expression or literal string to search for",
-                    },
-                    "path": {
-                        "type": "string",
-                        "description": "Directory to search in (default: workspace root)",
-                        "default": ".",
-                    },
-                    "glob": {
-                        "type": "string",
-                        "description": "File pattern filter (e.g. '*.py')",
-                        "default": "*",
-                    },
-                    "max_results": {
-                        "type": "integer",
-                        "description": "Maximum matches to return",
-                        "default": 50,
-                    },
-                    "ignore_case": {
-                        "type": "boolean",
-                        "description": "Case-insensitive search",
-                        "default": False,
-                    },
-                },
-                "required": ["pattern"],
-            },
-            egress=False,
-            require_approval=False,
-            subject_scoped=False,
-            execute=file_search,
-        )
-    )
+    # --- Utility ---
 
-    # file.glob — find files by name pattern
     registry.register(
         CapabilityDef(
-            name="file.glob",
-            kind="tool",
-            description="Find files by name pattern within the workspace (like find/glob). "
-            "Returns relative file paths.",
-            parameters_schema={
-                "type": "object",
-                "properties": {
-                    "pattern": {
-                        "type": "string",
-                        "description": "Glob pattern (e.g. '*.py', '**/test_*.py')",
-                    },
-                    "path": {
-                        "type": "string",
-                        "description": "Directory to search in (default: workspace root)",
-                        "default": ".",
-                    },
-                    "max_results": {
-                        "type": "integer",
-                        "description": "Maximum files to return",
-                        "default": 100,
-                    },
-                },
-                "required": ["pattern"],
-            },
-            egress=False,
-            require_approval=False,
-            subject_scoped=False,
-            execute=file_glob,
-        )
-    )
-
-    # datetime.now — current date and time
-    registry.register(
-        CapabilityDef(
-            name="datetime.now",
+            name="datetime_now",
             kind="tool",
             description="Get the current date and time. Use this when you need to know "
             "what day it is, create timestamps, or reason about time.",
@@ -240,64 +294,5 @@ def register_builtin_capabilities() -> None:
             require_approval=False,
             subject_scoped=False,
             execute=datetime_now,
-        )
-    )
-
-    # web.search — search the web (DuckDuckGo, free, no API key)
-    registry.register(
-        CapabilityDef(
-            name="web.search",
-            kind="tool",
-            description="Search the web using DuckDuckGo. Returns titles, URLs, and snippets. "
-            "Use this to find current information, look up documentation, or research topics.",
-            parameters_schema={
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Search query",
-                    },
-                    "max_results": {
-                        "type": "integer",
-                        "description": "Maximum results to return",
-                        "default": 5,
-                    },
-                },
-                "required": ["query"],
-            },
-            egress=True,
-            require_approval=True,  # network access — require approval
-            subject_scoped=False,
-            execute=web_search,
-        )
-    )
-
-    # web.fetch — fetch a URL and return text content
-    registry.register(
-        CapabilityDef(
-            name="web.fetch",
-            kind="tool",
-            description="Fetch a URL and return its text content. For HTML pages, extracts "
-            "readable text (removes scripts, styles, navigation). Use this to read web pages "
-            "found via web.search.",
-            parameters_schema={
-                "type": "object",
-                "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "The URL to fetch",
-                    },
-                    "max_chars": {
-                        "type": "integer",
-                        "description": "Maximum characters to return",
-                        "default": 8000,
-                    },
-                },
-                "required": ["url"],
-            },
-            egress=True,
-            require_approval=True,  # network access — require approval
-            subject_scoped=False,
-            execute=web_fetch,
         )
     )

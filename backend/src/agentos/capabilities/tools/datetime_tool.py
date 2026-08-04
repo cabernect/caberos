@@ -1,4 +1,4 @@
-"""Datetime capability — datetime.now.
+"""Datetime capability — datetime_now.
 
 Gives the agent awareness of the current date and time. Essential for
 scheduling, timestamps, and general context ("what day is it?").

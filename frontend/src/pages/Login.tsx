@@ -16,7 +16,7 @@ export function Login() {
       await api.login(username, password);
       // Force a full reload so App re-checks auth via api.me()
       // (navigate("/") alone doesn't update the authed state in App)
-      window.location.assign("/");
+      window.location.assign("/agents");
     } catch {
       setError("Invalid credentials");
       setLoading(false);

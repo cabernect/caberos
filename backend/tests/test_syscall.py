@@ -52,7 +52,7 @@ class TestReduceResult:
 
 
 class TestSyscallHandler:
-    async def test_file_read_success(self, db, workspace):
+    async def test_read_file_success(self, db, workspace):
         # Write a test file
         import os
 
@@ -61,11 +61,11 @@ class TestSyscallHandler:
             f.write("hello world")
 
         handler = SyscallHandler(db=db, workspace_path=workspace)
-        agent_config = _make_agent_config(["file.read"])
+        agent_config = _make_agent_config(["read_file"])
         session = _make_session("contact-1")
 
         result = await handler.mediate(
-            call=ToolCall(id="1", name="file.read", args={"path": "test.txt"}),
+            call=ToolCall(id="1", name="read_file", args={"path": "test.txt"}),
             session=session,
             agent_config=agent_config,
             run_id="run-1",
@@ -74,14 +74,14 @@ class TestSyscallHandler:
         assert result.allowed is True
         assert result.output["content"] == "hello world"
 
-    async def test_file_read_path_escape_rejected(self, db, workspace):
+    async def test_read_file_path_escape_rejected(self, db, workspace):
         handler = SyscallHandler(db=db, workspace_path=workspace)
-        agent_config = _make_agent_config(["file.read"])
+        agent_config = _make_agent_config(["read_file"])
         session = _make_session("contact-1")
 
         result = await handler.mediate(
             call=ToolCall(
-                id="1", name="file.read", args={"path": "../../../etc/passwd"}
+                id="1", name="read_file", args={"path": "../../../etc/passwd"}
             ),
             session=session,
             agent_config=agent_config,
@@ -98,7 +98,7 @@ class TestSyscallHandler:
         session = _make_session("contact-1")
 
         result = await handler.mediate(
-            call=ToolCall(id="1", name="file.read", args={"path": "test.txt"}),
+            call=ToolCall(id="1", name="read_file", args={"path": "test.txt"}),
             session=session,
             agent_config=agent_config,
             run_id="run-1",
@@ -122,13 +122,13 @@ class TestSyscallHandler:
         assert result.allowed is False
         assert result.denied_reason == "capability not found"
 
-    async def test_shell_run_success(self, db, workspace):
+    async def test_terminal_success(self, db, workspace):
         handler = SyscallHandler(db=db, workspace_path=workspace)
-        agent_config = _make_agent_config(["shell.run"])
+        agent_config = _make_agent_config(["terminal"])
         session = _make_session("contact-1")
 
         result = await handler.mediate(
-            call=ToolCall(id="1", name="shell.run", args={"command": "echo hello"}),
+            call=ToolCall(id="1", name="terminal", args={"command": "echo hello"}),
             session=session,
             agent_config=agent_config,
             run_id="run-1",
@@ -137,16 +137,16 @@ class TestSyscallHandler:
         assert result.allowed is True
         assert "hello" in result.output["stdout"]
 
-    async def test_file_write_then_read(self, db, workspace):
+    async def test_write_file_then_read(self, db, workspace):
         handler = SyscallHandler(db=db, workspace_path=workspace)
-        agent_config = _make_agent_config(["file.write", "file.read"])
+        agent_config = _make_agent_config(["write_file", "read_file"])
         session = _make_session("contact-1")
 
         # Write
         result = await handler.mediate(
             call=ToolCall(
                 id="1",
-                name="file.write",
+                name="write_file",
                 args={"path": "output.txt", "content": "written content"},
             ),
             session=session,
@@ -158,7 +158,7 @@ class TestSyscallHandler:
 
         # Read back
         result = await handler.mediate(
-            call=ToolCall(id="2", name="file.read", args={"path": "output.txt"}),
+            call=ToolCall(id="2", name="read_file", args={"path": "output.txt"}),
             session=session,
             agent_config=agent_config,
             run_id="run-1",
@@ -166,7 +166,7 @@ class TestSyscallHandler:
         assert result.allowed is True
         assert result.output["content"] == "written content"
 
-    async def test_file_list(self, db, workspace):
+    async def test_search_files(self, db, workspace):
         import os
 
         # Create some files
@@ -176,11 +176,11 @@ class TestSyscallHandler:
             f.write("b")
 
         handler = SyscallHandler(db=db, workspace_path=workspace)
-        agent_config = _make_agent_config(["file.list"])
+        agent_config = _make_agent_config(["search_files"])
         session = _make_session("contact-1")
 
         result = await handler.mediate(
-            call=ToolCall(id="1", name="file.list", args={"path": "."}),
+            call=ToolCall(id="1", name="search_files", args={"mode": "list", "path": "."}),
             session=session,
             agent_config=agent_config,
             run_id="run-1",
@@ -197,11 +197,11 @@ class TestSyscallHandler:
         from agentos.models.audit import AuditRecord
 
         handler = SyscallHandler(db=db, workspace_path=workspace)
-        agent_config = _make_agent_config(["shell.run"])
+        agent_config = _make_agent_config(["terminal"])
         session = _make_session("contact-1")
 
         await handler.mediate(
-            call=ToolCall(id="1", name="shell.run", args={"command": "echo test"}),
+            call=ToolCall(id="1", name="terminal", args={"command": "echo test"}),
             session=session,
             agent_config=agent_config,
             run_id="run-audit-test",
@@ -214,7 +214,7 @@ class TestSyscallHandler:
         records = result.scalars().all()
         assert len(records) == 1
         assert records[0].allowed is True
-        assert records[0].capability_name == "shell.run"
+        assert records[0].capability_name == "terminal"
 
     async def test_denied_audit_record_written(self, db, workspace):
         from sqlalchemy import select
@@ -226,7 +226,7 @@ class TestSyscallHandler:
         session = _make_session("contact-1")
 
         await handler.mediate(
-            call=ToolCall(id="1", name="shell.run", args={"command": "echo test"}),
+            call=ToolCall(id="1", name="terminal", args={"command": "echo test"}),
             session=session,
             agent_config=agent_config,
             run_id="run-deny-test",
@@ -250,11 +250,11 @@ class TestSyscallHandler:
             f.write(big_content)
 
         handler = SyscallHandler(db=db, workspace_path=workspace)
-        agent_config = _make_agent_config(["file.read"])
+        agent_config = _make_agent_config(["read_file"])
         session = _make_session("contact-1")
 
         result = await handler.mediate(
-            call=ToolCall(id="1", name="file.read", args={"path": "big.txt"}),
+            call=ToolCall(id="1", name="read_file", args={"path": "big.txt"}),
             session=session,
             agent_config=agent_config,
             run_id="run-1",
@@ -264,3 +264,143 @@ class TestSyscallHandler:
         # The output should be reduced (truncated)
         assert isinstance(result.output, dict)
         assert result.output.get("truncated") is True
+
+
+class TestNoneCapabilities:
+    """Tests for capabilities=None (all tools enabled) vs [] (none)."""
+
+    async def test_none_capabilities_allows_any_tool(self, db, workspace):
+        """capabilities=None means all tools are granted."""
+        import os
+
+        with open(os.path.join(workspace, "test.txt"), "w") as f:
+            f.write("hello")
+
+        handler = SyscallHandler(db=db, workspace_path=workspace)
+        agent_config = AgentConfig(
+            id="test-agent",
+            name="Test",
+            model=ModelConfig(provider_id="test", name="test"),
+            capabilities=None,  # all tools enabled
+        )
+        session = _make_session("contact-1")
+
+        result = await handler.mediate(
+            call=ToolCall(id="1", name="read_file", args={"path": "test.txt"}),
+            session=session,
+            agent_config=agent_config,
+            run_id="run-1",
+        )
+        assert result.allowed is True
+        assert result.output["content"] == "hello"
+
+    async def test_empty_capabilities_denies_all(self, db, workspace):
+        """capabilities=[] means no tools are granted."""
+        handler = SyscallHandler(db=db, workspace_path=workspace)
+        agent_config = AgentConfig(
+            id="test-agent",
+            name="Test",
+            model=ModelConfig(provider_id="test", name="test"),
+            capabilities=[],  # no tools
+        )
+        session = _make_session("contact-1")
+
+        result = await handler.mediate(
+            call=ToolCall(id="1", name="read_file", args={"path": "test.txt"}),
+            session=session,
+            agent_config=agent_config,
+            run_id="run-1",
+        )
+        assert result.allowed is False
+        assert result.denied_reason == "not granted"
+
+    async def test_none_capabilities_uses_cap_def_approval(self, db, workspace):
+        """When capabilities=None, the approval check doesn't crash on None.
+
+        We use datetime_now (no approval required) to verify the code path
+        that looks up the grant in agent_config.capabilities handles None
+        without raising 'NoneType is not iterable'.
+        """
+        handler = SyscallHandler(db=db, workspace_path=workspace)
+        agent_config = AgentConfig(
+            id="test-agent",
+            name="Test",
+            model=ModelConfig(provider_id="test", name="test"),
+            capabilities=None,  # all tools, no per-grant overrides
+        )
+        session = _make_session("contact-1")
+
+        # datetime_now doesn't require approval, so this should succeed.
+        # The key is that the grant lookup at line 128 doesn't crash on None.
+        result = await handler.mediate(
+            call=ToolCall(id="1", name="datetime_now", args={}),
+            session=session,
+            agent_config=agent_config,
+            run_id="run-1",
+        )
+        assert result.allowed is True
+        assert "iso" in result.output
+
+
+class TestGetEnabledCapabilities:
+    """Tests for get_enabled_capabilities in context.py."""
+
+    def test_none_returns_all_tools(self):
+        from agentos.capabilities.builtin import register_builtin_capabilities
+        from agentos.capabilities.registry import registry
+        from agentos.harness.context import get_enabled_capabilities
+
+        registry._caps.clear()
+        register_builtin_capabilities()
+
+        config = AgentConfig(
+            id="test",
+            name="Test",
+            model=ModelConfig(provider_id="test", name="test"),
+            capabilities=None,
+        )
+        caps = get_enabled_capabilities(config)
+        assert len(caps) > 0
+        assert "read_file" in caps
+        assert "terminal" in caps
+        assert "run_subagent" in caps
+
+        registry._caps.clear()
+
+    def test_empty_returns_no_tools(self):
+        from agentos.capabilities.builtin import register_builtin_capabilities
+        from agentos.capabilities.registry import registry
+        from agentos.harness.context import get_enabled_capabilities
+
+        registry._caps.clear()
+        register_builtin_capabilities()
+
+        config = AgentConfig(
+            id="test",
+            name="Test",
+            model=ModelConfig(provider_id="test", name="test"),
+            capabilities=[],
+        )
+        caps = get_enabled_capabilities(config)
+        assert caps == []
+
+        registry._caps.clear()
+
+    def test_explicit_list_returns_only_those(self):
+        from agentos.capabilities.builtin import register_builtin_capabilities
+        from agentos.capabilities.registry import registry
+        from agentos.harness.context import get_enabled_capabilities
+
+        registry._caps.clear()
+        register_builtin_capabilities()
+
+        config = AgentConfig(
+            id="test",
+            name="Test",
+            model=ModelConfig(provider_id="test", name="test"),
+            capabilities=[CapabilityGrant(name="read_file"), CapabilityGrant(name="write_file")],
+        )
+        caps = get_enabled_capabilities(config)
+        assert set(caps) == {"read_file", "write_file"}
+
+        registry._caps.clear()

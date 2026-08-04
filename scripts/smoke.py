@@ -37,7 +37,7 @@ TEST_AGENT_CONFIG = AgentConfig(
     persona="Direct and concise.",
     task="Execute commands and report results.",
     capabilities=[
-        CapabilityGrant(name="shell.run", require_approval=False),  # auto-approve for smoke test
+        CapabilityGrant(name="shell_run", require_approval=False),  # auto-approve for smoke test
     ],
 )
 
@@ -64,7 +64,7 @@ async def run_smoke(agent_id: str, message: str) -> None:
         ScriptedResponse(
             tool_calls=[{
                 "id": "call_1",
-                "name": "shell.run",
+                "name": "shell_run",
                 "args": {"command": message},
             }],
         ),

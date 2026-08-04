@@ -24,10 +24,10 @@ def test_config_validation():
         soul="I am a test agent.",
         persona="Direct.",
         task="Help test the system.",
-        capabilities=[CapabilityGrant(name="shell.run")],
+        capabilities=[CapabilityGrant(name="terminal")],
     )
     assert config.id == "test-agent"
-    assert config.limits.max_turns_per_run == 12
+    assert config.limits.max_turns_per_run == 15
     assert config.heartbeat.enabled is False
 
 
@@ -36,7 +36,7 @@ def test_config_invalid_capability_subject():
     grant = CapabilityGrant(name="email.read", subject="self")
     assert grant.subject == "self"
 
-    grant2 = CapabilityGrant(name="shell.run", subject="none")
+    grant2 = CapabilityGrant(name="terminal", subject="none")
     assert grant2.subject == "none"
 
 
@@ -48,7 +48,7 @@ async def test_create_and_get_agent(db):
         name="Config Test",
         model=ModelConfig(provider_id="test", name="scripted"),
         soul="Test soul.",
-        capabilities=[CapabilityGrant(name="shell.run", require_approval=False)],
+        capabilities=[CapabilityGrant(name="terminal", require_approval=False)],
     )
     await create_agent(db, config)
 
@@ -57,7 +57,7 @@ async def test_create_and_get_agent(db):
     assert retrieved.name == "Config Test"
     assert retrieved.soul == "Test soul."
     assert len(retrieved.capabilities) == 1
-    assert retrieved.capabilities[0].name == "shell.run"
+    assert retrieved.capabilities[0].name == "terminal"
 
 
 @pytest.mark.asyncio
@@ -127,7 +127,7 @@ async def test_yaml_export_import(db):
         name="YAML Test",
         model=ModelConfig(provider_id="test", name="scripted"),
         soul="YAML soul.",
-        capabilities=[CapabilityGrant(name="shell.run")],
+        capabilities=[CapabilityGrant(name="terminal")],
     )
     await create_agent(db, config)
 
@@ -147,3 +147,79 @@ async def test_yaml_export_import(db):
     assert imported is not None
     assert imported.name == "Imported Agent"
     assert imported.soul == "YAML soul."
+
+
+def test_capabilities_none_means_all():
+    """capabilities=None means all tools (default when omitted from YAML)."""
+    config = AgentConfig(
+        id="test",
+        name="Test",
+        model=ModelConfig(provider_id="test", name="test"),
+        capabilities=None,
+    )
+    assert config.capabilities is None
+
+
+def test_capabilities_empty_means_none():
+    """capabilities=[] means no tools."""
+    config = AgentConfig(
+        id="test",
+        name="Test",
+        model=ModelConfig(provider_id="test", name="test"),
+        capabilities=[],
+    )
+    assert config.capabilities == []
+
+
+def test_capabilities_from_yaml_omitted():
+    """YAML without capabilities field should produce None."""
+    yaml_str = """
+id: yaml-test
+name: YAML Test
+soul: test
+model:
+  provider_id: ""
+  name: ""
+"""
+    data = yaml.safe_load(yaml_str)
+    config = AgentConfig.from_dict(data)
+    assert config.capabilities is None
+
+
+def test_capabilities_from_yaml_empty():
+    """YAML with capabilities: [] should produce empty list."""
+    yaml_str = """
+id: yaml-test
+name: YAML Test
+soul: test
+model:
+  provider_id: ""
+  name: ""
+capabilities: []
+"""
+    data = yaml.safe_load(yaml_str)
+    config = AgentConfig.from_dict(data)
+    assert config.capabilities == []
+
+
+def test_capabilities_from_yaml_explicit():
+    """YAML with explicit capabilities should produce the list."""
+    yaml_str = """
+id: yaml-test
+name: YAML Test
+soul: test
+model:
+  provider_id: ""
+  name: ""
+capabilities:
+  - name: read_file
+  - name: terminal
+    require_approval: true
+"""
+    data = yaml.safe_load(yaml_str)
+    config = AgentConfig.from_dict(data)
+    assert config.capabilities is not None
+    assert len(config.capabilities) == 2
+    assert config.capabilities[0].name == "read_file"
+    assert config.capabilities[1].name == "terminal"
+    assert config.capabilities[1].require_approval is True

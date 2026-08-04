@@ -1,12 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bot, Plus, MessageSquare, ArrowRight } from "lucide-react";
+import { Bot, Plus, MessageSquare, ArrowRight, Settings } from "lucide-react";
 import { api } from "@/lib/api";
-import type { Agent } from "@/lib/types";
+import type { Agent, Provider } from "@/lib/types";
 import {
   DashboardSidebar,
   type NavKey,
 } from "@/components/DashboardSidebar";
+import { CreateAgentModal } from "@/components/CreateAgentModal";
+import { SettingsOverlay } from "@/components/SettingsOverlay";
 
 interface AgentWithActivity extends Agent {
   sessionCount: number;
@@ -18,7 +20,64 @@ export function AgentList() {
   const [agents, setAgents] = useState<AgentWithActivity[]>([]);
   const [loading, setLoading] = useState(true);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [settingsAgent, setSettingsAgent] = useState<Agent | null>(null);
+  const [providers, setProviders] = useState<Provider[]>([]);
   const navigate = useNavigate();
+
+  const loadAgents = useCallback(async () => {
+    try {
+      const list = await api.listAgents();
+      const enriched = await Promise.all(
+        list.map(async (a) => {
+          try {
+            const sessions = await api.listSessions(a.id);
+            const totalMessages = sessions.reduce(
+              (sum, s) => sum + (s.message_count || 0),
+              0,
+            );
+            const lastActivity =
+              sessions.length > 0
+                ? sessions
+                    .map((s) => s.last_activity_at)
+                    .sort()
+                    .reverse()[0]
+                : null;
+            return {
+              ...a,
+              sessionCount: sessions.length,
+              lastActivity,
+              messageCount: totalMessages,
+            };
+          } catch {
+            return {
+              ...a,
+              sessionCount: 0,
+              lastActivity: null,
+              messageCount: 0,
+            };
+          }
+        }),
+      );
+      setAgents(enriched);
+    } catch {
+      navigate("/login");
+    } finally {
+      setLoading(false);
+    }
+  }, [navigate]);
+
+  const loadProviders = useCallback(async () => {
+    try {
+      setProviders(await api.listProviders());
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    loadAgents();
+    loadProviders();
+  }, [loadAgents, loadProviders]);
 
   const handleLogout = async () => {
     try {
@@ -27,59 +86,9 @@ export function AgentList() {
     window.location.assign("/login");
   };
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const list = await api.listAgents();
-        // Fetch sessions per agent in parallel to get activity stats
-        const enriched = await Promise.all(
-          list.map(async (a) => {
-            try {
-              const sessions = await api.listSessions(a.id);
-              const totalMessages = sessions.reduce(
-                (sum, s) => sum + (s.message_count || 0),
-                0,
-              );
-              const lastActivity =
-                sessions.length > 0
-                  ? sessions
-                      .map((s) => s.last_activity_at)
-                      .sort()
-                      .reverse()[0]
-                  : null;
-              return {
-                ...a,
-                sessionCount: sessions.length,
-                lastActivity,
-                messageCount: totalMessages,
-              };
-            } catch {
-              return {
-                ...a,
-                sessionCount: 0,
-                lastActivity: null,
-                messageCount: 0,
-              };
-            }
-          }),
-        );
-        if (!cancelled) setAgents(enriched);
-      } catch {
-        if (!cancelled) navigate("/login");
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [navigate]);
-
   const handleNavigate = (page: NavKey) => {
-    // Only "agents" has a page for now — others are stubs
-    if (page === "agents") return;
-    // Future: navigate to /scheduler, /mcps, /skills, etc.
+    if (page === "agents") navigate("/agents");
+    if (page === "settings") navigate("/settings");
   };
 
   return (
@@ -116,6 +125,7 @@ export function AgentList() {
             </div>
           </div>
           <button
+            onClick={() => setShowCreate(true)}
             className="flex items-center gap-1.5 rounded-[6px] px-3 py-2 text-[13px] font-medium transition"
             style={{
               background: "var(--ink)",
@@ -155,12 +165,35 @@ export function AgentList() {
                   key={agent.id}
                   agent={agent}
                   onClick={() => navigate(`/agents/${agent.id}/chat`)}
+                  onSettings={() => {
+                    setSettingsAgent(agent);
+                    setShowSettings(true);
+                  }}
                 />
               ))}
             </div>
           )}
         </div>
       </div>
+
+      <CreateAgentModal
+        open={showCreate}
+        onClose={() => setShowCreate(false)}
+        onCreated={(id) => {
+          setShowCreate(false);
+          loadAgents();
+          navigate(`/agents/${id}/chat`);
+        }}
+        providers={providers}
+      />
+
+      <SettingsOverlay
+        agent={settingsAgent}
+        open={showSettings}
+        onClose={() => setShowSettings(false)}
+        onSaved={() => loadAgents()}
+        providers={providers}
+      />
     </div>
   );
 }
@@ -168,9 +201,11 @@ export function AgentList() {
 function AgentCard({
   agent,
   onClick,
+  onSettings,
 }: {
   agent: AgentWithActivity;
   onClick: () => void;
+  onSettings: () => void;
 }) {
   const statusLabel = agent.enabled ? "Active" : "Disabled";
   const statusColor = agent.enabled ? "var(--success)" : "var(--ink-3)";
@@ -212,8 +247,13 @@ function AgentCard({
             <h3 className="truncate text-[15px] font-semibold text-[var(--ink)]">
               {agent.name}
             </h3>
-            <p className="mt-0.5 font-mono text-[11px] text-[var(--ink-2)]">
-              {agent.model || "no model"}
+            <p
+              className="mt-0.5 font-mono text-[11px]"
+              style={{
+                color: agent.model ? "var(--ink-2)" : "var(--accent)",
+              }}
+            >
+              {agent.model || "⚠ no model — configure in Settings"}
             </p>
           </div>
         </div>
@@ -236,7 +276,7 @@ function AgentCard({
         {agent.soul || "No soul configured."}
       </p>
 
-      {/* Bottom: stats + arrow */}
+      {/* Bottom: stats + actions */}
       <div className="mt-4 flex items-center justify-between border-t pt-3" style={{ borderColor: "var(--border)" }}>
         <div className="flex items-center gap-4">
           <Stat
@@ -248,9 +288,22 @@ function AgentCard({
             {lastActivityLabel}
           </span>
         </div>
-        <ArrowRight
-          className="h-4 w-4 text-[var(--ink-3)] transition group-hover:text-[var(--accent)]"
-        />
+        <div className="flex items-center gap-2">
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onSettings();
+            }}
+            className="flex h-7 w-7 items-center justify-center rounded text-[var(--ink-3)] transition hover:bg-[var(--border)] hover:text-[var(--ink)]"
+            style={{ border: "none", background: "none", cursor: "pointer" }}
+            title="Settings"
+          >
+            <Settings className="h-3.5 w-3.5" />
+          </button>
+          <ArrowRight
+            className="h-4 w-4 text-[var(--ink-3)] transition group-hover:text-[var(--accent)]"
+          />
+        </div>
       </div>
     </div>
   );

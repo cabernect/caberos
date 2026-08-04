@@ -28,6 +28,7 @@ from ..models.agent import Agent
 from ..models.approval import ApprovalRequest
 from ..models.audit import AuditRecord
 from ..models.contact import Contact
+from ..models.elicitation import ElicitationRequest
 from ..models.operator import Operator
 from ..models.run import Message, Run
 from ..models.session import Session
@@ -68,6 +69,7 @@ class SendMessageRequest(BaseModel):
     is_test: bool = False
     model_override: ModelOverride | None = None
     session_id: str | None = None  # if provided, use this session; else auto-resume
+    new_session: bool = False  # if true, force create a new session (ignore auto-resume)
     attachments: list[AttachmentIn] = []  # multimodal attachments
 
 
@@ -89,13 +91,26 @@ async def send_message(
     The run executes independently. Connect to GET /runs/{run_id}/events
     to stream the events. The run survives disconnects — reconnect anytime.
     """
-    # Quick agent existence check (short-lived session)
+    # Quick agent existence + model check (short-lived session)
+    from ..agent_service import get_active_config
     from ..db import async_session_factory
 
     async with async_session_factory() as check_db:
         result = await check_db.execute(select(Agent).where(Agent.id == agent_id))
         if result.scalar_one_or_none() is None:
             raise HTTPException(status_code=404, detail="Agent not found")
+
+        # Pre-check: refuse to start if no model is configured (and not a test run).
+        # This gives the user an immediate, clear error instead of a confusing
+        # LiteLLM failure after the run starts.
+        if not body.is_test:
+            config = await get_active_config(check_db, agent_id)
+            if config and not config.model.is_configured:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No model configured for this agent. "
+                    "Add a provider in Settings → Providers, then assign a model.",
+                )
 
     result = await start_run(
         agent_id=agent_id,
@@ -108,6 +123,7 @@ async def send_message(
             else None
         ),
         session_id=body.session_id,
+        new_session=body.new_session,
         attachments=[
             Attachment(
                 type=a.type,
@@ -352,6 +368,11 @@ async def get_session_messages(
             "content": msg.content,
             "created_at": _iso_utc(msg.created_at),
             "run_id": msg.run_id,
+            "run_status": run.status,
+            "tokens_in": run.tokens_in,
+            "tokens_out": run.tokens_out,
+            "cost": run.cost,
+            "subagent_id": msg.subagent_id,
         }
         for msg, run in rows
     ]
@@ -385,6 +406,7 @@ async def delete_session(
         await db.execute(delete(Message).where(Message.run_id.in_(run_ids)))
         await db.execute(delete(AuditRecord).where(AuditRecord.run_id.in_(run_ids)))
         await db.execute(delete(ApprovalRequest).where(ApprovalRequest.run_id.in_(run_ids)))
+        await db.execute(delete(ElicitationRequest).where(ElicitationRequest.run_id.in_(run_ids)))
         await db.execute(delete(Run).where(Run.id.in_(run_ids)))
 
     await db.delete(session)

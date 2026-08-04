@@ -10,7 +10,7 @@ class CapabilityDef:
     """Definition of a capability registered in the system."""
 
     name: str
-    kind: Literal["tool", "sub_agent", "memory", "connector_action"]
+    kind: Literal["tool", "memory", "mcp_tool"]
     description: str
     parameters_schema: dict[str, Any]
     egress: bool = False

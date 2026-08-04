@@ -89,6 +89,8 @@ async def _apply_schema_patches(conn) -> None:
     patches = [
         # (table, column, column_def)
         ("messages", "attachments", "TEXT"),
+        ("providers", "custom_models", "TEXT NOT NULL DEFAULT '[]'"),
+        ("messages", "subagent_id", "VARCHAR(36)"),
     ]
 
     for table, column, col_type in patches:

@@ -67,10 +67,12 @@ class SyscallHandler:
     - Running state emission via event_emitter
     """
 
-    def __init__(self, db: AsyncSession, workspace_path: str) -> None:
+    def __init__(self, db: AsyncSession, workspace_path: str, sandbox_mode: str = "strict") -> None:
         self.db = db
         self.workspace_path = workspace_path
+        self.sandbox_mode = sandbox_mode
         self._event_emitter: Any = None
+        self._spawn_context: dict[str, Any] = {}
 
     async def mediate(
         self,
@@ -93,11 +95,13 @@ class SyscallHandler:
             )
 
         # 2. Check grant
-        granted_names = {g.name for g in agent_config.capabilities}
-        if call.name not in granted_names:
-            return await self._deny(
-                run_id, call, agent_config, "not granted", start, sub_agent_id
-            )
+        # capabilities is None = all tools enabled (default), [] = none
+        if agent_config.capabilities is not None:
+            granted_names = {g.name for g in agent_config.capabilities}
+            if call.name not in granted_names:
+                return await self._deny(
+                    run_id, call, agent_config, "not granted", start, sub_agent_id
+                )
 
         # 3. Resolve subject (D10 — for subject-scoped capabilities)
         subject_contact_id: str | None = None
@@ -121,8 +125,12 @@ class SyscallHandler:
 
         # 5. Check approval (Ticket 04)
         # The grant's require_approval flag takes precedence, then the capability def's.
-        grant = next(
-            (g for g in agent_config.capabilities if g.name == call.name), None
+        # When capabilities is None (all tools), there's no per-grant override —
+        # fall back to the capability definition's require_approval.
+        grant = (
+            next((g for g in agent_config.capabilities if g.name == call.name), None)
+            if agent_config.capabilities is not None
+            else None
         )
         needs_approval = (
             grant.require_approval if grant else cap.require_approval
@@ -154,7 +162,7 @@ class SyscallHandler:
         # 5b. Handle elicitation — agent.ask_user is intercepted here.
         # It has no execute function; the mediator pauses the run and waits
         # for the user to respond via the elicitation API.
-        if call.name == "agent.ask_user":
+        if call.name == "agent_ask_user":
             return await self._handle_elicitation(
                 run_id, call, agent_config, session, start, sub_agent_id
             )
@@ -164,10 +172,19 @@ class SyscallHandler:
         # 7. Execute under timeout
         # (The harness emits the 'running' state before calling mediate)
 
+        # For run_subagent, inject the parent context so the sub-agent can
+        # run through the same harness with the parent's model, workspace, etc.
+        extra_kwargs: dict[str, Any] = {}
+        if call.name == "run_subagent":
+            extra_kwargs["parent_config"] = agent_config
+            extra_kwargs["_spawn_context"] = getattr(self, "_spawn_context", {})
+
         try:
             result = await cap.execute(
                 args=call.args,
                 workspace_path=self.workspace_path,
+                sandbox_mode=self.sandbox_mode,
+                **extra_kwargs,
             )
             elapsed = int((time.monotonic() - start) * 1000)
 
@@ -259,10 +276,13 @@ class SyscallHandler:
             args=json.dumps(call.args),
             status="pending",
         )
-        self.db.add(approval)
-        await self.db.flush()
-        # Commit immediately so the approval API (separate session) can see it
-        await self.db.commit()
+        # Use a separate session to avoid "Session is already flushing" errors
+        # when the event emitter's persistence layer triggers a flush concurrently.
+        from ..db import async_session_factory
+
+        async with async_session_factory() as session:
+            session.add(approval)
+            await session.commit()
 
         # Register the asyncio.Event so the API can resolve it
         pending = approval_registry.register(approval_id)

@@ -26,7 +26,7 @@ def agent_config():
         name="Elicitation Test",
         model=ModelConfig(provider_id="test", name="scripted"),
         soul="Test soul.",
-        capabilities=[CapabilityGrant(name="agent.ask_user", require_approval=False)],
+        capabilities=[CapabilityGrant(name="agent_ask_user", require_approval=False)],
     )
 
 
@@ -42,7 +42,7 @@ async def test_elicitation_basic_flow(db, workspace, agent_config):
     handler = SyscallHandler(db=db, workspace_path=workspace)
     call = ToolCall(
         id="call_1",
-        name="agent.ask_user",
+        name="agent_ask_user",
         args={"question": "Which file?", "options": ["a.txt", "b.txt"]},
     )
 
@@ -94,7 +94,7 @@ async def test_elicitation_free_text(db, workspace, agent_config):
     handler = SyscallHandler(db=db, workspace_path=workspace)
     call = ToolCall(
         id="call_2",
-        name="agent.ask_user",
+        name="agent_ask_user",
         args={"question": "What should I name the file?"},
     )
 
@@ -136,7 +136,7 @@ async def test_elicitation_not_granted(db, workspace):
     handler = SyscallHandler(db=db, workspace_path=workspace)
     call = ToolCall(
         id="call_3",
-        name="agent.ask_user",
+        name="agent_ask_user",
         args={"question": "Hello?"},
     )
 
@@ -157,7 +157,7 @@ async def test_elicitation_emits_events(db, workspace, agent_config):
     handler = SyscallHandler(db=db, workspace_path=workspace)
     call = ToolCall(
         id="call_4",
-        name="agent.ask_user",
+        name="agent_ask_user",
         args={"question": "Pick one", "options": ["x", "y"]},
     )
 
@@ -214,7 +214,7 @@ async def test_elicitation_writes_audit_record(db, workspace, agent_config):
     handler = SyscallHandler(db=db, workspace_path=workspace)
     call = ToolCall(
         id="call_5",
-        name="agent.ask_user",
+        name="agent_ask_user",
         args={"question": "Test?"},
     )
 
@@ -237,6 +237,6 @@ async def test_elicitation_writes_audit_record(db, workspace, agent_config):
     result = await db.execute(select(AuditRecord).where(AuditRecord.run_id == "test-run-5"))
     audits = result.scalars().all()
     assert len(audits) == 1
-    assert audits[0].capability_name == "agent.ask_user"
+    assert audits[0].capability_name == "agent_ask_user"
     assert audits[0].allowed is True
     assert json.loads(audits[0].result) == {"response": "yes"}

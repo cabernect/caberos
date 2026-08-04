@@ -90,6 +90,7 @@ async def start_run(
     is_test: bool = False,
     model_override: dict[str, str] | None = None,
     session_id: str | None = None,
+    new_session: bool = False,
     attachments: list[Attachment] | None = None,
 ) -> dict[str, str]:
     """Start a run in a managed task. Returns {run_id, session_id}.
@@ -130,6 +131,7 @@ async def start_run(
                 is_test=is_test,
                 model_override=model_override,
                 session_id=session_id,
+                new_session=new_session,
                 attachments=attachments,
                 event_callback=event_callback,
             )

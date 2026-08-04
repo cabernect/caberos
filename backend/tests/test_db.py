@@ -54,7 +54,7 @@ async def test_create_capability(db):
     """Create a capability."""
     cap = Capability(
         id="cap-1",
-        name="shell.run",
+        name="terminal",
         kind="tool",
         description="Execute a shell command",
         egress=True,
@@ -63,7 +63,7 @@ async def test_create_capability(db):
     db.add(cap)
     await db.commit()
 
-    result = await db.execute(select(Capability).where(Capability.name == "shell.run"))
+    result = await db.execute(select(Capability).where(Capability.name == "terminal"))
     found = result.scalar_one()
     assert found.kind == "tool"
     assert found.egress is True

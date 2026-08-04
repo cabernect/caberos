@@ -1,14 +1,94 @@
 """Test the harness loop with a scripted model double."""
 
+import asyncio
 import uuid
+from types import SimpleNamespace
 
 import pytest
 
+from agentos.config import settings
 from agentos.config_schema import AgentConfig, CapabilityGrant, ModelConfig
 from agentos.harness.context import assemble_system_prompt
+from agentos.harness.litellm_adapter import LiteLLMAdapter
 from agentos.harness.loop import Harness
 from agentos.harness.scripted_model import ScriptedModel, ScriptedResponse
 from agentos.syscall.mediator import StubSyscallHandler
+
+
+@pytest.mark.asyncio
+async def test_streaming_model_idle_timeout_ends_stalled_stream(monkeypatch):
+    async def stalled_stream():
+        yield SimpleNamespace(
+            choices=[SimpleNamespace(delta=SimpleNamespace(
+                reasoning_content="Checking the date", content=None, tool_calls=None,
+            ))],
+        )
+        await asyncio.Event().wait()
+
+    async def acompletion(**_kwargs):
+        return stalled_stream()
+
+    adapter = LiteLLMAdapter(db=None)
+
+    async def load_provider(_provider_id):
+        return {
+            "api_key": "",
+            "base_url": None,
+            "org_id": None,
+            "extra_params": {},
+            "type": "openai",
+        }
+
+    monkeypatch.setattr(adapter, "_load_provider", load_provider)
+    monkeypatch.setattr("agentos.harness.litellm_adapter.litellm.acompletion", acompletion)
+    monkeypatch.setattr(settings, "model_stream_idle_timeout", 0.01)
+
+    stream = adapter.complete_stream(
+        agent_model=ModelConfig(provider_id="test", name="test-model"),
+        messages=[{"role": "user", "content": "hello"}],
+    )
+    assert await anext(stream) == ("thinking", "Checking the date")
+    with pytest.raises(TimeoutError, match="Model stream was idle"):
+        await anext(stream)
+
+
+
+@pytest.mark.asyncio
+async def test_harness_reports_stream_timeout_to_the_user(db, workspace):
+    class TimedOutModel:
+        async def complete_stream(self, **_kwargs):
+            raise TimeoutError("Model stream was idle for 30s")
+            yield
+
+    config = AgentConfig(
+        id="timeout-test",
+        name="Timeout Test",
+        model=ModelConfig(provider_id="test", name="scripted"),
+        capabilities=[],
+    )
+    events = []
+
+    async def emit(event_type, payload):
+        events.append((event_type, payload))
+
+    run_id = str(uuid.uuid4())
+    result = await Harness(model=TimedOutModel()).run(
+        agent_config=config,
+        session=None,
+        message="Who won?",
+        syscall_handler=StubSyscallHandler(db=db, workspace_path=workspace),
+        run_id=run_id,
+        event_emitter=emit,
+    )
+
+    assert result.status == "failed"
+    assert "timed out" in result.final_answer
+    assert events[-1] == ("message_complete", {
+        "run_id": run_id,
+        "total_cost": 0.0,
+        "total_turns": 1,
+        "status": "failed",
+    })
 
 
 def test_base_system_prompt_present():
@@ -29,7 +109,7 @@ def test_base_system_prompt_present():
     assert "Workspace" in prompt
     assert "Capabilities" in prompt
     assert "Output Rules" in prompt
-    assert "agent.ask_user" in prompt
+    assert "agent_ask_user" in prompt
 
 
 def test_base_prompt_present_even_without_identity():
@@ -176,7 +256,7 @@ async def test_harness_tool_call_then_answer(db, workspace):
         name="Harness Test",
         model=ModelConfig(provider_id="test", name="scripted"),
         soul="Test soul.",
-        capabilities=[CapabilityGrant(name="shell.run", require_approval=False)],
+        capabilities=[CapabilityGrant(name="terminal", require_approval=False)],
     )
 
     model = ScriptedModel(
@@ -185,7 +265,7 @@ async def test_harness_tool_call_then_answer(db, workspace):
                 tool_calls=[
                     {
                         "id": "call_1",
-                        "name": "shell.run",
+                        "name": "terminal",
                         "args": {"command": "echo hello"},
                     }
                 ],
@@ -208,7 +288,7 @@ async def test_harness_tool_call_then_answer(db, workspace):
     assert result.status == "completed"
     assert result.total_turns == 2  # one for tool call, one for final answer
     assert len(result.tool_calls_made) == 1
-    assert result.tool_calls_made[0]["name"] == "shell.run"
+    assert result.tool_calls_made[0]["name"] == "terminal"
     assert result.tool_calls_made[0]["allowed"] is True
     assert "hello" in result.tool_calls_made[0]["result"]["stdout"]
     assert result.final_answer == "The command output: hello"
@@ -221,7 +301,7 @@ async def test_harness_turn_limit(db, workspace):
         id="harness-test-2",
         name="Turn Limit Test",
         model=ModelConfig(provider_id="test", name="scripted"),
-        capabilities=[CapabilityGrant(name="shell.run", require_approval=False)],
+        capabilities=[CapabilityGrant(name="terminal", require_approval=False)],
         limits=__import__("agentos.config_schema", fromlist=["Limits"]).Limits(max_turns_per_run=2),
     )
 
@@ -229,13 +309,13 @@ async def test_harness_turn_limit(db, workspace):
     model = ScriptedModel(
         [
             ScriptedResponse(
-                tool_calls=[{"id": "c1", "name": "shell.run", "args": {"command": "echo 1"}}]
+                tool_calls=[{"id": "c1", "name": "terminal", "args": {"command": "echo 1"}}]
             ),
             ScriptedResponse(
-                tool_calls=[{"id": "c2", "name": "shell.run", "args": {"command": "echo 2"}}]
+                tool_calls=[{"id": "c2", "name": "terminal", "args": {"command": "echo 2"}}]
             ),
             ScriptedResponse(
-                tool_calls=[{"id": "c3", "name": "shell.run", "args": {"command": "echo 3"}}]
+                tool_calls=[{"id": "c3", "name": "terminal", "args": {"command": "echo 3"}}]
             ),
         ]
     )
@@ -262,13 +342,13 @@ async def test_harness_event_emitter(db, workspace):
         id="harness-test-3",
         name="Event Test",
         model=ModelConfig(provider_id="test", name="scripted"),
-        capabilities=[CapabilityGrant(name="shell.run", require_approval=False)],
+        capabilities=[CapabilityGrant(name="terminal", require_approval=False)],
     )
 
     model = ScriptedModel(
         [
             ScriptedResponse(
-                tool_calls=[{"id": "c1", "name": "shell.run", "args": {"command": "echo hi"}}]
+                tool_calls=[{"id": "c1", "name": "terminal", "args": {"command": "echo hi"}}]
             ),
             ScriptedResponse(content="Done!"),
         ]
@@ -317,7 +397,7 @@ async def test_harness_denied_capability(db, workspace):
     model = ScriptedModel(
         [
             ScriptedResponse(
-                tool_calls=[{"id": "c1", "name": "shell.run", "args": {"command": "echo hi"}}]
+                tool_calls=[{"id": "c1", "name": "terminal", "args": {"command": "echo hi"}}]
             ),
             ScriptedResponse(content="Okay, I couldn't run that."),
         ]

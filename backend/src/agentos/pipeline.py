@@ -57,6 +57,47 @@ async def _generate_session_title(
         return None
 
 
+async def _generate_session_title_from_history(
+    db: AsyncSession,
+    agent_config: Any,
+    messages: list,
+) -> str | None:
+    """Generate a short title from the full conversation history.
+
+    Uses up to the last 6 user+assistant messages for context.
+    Returns a 3-5 word title, or None if generation fails.
+    """
+    try:
+        from .harness.litellm_adapter import LiteLLMAdapter
+
+        # Extract user and assistant messages only
+        convo = []
+        for msg in messages:
+            if msg.role in ("user", "assistant") and msg.content:
+                convo.append(f"{msg.role.capitalize()}: {msg.content[:150]}")
+            if len(convo) >= 6:
+                break
+
+        if not convo:
+            return None
+
+        adapter = LiteLLMAdapter(db)
+        prompt = (
+            f"Summarize this conversation in 3-5 words. "
+            f"Output ONLY the title, no quotes, no punctuation at the end.\n\n"
+            + "\n".join(convo)
+        )
+        response = await adapter.complete(
+            agent_model=agent_config.model,
+            messages=[{"role": "user", "content": prompt}],
+            tools=None,
+        )
+        title = response.content.strip().strip('"').strip("'")[:60]
+        return title if title else None
+    except Exception:
+        return None
+
+
 @dataclass
 class Attachment:
     """A multimodal attachment on a user message (image, URL, or workspace file).
@@ -88,6 +129,7 @@ class InboundMessage:
     is_test: bool = False
     model_override: dict[str, str] | None = None  # {provider_id, name} or None
     session_id: str | None = None  # explicit session to use, else auto-resume
+    new_session: bool = False  # if true, force create a new session (ignore auto-resume)
     attachments: list[Attachment] = None  # multimodal attachments (images, URLs, files)
 
 
@@ -130,7 +172,7 @@ class Pipeline:
 
         # Step 5: Resolve Session (use explicit session_id if provided, else auto-resume)
         session = await self._resolve_session(
-            contact.id, message.bot_id, message.session_id
+            contact.id, message.bot_id, message.session_id, message.new_session
         )
 
         # Step 3: Persist and acknowledge — create Run row with valid FKs
@@ -196,8 +238,9 @@ class Pipeline:
         self.db.add(user_msg)
         await self.db.flush()
 
-        # Auto-generate session title from first user message if untitled
-        # (temporary — will be replaced with LLM-generated title after the run)
+        # Set a temporary title from the first user message if untitled.
+        # This gets replaced with an LLM-generated title 3 minutes after
+        # the session starts (see title check below).
         if not session.title:
             session.title = guardrailed_text[:60].strip() or "New conversation"
             await self.db.flush()
@@ -231,12 +274,23 @@ class Pipeline:
                     agent_config.model = MC(
                         provider_id=message.model_override["provider_id"],
                         name=message.model_override["name"],
-                        temperature=agent_config.model.temperature,
                         max_tokens=agent_config.model.max_tokens,
                     )
 
+                # Guard: refuse to run if no model is configured (and not a test run).
+                # This happens when a provider is deleted out from under an agent.
+                if not message.is_test and not agent_config.model.is_configured:
+                    raise ValueError(
+                        "No model configured for this agent. "
+                        "Add a provider in Settings → Providers, then assign a model."
+                    )
+
                 # Get recent messages from this session (last 10)
-                recent_msgs = await self._get_recent_messages(session.id, limit=10)
+                # Exclude the current run — its user message is appended
+                # separately by build_message_history to avoid duplication.
+                recent_msgs = await self._get_recent_messages(
+                    session.id, limit=10, exclude_run_id=run.id
+                )
 
                 # Set up workspace
                 wm = WorkspaceManager()
@@ -250,13 +304,17 @@ class Pipeline:
                 syscall_handler = SyscallHandler(
                     db=self.db,
                     workspace_path=str(workspace_path),
+                    sandbox_mode=agent_config.sandbox_mode,
                 )
 
-                # Wrap event_emitter to persist thinking and tool_call events
-                # as Message rows, so they show up in conversation history.
-                # Uses a monotonically increasing seq counter to guarantee
-                # correct ordering: thinking → tool_call → assistant.
-                _thinking_buffer: list[str] = []
+                # Wrap event_emitter to persist thinking, intermediate text, and
+                # tool_call events as Message rows, so they show up in conversation
+                # history. Uses a monotonically increasing seq counter to guarantee
+                # correct ordering: thinking → text → tool_call → assistant.
+                # Sub-agent events (tagged with subagent_id) get separate buffers
+                # and are persisted with subagent_id set on the Message.
+                _thinking_buffers: dict[str | None, list[str]] = {None: []}
+                _token_buffers: dict[str | None, list[str]] = {None: []}
                 _tool_calls_seen: set[str] = set()
                 _msg_seq = 1  # user message is seq=0
 
@@ -269,14 +327,31 @@ class Pipeline:
                         if hasattr(result_emit, "__await__"):
                             await result_emit
 
+                    # Determine which buffer set to use (parent vs sub-agent)
+                    sub_id = payload.get("subagent_id")
+                    if sub_id not in _thinking_buffers:
+                        _thinking_buffers[sub_id] = []
+                    if sub_id not in _token_buffers:
+                        _token_buffers[sub_id] = []
+                    _tb = _thinking_buffers[sub_id]
+                    _tkb = _token_buffers[sub_id]
+
                     # Persist thinking as a single Message when it's done
                     # (we buffer chunks and flush on first token/tool_call)
                     if event_type == "thinking":
-                        _thinking_buffer.append(payload.get("content", ""))
-                    elif event_type in ("token", "tool_call") and _thinking_buffer:
+                        _tb.append(payload.get("content", ""))
+
+                    # Buffer text tokens — these are intermediate narration that
+                    # the model produces before tool calls. We flush them as an
+                    # assistant message when a tool_call arrives.
+                    if event_type == "token":
+                        _tkb.append(payload.get("content", ""))
+
+                    # Flush thinking buffer on first token/tool_call
+                    if event_type in ("token", "tool_call") and _tb:
                         # Flush buffered thinking into one Message row
-                        thinking_text = "".join(_thinking_buffer)
-                        _thinking_buffer.clear()
+                        thinking_text = "".join(_tb)
+                        _tb.clear()
                         if thinking_text:
                             self.db.add(
                                 Message(
@@ -285,6 +360,27 @@ class Pipeline:
                                     role="thinking",
                                     content=thinking_text,
                                     seq=_msg_seq,
+                                    subagent_id=sub_id,
+                                )
+                            )
+                            _msg_seq += 1
+                            await self.db.commit()
+
+                    # Flush token buffer when a tool_call arrives — the model
+                    # produced narration text before the tool call, save it
+                    # as an assistant message so it survives message_complete reload.
+                    if event_type == "tool_call" and _tkb:
+                        text_content = "".join(_tkb)
+                        _tkb.clear()
+                        if text_content.strip():
+                            self.db.add(
+                                Message(
+                                    id=str(uuid.uuid4()),
+                                    run_id=run.id,
+                                    role="assistant",
+                                    content=text_content,
+                                    seq=_msg_seq,
+                                    subagent_id=sub_id,
                                 )
                             )
                             _msg_seq += 1
@@ -311,10 +407,16 @@ class Pipeline:
                                         "result": payload.get("result"),
                                     }),
                                     seq=_msg_seq,
+                                    subagent_id=sub_id,
                                 )
                             )
                             _msg_seq += 1
                             await self.db.commit()
+
+                    # Clear token buffer on guardrail correction — the corrected
+                    # content will be saved as the final assistant message.
+                    if event_type == "guardrail_correction":
+                        _tkb.clear()
 
                 # Steps 8-11: Run the harness (with guardrailed user message + attachments)
                 result: RunResult = await self.harness.run(
@@ -351,15 +453,22 @@ class Pipeline:
                 # Update session activity
                 session.last_activity_at = datetime.now(UTC)
 
-                # Generate LLM-based session title after the first run
-                # (replaces the temporary title from the first message).
-                # Only do this on the first run (when there's exactly 1 user message).
-                if result.final_answer and len(recent_msgs) == 0:
-                    llm_title = await _generate_session_title(
-                        self.db, agent_config, guardrailed_text, result.final_answer
-                    )
-                    if llm_title:
-                        session.title = llm_title
+                # Generate LLM-based session title 3 minutes after the session
+                # started. This avoids locking in a title from a "nothing" first
+                # message (e.g. "hello") — by 3 min there's usually a real conversation.
+                if result.final_answer and session.title:
+                    started = session.started_at
+                    if started.tzinfo is None:
+                        started = started.replace(tzinfo=UTC)
+                    session_age = (datetime.now(UTC) - started).total_seconds()
+                    if session_age >= 180:  # 3 minutes
+                        # Gather all user + assistant messages for a better title
+                        all_msgs = await self._get_recent_messages(session.id, limit=20)
+                        llm_title = await _generate_session_title_from_history(
+                            self.db, agent_config, all_msgs
+                        )
+                        if llm_title:
+                            session.title = llm_title
 
                 await self.db.commit()
 
@@ -400,12 +509,14 @@ class Pipeline:
         contact_id: str,
         agent_id: str,
         explicit_session_id: str | None = None,
+        new_session: bool = False,
     ) -> Session:
         """Step 5: Resume the live session or open one.
 
         If explicit_session_id is provided, use that session (must belong to
-        this contact+agent). Otherwise, resume the most recent active session
-        or create a new one.
+        this contact+agent). If new_session is True, skip auto-resume and create
+        a fresh session. Otherwise, resume the most recent active session or
+        create a new one.
         """
         if explicit_session_id:
             result = await self.db.execute(
@@ -420,36 +531,49 @@ class Pipeline:
                 return session
             # Fall through to auto-resume if session not found
 
-        result = await self.db.execute(
-            select(Session)
-            .where(
-                Session.contact_id == contact_id,
-                Session.agent_id == agent_id,
-                Session.status == "active",
+        # Skip auto-resume if new_session is requested
+        if not new_session:
+            result = await self.db.execute(
+                select(Session)
+                .where(
+                    Session.contact_id == contact_id,
+                    Session.agent_id == agent_id,
+                    Session.status == "active",
+                )
+                .order_by(Session.last_activity_at.desc())
             )
-            .order_by(Session.last_activity_at.desc())
+            session = result.scalars().first()
+            if session is not None:
+                return session
+
+        session = Session(
+            id=str(uuid.uuid4()),
+            contact_id=contact_id,
+            agent_id=agent_id,
+            status="active",
         )
-        session = result.scalars().first()
-        if session is None:
-            session = Session(
-                id=str(uuid.uuid4()),
-                contact_id=contact_id,
-                agent_id=agent_id,
-                status="active",
-            )
-            self.db.add(session)
-            await self.db.flush()
+        self.db.add(session)
+        await self.db.flush()
         return session
 
-    async def _get_recent_messages(self, session_id: str, limit: int = 10) -> list[Message]:
-        """Get recent messages from the session for context."""
-        result = await self.db.execute(
+    async def _get_recent_messages(
+        self, session_id: str, limit: int = 10, exclude_run_id: str | None = None
+    ) -> list[Message]:
+        """Get recent messages from the session for context.
+
+        exclude_run_id: if set, skip messages from this run (e.g. the current
+        run's user message, which is appended separately by build_message_history).
+        """
+        stmt = (
             select(Message)
             .join(Run, Message.run_id == Run.id)
             .where(Run.session_id == session_id)
             .order_by(Message.created_at.desc())
             .limit(limit)
         )
+        if exclude_run_id:
+            stmt = stmt.where(Message.run_id != exclude_run_id)
+        result = await self.db.execute(stmt)
         msgs = list(result.scalars().all())
         msgs.reverse()  # chronological order
         return msgs

@@ -28,18 +28,22 @@ export function ModelSelector({
   );
 
   useEffect(() => {
+    let cancelled = false;
     api.listProviders().then(async (provs) => {
-      const loaded: ProviderModels[] = [];
-      for (const p of provs) {
-        try {
-          const resp = await api.listModels(p.id);
-          loaded.push({ provider: p, models: resp.models });
-        } catch {
-          loaded.push({ provider: p, models: [] });
-        }
-      }
-      setProviders(loaded);
+      // Fetch all providers' models in parallel (not sequentially)
+      const entries = await Promise.all(
+        provs.map(async (p) => {
+          try {
+            const resp = await api.listModels(p.id);
+            return { provider: p, models: resp.models };
+          } catch {
+            return { provider: p, models: [] };
+          }
+        }),
+      );
+      if (!cancelled) setProviders(entries);
     });
+    return () => { cancelled = true; };
   }, []);
 
   const handleSelect = (providerId: string, modelName: string) => {
@@ -58,9 +62,11 @@ export function ModelSelector({
     onChange(null);
   };
 
-  const selectedLabel = selected
-    ? formatModelLabel(selected, providers)
-    : "Default model";
+  const isDefault =
+    !selected || (defaultProviderId && defaultModelName && selected === `${defaultProviderId}/${defaultModelName}`);
+  const selectedLabel = isDefault
+    ? `${defaultModelName || "Default"} (Default)`
+    : formatModelLabel(selected, providers);
 
   return (
     <div className="relative shrink-0">
@@ -143,7 +149,7 @@ export function ModelSelector({
                   className="px-3 py-1.5 font-mono text-[11px] text-[var(--ink-3)]"
                   style={{ background: "var(--surface)" }}
                 >
-                  {provider.name} ({provider.type})
+                  {provider.name}
                 </div>
                 {models.length === 0 ? (
                   <div className="px-3 py-1.5 font-mono text-[11px] italic text-[var(--ink-3)]">

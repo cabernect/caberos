@@ -41,6 +41,7 @@ CaberOS is an open-source, local-first AI Agent Operating System. It hosts perso
          │
          ├──→ 05 (parallel with 03/04)
          ├──→ 06 (parallel with 03/04/05) ──→ 07
+         └──→ 05a (parallel with 05)
 ```
 
 - **01** — Smoke test vertical slice (tracer bullet, no blockers)
@@ -48,6 +49,7 @@ CaberOS is an open-source, local-first AI Agent Operating System. It hosts perso
 - **03** — File operations + tool call visibility
 - **04** — Approval flow
 - **05** — Agent management UI
+- **05a** — Global settings & provider management
 - **06** — Memory + skills
 - **07** — Heartbeat
 - **08** — Connectors (Outlook)

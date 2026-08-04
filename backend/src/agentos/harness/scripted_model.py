@@ -32,7 +32,7 @@ class ScriptedModel:
             ScriptedResponse(
                 tool_calls=[{
                     "id": "call_1",
-                    "name": "shell.run",
+                    "name": "terminal",
                     "args": {"command": "echo hello"},
                 }]
             ),

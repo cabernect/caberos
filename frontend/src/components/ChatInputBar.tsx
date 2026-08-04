@@ -205,6 +205,10 @@ export function ChatInputBar({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Ignore key events while IME is composing (e.g. Vietnamese, Chinese, Japanese).
+    // The Enter that confirms the IME composition should NOT send the message.
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+
     if (isElicitation) {
       // Number keys 1-9 to quick-select options (single select only)
       if (activeElicitation?.options && !activeElicitation.multiSelect) {

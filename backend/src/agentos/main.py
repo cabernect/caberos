@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api import agents, approvals, chat, elicitation, providers
+from .api import agent_files, agents, approvals, chat, elicitation, providers
 from .auth import router as auth_router
 from .capabilities.builtin import register_builtin_capabilities
 from .db import init_db
@@ -21,13 +21,15 @@ async def lifespan(app: FastAPI):
     register_builtin_capabilities()
     await init_db()
     # Seed default operator if none exists
-    from .seed import seed_operator_if_needed
+    from .seed import seed_default_agents, seed_operator_if_needed
 
     await seed_operator_if_needed()
+    await seed_default_agents()
 
     # Clean up runs stuck in "running" from a previous server crash.
     # Without this, the contact lock would block future runs for that contact.
     from sqlalchemy import update
+
     from .db import async_session_factory
     from .models.run import Run
 
@@ -64,6 +66,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(providers.router)
 app.include_router(agents.router)
+app.include_router(agent_files.router)
 app.include_router(chat.router)
 app.include_router(approvals.router)
 app.include_router(elicitation.router)

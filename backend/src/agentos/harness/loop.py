@@ -4,6 +4,7 @@ Assembles context, calls the model, iterates on tool calls (mediated by
 the syscall layer), enforces turn/cost limits, and emits SSE events.
 """
 
+import asyncio
 import json
 import uuid
 from collections.abc import Callable
@@ -71,6 +72,17 @@ class Harness:
             system_prompt, recent_messages or [], message, attachments
         )
 
+        # Inject spawn context into the syscall handler so run_subagent
+        # can access the harness, session, run_id, and event_emitter.
+        if hasattr(syscall_handler, "_spawn_context"):
+            syscall_handler._spawn_context = {
+                "harness": self,
+                "session": session,
+                "run_id": run_id,
+                "event_emitter": event_emitter,
+                "syscall_handler": syscall_handler,
+            }
+
         # Emit typing event
         if event_emitter:
             await self._emit(event_emitter, "typing", {})
@@ -82,6 +94,8 @@ class Harness:
             if trigger == "user_message"
             else agent_config.heartbeat.max_cost_per_heartbeat
         )
+        consecutive_tool_failures = 0
+        max_consecutive_failures = 5
 
         # Steps 8-11: the loop
         while result.total_turns < max_turns:
@@ -109,6 +123,13 @@ class Harness:
             except Exception as e:
                 result.status = "failed"
                 result.error = str(e)
+                result.final_answer = (
+                    "I couldn't complete that request because the model connection "
+                    "timed out. Please try again."
+                    if isinstance(e, TimeoutError)
+                    else "I couldn't complete that request because the model connection "
+                    "failed. Please try again."
+                )
                 if event_emitter:
                     await self._emit(
                         event_emitter,
@@ -129,15 +150,37 @@ class Harness:
 
             # Step 9: Process tool calls
             if response.tool_calls:
-                for tc in response.tool_calls:
-                    call = ToolCall(
+                # Add the assistant message with tool_calls to history FIRST
+                # (must precede the tool result messages for OpenAI API compliance)
+                history.append({
+                    "role": "assistant",
+                    "content": response.content or "",
+                    "tool_calls": [
+                        {
+                            "id": tc.get("id", str(uuid.uuid4())),
+                            "type": "function",
+                            "function": {
+                                "name": tc["name"],
+                                "arguments": json.dumps(tc.get("args", {})),
+                            },
+                        }
+                        for tc in response.tool_calls
+                    ],
+                })
+
+                # Build ToolCall objects
+                calls = [
+                    ToolCall(
                         id=tc.get("id", str(uuid.uuid4())),
                         name=tc["name"],
                         args=tc.get("args", {}),
                     )
+                    for tc in response.tool_calls
+                ]
 
-                    # Emit tool_call pending
-                    if event_emitter:
+                # Emit pending + running events for all calls (in order, before any execution)
+                if event_emitter:
+                    for call in calls:
                         await self._emit(
                             event_emitter,
                             "tool_call",
@@ -148,9 +191,7 @@ class Harness:
                                 "status": "pending",
                             },
                         )
-
-                    # Emit tool_call running (before execution)
-                    if event_emitter:
+                    for call in calls:
                         await self._emit(
                             event_emitter,
                             "tool_call",
@@ -162,8 +203,11 @@ class Harness:
                             },
                         )
 
-                    # Mediate
-                    syscall_result: SyscallResult = await syscall_handler.mediate(
+                # Dispatch all tool calls concurrently.
+                # Independent tools (read_file, web_search, run_subagent, etc.)
+                # run in parallel via asyncio.gather.
+                async def _mediate_one(call: ToolCall) -> SyscallResult:
+                    return await syscall_handler.mediate(
                         call=call,
                         session=session,
                         agent_config=agent_config,
@@ -171,6 +215,12 @@ class Harness:
                         event_emitter=event_emitter,
                     )
 
+                syscall_results = await asyncio.gather(
+                    *[_mediate_one(c) for c in calls]
+                )
+
+                # Process results in order (to maintain history ordering)
+                for call, syscall_result in zip(calls, syscall_results, strict=True):
                     # Emit tool_call complete/denied
                     if event_emitter:
                         status = "complete" if syscall_result.allowed else "denied"
@@ -198,17 +248,29 @@ class Harness:
 
                     # Add tool result to history
                     if syscall_result.allowed:
+                        output = syscall_result.output
+                        # Track consecutive failures (empty/error results)
+                        is_empty = (
+                            output is None
+                            or output == ""
+                            or (isinstance(output, dict) and output.get("results") == [])
+                        )
+                        if is_empty:
+                            consecutive_tool_failures += 1
+                        else:
+                            consecutive_tool_failures = 0
                         history.append(
                             {
                                 "role": "tool",
-                                "content": json.dumps(syscall_result.output)
-                                if syscall_result.output
+                                "content": json.dumps(output)
+                                if output
                                 else "",
                                 "tool_call_id": call.id,
                                 "name": call.name,
                             }
                         )
                     else:
+                        consecutive_tool_failures += 1
                         history.append(
                             {
                                 "role": "tool",
@@ -217,6 +279,13 @@ class Harness:
                                 "name": call.name,
                             }
                         )
+
+                # Stop if too many consecutive tool failures
+                if consecutive_tool_failures >= max_consecutive_failures:
+                    history.append({
+                        "role": "user",
+                        "content": f"Note: {consecutive_tool_failures} consecutive tool calls returned empty or failed results. Stop calling tools and respond with what you know.",
+                    })
 
                 # Emit turn_complete
                 if event_emitter:
@@ -235,6 +304,8 @@ class Harness:
                 continue
 
             # No tool calls → this is the final answer
+            # Add the assistant message to history
+            history.append({"role": "assistant", "content": response.content or ""})
             # Apply guardrails before emitting to the user (D2)
             guardrail_result = apply_guardrails(response.content)
             result.final_answer = guardrail_result.content
