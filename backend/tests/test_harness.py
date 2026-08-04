@@ -19,9 +19,15 @@ from agentos.syscall.mediator import StubSyscallHandler
 async def test_streaming_model_idle_timeout_ends_stalled_stream(monkeypatch):
     async def stalled_stream():
         yield SimpleNamespace(
-            choices=[SimpleNamespace(delta=SimpleNamespace(
-                reasoning_content="Checking the date", content=None, tool_calls=None,
-            ))],
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(
+                        reasoning_content="Checking the date",
+                        content=None,
+                        tool_calls=None,
+                    )
+                )
+            ],
         )
         await asyncio.Event().wait()
 
@@ -50,7 +56,6 @@ async def test_streaming_model_idle_timeout_ends_stalled_stream(monkeypatch):
     assert await anext(stream) == ("thinking", "Checking the date")
     with pytest.raises(TimeoutError, match="Model stream was idle"):
         await anext(stream)
-
 
 
 @pytest.mark.asyncio
@@ -83,12 +88,15 @@ async def test_harness_reports_stream_timeout_to_the_user(db, workspace):
 
     assert result.status == "failed"
     assert "timed out" in result.final_answer
-    assert events[-1] == ("message_complete", {
-        "run_id": run_id,
-        "total_cost": 0.0,
-        "total_turns": 1,
-        "status": "failed",
-    })
+    assert events[-1] == (
+        "message_complete",
+        {
+            "run_id": run_id,
+            "total_cost": 0.0,
+            "total_turns": 1,
+            "status": "failed",
+        },
+    )
 
 
 def test_base_system_prompt_present():

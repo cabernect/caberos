@@ -21,7 +21,7 @@ import asyncio
 import json
 import time
 import uuid
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -107,9 +107,7 @@ class SyscallHandler:
         subject_contact_id: str | None = None
         if cap.subject_scoped:
             # Resolve the Contact from the session
-            result = await self.db.execute(
-                select(Contact).where(Contact.id == session.contact_id)
-            )
+            result = await self.db.execute(select(Contact).where(Contact.id == session.contact_id))
             contact = result.scalar_one_or_none()
             if contact is None:
                 return await self._deny(
@@ -132,16 +130,12 @@ class SyscallHandler:
             if agent_config.capabilities is not None
             else None
         )
-        needs_approval = (
-            grant.require_approval if grant else cap.require_approval
-        )
+        needs_approval = grant.require_approval if grant else cap.require_approval
         if needs_approval:
             # Check session-scoped allowlist first — if the operator previously
             # approved this exact capability+args with "remember for this session",
             # skip the approval gate.
-            if approval_registry.is_session_approved(
-                session.id, call.name, call.args
-            ):
+            if approval_registry.is_session_approved(session.id, call.name, call.args):
                 pass  # Auto-approved for this session
             else:
                 approval_result = await self._await_approval(
@@ -154,8 +148,12 @@ class SyscallHandler:
                 if not approval_result:
                     # Denied (or rejected by operator)
                     return await self._deny(
-                        run_id, call, agent_config,
-                        "approval denied by operator", start, sub_agent_id
+                        run_id,
+                        call,
+                        agent_config,
+                        "approval denied by operator",
+                        start,
+                        sub_agent_id,
                     )
                 # Approved — continue to execution
 
@@ -370,10 +368,12 @@ class SyscallHandler:
                 if isinstance(opt, str):
                     options.append({"label": opt, "description": ""})
                 elif isinstance(opt, dict):
-                    options.append({
-                        "label": opt.get("label", ""),
-                        "description": opt.get("description", ""),
-                    })
+                    options.append(
+                        {
+                            "label": opt.get("label", ""),
+                            "description": opt.get("description", ""),
+                        }
+                    )
 
         elicitation_id = str(uuid.uuid4())
         elicitation = ElicitationRequest(

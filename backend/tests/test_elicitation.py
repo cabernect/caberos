@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import uuid
 
 import pytest
 from sqlalchemy import select
@@ -32,6 +31,7 @@ def agent_config():
 
 class FakeSession:
     """Minimal session stub for the mediator."""
+
     id = "test-session-1"
     contact_id = "test-contact-1"
 
@@ -192,9 +192,7 @@ async def test_elicitation_emits_events(db, workspace, agent_config):
     assert cq["tool_call_id"] == "call_4"
 
     # Find the pending_input tool_call event
-    tc_pending = next(
-        p for t, p in events if t == "tool_call" and p["status"] == "pending_input"
-    )
+    tc_pending = next(p for t, p in events if t == "tool_call" and p["status"] == "pending_input")
     assert tc_pending["elicitation_id"] is not None
 
     # Resolve
@@ -202,9 +200,7 @@ async def test_elicitation_emits_events(db, workspace, agent_config):
     await asyncio.wait_for(task, timeout=5.0)
 
     # Should have emitted a complete tool_call event
-    tc_complete = next(
-        p for t, p in events if t == "tool_call" and p["status"] == "complete"
-    )
+    tc_complete = next(p for t, p in events if t == "tool_call" and p["status"] == "complete")
     assert tc_complete["result"] == {"response": "x"}
 
 

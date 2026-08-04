@@ -124,27 +124,31 @@ def build_message_history(
             args = tc.get("args", {})
             result = tc.get("result", "")
             # Assistant message announcing the tool call
-            history.append({
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": call_id,
-                        "type": "function",
-                        "function": {
-                            "name": tool_name,
-                            "arguments": json.dumps(args),
-                        },
-                    }
-                ],
-            })
+            history.append(
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {
+                                "name": tool_name,
+                                "arguments": json.dumps(args),
+                            },
+                        }
+                    ],
+                }
+            )
             # Tool result message
             result_str = result if isinstance(result, str) else json.dumps(result)
-            history.append({
-                "role": "tool",
-                "tool_call_id": call_id,
-                "content": result_str,
-            })
+            history.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": result_str,
+                }
+            )
             continue
         # Skip empty assistant messages (e.g. failed runs, or placeholders after tool calls)
         if msg.role == "assistant" and not msg.content.strip():
@@ -157,29 +161,37 @@ def build_message_history(
         for att in attachments:
             if att.type == "image":
                 # base64 data URI — model sees the image directly
-                content_parts.append({
-                    "type": "image_url",
-                    "image_url": {"url": f"data:{att.mime_type};base64,{att.data}"},
-                })
+                content_parts.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{att.mime_type};base64,{att.data}"},
+                    }
+                )
             elif att.type == "url":
                 # URL — model fetches and processes it
-                content_parts.append({
-                    "type": "image_url",
-                    "image_url": {"url": att.data},
-                })
+                content_parts.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": att.data},
+                    }
+                )
             elif att.type == "file":
                 # Text file — append content to the message text
                 if att.mime_type.startswith("text/") or att.mime_type == "application/json":
-                    content_parts.append({
-                        "type": "text",
-                        "text": f"\n\n--- {att.filename} ---\n{att.data}\n--- end {att.filename} ---",
-                    })
+                    content_parts.append(
+                        {
+                            "type": "text",
+                            "text": f"\n\n--- {att.filename} ---\n{att.data}\n--- end {att.filename} ---",
+                        }
+                    )
                 elif att.mime_type.startswith("image/"):
                     # Image file — send as image_url
-                    content_parts.append({
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{att.mime_type};base64,{att.data}"},
-                    })
+                    content_parts.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:{att.mime_type};base64,{att.data}"},
+                        }
+                    )
                 # PDFs and other binary formats: LiteLLM handles some via the
                 # "file" content type, but support varies by provider. For v0.1,
                 # we pass them as text descriptions and let the model ask for

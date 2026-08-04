@@ -147,7 +147,10 @@ def register_builtin_capabilities() -> None:
             parameters_schema={
                 "type": "object",
                 "properties": {
-                    "terminal_id": {"type": "string", "description": "Terminal session ID from terminal(async=true)"},
+                    "terminal_id": {
+                        "type": "string",
+                        "description": "Terminal session ID from terminal(async=true)",
+                    },
                 },
                 "required": ["terminal_id"],
             },
@@ -166,7 +169,10 @@ def register_builtin_capabilities() -> None:
             parameters_schema={
                 "type": "object",
                 "properties": {
-                    "terminal_id": {"type": "string", "description": "Terminal session ID to close"},
+                    "terminal_id": {
+                        "type": "string",
+                        "description": "Terminal session ID to close",
+                    },
                 },
                 "required": ["terminal_id"],
             },
@@ -189,7 +195,11 @@ def register_builtin_capabilities() -> None:
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "Search query"},
-                    "max_results": {"type": "integer", "description": "Maximum results to return", "default": 5},
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum results to return",
+                        "default": 5,
+                    },
                 },
                 "required": ["query"],
             },
@@ -211,7 +221,11 @@ def register_builtin_capabilities() -> None:
                 "type": "object",
                 "properties": {
                     "url": {"type": "string", "description": "The URL to fetch"},
-                    "max_chars": {"type": "integer", "description": "Maximum characters to return", "default": 8000},
+                    "max_chars": {
+                        "type": "integer",
+                        "description": "Maximum characters to return",
+                        "default": 8000,
+                    },
                 },
                 "required": ["url"],
             },

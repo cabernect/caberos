@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..agent_service import get_active_config, save_agent
 from ..db import get_db
 from ..harness.litellm_adapter import LiteLLMAdapter
-from ..models.agent import Agent, AgentVersion
+from ..models.agent import Agent
 from ..models.provider import Provider
 from ..secret_store import encrypt
 
@@ -76,9 +76,7 @@ async def list_providers(db: AsyncSession = Depends(get_db)) -> list[ProviderOut
 
 
 @router.post("")
-async def create_provider(
-    data: ProviderCreate, db: AsyncSession = Depends(get_db)
-) -> ProviderOut:
+async def create_provider(data: ProviderCreate, db: AsyncSession = Depends(get_db)) -> ProviderOut:
     provider = Provider(
         id=str(uuid.uuid4()),
         name=data.name,
@@ -153,9 +151,7 @@ async def delete_provider(provider_id: str, db: AsyncSession = Depends(get_db)) 
 
 
 @router.get("/{provider_id}/models")
-async def list_models(
-    provider_id: str, db: AsyncSession = Depends(get_db)
-) -> dict:
+async def list_models(provider_id: str, db: AsyncSession = Depends(get_db)) -> dict:
     """Dynamic model discovery (D40). Returns models if the provider supports it."""
     result = await db.execute(select(Provider).where(Provider.id == provider_id))
     provider = result.scalar_one_or_none()

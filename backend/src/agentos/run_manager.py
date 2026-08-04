@@ -17,7 +17,6 @@ only needed for the HTTP/SSE transport (reconnectable streams).
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Any
 
 from .pipeline import Attachment
 from .runner import run_agent
@@ -30,6 +29,7 @@ class RunContext:
     Events are stored as (seq, event_type, payload) tuples. The seq number
     lets reconnecting clients resume from where they left off.
     """
+
     run_id: str
     session_id: str
     agent_id: str
@@ -140,24 +140,31 @@ async def start_run(
             if rid and rid in _active_runs:
                 ctx = _active_runs[rid]
                 ctx.status = "stopped"
-                ctx.append_event("message_complete", {
-                    "run_id": rid,
-                    "status": "stopped",
-                    "error": "Run was stopped by user",
-                })
+                ctx.append_event(
+                    "message_complete",
+                    {
+                        "run_id": rid,
+                        "status": "stopped",
+                        "error": "Run was stopped by user",
+                    },
+                )
             raise
         except Exception as e:
             import traceback
+
             traceback.print_exc()
             rid = run_id_future.result() if run_id_future.done() else None
             if rid and rid in _active_runs:
                 ctx = _active_runs[rid]
                 ctx.status = "failed"
-                ctx.append_event("message_complete", {
-                    "run_id": rid,
-                    "status": "failed",
-                    "error": str(e),
-                })
+                ctx.append_event(
+                    "message_complete",
+                    {
+                        "run_id": rid,
+                        "status": "failed",
+                        "error": str(e),
+                    },
+                )
             if not run_id_future.done():
                 run_id_future.set_exception(e)
 
@@ -194,10 +201,12 @@ async def start_run(
             ctx = _active_runs[run_id]
             if ctx.status == "running":
                 ctx.status = "completed"
+
             # Schedule cleanup after 60s (events are in the DB, context is just a cache)
             async def _delayed_cleanup() -> None:
                 await asyncio.sleep(60)
                 _active_runs.pop(run_id, None)
+
             asyncio.create_task(_delayed_cleanup())
 
     task.add_done_callback(_on_done)

@@ -18,7 +18,7 @@ a Redis/pubsub mechanism would be needed, but v0.1 is single-process.
 import asyncio
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -56,7 +56,10 @@ class ApprovalEventRegistry:
         return self._pending.get(approval_id)
 
     def resolve(
-        self, approval_id: str, decision: str, decided_by: str,
+        self,
+        approval_id: str,
+        decision: str,
+        decided_by: str,
         remember: bool = False,
     ) -> bool:
         """Resolve a pending approval. Returns True if found."""
@@ -78,18 +81,14 @@ class ApprovalEventRegistry:
 
     # --- Session-scoped allowlist ---
 
-    def is_session_approved(
-        self, session_id: str, capability: str, args: dict[str, Any]
-    ) -> bool:
+    def is_session_approved(self, session_id: str, capability: str, args: dict[str, Any]) -> bool:
         """Check if this capability+args was previously approved in this session."""
         allowed = self._session_allowlist.get(session_id)
         if not allowed:
             return False
         return _args_hash(capability, args) in allowed
 
-    def remember_approval(
-        self, session_id: str, capability: str, args: dict[str, Any]
-    ) -> None:
+    def remember_approval(self, session_id: str, capability: str, args: dict[str, Any]) -> None:
         """Add a capability+args to the session allowlist."""
         if session_id not in self._session_allowlist:
             self._session_allowlist[session_id] = set()

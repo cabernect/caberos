@@ -10,7 +10,7 @@ All capabilities are kind="tool" — no special sub_agent kind.
 
 import asyncio
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from ...config_schema import AgentConfig, CapabilityGrant, Limits, ModelConfig
@@ -20,6 +20,7 @@ from ..registry import CapabilityDef, registry
 @dataclass
 class SubAgentTask:
     """Tracks a background sub-agent execution."""
+
     subagent_id: str
     task: str
     status: str = "running"  # running, done, failed
@@ -122,7 +123,9 @@ async def _execute_subagent(
     # Determine capabilities
     caps_arg = args.get("capabilities", [])
     if caps_arg == "*":
-        sub_caps = list(parent_config.capabilities) if parent_config.capabilities is not None else []
+        sub_caps = (
+            list(parent_config.capabilities) if parent_config.capabilities is not None else []
+        )
     elif isinstance(caps_arg, list) and caps_arg:
         sub_caps = [CapabilityGrant(name=name) for name in caps_arg]
     else:

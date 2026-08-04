@@ -16,7 +16,6 @@ from ..auth import require_operator
 from ..db import get_db
 from ..models.elicitation import ElicitationRequest
 from ..models.operator import Operator
-from ..models.run import Run
 from ..syscall.elicitation_registry import elicitation_registry
 
 router = APIRouter(prefix="/api/elicitation", tags=["elicitation"])
@@ -78,9 +77,7 @@ async def respond_to_elicitation(
         )
 
     # Resolve the asyncio.Event — this unblocks the mediator
-    resolved = elicitation_registry.resolve(
-        elicitation_id, body.response, operator.id
-    )
+    resolved = elicitation_registry.resolve(elicitation_id, body.response, operator.id)
     if not resolved:
         raise HTTPException(
             status_code=500,

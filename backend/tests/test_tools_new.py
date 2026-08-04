@@ -5,10 +5,10 @@ import os
 import pytest
 
 from agentos.capabilities.tools.datetime_tool import datetime_now
-from agentos.capabilities.tools.file import read_file, write_file, search_files
-
+from agentos.capabilities.tools.file import read_file, search_files, write_file
 
 # --- search_files: content mode (grep) ---
+
 
 @pytest.mark.asyncio
 async def test_search_content_finds_matches(workspace):
@@ -29,7 +29,9 @@ async def test_search_content_regex(workspace):
     with open(os.path.join(workspace, "test.py"), "w") as f:
         f.write("import os\nimport sys\nfrom pathlib import Path\n")
 
-    result = await search_files({"mode": "content", "pattern": r"^import \w+"}, workspace_path=workspace)
+    result = await search_files(
+        {"mode": "content", "pattern": r"^import \w+"}, workspace_path=workspace
+    )
     assert result["count"] == 2
 
 
@@ -79,14 +81,18 @@ async def test_search_content_no_matches(workspace):
     with open(os.path.join(workspace, "test.txt"), "w") as f:
         f.write("nothing here\n")
 
-    result = await search_files({"mode": "content", "pattern": "nonexistent"}, workspace_path=workspace)
+    result = await search_files(
+        {"mode": "content", "pattern": "nonexistent"}, workspace_path=workspace
+    )
     assert result["count"] == 0
     assert result["matches"] == []
 
 
 @pytest.mark.asyncio
 async def test_search_content_invalid_regex(workspace):
-    result = await search_files({"mode": "content", "pattern": "[invalid"}, workspace_path=workspace)
+    result = await search_files(
+        {"mode": "content", "pattern": "[invalid"}, workspace_path=workspace
+    )
     assert "error" in result
 
 
@@ -98,12 +104,15 @@ async def test_search_content_skips_hidden_dirs(workspace):
     with open(os.path.join(workspace, "visible.txt"), "w") as f:
         f.write("secret_match\n")
 
-    result = await search_files({"mode": "content", "pattern": "secret_match"}, workspace_path=workspace)
+    result = await search_files(
+        {"mode": "content", "pattern": "secret_match"}, workspace_path=workspace
+    )
     assert result["count"] == 1
     assert result["matches"][0]["file"] == "visible.txt"
 
 
 # --- search_files: name mode (glob) ---
+
 
 @pytest.mark.asyncio
 async def test_search_name_finds_files(workspace):
@@ -151,12 +160,15 @@ async def test_search_name_max_results(workspace):
 
 @pytest.mark.asyncio
 async def test_search_name_no_matches(workspace):
-    result = await search_files({"mode": "name", "pattern": "*.nonexistent"}, workspace_path=workspace)
+    result = await search_files(
+        {"mode": "name", "pattern": "*.nonexistent"}, workspace_path=workspace
+    )
     assert result["count"] == 0
     assert result["files"] == []
 
 
 # --- search_files: list mode ---
+
 
 @pytest.mark.asyncio
 async def test_search_list_directory(workspace):
@@ -178,6 +190,7 @@ async def test_search_list_directory(workspace):
 
 # --- read_file / write_file ---
 
+
 @pytest.mark.asyncio
 async def test_read_file(workspace):
     with open(os.path.join(workspace, "test.txt"), "w") as f:
@@ -188,7 +201,9 @@ async def test_read_file(workspace):
 
 @pytest.mark.asyncio
 async def test_write_file_creates(workspace):
-    result = await write_file({"path": "new.txt", "content": "new content"}, workspace_path=workspace)
+    result = await write_file(
+        {"path": "new.txt", "content": "new content"}, workspace_path=workspace
+    )
     assert result["success"] is True
     assert result["action"] == "created"
     with open(os.path.join(workspace, "new.txt")) as f:
@@ -199,12 +214,15 @@ async def test_write_file_creates(workspace):
 async def test_write_file_modifies(workspace):
     with open(os.path.join(workspace, "mod.txt"), "w") as f:
         f.write("old content")
-    result = await write_file({"path": "mod.txt", "content": "new content"}, workspace_path=workspace)
+    result = await write_file(
+        {"path": "mod.txt", "content": "new content"}, workspace_path=workspace
+    )
     assert result["action"] == "modified"
     assert "diff" in result
 
 
 # --- datetime_now ---
+
 
 @pytest.mark.asyncio
 async def test_datetime_now_utc():
@@ -234,6 +252,7 @@ async def test_datetime_now_invalid_timezone():
 
 # --- web_search and web_fetch ---
 # These make real network calls — we test them with mocking.
+
 
 @pytest.mark.asyncio
 async def test_web_search_returns_results(monkeypatch):

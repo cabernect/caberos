@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 @dataclass
 class GuardrailResult:
     """Result of running all guardrails on a model output."""
+
     content: str
     warnings: list[str] = field(default_factory=list)
     redactions: list[str] = field(default_factory=list)  # what was redacted (sanitized)
@@ -64,7 +65,7 @@ _SECRET_PATTERNS: list[tuple[str, re.Pattern, int]] = [
     (
         "Labeled secret",
         re.compile(
-            r'''(?i)((?:api[_-]?key|password|passwd|secret|token|access[_-]?key)\s*[=:]\s*["']?[A-Za-z0-9_\-]{16,}["']?)'''
+            r"""(?i)((?:api[_-]?key|password|passwd|secret|token|access[_-]?key)\s*[=:]\s*["']?[A-Za-z0-9_\-]{16,}["']?)"""
         ),
         1,
     ),
@@ -86,9 +87,9 @@ def _redact_secrets(content: str) -> tuple[str, list[str]]:
             redacted_count = len(matches)
             # Sanitize: don't log the actual secret, just the name + count
             redactions.append(f"{name} ({redacted_count} occurrence(s))")
-            content = pattern.sub(lambda m: m.group(group).replace(
-                m.group(group), "[REDACTED]"
-            ), content)
+            content = pattern.sub(
+                lambda m: m.group(group).replace(m.group(group), "[REDACTED]"), content
+            )
     return content, redactions
 
 
@@ -197,8 +198,8 @@ def _check_context_leakage(content: str) -> tuple[list[str], str]:
             modified = pattern.sub("[PATH]", modified)
         elif name == "agent home path":
             warnings.append(
-                f"Context leakage: agent home directory path found in output. "
-                f"The agent home dir is internal and should not be exposed."
+                "Context leakage: agent home directory path found in output. "
+                "The agent home dir is internal and should not be exposed."
             )
             modified = pattern.sub("~/agentos/agents/[REDACTED]", modified)
         elif name == "system prompt fragment":
@@ -282,9 +283,11 @@ def apply_input_guardrails(content: str) -> GuardrailResult:
     for w in injection_warnings:
         # Rephrase for input context
         warnings.append(
-            w.replace("Output may contain echoed file instructions rather than model reasoning.",
-                      "The user message contains instruction-override patterns. "
-                      "The agent will still process the message, but this is logged for audit.")
+            w.replace(
+                "Output may contain echoed file instructions rather than model reasoning.",
+                "The user message contains instruction-override patterns. "
+                "The agent will still process the message, but this is logged for audit.",
+            )
         )
 
     return GuardrailResult(content=content, warnings=warnings, redactions=redactions)

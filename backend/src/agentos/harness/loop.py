@@ -68,9 +68,7 @@ class Harness:
         # Step 7: Assemble context
         system_prompt = assemble_system_prompt(agent_config)
         tool_schemas = assemble_tool_schemas(agent_config)
-        history = build_message_history(
-            system_prompt, recent_messages or [], message, attachments
-        )
+        history = build_message_history(system_prompt, recent_messages or [], message, attachments)
 
         # Inject spawn context into the syscall handler so run_subagent
         # can access the harness, session, run_id, and event_emitter.
@@ -117,9 +115,7 @@ class Harness:
                     )
                     # Emit thinking if present (non-streaming path)
                     if response.thinking and event_emitter:
-                        await self._emit(
-                            event_emitter, "thinking", {"content": response.thinking}
-                        )
+                        await self._emit(event_emitter, "thinking", {"content": response.thinking})
             except Exception as e:
                 result.status = "failed"
                 result.error = str(e)
@@ -152,21 +148,23 @@ class Harness:
             if response.tool_calls:
                 # Add the assistant message with tool_calls to history FIRST
                 # (must precede the tool result messages for OpenAI API compliance)
-                history.append({
-                    "role": "assistant",
-                    "content": response.content or "",
-                    "tool_calls": [
-                        {
-                            "id": tc.get("id", str(uuid.uuid4())),
-                            "type": "function",
-                            "function": {
-                                "name": tc["name"],
-                                "arguments": json.dumps(tc.get("args", {})),
-                            },
-                        }
-                        for tc in response.tool_calls
-                    ],
-                })
+                history.append(
+                    {
+                        "role": "assistant",
+                        "content": response.content or "",
+                        "tool_calls": [
+                            {
+                                "id": tc.get("id", str(uuid.uuid4())),
+                                "type": "function",
+                                "function": {
+                                    "name": tc["name"],
+                                    "arguments": json.dumps(tc.get("args", {})),
+                                },
+                            }
+                            for tc in response.tool_calls
+                        ],
+                    }
+                )
 
                 # Build ToolCall objects
                 calls = [
@@ -215,9 +213,7 @@ class Harness:
                         event_emitter=event_emitter,
                     )
 
-                syscall_results = await asyncio.gather(
-                    *[_mediate_one(c) for c in calls]
-                )
+                syscall_results = await asyncio.gather(*[_mediate_one(c) for c in calls])
 
                 # Process results in order (to maintain history ordering)
                 for call, syscall_result in zip(calls, syscall_results, strict=True):
@@ -262,9 +258,7 @@ class Harness:
                         history.append(
                             {
                                 "role": "tool",
-                                "content": json.dumps(output)
-                                if output
-                                else "",
+                                "content": json.dumps(output) if output else "",
                                 "tool_call_id": call.id,
                                 "name": call.name,
                             }
@@ -282,10 +276,12 @@ class Harness:
 
                 # Stop if too many consecutive tool failures
                 if consecutive_tool_failures >= max_consecutive_failures:
-                    history.append({
-                        "role": "user",
-                        "content": f"Note: {consecutive_tool_failures} consecutive tool calls returned empty or failed results. Stop calling tools and respond with what you know.",
-                    })
+                    history.append(
+                        {
+                            "role": "user",
+                            "content": f"Note: {consecutive_tool_failures} consecutive tool calls returned empty or failed results. Stop calling tools and respond with what you know.",
+                        }
+                    )
 
                 # Emit turn_complete
                 if event_emitter:

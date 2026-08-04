@@ -22,14 +22,14 @@ async def shell_run(
         start = time.monotonic()
         try:
             proc = await asyncio.create_subprocess_exec(
-                "/bin/sh", "-c", args["command"],
+                "/bin/sh",
+                "-c",
+                args["command"],
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=workspace_path,
             )
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                proc.communicate(), timeout=timeout
-            )
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
             elapsed = int((time.monotonic() - start) * 1000)
             return {
                 "stdout": stdout_bytes.decode("utf-8", errors="replace"),

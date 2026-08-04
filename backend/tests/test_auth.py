@@ -36,7 +36,11 @@ async def seeded_client(client):
     import bcrypt
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-    factory = async_sessionmaker(client._transport.app.dependency_overrides[get_db].__wrapped__().__self__.__class__, class_=AsyncSession, expire_on_commit=False)  # noqa: E501
+    factory = async_sessionmaker(
+        client._transport.app.dependency_overrides[get_db].__wrapped__().__self__.__class__,
+        class_=AsyncSession,
+        expire_on_commit=False,
+    )  # noqa: E501
     # Simpler: just seed via the DB directly
     # Actually, let's seed via the API or DB
     import uuid
@@ -46,6 +50,7 @@ async def seeded_client(client):
     async def seed_op():
         async with factory() as db:
             from sqlalchemy import select
+
             result = await db.execute(select(Operator).where(Operator.username == "admin"))
             if result.scalar_one_or_none() is None:
                 password_hash = bcrypt.hashpw(b"admin", bcrypt.gensalt()).decode()

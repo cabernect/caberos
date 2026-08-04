@@ -73,9 +73,7 @@ async def get_operator_from_session(
     return result.scalar_one_or_none()
 
 
-async def require_operator(
-    request: Request, db: AsyncSession = Depends(get_db)
-) -> Operator:
+async def require_operator(request: Request, db: AsyncSession = Depends(get_db)) -> Operator:
     """FastAPI dependency: require an authenticated operator."""
     operator = await get_operator_from_session(request, db)
     if operator is None:

@@ -18,7 +18,9 @@ class WorkspaceManager:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    def validate_path(self, workspace_root: str, rel_path: str, sandbox_mode: str = "strict") -> str:
+    def validate_path(
+        self, workspace_root: str, rel_path: str, sandbox_mode: str = "strict"
+    ) -> str:
         """Resolve a path and validate it against the sandbox policy.
 
         - strict mode: path must stay within workspace_root

@@ -97,6 +97,4 @@ async def _apply_schema_patches(conn) -> None:
         result = await conn.execute(text(f"PRAGMA table_info({table})"))
         existing_cols = {row[1] for row in result.fetchall()}
         if column not in existing_cols:
-            await conn.execute(
-                text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
-            )
+            await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"))

@@ -1,6 +1,5 @@
 """Tests for the real syscall layer (ticket 03 — D10, D11, D18)."""
 
-
 import pytest
 
 from agentos.capabilities.builtin import register_builtin_capabilities
@@ -80,9 +79,7 @@ class TestSyscallHandler:
         session = _make_session("contact-1")
 
         result = await handler.mediate(
-            call=ToolCall(
-                id="1", name="read_file", args={"path": "../../../etc/passwd"}
-            ),
+            call=ToolCall(id="1", name="read_file", args={"path": "../../../etc/passwd"}),
             session=session,
             agent_config=agent_config,
             run_id="run-1",
@@ -208,9 +205,7 @@ class TestSyscallHandler:
         )
 
         # Check audit record
-        result = await db.execute(
-            select(AuditRecord).where(AuditRecord.run_id == "run-audit-test")
-        )
+        result = await db.execute(select(AuditRecord).where(AuditRecord.run_id == "run-audit-test"))
         records = result.scalars().all()
         assert len(records) == 1
         assert records[0].allowed is True
@@ -232,9 +227,7 @@ class TestSyscallHandler:
             run_id="run-deny-test",
         )
 
-        result = await db.execute(
-            select(AuditRecord).where(AuditRecord.run_id == "run-deny-test")
-        )
+        result = await db.execute(select(AuditRecord).where(AuditRecord.run_id == "run-deny-test"))
         records = result.scalars().all()
         assert len(records) == 1
         assert records[0].allowed is False

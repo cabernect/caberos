@@ -66,6 +66,7 @@ class CreateAgentRequest(BaseModel):
 
 class UpdateAgentRequest(BaseModel):
     """Partial update — only provided fields are applied."""
+
     name: str | None = None
     provider_id: str | None = None
     model_name: str | None = None
@@ -136,7 +137,9 @@ async def get_agent_route(
         "soul": config.soul,
         "persona": config.persona,
         "task": config.task,
-        "capabilities": [c.model_dump() for c in config.capabilities] if config.capabilities is not None else None,
+        "capabilities": [c.model_dump() for c in config.capabilities]
+        if config.capabilities is not None
+        else None,
         "limits": config.limits.model_dump(),
         "heartbeat": config.heartbeat.model_dump(),
         "workspace": config.workspace,
@@ -196,12 +199,15 @@ async def update_agent_route(
         config.sandbox_mode = req.sandbox_mode
     if req.capabilities is not None:
         from ..config_schema import CapabilityGrant
+
         config.capabilities = [CapabilityGrant(**c) for c in req.capabilities]
     if req.limits is not None:
         from ..config_schema import Limits
+
         config.limits = Limits(**req.limits)
     if req.heartbeat is not None:
         from ..config_schema import HeartbeatConfig
+
         config.heartbeat = HeartbeatConfig(**req.heartbeat)
 
     version = await save_agent(db, config)
@@ -281,7 +287,8 @@ async def list_versions_route(
             "id": v.id,
             "version_number": v.version_number,
             "is_active": v.is_active,
-            "created_at": v.created_at.isoformat() + "Z" if v.created_at and v.created_at.tzinfo is None
+            "created_at": v.created_at.isoformat() + "Z"
+            if v.created_at and v.created_at.tzinfo is None
             else (v.created_at.isoformat() if v.created_at else ""),
         }
         for v in versions
@@ -297,14 +304,13 @@ async def get_version_route(
 ) -> dict:
     """Get a specific version's config."""
     result = await db.execute(
-        select(AgentVersion).where(
-            AgentVersion.id == version_id, AgentVersion.agent_id == agent_id
-        )
+        select(AgentVersion).where(AgentVersion.id == version_id, AgentVersion.agent_id == agent_id)
     )
     version = result.scalar_one_or_none()
     if version is None:
         raise HTTPException(status_code=404, detail="Version not found")
     import json
+
     config = json.loads(version.config)
     return {
         "id": version.id,

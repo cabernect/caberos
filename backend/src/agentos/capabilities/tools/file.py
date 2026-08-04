@@ -51,12 +51,14 @@ async def write_file(args: dict[str, Any], workspace_path: str, **kwargs: Any) -
     # Generate unified diff if the file existed and changed
     if before_content is not None:
         if before_content != args["content"]:
-            diff_lines = list(difflib.unified_diff(
-                before_content.splitlines(keepends=True),
-                args["content"].splitlines(keepends=True),
-                fromfile=f"a/{args['path']}",
-                tofile=f"b/{args['path']}",
-            ))
+            diff_lines = list(
+                difflib.unified_diff(
+                    before_content.splitlines(keepends=True),
+                    args["content"].splitlines(keepends=True),
+                    fromfile=f"a/{args['path']}",
+                    tofile=f"b/{args['path']}",
+                )
+            )
             result["diff"] = "".join(diff_lines)
             result["action"] = "modified"
         else:
@@ -88,11 +90,13 @@ async def search_files(args: dict[str, Any], workspace_path: str, **kwargs: Any)
         entries = []
         for name in sorted(os.listdir(path)):
             full = os.path.join(path, name)
-            entries.append({
-                "name": name,
-                "type": "dir" if os.path.isdir(full) else "file",
-                "size": os.path.getsize(full) if os.path.isfile(full) else 0,
-            })
+            entries.append(
+                {
+                    "name": name,
+                    "type": "dir" if os.path.isdir(full) else "file",
+                    "size": os.path.getsize(full) if os.path.isfile(full) else 0,
+                }
+            )
         return {"entries": entries, "path": rel_path, "mode": "list"}
 
     rel_path = args.get("path", ".")
@@ -110,7 +114,12 @@ async def search_files(args: dict[str, Any], workspace_path: str, **kwargs: Any)
                 if fnmatch.fnmatch(rel, pattern) or fnmatch.fnmatch(filename, pattern):
                     results.append(rel)
                     if len(results) >= max_results:
-                        return {"files": results, "truncated": True, "count": len(results), "mode": "name"}
+                        return {
+                            "files": results,
+                            "truncated": True,
+                            "count": len(results),
+                            "mode": "name",
+                        }
         return {"files": results, "truncated": False, "count": len(results), "mode": "name"}
 
     # mode == "content" (grep)
@@ -134,13 +143,20 @@ async def search_files(args: dict[str, Any], workspace_path: str, **kwargs: Any)
                 with open(full_path, encoding="utf-8", errors="replace") as f:
                     for line_num, line in enumerate(f, 1):
                         if regex.search(line):
-                            matches.append({
-                                "file": rel,
-                                "line": line_num,
-                                "text": line.rstrip()[:200],
-                            })
+                            matches.append(
+                                {
+                                    "file": rel,
+                                    "line": line_num,
+                                    "text": line.rstrip()[:200],
+                                }
+                            )
                             if len(matches) >= max_results:
-                                return {"matches": matches, "truncated": True, "count": len(matches), "mode": "content"}
+                                return {
+                                    "matches": matches,
+                                    "truncated": True,
+                                    "count": len(matches),
+                                    "mode": "content",
+                                }
             except (OSError, UnicodeDecodeError):
                 continue
 

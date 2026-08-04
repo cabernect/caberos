@@ -6,9 +6,9 @@ pipeline without an API key or a real LLM.
 """
 
 import asyncio
-
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator
+from typing import Any
 
 
 @dataclass

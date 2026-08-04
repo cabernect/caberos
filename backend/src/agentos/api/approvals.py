@@ -80,9 +80,7 @@ async def approve(
     If `remember` is True, subsequent calls with the same capability+args
     in the same session will be auto-approved (no operator interaction needed).
     """
-    result = await db.execute(
-        select(ApprovalRequest).where(ApprovalRequest.id == approval_id)
-    )
+    result = await db.execute(select(ApprovalRequest).where(ApprovalRequest.id == approval_id))
     approval = result.scalar_one_or_none()
     if approval is None:
         raise HTTPException(status_code=404, detail="Approval not found")
@@ -97,7 +95,8 @@ async def approve(
         # The run may have timed out or been cancelled. Update the DB anyway.
         approval.status = "approved"
         approval.decided_by = operator.id
-        from datetime import datetime, UTC
+        from datetime import UTC, datetime
+
         approval.decided_at = datetime.now(UTC)
         await db.commit()
 
@@ -111,9 +110,7 @@ async def reject(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Reject a pending approval. The run continues with a denied result."""
-    result = await db.execute(
-        select(ApprovalRequest).where(ApprovalRequest.id == approval_id)
-    )
+    result = await db.execute(select(ApprovalRequest).where(ApprovalRequest.id == approval_id))
     approval = result.scalar_one_or_none()
     if approval is None:
         raise HTTPException(status_code=404, detail="Approval not found")
@@ -124,7 +121,8 @@ async def reject(
     if not resolved:
         approval.status = "rejected"
         approval.decided_by = operator.id
-        from datetime import datetime, UTC
+        from datetime import UTC, datetime
+
         approval.decided_at = datetime.now(UTC)
         await db.commit()
 

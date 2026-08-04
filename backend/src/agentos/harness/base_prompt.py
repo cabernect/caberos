@@ -123,7 +123,9 @@ already in your context.
 def _build_capabilities_section(enabled_caps: list[str]) -> str:
     """Build the adaptive Capabilities section based on enabled tools."""
     # Separate regular tools from delegation/interaction mechanisms
-    regular_tools = [n for n in enabled_caps if n not in ("run_subagent", "read_subagent", "agent_ask_user")]
+    regular_tools = [
+        n for n in enabled_caps if n not in ("run_subagent", "read_subagent", "agent_ask_user")
+    ]
     has_spawn = "run_subagent" in enabled_caps
     has_ask = "agent_ask_user" in enabled_caps
 
@@ -193,6 +195,7 @@ def get_base_system_prompt(enabled_caps: list[str] | None = None) -> str:
     """
     if enabled_caps is None:
         from ..capabilities.registry import registry
+
         enabled_caps = [cap.name for cap in registry.list_all()]
 
     caps_section = _build_capabilities_section(enabled_caps)

@@ -36,9 +36,7 @@ class ElicitationEventRegistry:
     def get(self, elicitation_id: str) -> PendingElicitation | None:
         return self._pending.get(elicitation_id)
 
-    def resolve(
-        self, elicitation_id: str, response: str, responded_by: str
-    ) -> bool:
+    def resolve(self, elicitation_id: str, response: str, responded_by: str) -> bool:
         """Resolve a pending elicitation. Returns True if found."""
         pe = self._pending.get(elicitation_id)
         if pe is None:

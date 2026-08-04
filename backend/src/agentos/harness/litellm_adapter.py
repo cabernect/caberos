@@ -176,11 +176,15 @@ class LiteLLMAdapter:
             messages = []
 
         # DEBUG: print message roles
-        import sys as _sys, json as _json
-        print(f"[DEBUG stream] messages:", file=_sys.stderr)
+        import sys as _sys
+
+        print("[DEBUG stream] messages:", file=_sys.stderr)
         for i, m in enumerate(messages):
-            tc = bool(m.get('tool_calls'))
-            print(f"  {i}: role={m['role']} tool_calls={tc} content={str(m.get('content',''))[:60]}", file=_sys.stderr)
+            tc = bool(m.get("tool_calls"))
+            print(
+                f"  {i}: role={m['role']} tool_calls={tc} content={str(m.get('content', ''))[:60]}",
+                file=_sys.stderr,
+            )
 
         provider = await self._load_provider(agent_model.provider_id)
         model_str = f"{provider['type']}/{agent_model.name}"
@@ -350,10 +354,7 @@ class LiteLLMAdapter:
                 resp = await client.get(f"{base}/models", headers=headers, timeout=10)
                 resp.raise_for_status()
                 data = resp.json()
-                return [
-                    {"id": m["id"], "name": m["id"]}
-                    for m in data.get("data", [])
-                ]
+                return [{"id": m["id"], "name": m["id"]} for m in data.get("data", [])]
         except Exception:
             return []
 
@@ -386,9 +387,6 @@ class LiteLLMAdapter:
                 resp = await client.get(f"{base}/api/tags", timeout=10)
                 resp.raise_for_status()
                 data = resp.json()
-                return [
-                    {"id": m["name"], "name": m["name"]}
-                    for m in data.get("models", [])
-                ]
+                return [{"id": m["name"], "name": m["name"]} for m in data.get("models", [])]
         except Exception:
             return []

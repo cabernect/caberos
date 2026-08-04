@@ -83,9 +83,8 @@ async def _generate_session_title_from_history(
 
         adapter = LiteLLMAdapter(db)
         prompt = (
-            f"Summarize this conversation in 3-5 words. "
-            f"Output ONLY the title, no quotes, no punctuation at the end.\n\n"
-            + "\n".join(convo)
+            "Summarize this conversation in 3-5 words. "
+            "Output ONLY the title, no quotes, no punctuation at the end.\n\n" + "\n".join(convo)
         )
         response = await adapter.complete(
             agent_model=agent_config.model,
@@ -218,14 +217,16 @@ class Pipeline:
 
         attachment_meta = None
         if message.attachments:
-            attachment_meta = _json.dumps([
-                {
-                    "type": a.type,
-                    "mime_type": a.mime_type,
-                    "filename": a.filename,
-                }
-                for a in message.attachments
-            ])
+            attachment_meta = _json.dumps(
+                [
+                    {
+                        "type": a.type,
+                        "mime_type": a.mime_type,
+                        "filename": a.filename,
+                    }
+                    for a in message.attachments
+                ]
+            )
 
         user_msg = Message(
             id=str(uuid.uuid4()),
@@ -394,18 +395,21 @@ class Pipeline:
                         if status in ("complete", "denied") and tc_id not in _tool_calls_seen:
                             _tool_calls_seen.add(tc_id)
                             import json as _json
+
                             self.db.add(
                                 Message(
                                     id=str(uuid.uuid4()),
                                     run_id=run.id,
                                     role="tool_call",
-                                    content=_json.dumps({
-                                        "id": tc_id,
-                                        "capability": payload.get("capability", ""),
-                                        "args": payload.get("args", {}),
-                                        "status": status,
-                                        "result": payload.get("result"),
-                                    }),
+                                    content=_json.dumps(
+                                        {
+                                            "id": tc_id,
+                                            "capability": payload.get("capability", ""),
+                                            "args": payload.get("args", {}),
+                                            "status": status,
+                                            "result": payload.get("result"),
+                                        }
+                                    ),
                                     seq=_msg_seq,
                                     subagent_id=sub_id,
                                 )

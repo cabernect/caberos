@@ -1,10 +1,8 @@
 """Agent files API — MEMORY.md, skills, workspace browser (D34, D37)."""
 
-import os
 from pathlib import Path
-from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,6 +36,7 @@ def _skills_dir(agent_id: str) -> Path:
 def _workspace_path(agent_id: str) -> Path:
     """Get the agent's workspace path."""
     from ..sandbox.workspace import WorkspaceManager
+
     wm = WorkspaceManager()
     return Path(wm.create_workspace(agent_id))
 
@@ -103,17 +102,21 @@ async def list_skills(
                         if line.strip() and not line.startswith("#"):
                             desc = line.strip()
                             break
-                skills.append({
-                    "name": entry.name,
-                    "type": "directory",
-                    "description": desc,
-                })
+                skills.append(
+                    {
+                        "name": entry.name,
+                        "type": "directory",
+                        "description": desc,
+                    }
+                )
             elif entry.is_file() and entry.suffix in (".md", ".yaml", ".yml"):
-                skills.append({
-                    "name": entry.name,
-                    "type": "file",
-                    "description": "",
-                })
+                skills.append(
+                    {
+                        "name": entry.name,
+                        "type": "file",
+                        "description": "",
+                    }
+                )
     return skills
 
 
@@ -155,6 +158,7 @@ async def delete_skill(
         raise HTTPException(status_code=404, detail="Skill not found")
     if skill_path.is_dir():
         import shutil
+
         shutil.rmtree(skill_path)
     else:
         skill_path.unlink()
@@ -197,11 +201,13 @@ async def list_workspace(
     for entry in sorted(target.iterdir(), key=lambda e: (not e.is_dir(), e.name)):
         if entry.name.startswith("."):
             continue
-        entries.append({
-            "name": entry.name,
-            "type": "dir" if entry.is_dir() else "file",
-            "size": entry.stat().st_size if entry.is_file() else 0,
-        })
+        entries.append(
+            {
+                "name": entry.name,
+                "type": "dir" if entry.is_dir() else "file",
+                "size": entry.stat().st_size if entry.is_file() else 0,
+            }
+        )
     return {
         "type": "dir",
         "path": path,

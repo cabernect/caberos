@@ -10,10 +10,9 @@ GET    /api/chat/{agent_id}/sessions/{sid}/messages  — session messages
 DELETE /api/chat/{agent_id}/sessions/{sid}       — delete session
 """
 
-import asyncio
 import json
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -33,7 +32,7 @@ from ..models.operator import Operator
 from ..models.run import Message, Run
 from ..models.session import Session
 from ..pipeline import Attachment
-from ..run_manager import start_run, stop_run, get_run, get_run_status
+from ..run_manager import get_run, get_run_status, start_run, stop_run
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -52,12 +51,14 @@ def _iso_utc(dt: datetime | None) -> str:
 
 class ModelOverride(BaseModel):
     """Optional model override — user can switch models per-message."""
+
     provider_id: str
     name: str
 
 
 class AttachmentIn(BaseModel):
     """A multimodal attachment sent from the frontend."""
+
     type: str  # "image", "url", "file"
     mime_type: str = ""
     data: str  # base64 for images, URL for urls, text content for files
@@ -387,18 +388,14 @@ async def delete_session(
 ) -> dict:
     """Delete a session and all its messages."""
     result = await db.execute(
-        select(Session).where(
-            Session.id == session_id, Session.agent_id == agent_id
-        )
+        select(Session).where(Session.id == session_id, Session.agent_id == agent_id)
     )
     session = result.scalar_one_or_none()
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
     # Delete messages via runs
-    run_ids_result = await db.execute(
-        select(Run.id).where(Run.session_id == session_id)
-    )
+    run_ids_result = await db.execute(select(Run.id).where(Run.session_id == session_id))
     run_ids = [r[0] for r in run_ids_result.all()]
 
     if run_ids:

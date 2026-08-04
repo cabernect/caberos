@@ -93,15 +93,17 @@ async def seed() -> None:
         for cap in registry.list_all():
             result = await db.execute(select(Capability).where(Capability.name == cap.name))
             if result.scalar_one_or_none() is None:
-                db.add(Capability(
-                    name=cap.name,
-                    kind=cap.kind,
-                    description=cap.description,
-                    parameters_schema=json.dumps(cap.parameters_schema),
-                    egress=cap.egress,
-                    require_approval=cap.require_approval,
-                    subject_scoped=cap.subject_scoped,
-                ))
+                db.add(
+                    Capability(
+                        name=cap.name,
+                        kind=cap.kind,
+                        description=cap.description,
+                        parameters_schema=json.dumps(cap.parameters_schema),
+                        egress=cap.egress,
+                        require_approval=cap.require_approval,
+                        subject_scoped=cap.subject_scoped,
+                    )
+                )
                 print(f"Seeded capability: {cap.name}")
 
         await db.commit()

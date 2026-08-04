@@ -77,9 +77,7 @@ async def web_fetch(args: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
     max_chars = args.get("max_chars", 8000)
 
     try:
-        async with httpx.AsyncClient(
-            timeout=20, follow_redirects=True
-        ) as client:
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
             resp = await client.get(
                 url,
                 headers={"User-Agent": "CaberOS/0.1 (local-first agent OS)"},

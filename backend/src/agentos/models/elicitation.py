@@ -19,7 +19,9 @@ class ElicitationRequest(Base, IdMixin):
 
     run_id: Mapped[str] = mapped_column(String(36), ForeignKey("runs.id"), nullable=False)
     question: Mapped[str] = mapped_column(Text, nullable=False)
-    options: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON array of options, or None for free-text
+    options: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )  # JSON array of options, or None for free-text
     status: Mapped[str] = mapped_column(
         String(20), default="pending"
     )  # pending, answered, cancelled
