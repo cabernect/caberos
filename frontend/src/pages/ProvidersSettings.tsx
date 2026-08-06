@@ -77,6 +77,7 @@ export function ProvidersSettings() {
     if (page === "settings") return;
     if (page === "vault") navigate("/vault");
     if (page === "skills") navigate("/skills");
+    if (page === "scheduler") navigate("/scheduler");
   };
 
   const handleDelete = async (id: string) => {

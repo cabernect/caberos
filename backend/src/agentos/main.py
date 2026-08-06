@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api import agent_files, agents, approvals, chat, elicitation, providers, skills
+from .api import agent_files, agents, approvals, chat, elicitation, providers, scheduler, skills
 from .auth import router as auth_router
 from .capabilities.builtin import register_builtin_capabilities
 from .db import init_db
@@ -81,7 +81,15 @@ async def lifespan(app: FastAPI):
     # Start the periodic session sweeper (Trigger 2 — backstop for abandoned sessions)
     _sweeper_task = asyncio.create_task(_session_sweeper())
 
+    # Start the heartbeat scheduler
+    from . import scheduler as scheduler_service
+
+    await scheduler_service.start_scheduler()
+
     yield
+
+    # Shutdown: stop the scheduler
+    await scheduler_service.stop_scheduler()
 
     # Shutdown: cancel the sweeper
     if _sweeper_task:
@@ -113,6 +121,7 @@ app.include_router(chat.router)
 app.include_router(approvals.router)
 app.include_router(elicitation.router)
 app.include_router(skills.router)
+app.include_router(scheduler.router)
 
 
 @app.get("/health")

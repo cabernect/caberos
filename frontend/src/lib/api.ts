@@ -291,4 +291,25 @@ export const api = {
     request<{ promoted: boolean; name: string }>(`/api/skills/${name}/promote?agent_id=${agentId}`, {
       method: "POST",
     }),
+
+  // Scheduler — heartbeat
+  listHeartbeats: () =>
+    request<HeartbeatStatus[]>("/api/scheduler/heartbeat"),
+  updateHeartbeat: (agentId: string, data: Partial<HeartbeatConfig>) =>
+    request<{ agent_id: string; version: number; heartbeat: HeartbeatConfig }>(
+      `/api/scheduler/heartbeat/${agentId}`,
+      { method: "PUT", body: JSON.stringify(data) },
+    ),
+  fireHeartbeat: (agentId: string) =>
+    request<{ run_id: string; session_id: string; status: string; cost: number; error: string | null }>(
+      `/api/scheduler/heartbeat/${agentId}/fire`,
+      { method: "POST" },
+    ),
+  listSchedulerAlerts: () =>
+    request<SchedulerAlert[]>("/api/scheduler/alerts"),
+  clearSchedulerAlert: (agentId: string) =>
+    request<{ agent_id: string; cleared: boolean }>(
+      `/api/scheduler/alerts/${agentId}/clear`,
+      { method: "POST" },
+    ),
 };

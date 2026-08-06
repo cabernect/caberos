@@ -7,6 +7,7 @@ import { Conversation } from "./pages/Conversation";
 import { ProvidersSettings } from "./pages/ProvidersSettings";
 import { KnowledgeVault } from "./pages/KnowledgeVault";
 import { Skills } from "./pages/Skills";
+import { Scheduler } from "./pages/Scheduler";
 
 export default function App() {
   const [authed, setAuthed] = useState<boolean | null>(null);
@@ -46,6 +47,10 @@ export default function App() {
         <Route
           path="/skills"
           element={authed ? <Skills /> : <Navigate to="/login" />}
+        />
+        <Route
+          path="/scheduler"
+          element={authed ? <Scheduler /> : <Navigate to="/login" />}
         />
       </Routes>
     </BrowserRouter>

@@ -3,7 +3,6 @@ import {
   CalendarClock,
   Plug,
   Sparkles,
-  Wrench,
   Radio,
   Activity,
   Settings,
@@ -18,7 +17,6 @@ export type NavKey =
   | "scheduler"
   | "mcps"
   | "skills"
-  | "tools"
   | "channels"
   | "vault"
   | "observability"
@@ -66,7 +64,6 @@ export function DashboardSidebar({
       items: [
         { key: "mcps", label: "MCPs", icon: Plug },
         { key: "skills", label: "Skills", icon: Sparkles },
-        { key: "tools", label: "Tools", icon: Wrench },
         { key: "channels", label: "Channels", icon: Radio },
         { key: "vault", label: "Knowledge Vault", icon: Database },
       ],

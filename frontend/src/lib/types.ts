@@ -178,3 +178,27 @@ export interface Approval {
   decided_by: string | null;
   decided_at: string | null;
 }
+
+export interface HeartbeatStatus {
+  agent_id: string;
+  agent_name: string;
+  enabled: boolean;
+  interval_minutes: number;
+  task_prompt: string;
+  max_cost_per_heartbeat: number;
+  consecutive_failure_threshold: number;
+  last_fired: string | null;
+  last_status: string | null;
+  last_error: string | null;
+  consecutive_failures: number;
+  next_fire: string | null;
+}
+
+export interface SchedulerAlert {
+  agent_id: string;
+  agent_name: string;
+  consecutive_failures: number;
+  threshold: number;
+  last_error: string | null;
+  timestamp: string;
+}

@@ -197,6 +197,8 @@ async def run_agent(
     attachments: list[Attachment] | None = None,
     event_callback: EventCallback | None = None,
     skill: str | None = None,
+    trigger: str = "user_message",
+    channel: str = "dashboard_chat",
 ) -> dict[str, Any]:
     """Run a single agent turn. The universal entry point.
 
@@ -209,6 +211,8 @@ async def run_agent(
         session_id: Optional session to use (else auto-resume most recent)
         attachments: Optional multimodal attachments (images, URLs, files)
         event_callback: Optional async callback for events (typing, token, tool_call, etc.)
+        trigger: What triggered this run ("user_message" or "heartbeat")
+        channel: Source channel ("dashboard_chat", "heartbeat", ...)
 
     Returns:
         {"run_id": str, "session_id": str, "status": str, "cost": float, "error": str | None}
@@ -228,7 +232,7 @@ async def run_agent(
 
         # Build the inbound message
         inbound = InboundMessage(
-            channel="dashboard_chat",
+            channel=channel,
             bot_id=agent_id,
             external_user_id=user_id,
             text=text,
@@ -262,7 +266,7 @@ async def run_agent(
         try:
             run = await pipeline.handle_inbound(
                 message=inbound,
-                trigger="user_message",
+                trigger=trigger,
                 is_test=is_test,
                 event_emitter=event_emitter,
             )

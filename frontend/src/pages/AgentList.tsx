@@ -91,6 +91,7 @@ export function AgentList() {
     if (page === "settings") navigate("/settings");
     if (page === "vault") navigate("/vault");
     if (page === "skills") navigate("/skills");
+    if (page === "scheduler") navigate("/scheduler");
   };
 
   return (

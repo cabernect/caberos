@@ -1369,12 +1369,21 @@ function MessageRow({ message, isLastInRun, subagentMessages }: { message: ChatM
   }
 
   if (message.role === "heartbeat") {
+    const ts = message.created_at ? new Date(message.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
     return (
-      <div
-        className="mb-6 border-l-2 pl-4 text-[13px] text-[var(--ink-2)]"
-        style={{ borderColor: "var(--warning)" }}
-      >
-        {message.content}
+      <div className="mb-6">
+        <div className="mb-1.5 flex items-center gap-1.5">
+          <span className="font-mono text-[11px] font-medium" style={{ color: "#7C3AED" }}>♢ heartbeat</span>
+          {ts && (
+            <span className="font-mono text-[10px]" style={{ color: "var(--ink-3)" }}>· {ts}</span>
+          )}
+        </div>
+        <div
+          className="border-l-[3px] pl-4 text-[14px] leading-[1.65]"
+          style={{ borderColor: "#7C3AED" }}
+        >
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+        </div>
       </div>
     );
   }

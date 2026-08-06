@@ -19,6 +19,7 @@ export function KnowledgeVault() {
     if (page === "settings") navigate("/settings");
     if (page === "skills") navigate("/skills");
     if (page === "vault") return;
+    if (page === "scheduler") navigate("/scheduler");
   };
 
   return (

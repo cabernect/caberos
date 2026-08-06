@@ -139,10 +139,6 @@ function GeneralTab({
   const [idleTimeout, setIdleTimeout] = useState(60);
   const [maxContext, setMaxContext] = useState(24000);
   const [sandboxMode, setSandboxMode] = useState<"strict" | "open">("strict");
-  const [hbEnabled, setHbEnabled] = useState(false);
-  const [hbInterval, setHbInterval] = useState(60);
-  const [hbPrompt, setHbPrompt] = useState("");
-  const [hbMaxCost, setHbMaxCost] = useState(0.5);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -160,12 +156,6 @@ function GeneralTab({
         setMaxContext(agent.limits.max_context_tokens);
       }
       setSandboxMode(agent.sandbox_mode || "strict");
-      if (agent.heartbeat) {
-        setHbEnabled(agent.heartbeat.enabled);
-        setHbInterval(agent.heartbeat.interval_minutes);
-        setHbPrompt(agent.heartbeat.task_prompt);
-        setHbMaxCost(agent.heartbeat.max_cost_per_heartbeat);
-      }
     }
   }, [agent]);
 
@@ -195,13 +185,6 @@ function GeneralTab({
           max_cost_per_run: maxCost,
           session_idle_timeout_min: idleTimeout,
           max_context_tokens: maxContext,
-        },
-        heartbeat: {
-          enabled: hbEnabled,
-          interval_minutes: hbInterval,
-          task_prompt: hbPrompt,
-          max_cost_per_heartbeat: hbMaxCost,
-          consecutive_failure_threshold: 3,
         },
       });
       onSaved();
@@ -370,32 +353,10 @@ function GeneralTab({
             <NumberInput value={maxContext} onChange={setMaxContext} />
           </Field>
         </div>
-        <label className="flex items-center gap-2 text-[13px] text-[var(--ink-2)]">
-          <input type="checkbox" checked={hbEnabled} onChange={(e) => setHbEnabled(e.target.checked)} />
-          Enable periodic heartbeat
-        </label>
-        {hbEnabled && (
-          <div className="grid grid-cols-2 gap-4">
-            <Field label="Interval (minutes)">
-              <NumberInput value={hbInterval} onChange={setHbInterval} />
-            </Field>
-            <Field label="Max cost per heartbeat ($)">
-              <NumberInput value={hbMaxCost} onChange={setHbMaxCost} step={0.01} />
-            </Field>
-            <div className="col-span-2">
-              <Field label="Heartbeat task prompt">
-                <textarea
-                  value={hbPrompt}
-                  onChange={(e) => setHbPrompt(e.target.value)}
-                  placeholder="What should the agent do on each heartbeat?"
-                  rows={2}
-                  className="w-full resize-none rounded-[5px] border px-3 py-2 text-[13px] text-[var(--ink)] outline-none"
-                  style={{ borderColor: "var(--border)", background: "var(--surface)" }}
-                />
-              </Field>
-            </div>
-          </div>
-        )}
+        <p className="text-[12px] text-[var(--ink-3)]">
+          Heartbeat scheduling is configured in the{" "}
+          <a href="/scheduler" className="underline" style={{ color: "var(--accent)" }}>Scheduler</a> page.
+        </p>
       </Section>
 
       {/* Section: Actions */}
