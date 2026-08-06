@@ -73,6 +73,10 @@ class SyscallHandler:
         self.sandbox_mode = sandbox_mode
         self._event_emitter: Any = None
         self._spawn_context: dict[str, Any] = {}
+        # Serialize DB operations — asyncio.gather may run multiple tool
+        # calls concurrently, but SQLAlchemy async sessions are not safe
+        # for concurrent flush/commit.
+        self._db_lock = asyncio.Lock()
 
     async def mediate(
         self,
@@ -107,7 +111,8 @@ class SyscallHandler:
         subject_contact_id: str | None = None
         if cap.subject_scoped:
             # Resolve the Contact from the session
-            result = await self.db.execute(select(Contact).where(Contact.id == session.contact_id))
+            async with self._db_lock:
+                result = await self.db.execute(select(Contact).where(Contact.id == session.contact_id))
             contact = result.scalar_one_or_none()
             if contact is None:
                 return await self._deny(
@@ -177,6 +182,23 @@ class SyscallHandler:
             extra_kwargs["parent_config"] = agent_config
             extra_kwargs["_spawn_context"] = getattr(self, "_spawn_context", {})
 
+        # For memory capabilities, inject db + agent_id + contact_id + run_id
+        # (subject-scoped caps get contact_id from the session — D10)
+        # Also inject the db_lock so memory tools serialize their flushes
+        # with the mediator's audit record writes (prevents "Session is
+        # already flushing" when asyncio.gather runs tools concurrently).
+        if cap.kind == "memory":
+            extra_kwargs["db"] = self.db
+            extra_kwargs["agent_id"] = agent_config.id
+            extra_kwargs["run_id"] = run_id
+            extra_kwargs["db_lock"] = getattr(self, "_db_lock", None)
+            if cap.subject_scoped:
+                extra_kwargs["contact_id"] = subject_contact_id
+
+        # For skill capabilities, inject agent_id (needed to find skill dirs)
+        if call.name in ("skills_list", "skills_load", "skills_read_resource"):
+            extra_kwargs["agent_id"] = agent_config.id
+
         try:
             result = await cap.execute(
                 args=call.args,
@@ -204,8 +226,9 @@ class SyscallHandler:
                 args=json.dumps(call.args),
                 result=json.dumps(result) if result else None,
             )
-            self.db.add(audit)
-            await self.db.flush()
+            async with self._db_lock:
+                self.db.add(audit)
+                await self.db.flush()
 
             return SyscallResult(
                 output=reduced,
@@ -242,8 +265,9 @@ class SyscallHandler:
             latency_ms=elapsed,
             args=json.dumps(call.args),
         )
-        self.db.add(audit)
-        await self.db.flush()
+        async with self._db_lock:
+            self.db.add(audit)
+            await self.db.flush()
         return SyscallResult(
             output=None,
             allowed=False,
@@ -336,8 +360,9 @@ class SyscallHandler:
         approval.status = decision
         approval.decided_by = pending.decided_by
         approval.decided_at = datetime.now(UTC)
-        await self.db.flush()
-        await self.db.commit()
+        async with self._db_lock:
+            await self.db.flush()
+            await self.db.commit()
 
         return decision == "approved"
 
@@ -383,10 +408,11 @@ class SyscallHandler:
             options=json.dumps(options) if options else None,
             status="pending",
         )
-        self.db.add(elicitation)
-        await self.db.flush()
-        # Commit immediately so the elicitation API (separate session) can see it
-        await self.db.commit()
+        async with self._db_lock:
+            self.db.add(elicitation)
+            await self.db.flush()
+            # Commit immediately so the elicitation API (separate session) can see it
+            await self.db.commit()
 
         # Register the asyncio.Event so the API can resolve it
         pending = elicitation_registry.register(elicitation_id)
@@ -454,8 +480,9 @@ class SyscallHandler:
         elicitation.response = response
         elicitation.responded_by = responded_by
         elicitation.responded_at = datetime.now(UTC)
-        await self.db.flush()
-        await self.db.commit()
+        async with self._db_lock:
+            await self.db.flush()
+            await self.db.commit()
 
         # Emit tool_call complete event
         if self._event_emitter:
@@ -488,8 +515,9 @@ class SyscallHandler:
             args=json.dumps(call.args),
             result=json.dumps({"response": response}),
         )
-        self.db.add(audit)
-        await self.db.flush()
+        async with self._db_lock:
+            self.db.add(audit)
+            await self.db.flush()
 
         return SyscallResult(
             output={"response": response},

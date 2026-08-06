@@ -4,7 +4,7 @@ import {
   FileText, Folder, ChevronRight, FolderOpen,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import type { Agent, ModelInfo, Provider, Skill, WorkspaceEntry } from "@/lib/types";
+import type { Agent, ModelInfo, Provider, Skill, SkillInfo, WorkspaceEntry } from "@/lib/types";
 import { ModelSelect } from "@/components/ModelSelect";
 
 interface CapabilityInfo {
@@ -496,6 +496,8 @@ function CapabilitiesTab({
     if (next.has(name)) next.delete(name);
     else next.add(name);
     setGranted(next);
+    // Auto-save with the updated granted set
+    void saveCapabilities(next, approvals);
   };
 
   const toggleApproval = (name: string) => {
@@ -503,25 +505,25 @@ function CapabilitiesTab({
     if (next.has(name)) next.delete(name);
     else next.add(name);
     setApprovals(next);
+    // Auto-save with the updated approvals set
+    void saveCapabilities(granted, next);
   };
 
-  const handleSave = async () => {
+  const saveCapabilities = async (grantedSet: Set<string>, approvalSet: Set<string>) => {
     if (!agent) return;
     setSaving(true);
     try {
-      // If all tools are granted, save null (= all tools, default)
-      // Otherwise save the explicit list
-      const allGranted = allCaps.length > 0 && allCaps.every((c) => granted.has(c.name));
-      const caps = allGranted
-        ? null
-        : Array.from(granted).map((name) => ({
-            name,
-            subject: "none" as const,
-            require_approval: approvals.has(name),
-          }));
+      // Always save the explicit list with approval settings.
+      // (Saving null = "all tools, default approvals" would lose approval toggles.)
+      const caps = Array.from(grantedSet).map((name) => ({
+        name,
+        subject: "none" as const,
+        require_approval: approvalSet.has(name),
+      }));
       await api.updateAgent(agent.id, { capabilities: caps });
       onSaved();
-      onClose();
+    } catch {
+      // Error — don't close, let user retry
     } finally {
       setSaving(false);
     }
@@ -564,7 +566,9 @@ function CapabilitiesTab({
           </div>
         );
       })}
-      <SaveButton onClick={handleSave} disabled={saving} label="Save" />
+      {saving && (
+        <p className="font-mono text-[11px] text-[var(--ink-3)]">Saving…</p>
+      )}
     </div>
   );
 }
@@ -621,15 +625,18 @@ function MemoryTab({ agentId, onClose, showSaved }: { agentId: string; onClose: 
 // --- Skills Tab ---
 
 function SkillsTab({ agentId, showSaved }: { agentId: string; showSaved: (msg: string) => void }) {
-  const [skills, setSkills] = useState<Skill[]>([]);
+  const [systemSkills, setSystemSkills] = useState<SkillInfo[]>([]);
+  const [agentSkills, setAgentSkills] = useState<Skill[]>([]);
   const [loading, setLoading] = useState(true);
-  const [newName, setNewName] = useState("");
-  const [showCreate, setShowCreate] = useState(false);
 
   const load = useCallback(async () => {
-    if (!agentId) return;
     try {
-      setSkills(await api.listSkills(agentId));
+      const [globalData, agentData] = await Promise.all([
+        api.listSkills(),
+        api.listAgentSkills(agentId),
+      ]);
+      setSystemSkills(globalData.skills);
+      setAgentSkills(agentData);
     } catch {} finally {
       setLoading(false);
     }
@@ -637,83 +644,126 @@ function SkillsTab({ agentId, showSaved }: { agentId: string; showSaved: (msg: s
 
   useEffect(() => { load(); }, [load]);
 
-  const handleCreate = async () => {
-    if (!newName.trim()) return;
-    await api.createSkill(agentId, newName.trim());
-    setNewName("");
-    setShowCreate(false);
-    load();
-    showSaved("Skill created");
-  };
-
-  const handleDelete = async (name: string) => {
-    if (!confirm(`Delete skill "${name}"?`)) return;
-    await api.deleteSkill(agentId, name);
+  const handleDeleteAgentSkill = async (name: string) => {
+    if (!confirm(`Delete agent skill "${name}"?`)) return;
+    await api.deleteAgentSkill(agentId, name);
     load();
     showSaved("Skill deleted");
+  };
+
+  const handleDeleteSystemSkill = async (name: string) => {
+    if (!confirm(`Delete global skill "${name}"? This affects all agents.`)) return;
+    await api.deleteSkill(name);
+    load();
+    showSaved("Global skill deleted");
+  };
+
+  const handlePromote = async (name: string) => {
+    try {
+      await api.promoteSkill(name, agentId);
+      load();
+      showSaved(`Promoted "${name}" to global`);
+    } catch (e) {
+      showSaved(`Promote failed: ${e instanceof Error ? e.message : "error"}`);
+    }
   };
 
   if (loading) return <p className="text-[13px] text-[var(--ink-2)]">Loading…</p>;
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <p className="text-[12px] text-[var(--ink-3)]">
-          Skills are reusable prompt fragments in the agent's home directory.
+    <div className="space-y-5">
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-[12px] font-medium text-[var(--ink-2)]">
+            Global Skills ({systemSkills.length})
+          </p>
+          <a
+            href="/skills"
+            className="text-[12px] text-[var(--accent)] hover:underline"
+          >
+            Manage in Skills page →
+          </a>
+        </div>
+        <p className="text-[11px] text-[var(--ink-3)] mb-3">
+          Available to all agents. Use /skillname in chat to activate.
         </p>
-        <button
-          onClick={() => setShowCreate(!showCreate)}
-          className="flex items-center gap-1 rounded-[5px] px-2.5 py-1.5 text-[12px] transition"
-          style={{ border: "1px solid var(--border)", background: "none", cursor: "pointer", color: "var(--ink-2)" }}
-        >
-          <Plus className="h-3.5 w-3.5" /> New Skill
-        </button>
+        {systemSkills.length === 0 ? (
+          <p className="py-4 text-center text-[13px] text-[var(--ink-3)]">No global skills installed.</p>
+        ) : (
+          <div className="space-y-1.5">
+            {systemSkills.map((skill) => (
+              <div
+                key={skill.name}
+                className="flex items-center justify-between rounded-[5px] border px-4 py-2.5"
+                style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="font-mono text-[13px] font-medium text-[var(--ink)]">{skill.name}</p>
+                  {skill.description && (
+                    <p className="text-[12px] text-[var(--ink-2)] truncate">{skill.description}</p>
+                  )}
+                </div>
+                <button
+                  onClick={() => handleDeleteSystemSkill(skill.name)}
+                  className="ml-2 text-[var(--ink-3)] transition hover:text-[var(--danger)]"
+                  style={{ border: "none", background: "none", cursor: "pointer" }}
+                  title="Delete global skill"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
-      {showCreate && (
-        <div className="flex gap-2 rounded-[5px] border p-3" style={{ borderColor: "var(--border)", background: "var(--surface)" }}>
-          <input
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            placeholder="skill-name"
-            className="flex-1 rounded-[5px] border px-3 py-1.5 text-[13px] text-[var(--ink)] outline-none"
-            style={{ borderColor: "var(--border)", background: "var(--white)" }}
-            autoFocus
-            onKeyDown={(e) => e.key === "Enter" && handleCreate()}
-          />
-          <button
-            onClick={handleCreate}
-            className="rounded-[5px] px-3 py-1.5 text-[13px] font-medium"
-            style={{ background: "var(--ink)", color: "var(--white)", border: "none", cursor: "pointer" }}
-          >
-            Create
-          </button>
-        </div>
-      )}
-
-      {skills.length === 0 ? (
-        <p className="py-8 text-center text-[13px] text-[var(--ink-3)]">No skills configured.</p>
-      ) : (
-        skills.map((skill) => (
-          <div
-            key={skill.name}
-            className="flex items-center justify-between rounded-[5px] border px-4 py-3"
-            style={{ borderColor: "var(--border)", background: "var(--surface)" }}
-          >
-            <div>
-              <p className="font-mono text-[13px] font-medium text-[var(--ink)]">{skill.name}</p>
-              {skill.description && <p className="text-[12px] text-[var(--ink-2)]">{skill.description}</p>}
-            </div>
-            <button
-              onClick={() => handleDelete(skill.name)}
-              className="text-[var(--ink-3)] transition hover:text-[var(--danger)]"
-              style={{ border: "none", background: "none", cursor: "pointer" }}
-            >
-              <Trash2 className="h-4 w-4" />
-            </button>
+      <div style={{ borderTop: "1px solid var(--border)", paddingTop: "16px" }}>
+        <p className="text-[12px] font-medium text-[var(--ink-2)] mb-2">
+          Agent Skills ({agentSkills.length})
+        </p>
+        <p className="text-[11px] text-[var(--ink-3)] mb-3">
+          Created by this agent via skill-creator. Promote to global to share with other agents.
+        </p>
+        {agentSkills.length === 0 ? (
+          <p className="py-4 text-center text-[13px] text-[var(--ink-3)]">
+            No agent-specific skills. Use the skill-creator skill in chat to create one.
+          </p>
+        ) : (
+          <div className="space-y-1.5">
+            {agentSkills.map((skill) => (
+              <div
+                key={skill.name}
+                className="flex items-center justify-between rounded-[5px] border px-4 py-2.5"
+                style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="font-mono text-[13px] font-medium text-[var(--ink)]">{skill.name}</p>
+                  {skill.description && (
+                    <p className="text-[12px] text-[var(--ink-2)] truncate">{skill.description}</p>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 ml-2">
+                  <button
+                    onClick={() => handlePromote(skill.name)}
+                    className="text-[12px] text-[var(--accent)] transition hover:underline"
+                    style={{ border: "none", background: "none", cursor: "pointer" }}
+                    title="Promote to global"
+                  >
+                    Promote
+                  </button>
+                  <button
+                    onClick={() => handleDeleteAgentSkill(skill.name)}
+                    className="text-[var(--ink-3)] transition hover:text-[var(--danger)]"
+                    style={{ border: "none", background: "none", cursor: "pointer" }}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
-        ))
-      )}
+        )}
+      </div>
     </div>
   );
 }

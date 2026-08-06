@@ -32,6 +32,11 @@ class RunResult:
     error: str | None = None
     guardrail_warnings: list[str] = field(default_factory=list)
     guardrail_redactions: list[str] = field(default_factory=list)
+    # Compaction metadata (for context bar)
+    context_tokens: int = 0  # tokens actually sent to the model
+    max_context_tokens: int = 0  # model's context window
+    compacted: bool = False  # whether compaction occurred this run
+    context_breakdown: dict[str, int] = field(default_factory=dict)  # per-section token counts
 
 
 # SSE event emitter type: async callable that takes (event_type: str, payload: dict)
@@ -56,6 +61,7 @@ class Harness:
         trigger: str = "user_message",
         event_emitter: EventEmitter = None,
         attachments: list[Any] | None = None,
+        skill: str | None = None,
     ) -> RunResult:
         """Execute the agent loop (D19 steps 7-11).
 
@@ -66,9 +72,142 @@ class Harness:
         11. Iterate until final answer or limit hit
         """
         # Step 7: Assemble context
-        system_prompt = assemble_system_prompt(agent_config)
+        # Load KG facts for this contact (D34 — subject-scoped, D10)
+        kg_facts: list[dict] = []
+        recall_snippets: list[dict] = []
+        past_sessions: list[dict] = []
+        if hasattr(syscall_handler, "db") and hasattr(session, "contact_id"):
+            from ..memory.triples import query_facts
+
+            try:
+                kg_facts = await query_facts(
+                    syscall_handler.db,
+                    contact_id=session.contact_id,
+                    agent_id=agent_config.id,
+                )
+            except Exception:
+                pass  # No facts yet, or contact not resolved — continue without
+
+            # Semantic recall fallback (D34) — fetch relevant snippets from past
+            # conversations. Bounded: top 3 results, only if there's a real query.
+            if message and len(message.strip()) > 3:
+                from ..memory.recall import recall_snippets as _recall
+
+                try:
+                    recall_snippets = await _recall(
+                        syscall_handler.db,
+                        contact_id=session.contact_id,
+                        agent_id=agent_config.id,
+                        query=message,
+                        limit=3,
+                    )
+                except Exception:
+                    pass  # No snippets yet, or FTS not ready — continue without
+
+                # Episodic recall (D34) — search past session summaries for
+                # topical context. Auto-injected into the system prompt so
+                # the agent knows "what we did before" without searching.
+                from ..memory.episodic import search_session_summaries
+
+                try:
+                    past_sessions = await search_session_summaries(
+                        syscall_handler.db,
+                        agent_id=agent_config.id,
+                        contact_id=session.contact_id,
+                        query=message,
+                        limit=3,
+                    )
+                except Exception:
+                    past_sessions = []
+
+        system_prompt = assemble_system_prompt(
+            agent_config, message, kg_facts=kg_facts, recall_snippets=recall_snippets,
+            forced_skill=skill, past_sessions=past_sessions,
+        )
         tool_schemas = assemble_tool_schemas(agent_config)
         history = build_message_history(system_prompt, recent_messages or [], message, attachments)
+
+        result = RunResult()
+
+        # --- Context compaction (head/middle/tail) ---
+        # Runs before the first LLM call. If auto-compaction is on and the
+        # context exceeds the threshold, older messages are summarized.
+        # The system prompt (history[0]) is always protected.
+        from .compaction import compact_context, count_tokens, count_text_tokens, count_tool_tokens, get_model_max_tokens
+
+        compaction_summary = getattr(session, "conversation_summary", None)
+
+        # Get model info for token counting + summary LLM call
+        model_str = "gpt-4o"  # fallback
+        api_key = None
+        base_url = None
+        if hasattr(self.model, "get_model_info"):
+            try:
+                info = await self.model.get_model_info(agent_config.model)
+                model_str = info["model_str"]
+                api_key = info["api_key"]
+                base_url = info["base_url"]
+            except Exception:
+                pass
+
+        if agent_config.compaction.auto_compaction and len(history) > 1:
+            # Compact the message portion (exclude system prompt — always kept)
+            system_msgs = [history[0]] if history and history[0].get("role") == "system" else []
+            conversation_msgs = history[len(system_msgs):]
+
+            compaction_result = await compact_context(
+                messages=conversation_msgs,
+                agent_config=agent_config,
+                model_str=model_str,
+                previous_summary=compaction_summary,
+                api_key=api_key,
+                base_url=base_url,
+            )
+
+            history = system_msgs + compaction_result.messages
+            result.max_context_tokens = get_model_max_tokens(
+                model_str, agent_config.limits.max_context_tokens,
+            )
+            result.compacted = compaction_result.compacted
+
+            # Per-section breakdown for the context tooltip
+            result.context_breakdown = {
+                "system_prompt": count_text_tokens(system_prompt, model_str),
+                "conversation": count_tokens(compaction_result.messages, model_str),
+                "tools": count_tool_tokens(tool_schemas, model_str),
+            }
+            result.context_tokens = sum(result.context_breakdown.values())
+
+            # Persist the updated summary to the session
+            if compaction_result.compacted and compaction_result.summary != compaction_summary:
+                if hasattr(syscall_handler, "db") and hasattr(session, "id"):
+                    from sqlalchemy import update as sa_update
+                    from ..models.session import Session as SessionModel
+
+                    await syscall_handler.db.execute(
+                        sa_update(SessionModel)
+                        .where(SessionModel.id == session.id)
+                        .values(conversation_summary=compaction_result.summary)
+                    )
+                    await syscall_handler.db.flush()
+                    session.conversation_summary = compaction_result.summary
+        else:
+            # No compaction — still report token count for the context bar
+            result.max_context_tokens = get_model_max_tokens(
+                model_str, agent_config.limits.max_context_tokens,
+            )
+
+            # Per-section breakdown for the context tooltip
+            system_msgs = [history[0]] if history and history[0].get("role") == "system" else []
+            conversation_msgs = history[len(system_msgs):]
+            result.context_breakdown = {
+                "system_prompt": count_tokens(system_msgs, model_str),
+                "conversation": count_tokens(conversation_msgs, model_str),
+                "tools": count_tool_tokens(tool_schemas, model_str),
+            }
+            # Total = sum of all sections (litellm's token_counter on full history
+            # can be inconsistent, so we sum the breakdown for accuracy)
+            result.context_tokens = sum(result.context_breakdown.values())
 
         # Inject spawn context into the syscall handler so run_subagent
         # can access the harness, session, run_id, and event_emitter.
@@ -85,7 +224,6 @@ class Harness:
         if event_emitter:
             await self._emit(event_emitter, "typing", {})
 
-        result = RunResult()
         max_turns = agent_config.limits.max_turns_per_run
         max_cost = (
             agent_config.limits.max_cost_per_run

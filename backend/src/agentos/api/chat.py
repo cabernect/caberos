@@ -72,6 +72,7 @@ class SendMessageRequest(BaseModel):
     session_id: str | None = None  # if provided, use this session; else auto-resume
     new_session: bool = False  # if true, force create a new session (ignore auto-resume)
     attachments: list[AttachmentIn] = []  # multimodal attachments
+    skill: str | None = None  # slash command: /skillname → auto-load skill into context
 
 
 class MessageOut(BaseModel):
@@ -134,9 +135,117 @@ async def send_message(
             )
             for a in body.attachments
         ],
+        skill=body.skill,
     )
 
     return {"run_id": result["run_id"], "session_id": result["session_id"], "status": "started"}
+
+
+class CompactRequest(BaseModel):
+    session_id: str
+
+
+@router.post("/{agent_id}/compact")
+async def compact_session(
+    agent_id: str,
+    body: CompactRequest,
+    operator: Operator = Depends(require_operator),
+) -> dict:
+    """Manually trigger context compaction on a session.
+
+    Forces compaction regardless of the token threshold. Useful when the user
+    wants to proactively compress context before a long task, or when
+    auto-compaction is off.
+    """
+    from ..agent_service import get_active_config
+    from ..db import async_session_factory
+    from ..harness.compaction import compact_context, count_tokens, get_model_max_tokens
+    from ..harness.context import assemble_system_prompt, build_message_history
+    from ..harness.litellm_adapter import LiteLLMAdapter
+    from ..models.run import Message, Run
+    from ..models.session import Session
+
+    async with async_session_factory() as db:
+        # Load agent config
+        config = await get_active_config(db, agent_id)
+        if not config:
+            raise HTTPException(status_code=404, detail="Agent not found")
+
+        # Load session
+        result = await db.execute(
+            select(Session).where(Session.id == body.session_id, Session.agent_id == agent_id)
+        )
+        session = result.scalar_one_or_none()
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        # Load all messages from the session
+        msg_result = await db.execute(
+            select(Message)
+            .where(Message.run_id.in_(
+                select(Run.id).where(Run.session_id == session.id)
+            ))
+            .order_by(Message.seq)
+        )
+        all_messages = msg_result.scalars().all()
+
+        # Build message history (same as harness does)
+        # Use a dummy message — compaction works on history, not the new message
+        system_prompt = assemble_system_prompt(config, "")
+        from types import SimpleNamespace
+
+        recent = [SimpleNamespace(role=m.role, content=m.content) for m in all_messages]
+        history = build_message_history(system_prompt, recent, "", None)
+
+        # Get model info
+        model_str = "gpt-4o"
+        api_key = None
+        base_url = None
+        adapter = LiteLLMAdapter(db)
+        if config.model.is_configured:
+            try:
+                info = await adapter.get_model_info(config.model)
+                model_str = info["model_str"]
+                api_key = info["api_key"]
+                base_url = info["base_url"]
+            except Exception:
+                pass
+
+        # Run compaction (force=True)
+        system_msgs = [history[0]] if history and history[0].get("role") == "system" else []
+        conversation_msgs = history[len(system_msgs):]
+
+        compaction_result = await compact_context(
+            messages=conversation_msgs,
+            agent_config=config,
+            model_str=model_str,
+            previous_summary=session.conversation_summary,
+            api_key=api_key,
+            base_url=base_url,
+            force=True,
+        )
+
+        # Persist the updated summary
+        if compaction_result.summary != session.conversation_summary:
+            from sqlalchemy import update as sa_update
+
+            await db.execute(
+                sa_update(Session)
+                .where(Session.id == session.id)
+                .values(conversation_summary=compaction_result.summary)
+            )
+            await db.commit()
+
+        return {
+            "compacted": compaction_result.compacted,
+            "original_tokens": compaction_result.original_tokens,
+            "compacted_tokens": compaction_result.compacted_tokens,
+            "max_context_tokens": get_model_max_tokens(model_str),
+            "head_count": compaction_result.head_count,
+            "middle_count": compaction_result.middle_count,
+            "tail_count": compaction_result.tail_count,
+            "summary": compaction_result.summary,
+        }
 
 
 @router.get("/{agent_id}/runs/{run_id}/events")
@@ -190,6 +299,10 @@ async def stream_run_events(
                         data = json.dumps(payload)
                         yield f"id: {ev_seq}\nevent: {event_type}\ndata: {data}\n\n"
                 seq = new_seq
+            else:
+                # No new event — send a keepalive comment so the proxy/browser
+                # doesn't close the connection due to inactivity
+                yield ": keepalive\n\n"
 
     return StreamingResponse(
         event_stream(),
@@ -374,6 +487,7 @@ async def get_session_messages(
             "tokens_out": run.tokens_out,
             "cost": run.cost,
             "subagent_id": msg.subagent_id,
+            "attachments": msg.attachments,
         }
         for msg, run in rows
     ]

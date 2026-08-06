@@ -1,12 +1,18 @@
-import { useState, useRef, useEffect } from "react";
-import { Paperclip, FileText, Image as ImageIcon, Link, Wrench, ArrowUp, HelpCircle, Check } from "lucide-react";
+import { useState, useRef, useEffect, useImperativeHandle, forwardRef } from "react";
+import { Paperclip, FileText, Image as ImageIcon, Link, Wrench, ArrowUp, HelpCircle, Check, Sparkles, Square } from "lucide-react";
 import { ModelSelector } from "@/components/ModelSelector";
+import { api } from "@/lib/api";
+import type { SkillInfo } from "@/lib/types";
 
 export interface Attachment {
   type: "image" | "url" | "file";
   mimeType: string;
   data: string; // base64 for images/files, URL for urls
   filename: string;
+}
+
+export interface ChatInputBarHandle {
+  addFiles: (files: File[]) => void;
 }
 
 export interface ContextItem {
@@ -35,19 +41,32 @@ interface ChatInputBarProps {
     modelOverride: { provider_id: string; name: string } | null,
     context: ContextItem[],
     attachments?: Attachment[],
+    skill?: string,
   ) => void;
+  onStop?: () => void;
   activeElicitation?: ActiveElicitation | null;
   onElicitationRespond?: (response: string) => void;
+  contextTokens?: number;
+  maxContextTokens?: number;
+  compacted?: boolean;
+  contextBreakdown?: { system_prompt: number; conversation: number; tools: number };
+  onCompact?: () => void;
 }
 
-export function ChatInputBar({
+export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(function ChatInputBar({
   defaultProviderId,
   defaultModelName,
   disabled,
   onSend,
+  onStop,
   activeElicitation,
   onElicitationRespond,
-}: ChatInputBarProps) {
+  contextTokens,
+  maxContextTokens,
+  compacted,
+  contextBreakdown,
+  onCompact,
+}, ref) {
   const [text, setText] = useState("");
   const [modelOverride, setModelOverride] = useState<{
     provider_id: string;
@@ -59,11 +78,44 @@ export function ChatInputBar({
   const [showUrlInput, setShowUrlInput] = useState(false);
   const [urlValue, setUrlValue] = useState("");
   const [selectedOptions, setSelectedOptions] = useState<Set<number>>(new Set());
+  const [skills, setSkills] = useState<SkillInfo[]>([]);
+  const [skillQuery, setSkillQuery] = useState<string | null>(null);
+  const [skillIndex, setSkillIndex] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
 
   const isElicitation = !!activeElicitation;
+
+  // Load skills for slash command autocomplete
+  useEffect(() => {
+    api.listSkills().then((data) => setSkills(data.skills)).catch(() => {});
+  }, []);
+
+  // Detect slash command in text — only show autocomplete while typing the skill name
+  // (not after a space, which means the user has moved on to their message)
+  const slashMatch = !isElicitation && text.startsWith("/")
+    ? text.match(/^\/([a-z0-9-]*)$/)
+    : null;
+  const skillQueryStr = slashMatch ? slashMatch[1] : null;
+
+  // Built-in slash commands (always available, alongside skills)
+  const builtinCommands = [
+    { name: "compact", description: "Summarize older messages to free up context", isBuiltin: true },
+  ];
+  const filteredBuiltins = skillQueryStr !== null
+    ? builtinCommands.filter((c) => c.name.startsWith(skillQueryStr))
+    : [];
+  const filteredSkills = skillQueryStr !== null
+    ? skills.filter((s) => s.name.startsWith(skillQueryStr))
+    : [];
+  const allFiltered = [...filteredBuiltins, ...filteredSkills];
+  const showSkillMenu = skillQueryStr !== null && allFiltered.length > 0;
+
+  useEffect(() => {
+    setSkillQuery(skillQueryStr);
+    setSkillIndex(0);
+  }, [skillQueryStr]);
 
   useEffect(() => {
     const ta = textareaRef.current;
@@ -100,7 +152,18 @@ export function ChatInputBar({
       return;
     }
     if (!text.trim() || disabled) return;
-    onSend(text.trim(), modelOverride, contextItems, attachments.length > 0 ? attachments : undefined);
+
+    // Slash command detection: /skillname rest of message
+    // Extracts the skill name and passes it separately to the backend
+    let skill: string | undefined;
+    let messageText = text.trim();
+    const slashMatch = messageText.match(/^\/([a-z0-9-]+)\s*(.*)/s);
+    if (slashMatch) {
+      skill = slashMatch[1];
+      messageText = slashMatch[2].trim() || messageText; // keep original if no text after skill
+    }
+
+    onSend(messageText, modelOverride, contextItems, attachments.length > 0 ? attachments : undefined, skill);
     setText("");
     setContextItems([]);
     setAttachments([]);
@@ -135,6 +198,43 @@ export function ChatInputBar({
     });
   };
 
+  // Process dropped/selected files and add them as attachments.
+  // Exposed via ref so the parent (Conversation) can forward drops
+  // from the entire chat view, not just the input bar.
+  const addFiles = async (files: File[]) => {
+    if (isElicitation) return;
+    for (const file of files) {
+      if (file.type.startsWith("image/")) {
+        const base64 = await fileToBase64(file);
+        setAttachments((prev) => [...prev, {
+          type: "image",
+          mimeType: file.type || "image/png",
+          data: base64,
+          filename: file.name,
+        }]);
+      } else if (file.type.startsWith("text/") || file.type === "application/json") {
+        const content = await file.text();
+        setAttachments((prev) => [...prev, {
+          type: "file",
+          mimeType: file.type || "text/plain",
+          data: content,
+          filename: file.name,
+        }]);
+      } else {
+        const base64 = await fileToBase64(file);
+        setAttachments((prev) => [...prev, {
+          type: "file",
+          mimeType: file.type || "application/octet-stream",
+          data: base64,
+          filename: file.name,
+        }]);
+      }
+      setContextItems((prev) => [...prev, { type: "file", label: file.name }]);
+    }
+  };
+
+  useImperativeHandle(ref, () => ({ addFiles }), [isElicitation]);
+
   const handleImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files) return;
@@ -166,18 +266,15 @@ export function ChatInputBar({
           data: content,
           filename: file.name,
         }]);
-      } else if (file.type.startsWith("image/")) {
-        // Image file — read as base64
+      } else {
+        // Binary file (PDF, docx, image, etc.) — read as base64, backend saves to workspace
         const base64 = await fileToBase64(file);
         setAttachments((prev) => [...prev, {
-          type: "image",
-          mimeType: file.type,
+          type: "file",
+          mimeType: file.type || "application/octet-stream",
           data: base64,
           filename: file.name,
         }]);
-      } else {
-        // Binary file — skip for now (PDF support can be added later)
-        continue;
       }
       setContextItems((prev) => [...prev, { type: "file", label: file.name }]);
     }
@@ -208,6 +305,44 @@ export function ChatInputBar({
     // Ignore key events while IME is composing (e.g. Vietnamese, Chinese, Japanese).
     // The Enter that confirms the IME composition should NOT send the message.
     if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+
+    // Slash command autocomplete navigation
+    if (showSkillMenu && !isElicitation) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSkillIndex((i) => Math.min(i + 1, filteredSkills.length - 1));
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSkillIndex((i) => Math.max(i - 1, 0));
+        return;
+      }
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        const skill = filteredSkills[skillIndex];
+        if (skill) {
+          // Replace /query with /skillname + space
+          const afterSlash = text.slice(slashMatch![0].length);
+          setText(`/${skill.name} ${afterSlash}`.trim() + " ");
+          return;
+        }
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setSkillQuery(null);
+        return;
+      }
+      if (e.key === "Tab") {
+        e.preventDefault();
+        const skill = filteredSkills[skillIndex];
+        if (skill) {
+          const afterSlash = text.slice(slashMatch![0].length);
+          setText(`/${skill.name} ${afterSlash}`.trim() + " ");
+        }
+        return;
+      }
+    }
 
     if (isElicitation) {
       // Number keys 1-9 to quick-select options (single select only)
@@ -242,9 +377,46 @@ export function ChatInputBar({
 
   // (addContext/removeContext replaced by handleImageSelect/handleFileSelect/handleUrlSubmit/removeAttachment)
 
+  // Drag-and-drop file upload
+  const [isDragging, setIsDragging] = useState(false);
+  const dragCounter = useRef(0);
+
+  const handleDragEnter = (e: React.DragEvent) => {
+    if (isElicitation) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current++;
+    if (e.dataTransfer.types.includes("Files")) setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current--;
+    if (dragCounter.current === 0) setIsDragging(false);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current = 0;
+    setIsDragging(false);
+    if (isElicitation) return;
+    await addFiles(Array.from(e.dataTransfer.files));
+  };
+
   return (
     <div
-      className="px-4 py-3"
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+      className="relative px-4 py-3"
       style={{
         borderTop: "1px solid var(--border)",
         background: "var(--sidebar)",
@@ -318,7 +490,7 @@ export function ChatInputBar({
         </div>
       )}
 
-      <div className="mx-auto flex max-w-[672px] items-end gap-2">
+      <div className="relative mx-auto flex max-w-[672px] items-end gap-2">
         {/* Context chips above input */}
         {!isElicitation && contextItems.length > 0 && (
           <div className="absolute -top-9 left-0 flex flex-wrap gap-1.5">
@@ -350,13 +522,23 @@ export function ChatInputBar({
           </div>
         )}
 
-        {/* Model selector — hidden during elicitation */}
+        {/* Model selector + context indicator — hidden during elicitation */}
         {!isElicitation && (
-          <ModelSelector
-            defaultProviderId={defaultProviderId}
-            defaultModelName={defaultModelName}
-            onChange={setModelOverride}
-          />
+          <div className="flex items-center gap-1.5">
+            <ModelSelector
+              defaultProviderId={defaultProviderId}
+              defaultModelName={defaultModelName}
+              onChange={setModelOverride}
+            />
+            {contextTokens != null && maxContextTokens != null && maxContextTokens > 0 && (
+              <ContextCircle
+                contextTokens={contextTokens}
+                maxContextTokens={maxContextTokens}
+                compacted={compacted}
+                breakdown={contextBreakdown}
+              />
+            )}
+          </div>
         )}
 
         {/* Attach button + context menu — hidden during elicitation */}
@@ -374,7 +556,7 @@ export function ChatInputBar({
           <input
             ref={fileInputRef}
             type="file"
-            accept="text/*,.json,.md,.py,.js,.ts,.tsx,.jsx,.yaml,.yml,.toml,.cfg,.ini,.txt,.csv,.log"
+            accept="*/*"
             multiple
             style={{ display: "none" }}
             onChange={handleFileSelect}
@@ -419,7 +601,7 @@ export function ChatInputBar({
                 />
                 <ContextMenuItem
                   icon={<FileText className="h-4 w-4" />}
-                  label="Text file"
+                  label="File"
                   onClick={() => fileInputRef.current?.click()}
                 />
                 <ContextMenuItem
@@ -464,6 +646,60 @@ export function ChatInputBar({
         </div>
         )}
 
+        {/* Slash command autocomplete */}
+        {showSkillMenu && (
+          <div
+            className="absolute bottom-full left-0 mb-1 w-full max-w-md rounded-lg border shadow-lg overflow-hidden"
+            style={{
+              background: "var(--white)",
+              borderColor: "var(--border)",
+              maxHeight: "240px",
+              overflowY: "auto",
+            }}
+          >
+            {allFiltered.slice(0, 6).map((cmd, i) => (
+              <button
+                key={cmd.name}
+                onClick={() => {
+                  if ("isBuiltin" in cmd && cmd.isBuiltin) {
+                    // Built-in commands execute immediately — no text after
+                    setText(`/${cmd.name} `);
+                    textareaRef.current?.focus();
+                  } else {
+                    const skill = cmd as SkillInfo;
+                    const afterSlash = text.slice(slashMatch![0].length);
+                    setText(`/${skill.name} ${afterSlash}`.trim() + " ");
+                    textareaRef.current?.focus();
+                  }
+                }}
+                className="flex w-full items-start gap-2 px-3 py-2 text-left transition"
+                style={{
+                  background: i === skillIndex ? "var(--surface)" : "none",
+                  border: "none",
+                  cursor: "pointer",
+                }}
+                onMouseEnter={() => setSkillIndex(i)}
+              >
+                {"isBuiltin" in cmd && cmd.isBuiltin ? (
+                  <Wrench className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: "var(--color-secondary)" }} />
+                ) : (
+                  <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: "var(--accent)" }} />
+                )}
+                <div className="min-w-0 flex-1">
+                  <p className="font-mono text-[13px] font-medium text-[var(--ink)]">
+                    /{cmd.name}
+                  </p>
+                  {cmd.description && (
+                    <p className="text-[11px] text-[var(--ink-3)] truncate">
+                      {cmd.description}
+                    </p>
+                  )}
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+
         {/* Text input */}
         <textarea
           ref={textareaRef}
@@ -487,8 +723,34 @@ export function ChatInputBar({
           onBlur={(e) => (e.currentTarget.style.borderColor = "var(--border)")}
         />
 
-        {/* Send — enabled during elicitation if text or options selected */}
+        {/* Send / Stop — stop button replaces send while a run is active */}
         {(() => {
+          // Show stop button when a run is active (disabled && not elicitation)
+          const isRunning = disabled && !isElicitation && onStop;
+          if (isRunning) {
+            return (
+              <button
+                onClick={onStop}
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[5px] border transition"
+                style={{
+                  background: "var(--danger, #dc2626)",
+                  color: "var(--white)",
+                  borderColor: "var(--danger, #dc2626)",
+                  cursor: "pointer",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.opacity = "0.85";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.opacity = "1";
+                }}
+                title="Stop run"
+              >
+                <Square className="h-3.5 w-3.5 fill-current" />
+              </button>
+            );
+          }
+          // Send button
           const canSend = isElicitation
             ? (text.trim() || selectedOptions.size > 0)
             : (text.trim() && !disabled);
@@ -520,9 +782,26 @@ export function ChatInputBar({
           );
         })()}
       </div>
+
+      {/* Drag-and-drop overlay */}
+      {isDragging && (
+        <div
+          className="absolute inset-0 z-50 flex items-center justify-center rounded-[inherit]"
+          style={{
+            background: "rgba(0, 0, 0, 0.05)",
+            borderTop: "2px dashed var(--accent)",
+            borderBottom: "2px dashed var(--accent)",
+          }}
+        >
+          <div className="flex items-center gap-2 text-[14px] font-medium" style={{ color: "var(--accent)" }}>
+            <Paperclip className="h-5 w-5" />
+            Drop files to attach
+          </div>
+        </div>
+      )}
     </div>
   );
-}
+});
 
 function ContextMenuItem({
   icon,
@@ -544,5 +823,163 @@ function ContextMenuItem({
       {icon}
       {label}
     </button>
+  );
+}
+
+function ContextCircle({
+  contextTokens,
+  maxContextTokens,
+  compacted,
+  breakdown,
+}: {
+  contextTokens: number;
+  maxContextTokens: number;
+  compacted?: boolean;
+  breakdown?: { system_prompt: number; conversation: number; tools: number };
+}) {
+  const [showTooltip, setShowTooltip] = useState(false);
+  const pct = Math.min(100, (contextTokens / maxContextTokens) * 100);
+  const ratio = contextTokens / maxContextTokens;
+  const isWarning = ratio > 0.7;
+  const color = isWarning ? "var(--warning)" : "var(--brand-2)";
+  const trackColor = "#E0DFDC";
+  const radius = 7;
+  const circumference = 2 * Math.PI * radius;
+  const dashOffset = circumference - (pct / 100) * circumference;
+
+  const sections = breakdown
+    ? [
+        { label: "System Prompt", tokens: breakdown.system_prompt, color: "var(--accent)" },
+        { label: "Conversation", tokens: breakdown.conversation, color: "var(--brand-2)" },
+        { label: "Tools", tokens: breakdown.tools, color: "var(--warning)" },
+      ].filter((s) => s.tokens > 0)
+    : [];
+
+  return (
+    <div
+      className="relative shrink-0"
+      onMouseEnter={() => setShowTooltip(true)}
+      onMouseLeave={() => setShowTooltip(false)}
+    >
+      <div
+        className="flex h-7 w-7 items-center justify-center rounded-full transition"
+        style={{ cursor: "pointer" }}
+        title="Context window usage"
+      >
+        <svg width="18" height="18" viewBox="0 0 18 18">
+          <circle
+            cx="9"
+            cy="9"
+            r={radius}
+            fill="none"
+            stroke={trackColor}
+            strokeWidth="2"
+          />
+          <circle
+            cx="9"
+            cy="9"
+            r={radius}
+            fill="none"
+            stroke={color}
+            strokeWidth="2"
+            strokeDasharray={circumference}
+            strokeDashoffset={dashOffset}
+            strokeLinecap="round"
+            transform="rotate(-90 9 9)"
+            style={{ transition: "stroke-dashoffset 0.3s ease" }}
+          />
+        </svg>
+      </div>
+
+      {showTooltip && (
+        <div
+          className="absolute bottom-full right-0 mb-1 z-50 w-60 rounded-lg border p-3 shadow-lg"
+          style={{
+            background: "var(--white)",
+            borderColor: "var(--border)",
+          }}
+        >
+          <div className="mb-2 flex items-center justify-between">
+            <span className="text-[12px] font-semibold" style={{ color: "var(--ink)" }}>
+              Context Window
+            </span>
+            <span className="text-[11px] tabular-nums" style={{ color: isWarning ? color : "var(--ink-2)" }}>
+              {pct.toFixed(1)}%
+            </span>
+          </div>
+
+          {/* Stacked bar showing section proportions */}
+          {sections.length > 0 && (
+            <div className="mb-2.5 flex h-2 w-full overflow-hidden rounded-full" style={{ background: "#E0DFDC" }}>
+              {sections.map((s) => (
+                <div
+                  key={s.label}
+                  className="h-full transition-all"
+                  style={{
+                    width: `${(s.tokens / maxContextTokens) * 100}%`,
+                    background: s.color,
+                  }}
+                />
+              ))}
+            </div>
+          )}
+
+          {/* Per-section breakdown */}
+          {sections.length > 0 ? (
+            <div className="space-y-1.5 text-[11px]">
+              {sections.map((s) => (
+                <div key={s.label} className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <div className="h-2 w-2 rounded-full" style={{ background: s.color }} />
+                    <span style={{ color: "var(--ink-2)" }}>{s.label}</span>
+                  </div>
+                  <span className="tabular-nums" style={{ color: "var(--ink)" }}>
+                    {s.tokens.toLocaleString()}
+                  </span>
+                </div>
+              ))}
+              <div className="mt-1.5 border-t pt-1.5" style={{ borderColor: "var(--border)" }}>
+                <div className="flex items-center justify-between">
+                  <span style={{ color: "var(--ink-2)" }}>Total Used</span>
+                  <span className="tabular-nums font-medium" style={{ color: isWarning ? color : "var(--ink)" }}>
+                    {contextTokens.toLocaleString()}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span style={{ color: "var(--ink-2)" }}>Max</span>
+                  <span className="tabular-nums" style={{ color: "var(--ink-2)" }}>
+                    {maxContextTokens.toLocaleString()}
+                  </span>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-1 text-[11px]" style={{ color: "var(--ink-2)" }}>
+              <div className="flex justify-between">
+                <span>Used</span>
+                <span className="tabular-nums" style={{ color: isWarning ? color : "var(--ink)" }}>
+                  {contextTokens.toLocaleString()} tokens
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span>Max</span>
+                <span className="tabular-nums">{maxContextTokens.toLocaleString()} tokens</span>
+              </div>
+            </div>
+          )}
+
+          {compacted && (
+            <div className="mt-2 rounded px-1.5 py-1 text-[10px]" style={{ background: "var(--surface)", color: "var(--ink-3)" }}>
+              Context was compacted — older messages summarized
+            </div>
+          )}
+          {isWarning && !compacted && (
+            <div className="mt-2 text-[10px]" style={{ color }}>
+              Approaching limit — type /compact to summarize
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }

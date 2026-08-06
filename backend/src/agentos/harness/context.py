@@ -16,6 +16,24 @@ from ..models.run import Message
 from .base_prompt import get_base_system_prompt
 
 
+def _load_memory_md(agent_config: AgentConfig) -> str:
+    """Load MEMORY.md from the agent home dir (D34). Returns empty string if missing."""
+    from ..memory.notebook import read_memory
+
+    return read_memory(agent_config.id)
+
+
+def _load_skill_menu(agent_config: AgentConfig) -> str:
+    """Load the skill menu (names + descriptions only) for the system prompt (D11b).
+
+    Skills are NOT auto-injected — the agent sees a menu and calls skills_load
+    to get the full content when it decides to use one.
+    """
+    from ..skills.loader import format_skill_menu
+
+    return format_skill_menu(agent_config.id)
+
+
 def get_enabled_capabilities(agent_config: AgentConfig) -> list[str]:
     """Return the list of enabled capability names for this agent.
 
@@ -31,7 +49,14 @@ def get_enabled_capabilities(agent_config: AgentConfig) -> list[str]:
     return [grant.name for grant in agent_config.capabilities]
 
 
-def assemble_system_prompt(agent_config: AgentConfig) -> str:
+def assemble_system_prompt(
+    agent_config: AgentConfig,
+    user_message: str = "",
+    kg_facts: list[dict[str, Any]] | None = None,
+    recall_snippets: list[dict[str, Any]] | None = None,
+    forced_skill: str | None = None,
+    past_sessions: list[dict[str, Any]] | None = None,
+) -> str:
     """Build the system prompt from base prompt + agent identity (D35 order).
 
     Order:
@@ -39,9 +64,12 @@ def assemble_system_prompt(agent_config: AgentConfig) -> str:
     2. Soul (who the agent is — values, principles)
     3. Persona (how the agent communicates — tone, style)
     4. Task (what the agent does — mission, instructions)
-    5. MEMORY.md (long-term memory — loaded in ticket 06)
-    6. Skills (prompt injection — loaded in ticket 06)
-    7. KG facts (knowledge graph — loaded in ticket 06)
+    5. MEMORY.md (long-term memory — agent-curated notebook)
+    6. Available Skills (menu — names + descriptions only)
+    7. KG facts (knowledge graph — passed in by the harness from the DB)
+    8. Past sessions (episodic — session summaries for topical recall)
+    9. Recall snippets (semantic recall fallback — D34)
+    10. Forced skill (slash command — full body injected when user types /skillname)
     """
     parts: list[str] = []
 
@@ -59,9 +87,59 @@ def assemble_system_prompt(agent_config: AgentConfig) -> str:
     if agent_config.task:
         parts.append(f"## Task\n\n{agent_config.task}")
 
-    # MEMORY.md loading will be added in ticket 06
-    # Skills loading will be added in ticket 06
-    # KG facts will be added in ticket 06
+    # 5. MEMORY.md (D34 — agent-curated notebook, always loaded)
+    memory_md = _load_memory_md(agent_config)
+    if memory_md:
+        parts.append(f"## MEMORY.md\n\n{memory_md}")
+
+    # 6. Skills (D11b — menu only, not auto-injected)
+    # The agent sees available skill names + descriptions, then calls
+    # skills_load(name) to get the full content when it decides to use one.
+    skill_menu = _load_skill_menu(agent_config)
+    if skill_menu:
+        parts.append(f"## Available Skills\n\n{skill_menu}")
+
+    # 7. KG facts (D34 — knowledge graph triples for this contact)
+    if kg_facts:
+        facts_lines = [f"- ({f['subject']}, {f['predicate']}, {f['object']})" for f in kg_facts]
+        parts.append("## Known Facts\n\n" + "\n".join(facts_lines))
+
+    # 8. Past sessions (episodic — session summaries for topical recall)
+    if past_sessions:
+        # Char budget: ~500 chars total, truncate each summary
+        budget = 500
+        used = 0
+        session_lines = []
+        for s in past_sessions:
+            summary = s.get("summary", "")
+            if not summary:
+                continue
+            if used + len(summary) > budget:
+                summary = summary[: budget - used] + "..."
+            session_lines.append(f"- {summary}")
+            used += len(summary)
+            if used >= budget:
+                break
+        if session_lines:
+            parts.append("## Past Context (recent sessions)\n\n" + "\n".join(session_lines))
+
+    # 9. Recall snippets (D34 — semantic recall fallback, bounded)
+    if recall_snippets:
+        snippet_lines = [f"- [{s['key']}] {s['value']}" for s in recall_snippets]
+        parts.append("## Relevant Past Context\n\n" + "\n".join(snippet_lines))
+
+    # 10. Forced skill (slash command — /skillname message)
+    # When the user types /skillname, the skill's full body is injected into
+    # context so the agent has the instructions without calling skills_load.
+    if forced_skill:
+        from ..skills.loader import load_skill
+
+        skill = load_skill(agent_config.id, forced_skill)
+        if skill:
+            parts.append(
+                f"## Active Skill: {skill['name']}\n\n"
+                f"{skill['body']}"
+            )
 
     return "\n\n---\n\n".join(parts)
 
@@ -192,10 +270,17 @@ def build_message_history(
                             "image_url": {"url": f"data:{att.mime_type};base64,{att.data}"},
                         }
                     )
-                # PDFs and other binary formats: LiteLLM handles some via the
-                # "file" content type, but support varies by provider. For v0.1,
-                # we pass them as text descriptions and let the model ask for
-                # more if needed. This can be extended per-provider later.
+                else:
+                    # Binary file (PDF, docx, etc.) — already saved to workspace
+                    # by the pipeline. The data field contains a path note.
+                    # The file note is already in the message text, so we just
+                    # add a brief reference here.
+                    content_parts.append(
+                        {
+                            "type": "text",
+                            "text": f"\n[Attachment: {att.filename} — {att.data}]",
+                        }
+                    )
         history.append({"role": "user", "content": content_parts})
     else:
         history.append({"role": "user", "content": user_message})

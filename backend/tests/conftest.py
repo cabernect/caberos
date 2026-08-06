@@ -30,6 +30,50 @@ async def db_engine():
     engine = create_async_engine(TEST_DB_URL, echo=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Create FTS5 virtual tables for memory tests (D34)
+        from sqlalchemy import text
+
+        # 1. Working memory FTS (for memory_recall tool)
+        result = await conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='memory_fts'")
+        )
+        if result.fetchone() is None:
+            await conn.execute(
+                text(
+                    "CREATE VIRTUAL TABLE memory_fts USING fts5("
+                    "content, entry_id UNINDEXED, contact_id UNINDEXED, agent_id UNINDEXED, "
+                    "tokenize='porter unicode61')"
+                )
+            )
+
+        # 2. Raw messages FTS (episodic — exact recall via search_history)
+        result = await conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='messages_fts'")
+        )
+        if result.fetchone() is None:
+            await conn.execute(
+                text(
+                    "CREATE VIRTUAL TABLE messages_fts USING fts5("
+                    "content, message_id UNINDEXED, run_id UNINDEXED, "
+                    "session_id UNINDEXED, agent_id UNINDEXED, "
+                    "tokenize='porter unicode61')"
+                )
+            )
+
+        # 3. Session summaries FTS (episodic — topical recall at run start)
+        result = await conn.execute(
+            text(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='session_summaries_fts'"
+            )
+        )
+        if result.fetchone() is None:
+            await conn.execute(
+                text(
+                    "CREATE VIRTUAL TABLE session_summaries_fts USING fts5("
+                    "summary, session_id UNINDEXED, agent_id UNINDEXED, "
+                    "contact_id UNINDEXED, tokenize='porter unicode61')"
+                )
+            )
     yield engine
     await engine.dispose()
 

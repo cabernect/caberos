@@ -1,6 +1,6 @@
 // API client — the only way the frontend talks to the backend (D33)
 
-import type { Agent, AgentVersion, Approval, CapabilityGrant, HeartbeatConfig, Limits, Message, ModelInfo, Operator, Provider, SessionInfo, Skill, WorkspaceEntry } from "./types";
+import type { Agent, AgentVersion, Approval, CapabilityGrant, HeartbeatConfig, Limits, Message, ModelInfo, Operator, Provider, SessionInfo, Skill, SkillInfo, WorkspaceEntry } from "./types";
 
 const BASE = ""; // same origin via Vite proxy
 
@@ -91,14 +91,14 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ content }),
     }),
-  listSkills: (id: string) =>
+  listAgentSkills: (id: string) =>
     request<Skill[]>(`/api/agents/${id}/skills`),
-  createSkill: (id: string, name: string, content?: string) =>
+  createAgentSkill: (id: string, name: string, content?: string) =>
     request<{ name: string; path: string }>(`/api/agents/${id}/skills`, {
       method: "POST",
       body: JSON.stringify({ name, content: content || "" }),
     }),
-  deleteSkill: (id: string, skillName: string) =>
+  deleteAgentSkill: (id: string, skillName: string) =>
     request<{ ok: boolean }>(`/api/agents/${id}/skills/${skillName}`, { method: "DELETE" }),
   listWorkspace: (id: string, path?: string) =>
     request<{ type: "dir" | "file"; path: string; entries?: WorkspaceEntry[]; content?: string; size?: number }>(
@@ -114,6 +114,7 @@ export const api = {
     sessionId?: string,
     attachments?: { type: string; mime_type: string; data: string; filename: string }[],
     newSession = false,
+    skill?: string,
   ) =>
     request<{ run_id: string; session_id: string; status: string }>(
       `/api/chat/${agentId}/message`,
@@ -126,6 +127,7 @@ export const api = {
           session_id: sessionId,
           new_session: newSession,
           attachments: attachments || [],
+          skill,
         }),
       },
     ),
@@ -210,6 +212,20 @@ export const api = {
       `/api/chat/${agentId}/sessions/${sessionId}`,
       { method: "DELETE" },
     ),
+  compactSession: (agentId: string, sessionId: string) =>
+    request<{
+      compacted: boolean;
+      original_tokens: number;
+      compacted_tokens: number;
+      max_context_tokens: number;
+      head_count: number;
+      middle_count: number;
+      tail_count: number;
+      summary: string | null;
+    }>(`/api/chat/${agentId}/compact`, {
+      method: "POST",
+      body: JSON.stringify({ session_id: sessionId }),
+    }),
 
   // Providers
   listProviders: () => request<Provider[]>("/api/providers"),
@@ -247,5 +263,32 @@ export const api = {
     request<{ status: string }>(`/api/elicitation/${id}/respond`, {
       method: "POST",
       body: JSON.stringify({ response }),
+    }),
+
+  // Skills management (system-level)
+  listSkills: () =>
+    request<{ skills: SkillInfo[]; count: number }>("/api/skills"),
+  importSkillZip: (file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    return fetch("/api/skills/import", {
+      method: "POST",
+      credentials: "include",
+      body: formData,
+    }).then(async (r) => {
+      if (!r.ok) {
+        const text = await r.text().catch(() => "");
+        throw new Error(`${r.status}: ${text || r.statusText}`);
+      }
+      return r.json();
+    });
+  },
+  deleteSkill: (name: string) =>
+    request<{ deleted: boolean; name: string }>(`/api/skills/${name}`, {
+      method: "DELETE",
+    }),
+  promoteSkill: (name: string, agentId: string) =>
+    request<{ promoted: boolean; name: string }>(`/api/skills/${name}/promote?agent_id=${agentId}`, {
+      method: "POST",
     }),
 };

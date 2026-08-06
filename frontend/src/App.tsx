@@ -5,6 +5,8 @@ import { Login } from "./pages/Login";
 import { AgentList } from "./pages/AgentList";
 import { Conversation } from "./pages/Conversation";
 import { ProvidersSettings } from "./pages/ProvidersSettings";
+import { KnowledgeVault } from "./pages/KnowledgeVault";
+import { Skills } from "./pages/Skills";
 
 export default function App() {
   const [authed, setAuthed] = useState<boolean | null>(null);
@@ -36,6 +38,14 @@ export default function App() {
         <Route
           path="/settings"
           element={authed ? <ProvidersSettings /> : <Navigate to="/login" />}
+        />
+        <Route
+          path="/vault"
+          element={authed ? <KnowledgeVault /> : <Navigate to="/login" />}
+        />
+        <Route
+          path="/skills"
+          element={authed ? <Skills /> : <Navigate to="/login" />}
         />
       </Routes>
     </BrowserRouter>

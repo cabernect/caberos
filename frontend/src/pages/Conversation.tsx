@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowDown, PanelLeft, AlertCircle } from "lucide-react";
+import { ArrowDown, PanelLeft, AlertCircle, FileIcon, Paperclip } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api } from "@/lib/api";
 import type { Agent, Message, Provider, SessionInfo } from "@/lib/types";
 import { ToolCallBlock, type ToolCallData, type SubAgentStreamData } from "@/components/ToolCallBlock";
 import { ThinkingBlock } from "@/components/ThinkingBlock";
+import { ProcessSteps } from "@/components/ProcessSteps";
 import { ChatSidebar } from "@/components/ChatSidebar";
-import { ChatInputBar, type ContextItem } from "@/components/ChatInputBar";
+import { ChatInputBar, type ChatInputBarHandle, type ContextItem } from "@/components/ChatInputBar";
 import { SettingsOverlay } from "@/components/SettingsOverlay";
 
 interface ChatMessage {
@@ -22,6 +23,7 @@ interface ChatMessage {
   tokens_out?: number;
   cost?: number;
   subagent_id?: string | null;
+  attachments?: string | null;
 }
 
 interface TurnCost {
@@ -90,12 +92,19 @@ export function Conversation() {
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [isDraggingFile, setIsDraggingFile] = useState(false);
+  const [contextTokens, setContextTokens] = useState<number | undefined>(undefined);
+  const [maxContextTokens, setMaxContextTokens] = useState<number | undefined>(undefined);
+  const [compacted, setCompacted] = useState(false);
+  const [contextBreakdown, setContextBreakdown] = useState<{ system_prompt: number; conversation: number; tools: number } | undefined>(undefined);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const autoScrollRef = useRef(true);
   const activeSessionRef = useRef<string | null>(null);
   const streamingRef = useRef<StreamingResponse | null>(null);
+  const inputBarRef = useRef<ChatInputBarHandle>(null);
+  const dragCounterRef = useRef(0);
 
   // Support multiple concurrent runs — one per session.
   // Each entry tracks the run's streaming state, runId, and lastEventId.
@@ -169,6 +178,7 @@ export function Conversation() {
           tokens_out: m.tokens_out,
           cost: m.cost,
           subagent_id: m.subagent_id,
+          attachments: m.attachments,
         }));
         // If this session has an active run that we're streaming, drop the
         // run's non-user messages (thinking, tool_call, assistant) — they're
@@ -180,7 +190,16 @@ export function Conversation() {
             (m) => m.role === "user" || m.run_id !== runId,
           );
         }
-        setMessages(mapped);
+        // Preserve optimistic user messages that haven't been persisted yet
+        // (the run may have started but the user message isn't committed to
+        // the DB by the time we fetch).
+        setMessages((prev) => {
+          const apiUserMsgs = new Set(mapped.filter((m) => m.role === "user").map((m) => m.id));
+          const optimistic = prev.filter(
+            (m) => m.role === "user" && !apiUserMsgs.has(m.id) && !mapped.some((mm) => mm.id === m.id),
+          );
+          return [...mapped, ...optimistic];
+        });
       })
       .catch(() => {});
   }, [agentId, activeSessionId]);
@@ -438,6 +457,11 @@ export function Conversation() {
         if (data.session_id && !activeSessionRef.current) {
           setActiveSessionId(data.session_id);
         }
+        // Update context bar
+        if (data.context_tokens != null) setContextTokens(data.context_tokens);
+        if (data.max_context_tokens != null) setMaxContextTokens(data.max_context_tokens);
+        if (data.compacted != null) setCompacted(data.compacted);
+        if (data.context_breakdown != null) setContextBreakdown(data.context_breakdown);
         // Mark streaming as completed — push final turn's thinking, freeze timer
         updateStreamingForSession(sessionId, (prev) => {
           if (!prev) return prev;
@@ -481,6 +505,7 @@ export function Conversation() {
                 tokens_out: m.tokens_out,
                 cost: m.cost,
                 subagent_id: m.subagent_id,
+                attachments: m.attachments,
               })),
             );
             setStreaming(null);
@@ -597,6 +622,45 @@ export function Conversation() {
       streamingRef.current = null;
     }
     setActiveSessionId(id);
+    // Reset context bar when switching sessions
+    setContextTokens(undefined);
+    setMaxContextTokens(undefined);
+    setCompacted(false);
+    setContextBreakdown(undefined);
+  };
+
+  const handleStop = async () => {
+    if (!agentId || !activeSessionId) return;
+    const entry = runEntriesRef.current.get(activeSessionId);
+    if (!entry) return;
+    try {
+      await api.stopRun(agentId, entry.runId);
+    } catch {}
+    runEntriesRef.current.delete(activeSessionId);
+    setStreaming(null);
+    streamingRef.current = null;
+    setIsStreaming(false);
+    setRunningSessionId(null);
+    // Reload messages so the partial response becomes persistent
+    if (agentId && activeSessionId) {
+      api.getSessionMessages(agentId, activeSessionId).then((msgs) => {
+        setMessages(
+          msgs.map((m: Message) => ({
+            id: m.id,
+            role: m.role,
+            content: m.content,
+            created_at: m.created_at,
+            run_id: m.run_id,
+            run_status: m.run_status,
+            tokens_in: m.tokens_in,
+            tokens_out: m.tokens_out,
+            cost: m.cost,
+            subagent_id: m.subagent_id,
+            attachments: m.attachments,
+          })),
+        );
+      }).catch(() => {});
+    }
   };
 
   const handleDeleteSession = async (id: string) => {
@@ -672,8 +736,17 @@ export function Conversation() {
     modelOverride: { provider_id: string; name: string } | null,
     _context: ContextItem[],
     attachments?: { type: string; mimeType: string; data: string; filename: string }[],
+    skill?: string,
   ) => {
     if (!agentId) return;
+
+    // Handle /compact slash command — trigger manual compaction
+    if (text.trim() === "/compact") {
+      if (activeSessionId) {
+        handleCompact();
+      }
+      return;
+    }
 
     // Don't create a session upfront — let the backend auto-resume or create one.
     // The response will contain the session_id, which we set below.
@@ -700,6 +773,9 @@ export function Conversation() {
         role: "user",
         content: text,
         created_at: new Date().toISOString(),
+        attachments: attachments && attachments.length > 0
+          ? JSON.stringify(attachments.map((a) => ({ type: a.type, mime_type: a.mimeType, filename: a.filename })))
+          : null,
       },
     ]);
 
@@ -736,6 +812,7 @@ export function Conversation() {
           filename: a.filename,
         })),
         !sessionId, // new_session=true when no active session (don't auto-resume old ones)
+        skill,
       );
 
       const runSessionId = result.session_id || sessionId || "";
@@ -791,8 +868,57 @@ export function Conversation() {
     return () => clearInterval(interval);
   }, [activeSession?.started_at]);
 
+  // --- Full-view drag-and-drop for files ---
+  const handleViewDragEnter = (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes("Files")) return;
+    e.preventDefault();
+    dragCounterRef.current++;
+    setIsDraggingFile(true);
+  };
+  const handleViewDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    dragCounterRef.current--;
+    if (dragCounterRef.current <= 0) {
+      dragCounterRef.current = 0;
+      setIsDraggingFile(false);
+    }
+  };
+  const handleViewDragOver = (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes("Files")) return;
+    e.preventDefault();
+  };
+  const handleViewDrop = async (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes("Files")) return;
+    e.preventDefault();
+    dragCounterRef.current = 0;
+    setIsDraggingFile(false);
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length > 0 && inputBarRef.current) {
+      inputBarRef.current.addFiles(files);
+    }
+  };
+
+  const handleCompact = async () => {
+    if (!agentId || !activeSessionId) return;
+    try {
+      const result = await api.compactSession(agentId, activeSessionId);
+      setContextTokens(result.compacted_tokens);
+      setMaxContextTokens(result.max_context_tokens);
+      setCompacted(result.compacted);
+    } catch (e) {
+      console.error("Compact failed:", e);
+    }
+  };
+
   return (
-    <div className="flex h-screen overflow-hidden" style={{ background: "var(--surface)" }}>
+    <div
+      className="flex h-screen overflow-hidden"
+      style={{ background: "var(--surface)" }}
+      onDragEnter={handleViewDragEnter}
+      onDragLeave={handleViewDragLeave}
+      onDragOver={handleViewDragOver}
+      onDrop={handleViewDrop}
+    >
       {/* Sidebar */}
       <ChatSidebar
         sessions={sessions}
@@ -865,34 +991,74 @@ export function Conversation() {
               </div>
             )}
 
-            {messages
-              .filter((msg) => !msg.subagent_id)  // sub-agent messages are nested inside their run_subagent tool call
-              .map((msg, i, filtered) => {
-                // Find sub-agent messages for run_subagent tool calls
-                let subagentMessages: ChatMessage[] | undefined;
-                if (msg.role === "tool_call") {
-                  try {
-                    const tcData = JSON.parse(msg.content) as ToolCallData;
-                    if (tcData.capability === "run_subagent") {
-                      // Find all messages with the same run_id that have subagent_id
-                      subagentMessages = messages.filter(
-                        (m) => m.subagent_id && m.run_id === msg.run_id
-                      );
-                    }
-                  } catch { /* ignore */ }
-                }
-                return (
-                  <MessageRow
-                    key={msg.id}
-                    message={msg}
-                    isLastInRun={
-                      i === filtered.length - 1 ||
-                      filtered[i + 1].run_id !== msg.run_id
-                    }
-                    subagentMessages={subagentMessages}
+            {(() => {
+              // Group consecutive thinking + tool_call messages into ProcessSteps
+              const filtered = messages.filter((msg) => !msg.subagent_id);
+              const rendered: React.ReactNode[] = [];
+              let processGroup: { msg: ChatMessage; index: number }[] = [];
+              let groupRunId: string | undefined;
+
+              const flushGroup = () => {
+                if (processGroup.length === 0) return;
+                const steps = processGroup.map((g) => ({
+                  type: g.msg.role as "thinking" | "tool_call",
+                  content: g.msg.content,
+                }));
+                // Find sub-agent messages for the run
+                const subagentMsgs = groupRunId
+                  ? messages.filter((m) => m.subagent_id && m.run_id === groupRunId)
+                  : [];
+                rendered.push(
+                  <ProcessSteps
+                    key={`process-${processGroup[0].index}`}
+                    steps={steps}
+                    subagentMessages={subagentMsgs}
                   />
                 );
-              })}
+                processGroup = [];
+                groupRunId = undefined;
+              };
+
+              filtered.forEach((msg, i) => {
+                if (msg.role === "thinking" || msg.role === "tool_call") {
+                  // Start or continue a process group
+                  if (processGroup.length === 0) {
+                    groupRunId = msg.run_id;
+                  }
+                  processGroup.push({ msg, index: i });
+                } else {
+                  // Flush any pending process group
+                  flushGroup();
+
+                  // Find sub-agent messages for run_subagent tool calls
+                  let subagentMessages: ChatMessage[] | undefined;
+                  if (msg.role === "tool_call") {
+                    try {
+                      const tcData = JSON.parse(msg.content) as ToolCallData;
+                      if (tcData.capability === "run_subagent") {
+                        subagentMessages = messages.filter(
+                          (m) => m.subagent_id && m.run_id === msg.run_id
+                        );
+                      }
+                    } catch { /* ignore */ }
+                  }
+                  rendered.push(
+                    <MessageRow
+                      key={msg.id}
+                      message={msg}
+                      isLastInRun={
+                        i === filtered.length - 1 ||
+                        filtered[i + 1].run_id !== msg.run_id
+                      }
+                      subagentMessages={subagentMessages}
+                    />
+                  );
+                }
+              });
+              // Flush any remaining process group
+              flushGroup();
+              return rendered;
+            })()}
 
             {inputWarnings.length > 0 && (
               <div
@@ -965,6 +1131,7 @@ export function Conversation() {
 
         {/* Input bar */}
         <ChatInputBar
+          ref={inputBarRef}
           defaultProviderId={agent?.provider_id || null}
           defaultModelName={agent?.model || null}
           disabled={
@@ -972,10 +1139,41 @@ export function Conversation() {
             (!!agent && (!agent.provider_id || !agent.model))
           }
           onSend={handleSend}
+          onStop={handleStop}
           activeElicitation={activeElicitation}
           onElicitationRespond={handleElicitationRespond}
+          contextTokens={contextTokens}
+          maxContextTokens={maxContextTokens}
+          compacted={compacted}
+          contextBreakdown={contextBreakdown}
+          onCompact={handleCompact}
         />
       </div>
+
+      {/* Full-view drag-and-drop overlay */}
+      {isDraggingFile && (
+        <div
+          className="pointer-events-none fixed inset-0 z-[100] flex items-center justify-center"
+          style={{ background: "rgba(0, 0, 0, 0.08)" }}
+        >
+          <div
+            className="flex flex-col items-center gap-3 rounded-xl px-8 py-6"
+            style={{
+              background: "var(--surface)",
+              border: "2px dashed var(--accent)",
+              boxShadow: "0 8px 32px rgba(0,0,0,0.12)",
+            }}
+          >
+            <Paperclip className="h-8 w-8" style={{ color: "var(--accent)" }} />
+            <span className="text-[16px] font-semibold" style={{ color: "var(--ink)" }}>
+              Drop files to attach
+            </span>
+            <span className="text-[12px]" style={{ color: "var(--ink-3)" }}>
+              Images, PDFs, documents — anywhere in the chat
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Settings overlay */}
       <SettingsOverlay
@@ -1083,8 +1281,40 @@ function StreamingMessage({ streaming }: { streaming: StreamingResponse }) {
 
 function MessageRow({ message, isLastInRun, subagentMessages }: { message: ChatMessage; isLastInRun?: boolean; subagentMessages?: ChatMessage[] }) {
   if (message.role === "user") {
+    // Parse attachment metadata (JSON string from the API)
+    let attachmentFiles: { type: string; mime_type: string; filename: string }[] = [];
+    if (message.attachments) {
+      try {
+        const parsed = JSON.parse(message.attachments);
+        if (Array.isArray(parsed)) {
+          attachmentFiles = parsed.filter((a: any) => a.filename);
+        }
+      } catch { /* ignore */ }
+    }
+
     return (
-      <div className="mb-6 flex justify-end">
+      <div className="mb-6 flex flex-col items-end gap-1.5">
+        {attachmentFiles.length > 0 && (
+          <div className="flex flex-wrap justify-end gap-1.5">
+            {attachmentFiles.map((f, i) => (
+              <div
+                key={i}
+                className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12px]"
+                style={{
+                  background: "var(--surface)",
+                  border: "1px solid var(--border)",
+                  color: "var(--ink-2)",
+                }}
+              >
+                <FileIcon className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--ink-3)" }} />
+                <span className="font-medium">{f.filename}</span>
+                <span className="text-[10px]" style={{ color: "var(--ink-3)" }}>
+                  {f.mime_type.split("/")[1]?.toUpperCase() || f.type}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
         <div
           className="max-w-[75%] rounded-lg px-3.5 py-2.5 text-[14px] leading-[1.65]"
           style={{

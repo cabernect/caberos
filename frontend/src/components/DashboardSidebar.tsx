@@ -9,6 +9,7 @@ import {
   Settings,
   LogOut,
   PanelLeft,
+  Database,
 } from "lucide-react";
 import { LogoMark } from "@/components/LogoMark";
 
@@ -19,6 +20,7 @@ export type NavKey =
   | "skills"
   | "tools"
   | "channels"
+  | "vault"
   | "observability"
   | "settings";
 
@@ -66,6 +68,7 @@ export function DashboardSidebar({
         { key: "skills", label: "Skills", icon: Sparkles },
         { key: "tools", label: "Tools", icon: Wrench },
         { key: "channels", label: "Channels", icon: Radio },
+        { key: "vault", label: "Knowledge Vault", icon: Database },
       ],
     },
     {

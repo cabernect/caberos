@@ -12,17 +12,28 @@ def _build_profile(workspace: str, allow_network: bool) -> str:
     """Generate an SBPL profile for sandbox-exec.
 
     Strategy: allow all reads (the shell needs to read system libraries),
-    deny all writes except to the workspace, deny network by default.
+    deny all writes except to the workspace + a few system paths that
+    Python/shell need to function, deny network by default.
     """
     workspace = str(Path(workspace).resolve())
     lines = [
         "(version 1)",
         '(deny file-write* (subpath "/"))',
         f'(allow file-write* (subpath "{workspace}"))',
+        # /dev/null — needed for shell redirection (2>/dev/null, etc.)
+        '(allow file-write* (literal "/dev/null"))',
+        # /tmp (symlink → /private/tmp) — Python needs it for cache files,
+        # xcrun, tempfile, etc.  Without this, python3 fails to start.
+        '(allow file-write* (subpath "/private/tmp"))',
+        # /dev/dtracehelper — used by DTrace instrumentation in Python
+        '(allow file-write* (literal "/dev/dtracehelper"))',
         "(allow file-read*)",
-        '(allow process-exec (subpath "/bin") (subpath "/usr/bin"))',
+        # Allow executing binaries from anywhere — /usr/bin/python3 on macOS
+        # is a stub that spawns xcodebuild from /Applications/Xcode.app/...,
+        # and other tools may live in /Library, /opt, etc.  The real sandbox
+        # boundary is file-write restrictions + network denial, not exec paths.
+        '(allow process-exec*)',
         "(allow process-fork)",
-        '(allow process-exec* (subpath "/bin") (subpath "/usr/bin"))',
     ]
     if not allow_network:
         lines.append("(deny network*)")
@@ -53,7 +64,7 @@ class SeatbeltBackend(SandboxBackend):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=ws_resolved,
-                env={"PATH": "/usr/bin:/bin", "HOME": ws_resolved},
+                env={"PATH": "/usr/bin:/bin", "HOME": ws_resolved, "TMPDIR": "/tmp"},
             )
             stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
             elapsed = int((time.monotonic() - start) * 1000)

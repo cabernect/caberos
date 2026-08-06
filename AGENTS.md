@@ -13,7 +13,7 @@ CaberOS is an open-source, local-first AI Agent Operating System. It hosts perso
 - `docs/spec-v0.1.md` — the full specification. 40 decisions (D1-D40). Read this first.
 - `docs/plans/` — 15 implementation plans (00-14) with detailed specs, file lists, verification steps. These are the implementation reference.
 - `docs/plans/README.md` — plan index and build order.
-- `.scratch/caberos-v0.1/issues/` — 10 tracer-bullet tickets (01-10) with blocking edges. These drive the work order.
+- `.scratch/caberos-v0.1/issues/` — tracer-bullet tickets (01-10, with 08 split into 08a/08b) with blocking edges. These drive the work order.
 - `design-system/caberos/` — design system (dark-only, AI-native, conversation-first). MASTER.md + page specs.
 
 ## Key decisions (quick reference)
@@ -35,7 +35,7 @@ CaberOS is an open-source, local-first AI Agent Operating System. It hosts perso
 ## Ticket dependency graph
 
 ```
-01 ──→ 02 ──→ 03 ──→ 04 ──→ 08
+01 ──→ 02 ──→ 03 ──→ 04 ──→ 08a ──→ 08b
          │      │
          │      └──→ 09 ──→ 10
          │
@@ -51,8 +51,9 @@ CaberOS is an open-source, local-first AI Agent Operating System. It hosts perso
 - **05** — Agent management UI
 - **05a** — Global settings & provider management
 - **06** — Memory + skills
-- **07** — Heartbeat
-- **08** — Connectors (Outlook)
+- **07** — Scheduler (heartbeat is the first mode; cron/event triggers deferred to v0.5)
+- **08a** — MCP client infrastructure (generic, no OAuth)
+- **08b** — Outlook connector (OAuth, blocked by 08a)
 - **09** — Observability + spend
 - **10** — Testing hardening
 
@@ -80,8 +81,9 @@ Every agent's system prompt is assembled in this order (D35 + base prompt):
 3. **Persona** — tone, communication style (user-edited, versioned)
 4. **Task** — mission, instructions (user-edited, versioned)
 5. MEMORY.md — long-term memory (ticket 06)
-6. Skills — prompt injection (ticket 06)
+6. Available Skills — menu of skill names + descriptions (ticket 06). The agent calls `skills_load(name)` to get the full content when it decides to use one. Skills are NOT auto-injected — the agent sees the menu and chooses.
 7. KG facts — knowledge graph (ticket 06)
+8. Recall snippets — semantic recall fallback (ticket 06)
 
 The base prompt is the CaberOS equivalent of GoClaw's `AGENTS.md` — a static set of operating instructions that tells the agent how to work inside the system, regardless of its soul/persona/task.
 
@@ -89,20 +91,32 @@ The base prompt is the CaberOS equivalent of GoClaw's `AGENTS.md` — a static s
 
 `typing`, `thinking`, `token`, `tool_call` (pending → pending_approval → pending_input → running → complete/denied), `turn_complete`, `message_complete`, `heartbeat`, `guardrail_correction`, `guardrail_warning`, `clarifying_question`
 
-## Built-in capabilities (10 tools)
+## Built-in capabilities
 
-| Tool | Egress | Approval | Description |
-|---|---|---|---|
-| `file.read` | no | no | Read a file from the workspace |
-| `file.write` | no | no | Write a file to the workspace |
-| `file.list` | no | no | List files in a directory |
-| `file.search` | no | no | Search file contents (grep with regex + glob filter) |
-| `file.glob` | no | no | Find files by name pattern |
-| `shell.run` | yes | yes | Execute a shell command in the sandbox |
-| `datetime.now` | no | no | Get current date/time (with optional timezone) |
-| `web.search` | yes | yes | Search the web via DuckDuckGo (free, no API key) |
-| `web.fetch` | yes | yes | Fetch a URL and return text content (HTML → text) |
-| `agent.ask_user` | no | no | Ask the user a clarifying question (HITL elicitation) |
+Registered in `capabilities/builtin.py`. Two kinds: `tool` (workspace/shell/web ops) and `memory` (subject-scoped memory ops). `run_subagent` is a tool registered separately in `capabilities/tools/subagent.py`.
+
+| Capability | Kind | Egress | Approval | Description |
+|---|---|---|---|---|
+| `read_file` | tool | no | no | Read a file from the workspace |
+| `write_file` | tool | no | no | Write a file to the workspace (returns a diff) |
+| `search_files` | tool | no | no | Unified search — `mode`: `content` (grep), `name` (glob), `list` (dir listing) |
+| `terminal` | tool | yes | yes | Run a shell command in the sandbox (persistent session) |
+| `read_terminal` | tool | no | no | Read output from a running/finished terminal session |
+| `close_terminal` | tool | no | no | Close a terminal session |
+| `web_search` | tool | yes | yes | Search the web via DuckDuckGo (free, no API key) |
+| `web_fetch` | tool | yes | yes | Fetch a URL and return text content (HTML → text) |
+| `agent_ask_user` | tool | no | no | Ask the user a clarifying question (HITL elicitation) |
+| `datetime_now` | tool | no | no | Get current date/time (with optional timezone) |
+| `run_subagent` | tool | no | no | Spawn a sub-agent with its own task + capability subset |
+| `read_subagent` | tool | no | no | Poll a running sub-agent's status/output |
+| `memory_recall` | memory | no | no | Recall past conversation snippets (FTS5/Postgres FTS) |
+| `memory_store` | memory | no | no | Store a snippet for later recall (subject-scoped) |
+| `memory_remember_fact` | memory | no | no | Store a KG triple (entity, predicate, object) |
+| `memory_query_facts` | memory | no | no | Query KG triples by entity/predicate/object |
+| `memory_update` | memory | no | no | Update MEMORY.md (agent-scoped, not contact-scoped) |
+| `skills_list` | tool | no | no | List available skills (name + description only — menu) |
+| `skills_load` | tool | no | no | Load a skill's full content + resource listing |
+| `skills_read_resource` | tool | no | no | Read a resource file from a skill directory (scoped to skill dir) |
 
 ## Multimodal input
 
@@ -125,34 +139,30 @@ The `messages.attachments` column stores attachment metadata (type, mime_type, f
 | Provider keys | DB — encrypted (Fernet) | n/a |
 | Connector tokens | DB — encrypted (Fernet) | n/a |
 | Workspace (working files) | Filesystem — shared directory | n/a |
-| Skills | Filesystem — `workspace/skills/{agent_id}/` | n/a |
+| Skills | Filesystem — `skills/` (system) + `workspace/skills/{agent_id}/` (per-agent) | n/a |
 
 ## Current status
 
-- **Baseline commit:** `c50e2a7` on `main` — spec, plans, design system, tickets.
-- **Ticket 01 (smoke test vertical slice):** IMPLEMENTED. All 23 tests pass, smoke script works end-to-end.
-- **Ticket 02 (dashboard chat with real model):** IMPLEMENTED. 37 tests pass. LiteLLM adapter, provider API, operator auth, chat channel (SSE), React frontend (login + agent list + conversation view with streaming). Frontend builds successfully.
-- **Ticket 03 (file ops + tool call visibility):** IMPLEMENTED. 50 tests pass. Real syscall layer (subject injection, result reduction), tool call blocks (collapsible, state icons), thinking blocks (streaming, auto-collapse), per-turn cost badges. shadcn/ui components.
-- **Ticket 04 (approval flow + elicitation):** IMPLEMENTED. Two human-in-the-loop mechanisms:
-  - **Approval gate:** Syscall mediator pauses run on `require_approval=true` capabilities, creates ApprovalRequest, emits `pending_approval` SSE event with approval_id. Frontend shows inline Approve/Deny buttons with "Remember for this session" checkbox (session-scoped auto-allow for same capability+args). Approval API (`GET /api/approvals`, `POST approve/reject`) resolves asyncio.Event via process-global registry. Agent continues after denial (tries alternative approach).
-  - **Elicitation (clarifying question):** Capability `agent.ask_user(question, options?, multi_select?)`. Options support `{label, description}` format. When the agent calls it, the mediator creates an ElicitationRequest, emits `clarifying_question` SSE event (with `multi_select`), and pauses the run. The **chat bar transforms** into the elicitation input — shows numbered options with descriptions, single/multi-select, number key shortcuts (1-9), free-text fallback. Q&A pair added to chat history after answering. Configurable timeout (`hitl_timeout`, default 5 min) — auto-responds on timeout. User responds via `POST /api/elicitation/{id}/respond`.
-- **Guardrails (D2):** IMPLEMENTED. Both input and output guardrails.
-  - **Input guardrails** (run on user message before storage/processing): secret redaction (don't persist API keys in message history), prompt injection detection (warns but doesn't block — the message still goes through, logged for audit). Does NOT check context leakage (users are allowed to reference their own file paths).
-  - **Output guardrails** (run on model's final answer before it reaches the user): secret redaction (`[REDACTED]`), prompt injection detection (flags "ignore previous instructions", role reset tags, ChatML markers — warns but doesn't remove, operator should see what the agent tried to echo), context leakage check (redacts home paths to `[PATH]`, flags agent home dir paths, system prompt fragments, 3+ internal UUIDs).
-  - SSE events: `guardrail_correction` (replaces streamed content with clean version), `guardrail_warning` (shows warnings in UI, with `direction: "input"` or `"output"`). Input warnings show in a separate yellow box before the streaming response.
-- **Run manager + SSE refactor:** IMPLEMENTED. Runs are first-class entities with managed lifecycle.
-  - `RunContext` dataclass tracks asyncio.Task, event buffer, and status per run.
-  - `POST /message` returns `{run_id, session_id}` immediately (no SSE on the response).
-  - `GET /runs/{id}/events` — reconnectable SSE stream with event buffer + `Last-Event-ID` support.
-  - `GET /runs/{id}` — poll run status. `POST /runs/{id}/stop` — cancel a run.
-  - **Per-session lock** (not per-contact) — concurrent runs for different sessions of the same agent.
-  - Stuck run cleanup on server startup. Finished runs cleaned from `_active_runs` after TTL.
-  - Frontend: `POST` message → get `run_id` → connect to `GET /runs/{id}/events` SSE stream. Reconnect logic on disconnect.
-- **File write diffs:** IMPLEMENTED. `file.write` reads before content, generates unified diff via `difflib`. Returns `{action: created|modified|unchanged, diff: "..."}`. Frontend `DiffBlock` renders collapsible diff with green/red coloring and +N/-N counts.
-- **Streaming UX fixes:** IMPLEMENTED. Completed runs keep thinking blocks, tool calls, and costs visible (`completed` flag on `StreamingResponse`). Cost badges aggregated into single "N turns · M tokens · $X" line. Thinking animation stops on run completion (not just when text starts).
-- **Session timezone fix:** IMPLEMENTED. `_iso_utc()` helper in `chat.py` appends `Z` to naive SQLite UTC datetimes. Fixes 7h offset bug where browser parsed UTC as local time.
-- **LLM session titles:** IMPLEMENTED. After first run, generates 3-5 word title from conversation via LLM. Falls back to first-message title if LLM call fails (demo mode).
-- **112 backend tests pass.** Frontend type-checks cleanly.
+Tickets **01–06 implemented**: smoke slice, real-model chat + SSE streaming, file ops + tool call UI, approval flow + elicitation (`agent.ask_user`), guardrails (input/output secret redaction + injection detection), run manager (reconnectable SSE, stop/poll), file-write diffs, agent management UI, global settings/providers, `run_subagent` tool, and now **memory + skills** (ticket 06): MEMORY.md, knowledge graph triples, FTS5 semantic recall, skill loading with trigger matching, full D35 context assembly.
+
+**Next up: Ticket 07 (Scheduler/Heartbeat)** — the sidebar "Scheduler" nav becomes a unified scheduling page with heartbeat as the first mode. Ticket 08 is split into 08a (generic MCP client) and 08b (Outlook OAuth). Ticket 10 note: write security tests per-ticket, not all deferred to the hardening pass.
+
+**Ticket 06 (Memory + skills):** IMPLEMENTED. Three-layer memory + skills:
+- **MEMORY.md** — agent-curated notebook in `~/agentos/agents/{id}/MEMORY.md`, always loaded into context. Agent updates via `memory_update` capability; user edits via `GET/PUT /api/agents/{id}/memory`.
+- **Knowledge graph** — `memory_triples` table (subject, predicate, object, contact_id, agent_id). `memory_remember_fact` and `memory_query_facts` capabilities (subject-scoped, D10). Note: triple's "subject" exposed as `entity` in the schema to avoid colliding with D10's reserved `subject` param.
+- **Semantic recall** — FTS5 (SQLite) or tsvector (Postgres) on conversation snippets. `memory_recall` and `memory_store` capabilities. Bounded: top 3 snippets auto-fetched as context fallback.
+- **Skills** — markdown `SKILL.md` with YAML frontmatter (name, description, triggers). System-level `skills/` + per-agent `workspace/skills/{id}/`. Trigger-matched against user message, injected into system prompt. Aligned with the [Agent Skills spec](https://agentskills.io/specification): supports `license`, `compatibility`, `metadata`, `allowed-tools` optional fields. 17 Anthropic skills ship out of the box (pdf, docx, pptx, xlsx, mcp-builder, skill-creator, frontend-design, webapp-testing, etc.).
+- **Full context assembly (D35):** base prompt → soul → persona → task → MEMORY.md → skills → KG facts → recall snippets. All loaded by the harness before the model call.
+- **Cross-contact isolation** — tested as a security property (3 tests: triples, recall, syscall-level). Contact A's memory is invisible to Contact B.
+- **DB backends pluggable** — SQLite (default) or Postgres via `AGENTOS_DATABASE_URL=postgresql+asyncpg://...`. `db_backends/` package with `DatabaseBackend` ABC, `SQLiteBackend`, `PostgresBackend`. FTS5 ↔ tsvector handled per-backend.
+- **149 backend tests pass.**
+
+**Recent fixes (this session):**
+- Fixed `Session is already flushing` crash in the approval flow (`syscall/mediator.py` now uses a separate DB session for `ApprovalRequest`).
+- Added model stream idle timeout (30s) + request timeout (120s) in `litellm_adapter.py` — prevents runs hanging forever on a stalled provider stream.
+- Fixed streaming text/tool-call ordering in the frontend (`Conversation.tsx`) — text now flushes into the ordered item list before a tool call/approval card, so approvals don't render above already-streamed text.
+
+**128 backend tests pass.** Frontend type-checks cleanly (`tsc --noEmit`). Ruff clean except long-line (E501) warnings.
 
 ## Build & test commands
 
@@ -208,15 +218,26 @@ backend/src/agentos/
 │   └── elicitation.py   — ElicitationRequest model
 ├── capabilities/        — capability registry + built-in tools
 │   ├── registry.py      — CapabilityDef, CapabilityRegistry
-│   ├── builtin.py       — register_builtin_capabilities() (10 tools)
-│   └── tools/           — file.read, file.write (with diff), file.list, file.search, file.glob,
-│                         shell.run, datetime.now, web.search, web.fetch
+│   ├── builtin.py       — register_builtin_capabilities() (tools + memory caps)
+│   └── tools/           — file, shell, web, datetime, subagent, memory
+├── memory/              — three-layer memory (D34)
+│   ├── notebook.py      — MEMORY.md read/write (agent home dir)
+│   ├── triples.py       — knowledge graph (subject/predicate/object triples)
+│   └── recall.py        — semantic recall (FTS5 / Postgres tsvector)
+├── skills/              — skill loading (D11b, D11c) — NOT auto-injected
+│   └── loader.py        — list_skills (menu), load_skill (full content + resources)
+├── db_backends/         — pluggable database backends (D5)
+│   ├── base.py          — DatabaseBackend ABC
+│   ├── factory.py       — URL scheme → backend class
+│   ├── sqlite_backend.py — SQLite + aiosqlite (WAL, FTS5)
+│   └── postgres_backend.py — Postgres + asyncpg (tsvector, GIN)
 ├── api/                 — REST API routes (control plane)
 │   ├── agents.py        — list/get agents
 │   ├── chat.py          — chat channel (POST /message, GET /runs/{id}/events SSE, run management)
 │   ├── providers.py     — provider CRUD, model discovery, validation
 │   ├── approvals.py     — approval list/approve/reject API
-│   └── elicitation.py   — elicitation respond API
+│   ├── elicitation.py   — elicitation respond API
+│   └── agent_files.py   — MEMORY.md, skills, workspace, memory management (triples/clear)
 ├── sandbox/             — process-level sandbox
 │   ├── base.py          — SandboxBackend ABC, get_backend()
 │   ├── seatbelt.py      — macOS sandbox-exec

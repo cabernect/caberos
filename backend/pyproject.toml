@@ -24,6 +24,12 @@ dependencies = [
     "uvicorn[standard]>=0.51.0",
 ]
 
+[project.optional-dependencies]
+# Install with: uv pip install -e ".[postgres]"  (or uv sync --extra postgres)
+postgres = [
+    "asyncpg>=0.30.0",
+]
+
 [build-system]
 requires = ["uv_build>=0.9.6,<0.10.0"]
 build-backend = "uv_build"

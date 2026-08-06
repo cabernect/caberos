@@ -34,6 +34,7 @@ export interface Agent {
   capabilities?: CapabilityGrant[] | null;
   limits?: Limits;
   heartbeat?: HeartbeatConfig;
+  compaction?: CompactionConfig;
   workspace?: string;
   sandbox_mode?: "strict" | "open";
 }
@@ -59,6 +60,15 @@ export interface HeartbeatConfig {
   consecutive_failure_threshold: number;
 }
 
+export interface CompactionConfig {
+  auto_compaction: boolean;
+  threshold: number;
+  protect_first_n: number;
+  protect_last_n: number;
+  tail_budget_fraction: number;
+  prune_tool_results_over: number;
+}
+
 export interface AgentVersion {
   id: string;
   version_number: number;
@@ -70,6 +80,16 @@ export interface Skill {
   name: string;
   type: "directory" | "file";
   description: string;
+}
+
+export interface SkillInfo {
+  name: string;
+  description: string;
+  source: string;
+  path: string;
+  resource_count: number;
+  license?: string;
+  compatibility?: string;
 }
 
 export interface WorkspaceEntry {
@@ -89,6 +109,7 @@ export interface Message {
   tokens_out?: number;
   cost?: number;
   subagent_id?: string | null;
+  attachments?: string | null;
 }
 
 export interface SessionInfo {
@@ -131,10 +152,19 @@ export interface TurnCompleteEvent {
 
 export interface MessageCompleteEvent {
   run_id: string;
+  session_id?: string;
   status: string;
   total_cost?: number;
   total_turns?: number;
   error?: string;
+  context_tokens?: number;
+  max_context_tokens?: number;
+  compacted?: boolean;
+  context_breakdown?: {
+    system_prompt: number;
+    conversation: number;
+    tools: number;
+  };
 }
 
 export interface Approval {

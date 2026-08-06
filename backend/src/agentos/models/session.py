@@ -1,6 +1,6 @@
 """Session model."""
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import Base, IdMixin
@@ -18,4 +18,13 @@ class Session(Base, IdMixin):
     last_activity_at: Mapped[str] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
-    idle_timeout_min: Mapped[int] = mapped_column(Integer, default=60)
+    idle_timeout_min: Mapped[int] = mapped_column(Integer, default=30)
+    # Episodic memory: 3-5 sentence summary generated at session close.
+    # FTS5-indexed for topical recall at run start.
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Idempotency guard: once closed, session_close_extract() won't re-fire.
+    closed: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Running compaction summary — updated by the compaction pipeline when
+    # the context window overflows. Stores the structured summary of older
+    # messages that have been compacted out of the verbatim context.
+    conversation_summary: Mapped[str | None] = mapped_column(Text, nullable=True)

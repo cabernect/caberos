@@ -5,9 +5,11 @@ scheduler (plan 12) call pipeline.handle_inbound() to trigger a run.
 The pipeline is channel-agnostic.
 """
 
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
@@ -22,6 +24,8 @@ from .models.run import Message, Run
 from .models.session import Session
 from .sandbox.workspace import WorkspaceManager
 from .syscall.lock import session_locks
+
+logger = logging.getLogger(__name__)
 from .syscall.mediator import SyscallHandler
 
 
@@ -97,6 +101,122 @@ async def _generate_session_title_from_history(
         return None
 
 
+async def _auto_extract_memory(
+    db: AsyncSession,
+    agent_config: Any,
+    agent_id: str,
+    messages: list,
+    run_id: str | None = None,
+) -> None:
+    """After a run, review the conversation and update MEMORY.md.
+
+    Uses a cheap 1-turn LLM call to extract durable facts worth remembering:
+    user preferences, project context, recurring patterns, etc.
+    Merges with existing MEMORY.md content (doesn't overwrite).
+
+    Also reads working memory entries for this run (if any) and includes
+    them in the consolidation prompt. After writing MEMORY.md, deletes
+    all working entries for this run — promotion = inclusion in MEMORY.md.
+
+    DB locking: reads + LLM call happen with the session closed (no write
+    lock held during the slow LLM call). Only the final cleanup of working
+    memory entries opens a short write transaction.
+    """
+    try:
+        from .harness.litellm_adapter import LiteLLMAdapter
+        from .memory.notebook import read_memory, write_memory
+        from .memory.recall import get_run_entries, clear_run_entries
+
+        # Build a compact conversation excerpt
+        convo = []
+        for msg in messages:
+            if msg.role in ("user", "assistant") and msg.content:
+                role = "User" if msg.role == "user" else "Assistant"
+                convo.append(f"{role}: {msg.content[:300]}")
+            if len(convo) >= 8:
+                break
+
+        if not convo:
+            return
+
+        # Phase 1: read working memory entries (short transaction)
+        working_entries = []
+        if run_id:
+            working_entries = await get_run_entries(db, run_id)
+        await db.commit()  # release the read transaction
+
+        existing = read_memory(agent_id)
+
+        prompt = (
+            "You are a memory extraction system. Review this conversation and extract "
+            "durable facts worth remembering for future sessions.\n\n"
+            "Extract ONLY:\n"
+            "- User preferences and working habits\n"
+            "- Project context (names, file formats, recurring tasks)\n"
+            "- Important decisions or constraints\n"
+            "- Patterns that will recur in future conversations\n\n"
+            "Do NOT extract:\n"
+            "- One-off task results (e.g. 'extracted 3 rows from PDF')\n"
+            "- Transient state or temporary file contents\n"
+            "- Things already in the existing memory\n\n"
+        )
+        if existing:
+            prompt += f"## Existing MEMORY.md\n\n{existing}\n\n"
+            prompt += "Only extract NEW information not already captured above.\n\n"
+        if working_entries:
+            prompt += "## Working memory notes (agent flagged these as important)\n\n"
+            for e in working_entries:
+                prompt += f"- [{e['key']}] {e['value']}\n"
+            prompt += "\n"
+        prompt += f"## Recent conversation\n\n" + "\n".join(convo) + "\n\n"
+        prompt += (
+            "Output a markdown list of new facts to remember, one per line, "
+            "prefixed with '- '. If there is nothing worth remembering, "
+            "output exactly: NOTHING_TO_REMEMBER"
+        )
+
+        # Phase 2: LLM call (db session is open but no transaction is held
+        # — we committed above, and LiteLLMAdapter only reads the provider)
+        adapter = LiteLLMAdapter(db)
+        response = await adapter.complete(
+            agent_model=agent_config.model,
+            messages=[{"role": "user", "content": prompt}],
+            tools=None,
+        )
+        await db.commit()  # release any read lock from provider load
+
+        result = response.content.strip()
+        if not result or result == "NOTHING_TO_REMEMBER":
+            # Even if nothing to remember, clean up working entries
+            if run_id:
+                await clear_run_entries(db, run_id)
+                await db.commit()
+            return
+
+        # Merge with existing memory — append new facts
+        if existing:
+            # Avoid duplicate lines
+            existing_lines = set(l.strip().lower() for l in existing.split("\n") if l.strip())
+            new_lines = [l for l in result.split("\n") if l.strip() and l.strip().lower() not in existing_lines]
+            if not new_lines:
+                if run_id:
+                    await clear_run_entries(db, run_id)
+                    await db.commit()
+                return
+            merged = existing.rstrip() + "\n\n## Auto-extracted\n\n" + "\n".join(new_lines) + "\n"
+        else:
+            merged = "# Memory\n\n## Auto-extracted\n\n" + result + "\n"
+
+        write_memory(agent_id, merged)
+
+        # Phase 3: clean up working memory entries (short write transaction)
+        if run_id:
+            await clear_run_entries(db, run_id)
+            await db.commit()
+    except Exception:
+        pass
+
+
 @dataclass
 class Attachment:
     """A multimodal attachment on a user message (image, URL, or workspace file).
@@ -130,6 +250,7 @@ class InboundMessage:
     session_id: str | None = None  # explicit session to use, else auto-resume
     new_session: bool = False  # if true, force create a new session (ignore auto-resume)
     attachments: list[Attachment] = None  # multimodal attachments (images, URLs, files)
+    skill: str | None = None  # slash command: /skillname → auto-load this skill into context
 
 
 # Ensure capabilities are registered
@@ -174,6 +295,11 @@ class Pipeline:
             contact.id, message.bot_id, message.session_id, message.new_session
         )
 
+        # Lazy session close: check for other sessions for this agent+contact
+        # that are idle beyond their timeout and not yet closed. Close them
+        # before starting this run (Trigger 1 — lazy at run start).
+        await self._close_idle_sessions(message.bot_id, contact.id, exclude_session_id=session.id)
+
         # Step 3: Persist and acknowledge — create Run row with valid FKs
         run = Run(
             id=str(uuid.uuid4()),
@@ -198,9 +324,64 @@ class Pipeline:
             if hasattr(result_emit, "__await__"):
                 await result_emit
 
+        # Save binary file attachments to the workspace so the agent can
+        # process them with its skills (pdf, docx, etc.). Text files and
+        # images are passed inline to the model; binary files (PDF, docx,
+        # xlsx, etc.) are saved to disk and a note is appended to the
+        # message telling the agent where to find them.
+        import asyncio as _aio
+        import base64 as _b64
+
+        processed_attachments: list[Attachment] = []
+        has_binary = False
+        for att in (message.attachments or []):
+            if att.type == "file" and not (
+                att.mime_type.startswith("text/")
+                or att.mime_type == "application/json"
+                or att.mime_type.startswith("image/")
+            ):
+                # Binary file — save to workspace (in a thread to avoid
+                # blocking the event loop during file I/O)
+                wm = WorkspaceManager()
+                workspace = Path(wm.create_workspace(message.bot_id))
+                uploads_dir = workspace / "uploads"
+                safe_name = Path(att.filename).name
+                file_path = uploads_dir / safe_name
+
+                def _save_file(uploads_dir: Path, file_path: Path, raw: bytes) -> None:
+                    uploads_dir.mkdir(parents=True, exist_ok=True)
+                    file_path.write_bytes(raw)
+
+                try:
+                    raw = _b64.b64decode(att.data)
+                    await _aio.to_thread(_save_file, uploads_dir, file_path, raw)
+                    rel_path = f"uploads/{safe_name}"
+                    # Don't pass the base64 data to the model — too large.
+                    # The agent will read the file from the workspace instead.
+                    # build_message_history sends the path note as a text
+                    # content part alongside the user's message.
+                    processed_attachments.append(
+                        Attachment(
+                            type="file",
+                            mime_type=att.mime_type,
+                            data=f"[Saved to workspace: {rel_path}]",
+                            filename=att.filename,
+                        )
+                    )
+                    has_binary = True
+                except Exception:
+                    processed_attachments.append(att)
+            else:
+                processed_attachments.append(att)
+
+        # Replace attachments with processed ones (binary files have their
+        # base64 data replaced with a workspace path note).
+        if has_binary:
+            message.attachments = processed_attachments
+
         # Apply input guardrails — redact secrets, detect prompt injection (D2)
         input_guardrail = apply_input_guardrails(message.text)
-        guardrailed_text = input_guardrail.content
+        guardrailed_text = input_guardrail.content  # DB + frontend + model
 
         # Emit input guardrail warnings (if any) so the operator sees them live
         if input_guardrail.warnings and event_emitter:
@@ -238,6 +419,13 @@ class Pipeline:
         )
         self.db.add(user_msg)
         await self.db.flush()
+
+        # Index in messages FTS5 (episodic — exact recall via search_history)
+        from .memory.episodic import index_message
+
+        await index_message(
+            self.db, user_msg.id, run.id, session.id, message.bot_id, guardrailed_text
+        )
 
         # Set a temporary title from the first user message if untitled.
         # This gets replaced with an LLM-generated title 3 minutes after
@@ -433,6 +621,7 @@ class Pipeline:
                     trigger=trigger,
                     event_emitter=_persisting_emitter,
                     attachments=message.attachments,
+                    skill=message.skill,
                 )
 
                 # Store the assistant's response
@@ -444,6 +633,17 @@ class Pipeline:
                     seq=_msg_seq,
                 )
                 self.db.add(assistant_msg)
+                await self.db.flush()
+
+                # Index in messages FTS5 (episodic — exact recall via search_history)
+                await index_message(
+                    self.db,
+                    assistant_msg.id,
+                    run.id,
+                    session.id,
+                    agent_config.id,
+                    result.final_answer,
+                )
 
                 # Step 13: Record — close the Run
                 run.status = result.status
@@ -454,25 +654,93 @@ class Pipeline:
                 if result.error:
                     run.error = result.error
 
+                # Context compaction metadata (for the context bar — not persisted)
+                run.context_tokens = result.context_tokens
+                run.max_context_tokens = result.max_context_tokens
+                run.compacted = result.compacted
+                run.context_breakdown = result.context_breakdown
+
                 # Update session activity
                 session.last_activity_at = datetime.now(UTC)
 
                 # Generate LLM-based session title 3 minutes after the session
                 # started. This avoids locking in a title from a "nothing" first
                 # message (e.g. "hello") — by 3 min there's usually a real conversation.
+                # Run in background — don't block message_complete on this.
                 if result.final_answer and session.title:
                     started = session.started_at
                     if started.tzinfo is None:
                         started = started.replace(tzinfo=UTC)
                     session_age = (datetime.now(UTC) - started).total_seconds()
                     if session_age >= 180:  # 3 minutes
-                        # Gather all user + assistant messages for a better title
-                        all_msgs = await self._get_recent_messages(session.id, limit=20)
-                        llm_title = await _generate_session_title_from_history(
-                            self.db, agent_config, all_msgs
-                        )
-                        if llm_title:
-                            session.title = llm_title
+                        import asyncio as _asyncio
+                        from .db import async_session_factory
+
+                        async def _bg_title():
+                            try:
+                                # Phase 1: read messages + load provider (short transaction)
+                                async with async_session_factory() as bg_db:
+                                    stmt = (
+                                        select(Message)
+                                        .join(Run, Message.run_id == Run.id)
+                                        .where(Run.session_id == session.id)
+                                        .order_by(Message.created_at.desc())
+                                        .limit(20)
+                                    )
+                                    rows = (await bg_db.execute(stmt)).scalars().all()
+                                    all_msgs = list(reversed(rows))
+                                # Session is closed here — no transaction held during LLM call
+
+                                # Phase 2: LLM call with a fresh short-lived session
+                                # (LiteLLMAdapter needs db to load the provider, but
+                                # we commit immediately so no write lock is held)
+                                async with async_session_factory() as bg_db:
+                                    llm_title = await _generate_session_title_from_history(
+                                        bg_db, agent_config, all_msgs
+                                    )
+                                    await bg_db.commit()
+
+                                if llm_title:
+                                    # Phase 3: write title (short transaction)
+                                    from sqlalchemy import update as sa_update
+                                    from ..models.session import Session as SessionModel
+                                    async with async_session_factory() as bg_db:
+                                        await bg_db.execute(
+                                            sa_update(SessionModel)
+                                            .where(SessionModel.id == session.id)
+                                            .values(title=llm_title)
+                                        )
+                                        await bg_db.commit()
+                            except Exception:
+                                logger.debug("Background title generation failed", exc_info=True)
+
+                        _asyncio.create_task(_bg_title())
+
+                # Auto-extract durable facts into MEMORY.md after the run.
+                # Run in background — don't block message_complete on this.
+                if result.final_answer:
+                    import asyncio as _asyncio
+                    from .db import async_session_factory
+
+                    async def _bg_memory():
+                        try:
+                            async with async_session_factory() as bg_db:
+                                stmt = (
+                                    select(Message)
+                                    .join(Run, Message.run_id == Run.id)
+                                    .where(Run.session_id == session.id)
+                                    .order_by(Message.created_at.desc())
+                                    .limit(20)
+                                )
+                                rows = (await bg_db.execute(stmt)).scalars().all()
+                                all_msgs = list(reversed(rows))
+                                await _auto_extract_memory(
+                                    bg_db, agent_config, agent_config.id, all_msgs, run_id=run.id
+                                )
+                        except Exception:
+                            logger.debug("Background memory extraction failed", exc_info=True)
+
+                    _asyncio.create_task(_bg_memory())
 
                 await self.db.commit()
 
@@ -559,6 +827,41 @@ class Pipeline:
         self.db.add(session)
         await self.db.flush()
         return session
+
+    async def _close_idle_sessions(
+        self, agent_id: str, contact_id: str, exclude_session_id: str | None = None
+    ) -> None:
+        """Lazy trigger (Trigger 1): close idle sessions for this agent+contact.
+
+        Called at run start. Finds other sessions that are idle beyond their
+        timeout and not yet closed, and fires session_close_extract() on them.
+        """
+        from .memory.episodic import close_session, find_idle_sessions
+
+        try:
+            idle = await find_idle_sessions(self.db, idle_minutes=30)
+            for s in idle:
+                if s.agent_id != agent_id or s.contact_id != contact_id:
+                    continue
+                if exclude_session_id and s.id == exclude_session_id:
+                    continue
+                # Need agent config for the LLM calls
+                agent_config = await self._get_agent_config(agent_id)
+                if agent_config:
+                    await close_session(self.db, agent_config, s, contact_id)
+            await self.db.commit()
+        except Exception:
+            pass  # Non-critical — don't block the run
+
+    async def _get_agent_config(self, agent_id: str) -> Any:
+        """Load agent config for memory extraction LLM calls."""
+        try:
+            from .agent_service import AgentService
+
+            service = AgentService(self.db)
+            return await service.get_agent(agent_id)
+        except Exception:
+            return None
 
     async def _get_recent_messages(
         self, session_id: str, limit: int = 10, exclude_run_id: str | None = None

@@ -16,6 +16,7 @@ class CapabilityDef:
     egress: bool = False
     require_approval: bool = False
     subject_scoped: bool = False
+    silent: bool = False  # if True, don't emit tool_call SSE events (e.g. skills_list)
     execute: Callable[..., Any] = field(default=lambda: None)
 
 

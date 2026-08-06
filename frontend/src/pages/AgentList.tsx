@@ -89,6 +89,8 @@ export function AgentList() {
   const handleNavigate = (page: NavKey) => {
     if (page === "agents") navigate("/agents");
     if (page === "settings") navigate("/settings");
+    if (page === "vault") navigate("/vault");
+    if (page === "skills") navigate("/skills");
   };
 
   return (

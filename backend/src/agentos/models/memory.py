@@ -18,6 +18,9 @@ class MemoryEntry(Base, IdMixin, TimestampMixin):
     key: Mapped[str] = mapped_column(String(255), nullable=False)
     value: Mapped[str] = mapped_column(Text, nullable=False)
     tags: Mapped[str] = mapped_column(Text, default="[]")  # JSON list
+    # Run-scoped working memory: entries are deleted at run end unless
+    # promoted (included in MEMORY.md by the consolidation LLM).
+    run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
 
 class MemoryTriple(Base, IdMixin, TimestampMixin):

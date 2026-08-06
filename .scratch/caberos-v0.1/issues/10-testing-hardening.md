@@ -6,6 +6,8 @@
 
 **Status:** ready-for-agent
 
+**Note (revised after 01-05a):** Write each ticket's security tests (path escape, sandbox containment, cross-contact isolation) as that feature lands, not deferred entirely to this ticket. This ticket hardens/fills gaps and adds the E2E tests, it doesn't start security testing from zero.
+
 - [ ] Coverage targets: core modules (harness, syscall, pipeline, sandbox, memory) at 80%+ coverage. API routes at 70%+. Frontend components have basic render tests.
 - [ ] Security tests (behavioural, not implementation):
   - [ ] Path escape: `file.read("../../etc/passwd")` → rejected with denied audit record (path escapes workspace)

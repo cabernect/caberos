@@ -75,6 +75,8 @@ export function ProvidersSettings() {
   const handleNavigate = (page: NavKey) => {
     if (page === "agents") navigate("/agents");
     if (page === "settings") return;
+    if (page === "vault") navigate("/vault");
+    if (page === "skills") navigate("/skills");
   };
 
   const handleDelete = async (id: string) => {

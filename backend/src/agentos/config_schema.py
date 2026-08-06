@@ -16,6 +16,9 @@ class ModelConfig(BaseModel):
     provider_id: str = ""
     name: str = ""
     max_tokens: int | None = None
+    # Override the model's max context window (input tokens).
+    # If None, we try litellm's registry, then fall back to 32K.
+    max_context_tokens: int | None = None
 
     @property
     def is_configured(self) -> bool:
@@ -33,7 +36,7 @@ class CapabilityGrant(BaseModel):
 class Limits(BaseModel):
     max_turns_per_run: int = 15
     max_cost_per_run: float = 500.0
-    session_idle_timeout_min: int = 60
+    session_idle_timeout_min: int = 30
     max_context_tokens: int = 24000
 
 
@@ -48,6 +51,28 @@ class HeartbeatConfig(BaseModel):
     task_prompt: str = ""
     max_cost_per_heartbeat: float = 0.50
     consecutive_failure_threshold: int = 3
+
+
+class CompactionConfig(BaseModel):
+    """Context compaction settings (head/middle/tail summarization).
+
+    auto_compaction: when True, compaction fires automatically when tokens
+      exceed threshold. When False, only /compact triggers it manually.
+      Manual /compact always compacts regardless of threshold.
+    threshold: fraction of model's max context window that triggers auto
+      compaction (default 0.7 = 70%)
+    protect_first_n: number of messages always kept verbatim (head)
+    protect_last_n: minimum number of messages always kept verbatim (tail)
+    tail_budget_fraction: fraction of threshold_tokens reserved for the tail
+    prune_tool_results_over: char length — tool results longer than this
+      outside the protected tail are replaced with a stub (Phase 1)
+    """
+    auto_compaction: bool = True
+    threshold: float = 0.7
+    protect_first_n: int = 3
+    protect_last_n: int = 20
+    tail_budget_fraction: float = 0.20
+    prune_tool_results_over: int = 200
 
 
 class AgentConfig(BaseModel):
@@ -65,6 +90,7 @@ class AgentConfig(BaseModel):
     limits: Limits = Field(default_factory=Limits)
     fallback: Fallback = Field(default_factory=Fallback)
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
+    compaction: CompactionConfig = Field(default_factory=CompactionConfig)
     sandbox_mode: Literal["strict", "open"] = "strict"  # strict=workspace only, open=any path
 
     def to_dict(self) -> dict[str, Any]:

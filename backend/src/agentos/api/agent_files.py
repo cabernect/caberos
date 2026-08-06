@@ -1,4 +1,4 @@
-"""Agent files API — MEMORY.md, skills, workspace browser (D34, D37)."""
+"""Agent files API — MEMORY.md, skills, workspace browser, memory management (D34, D37)."""
 
 from pathlib import Path
 
@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..auth import require_operator
 from ..config import settings
 from ..db import get_db
+from ..memory import triples
 from ..models.operator import Operator
 
 router = APIRouter(prefix="/api/agents", tags=["agent-files"])
@@ -213,3 +214,43 @@ async def list_workspace(
         "path": path,
         "entries": entries,
     }
+
+
+# --- Memory management (triples + recall entries) ---
+
+
+@router.get("/{agent_id}/memory/triples")
+async def list_triples(
+    agent_id: str,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """List all knowledge graph triples for an agent."""
+    return await triples.list_triples(db, agent_id)
+
+
+@router.delete("/{agent_id}/memory/triples")
+async def clear_triples(
+    agent_id: str,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+    contact_id: str | None = None,
+) -> dict:
+    """Clear knowledge graph triples for an agent. Optional contact_id to scope."""
+    count = await triples.clear_triples(db, agent_id, contact_id)
+    await db.commit()
+    return {"deleted": count}
+
+
+@router.delete("/{agent_id}/contacts/{contact_id}/memory")
+async def clear_contact_memory(
+    agent_id: str,
+    contact_id: str,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Clear all per-contact memory (triples + recall entries) for a specific contact."""
+    triple_count = await triples.clear_triples(db, agent_id, contact_id)
+    entry_count = await recall.clear_entries(db, agent_id, contact_id)
+    await db.commit()
+    return {"deleted_triples": triple_count, "deleted_entries": entry_count}

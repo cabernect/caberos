@@ -196,6 +196,7 @@ async def run_agent(
     new_session: bool = False,
     attachments: list[Attachment] | None = None,
     event_callback: EventCallback | None = None,
+    skill: str | None = None,
 ) -> dict[str, Any]:
     """Run a single agent turn. The universal entry point.
 
@@ -237,6 +238,7 @@ async def run_agent(
             session_id=session_id,
             new_session=new_session,
             attachments=attachments,
+            skill=skill,
         )
 
         # Select the model: scripted demo or real LiteLLM
@@ -274,6 +276,10 @@ async def run_agent(
                         "session_id": run.session_id,
                         "status": run.status,
                         "total_cost": run.cost,
+                        "context_tokens": getattr(run, "context_tokens", 0),
+                        "max_context_tokens": getattr(run, "max_context_tokens", 0),
+                        "compacted": getattr(run, "compacted", False),
+                        "context_breakdown": getattr(run, "context_breakdown", {}),
                     },
                 )
                 if hasattr(result, "__await__"):

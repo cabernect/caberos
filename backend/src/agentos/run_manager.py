@@ -92,6 +92,7 @@ async def start_run(
     session_id: str | None = None,
     new_session: bool = False,
     attachments: list[Attachment] | None = None,
+    skill: str | None = None,
 ) -> dict[str, str]:
     """Start a run in a managed task. Returns {run_id, session_id}.
 
@@ -134,6 +135,7 @@ async def start_run(
                 new_session=new_session,
                 attachments=attachments,
                 event_callback=event_callback,
+                skill=skill,
             )
         except asyncio.CancelledError:
             rid = run_id_future.result() if run_id_future.done() else None

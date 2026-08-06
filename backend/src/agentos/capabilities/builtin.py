@@ -7,7 +7,16 @@ run_subagent is just another tool.
 from .registry import CapabilityDef, registry
 from .tools.datetime_tool import datetime_now
 from .tools.file import read_file, search_files, write_file
+from .tools.memory import (
+    memory_query_facts,
+    memory_recall,
+    memory_remember_fact,
+    memory_store,
+    memory_update,
+    search_history,
+)
 from .tools.shell import shell_run
+from .tools.skills import skills_list, skills_load, skills_read_resource
 from .tools.subagent import register_subagent_tools
 from .tools.web import web_fetch, web_search
 
@@ -308,5 +317,259 @@ def register_builtin_capabilities() -> None:
             require_approval=False,
             subject_scoped=False,
             execute=datetime_now,
+        )
+    )
+
+    # --- Memory (D34) ---
+
+    registry.register(
+        CapabilityDef(
+            name="memory_recall",
+            kind="memory",
+            description=(
+                "Recall past conversation snippets relevant to a query. "
+                "Use this when you need to find something the user mentioned before "
+                "that isn't in MEMORY.md or the knowledge graph."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "What to search for"},
+                },
+                "required": ["query"],
+            },
+            egress=False,
+            require_approval=False,
+            subject_scoped=True,
+            execute=memory_recall,
+        )
+    )
+
+    registry.register(
+        CapabilityDef(
+            name="memory_store",
+            kind="memory",
+            description=(
+                "Store a conversation snippet for later recall. Use this when the user "
+                "shares something worth remembering but not important enough for MEMORY.md "
+                "or a structured fact."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "The text to store"},
+                    "key": {
+                        "type": "string",
+                        "description": "Short label for the snippet",
+                        "default": "snippet",
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional tags for categorization",
+                    },
+                },
+                "required": ["text"],
+            },
+            egress=False,
+            require_approval=False,
+            subject_scoped=True,
+            execute=memory_store,
+        )
+    )
+
+    registry.register(
+        CapabilityDef(
+            name="memory_remember_fact",
+            kind="memory",
+            description=(
+                "Store a structured fact as a (entity, predicate, object) triple in the "
+                "knowledge graph. Use this for important, queryable facts about the user "
+                "or their context — e.g. ('user', 'prefers', 'dark mode')."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "entity": {
+                        "type": "string",
+                        "description": "The entity the fact is about (e.g. 'user', 'project')",
+                    },
+                    "predicate": {
+                        "type": "string",
+                        "description": "The predicate (relation, e.g. 'prefers', 'works_on')",
+                    },
+                    "object": {
+                        "type": "string",
+                        "description": "The object (value, e.g. 'dark mode')",
+                    },
+                },
+                "required": ["entity", "predicate", "object"],
+            },
+            egress=False,
+            require_approval=False,
+            subject_scoped=True,
+            execute=memory_remember_fact,
+        )
+    )
+
+    registry.register(
+        CapabilityDef(
+            name="memory_query_facts",
+            kind="memory",
+            description=(
+                "Query the knowledge graph for structured facts. All filters are optional "
+                "and use exact match. Returns matching (entity, predicate, object) triples."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "entity": {
+                        "type": "string",
+                        "description": "Filter by entity (the thing the fact is about)",
+                    },
+                    "predicate": {
+                        "type": "string",
+                        "description": "Filter by predicate (relation)",
+                    },
+                    "object": {"type": "string", "description": "Filter by object (value)"},
+                },
+            },
+            egress=False,
+            require_approval=False,
+            subject_scoped=True,
+            execute=memory_query_facts,
+        )
+    )
+
+    registry.register(
+        CapabilityDef(
+            name="memory_update",
+            kind="memory",
+            description=(
+                "Update MEMORY.md — the agent's long-term notebook. Use this when you learn "
+                "something important about the user that should persist across all future "
+                "sessions. The content replaces the entire file."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string", "description": "The new MEMORY.md content"},
+                },
+                "required": ["content"],
+            },
+            egress=False,
+            require_approval=False,
+            subject_scoped=False,  # agent-scoped, not contact-scoped
+            execute=memory_update,
+        )
+    )
+
+    registry.register(
+        CapabilityDef(
+            name="search_history",
+            kind="memory",
+            description=(
+                "Search raw message history for exact phrases or details. "
+                "Use this when you need to find exactly what was said in a past "
+                "conversation — error messages, config values, quotes, version numbers. "
+                "This searches verbatim messages, not summaries."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "What to search for in past messages"},
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max results (default 5)",
+                        "default": 5,
+                    },
+                },
+                "required": ["query"],
+            },
+            egress=False,
+            require_approval=False,
+            subject_scoped=True,
+            execute=search_history,
+        )
+    )
+
+    # --- Skills (D11b, D11c) ---
+    # Skills are NOT auto-injected. The agent sees a menu in the system prompt
+    # (names + descriptions), then calls skills_list or skills_load to get details.
+
+    registry.register(
+        CapabilityDef(
+            name="skills_list",
+            kind="tool",
+            description=(
+                "List all available skills (name + description only). "
+                "Use this to discover what skills exist. Call skills_load(name) "
+                "to get the full content of a specific skill."
+            ),
+            parameters_schema={"type": "object", "properties": {}},
+            egress=False,
+            require_approval=False,
+            subject_scoped=False,
+            silent=True,  # discovery only — don't show in chat as a tool call
+            execute=skills_list,
+        )
+    )
+
+    registry.register(
+        CapabilityDef(
+            name="skills_load",
+            kind="tool",
+            description=(
+                "Load a specific skill's full content (SKILL.md body) and list its "
+                "resources (templates, checklists, data files). Use this when you "
+                "decide to apply a skill, or when the user asks you to use one. "
+                "After loading, call skills_read_resource to read any resource files "
+                "the skill body references."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "The skill name (from skills_list)",
+                    },
+                },
+                "required": ["name"],
+            },
+            egress=False,
+            require_approval=False,
+            subject_scoped=False,
+            execute=skills_load,
+        )
+    )
+
+    registry.register(
+        CapabilityDef(
+            name="skills_read_resource",
+            kind="tool",
+            description=(
+                "Read a resource file from a skill directory (templates, checklists, "
+                "data files). Use this after skills_load to read any resource the "
+                "skill body references. The path is scoped to the skill directory — "
+                "it cannot escape."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "skill": {
+                        "type": "string",
+                        "description": "The skill name (from skills_list)",
+                    },
+                    "resource": {
+                        "type": "string",
+                        "description": "The resource filename (from skills_load resources listing)",
+                    },
+                },
+                "required": ["skill", "resource"],
+            },
+            egress=False,
+            require_approval=False,
+            subject_scoped=False,
+            execute=skills_read_resource,
         )
     )

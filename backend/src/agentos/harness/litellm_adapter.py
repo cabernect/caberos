@@ -64,6 +64,18 @@ class LiteLLMAdapter:
         self._provider_cache[provider_id] = config
         return config
 
+    async def get_model_info(self, agent_model: ModelConfig) -> dict[str, Any]:
+        """Return model string and provider credentials for auxiliary LLM calls
+        (e.g. compaction summaries, title generation).
+        """
+        provider = await self._load_provider(agent_model.provider_id)
+        model_str = f"{provider['type']}/{agent_model.name}"
+        return {
+            "model_str": model_str,
+            "api_key": provider["api_key"] or None,
+            "base_url": provider["base_url"] or None,
+        }
+
     async def complete(
         self,
         agent_model: ModelConfig | None = None,
