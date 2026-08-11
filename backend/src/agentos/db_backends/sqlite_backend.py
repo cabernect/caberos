@@ -46,9 +46,9 @@ class SQLiteBackend(DatabaseBackend):
             approval,
             audit,
             capability,
-            connector,
             contact,
             elicitation,
+            mcp,
             memory,
             operator,
             provider,
@@ -71,6 +71,9 @@ class SQLiteBackend(DatabaseBackend):
             ("sessions", "summary", "TEXT"),
             ("sessions", "closed", "BOOLEAN DEFAULT 0"),
             ("sessions", "conversation_summary", "TEXT"),
+            ("mcp_servers", "require_approval", "BOOLEAN DEFAULT 1"),
+            ("mcp_servers", "oauth_config", "TEXT"),
+            ("channel_configs", "mode", "VARCHAR(20) DEFAULT 'polling'"),
         ]
         for table, column, col_type in patches:
             if not await self.column_exists(conn, table, column):

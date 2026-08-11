@@ -1,12 +1,26 @@
 """FastAPI app entry point (D3, D4 — control plane on 127.0.0.1:8081)."""
 
 import asyncio
+import logging
+import os
 from contextlib import asynccontextmanager
+
+# Fix SSL certificate verification for LiteLLM's remote model catalog fetch
+# and httpx requests. On macOS behind a corporate firewall/proxy, the system
+# cert store (/etc/ssl/cert.pem) includes the proxy's CA, but Python's
+# certifi bundle does not. Use the system cert store when available.
+if "SSL_CERT_FILE" not in os.environ:
+    if os.path.exists("/etc/ssl/cert.pem"):
+        os.environ["SSL_CERT_FILE"] = "/etc/ssl/cert.pem"
+    else:
+        import certifi
+
+        os.environ["SSL_CERT_FILE"] = certifi.where()
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api import agent_files, agents, approvals, chat, elicitation, providers, scheduler, skills
+from .api import agent_files, agents, approvals, channels, chat, elicitation, mcp, providers, scheduler, skills
 from .auth import router as auth_router
 from .capabilities.builtin import register_builtin_capabilities
 from .db import init_db
@@ -53,6 +67,13 @@ async def lifespan(app: FastAPI):
     """Startup and shutdown."""
     global _sweeper_task
 
+    # Set a global exception handler so unhandled exceptions in background
+    # tasks (e.g. MCP client internals) don't crash the process
+    loop = asyncio.get_event_loop()
+    loop.set_exception_handler(lambda l, ctx: logging.getLogger("agentos.main").exception(
+        f"Unhandled async exception: {ctx.get('exception', ctx.get('message', 'unknown'))}"
+    ))
+
     register_builtin_capabilities()
     await init_db()
     # Seed default operator if none exists
@@ -86,7 +107,39 @@ async def lifespan(app: FastAPI):
 
     await scheduler_service.start_scheduler()
 
+    # Connect to all enabled MCP servers.
+    # Run in a background task so slow MCP connections (e.g. npx downloading
+    # packages) don't block the API from starting. Each connection is fully
+    # isolated — failures are logged and skipped, and the client runs each
+    # connection in its own asyncio task so anyio cancel scope errors can
+    # never crash the process.
+    from .mcp import registry as mcp_registry
+
+    async def _connect_mcp():
+        try:
+            await mcp_registry.connect_all()
+        except Exception:
+            logging.getLogger("agentos.main").exception("MCP connect_all failed — some servers may be unavailable")
+
+    mcp_task = asyncio.create_task(_connect_mcp())
+    mcp_task.add_done_callback(
+        lambda t: t.exception() if not t.cancelled() and t.exception() else None
+    )
+
+    # Load all enabled external channels (Telegram, Discord, etc.)
+    from .channels import load_all_channels
+
+    await load_all_channels()
+
     yield
+
+    # Shutdown: disconnect all MCP servers
+    await mcp_registry.disconnect_all()
+
+    # Shutdown: stop all channel polling tasks
+    from .channels import stop_all_channels
+
+    await stop_all_channels()
 
     # Shutdown: stop the scheduler
     await scheduler_service.stop_scheduler()
@@ -122,6 +175,8 @@ app.include_router(approvals.router)
 app.include_router(elicitation.router)
 app.include_router(skills.router)
 app.include_router(scheduler.router)
+app.include_router(mcp.router)
+app.include_router(channels.router)
 
 
 @app.get("/health")

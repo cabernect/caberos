@@ -1,0 +1,248 @@
+# MCP Server Catalog — curated static registry of official MCP servers.
+# Each entry has: name, category, description, transport, command/url, auth, env_template.
+# Operators can extend this file or add servers manually via the "Add Server" form.
+
+servers:
+  # --- Search & Web ---
+
+  - name: Brave Search
+    category: search
+    description: "Search the web with Brave's independent index — web, news, images, and videos."
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-brave-search"]
+    auth_type: api_key
+    env_template:
+      BRAVE_API_KEY: "{{credential_value}}"
+    vendor: Anthropic
+    homepage: https://brave.com/search/api/
+
+  - name: Exa
+    category: search
+    description: "AI-powered web search, code search, and company research with semantic understanding."
+    transport: http
+    url: https://mcp.exa.ai/mcp
+    auth_type: api_key
+    vendor: Exa
+    homepage: https://exa.ai/mcp
+
+  - name: Tavily
+    category: search
+    description: "Real-time web search, data extraction, site mapping, and crawling for AI agents."
+    transport: http
+    url: https://mcp.tavily.com/mcp/
+    auth_type: api_key
+    vendor: Tavily
+    homepage: https://tavily.com
+
+  - name: Fetch
+    category: search
+    description: "Fetch a URL and return its content as clean text (HTML → text conversion)."
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-fetch"]
+    auth_type: none
+    vendor: Anthropic
+    homepage: https://github.com/modelcontextprotocol/servers
+
+  # --- Productivity ---
+
+  - name: Notion
+    category: productivity
+    description: "Read and update content in your Notion workspace — pages, databases, blocks."
+    transport: http
+    url: https://mcp.notion.com/mcp
+    auth_type: oauth
+    vendor: Notion
+    homepage: https://developers.notion.com/guides/mcp
+
+  - name: Google Drive
+    category: productivity
+    description: "Search and read files from your Google Drive — docs, sheets, slides, PDFs."
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-gdrive"]
+    auth_type: oauth
+    vendor: Anthropic
+    homepage: https://github.com/modelcontextprotocol/servers
+
+  - name: Google Calendar
+    category: productivity
+    description: "View, create, and manage calendar events through Google Calendar."
+    transport: http
+    url: https://calendarmcp.googleapis.com/mcp/v1
+    auth_type: oauth
+    vendor: Google
+    homepage: https://developers.google.com/workspace/calendar/api/v3/reference/mcp
+
+  - name: Asana
+    category: productivity
+    description: "Create tasks, triage projects, and manage team workload in Asana."
+    transport: http
+    url: https://mcp.asana.com/mcp
+    auth_type: oauth
+    vendor: Asana
+    homepage: https://asana.com
+
+  - name: Atlassian Jira & Confluence
+    category: productivity
+    description: "Search Jira issues, move tickets, and keep Confluence docs aligned with work."
+    transport: http
+    url: https://mcp.atlassian.com/v1/mcp
+    auth_type: oauth
+    vendor: Atlassian
+    homepage: https://www.atlassian.com
+
+  # --- Design ---
+
+  - name: Figma
+    category: design
+    description: "Explore Figma designs and get context for code generation from design files."
+    transport: http
+    url: https://mcp.figma.com/mcp
+    auth_type: oauth
+    vendor: Figma
+    homepage: https://help.figma.com/hc/en-us/articles/32132100833559
+
+  # --- Communication ---
+
+  - name: Slack
+    category: communication
+    description: "List channels, read messages, post replies, and search workspace history."
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-slack"]
+    auth_type: api_key
+    env_template:
+      SLACK_BOT_TOKEN: "{{credential_value}}"
+    vendor: Anthropic
+    homepage: https://github.com/modelcontextprotocol/servers
+
+  - name: Gmail
+    category: communication
+    description: "Read, send, draft, and organize Gmail messages and threads."
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-gmail"]
+    auth_type: oauth
+    vendor: Anthropic
+    homepage: https://github.com/modelcontextprotocol/servers
+
+  # --- Dev Tools ---
+
+  - name: GitHub
+    category: dev-tools
+    description: "Repo operations, issues, pull requests, code search across your repositories."
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-github"]
+    auth_type: api_key
+    env_template:
+      GITHUB_PERSONAL_ACCESS_TOKEN: "{{credential_value}}"
+    vendor: Anthropic
+    homepage: https://github.com/modelcontextprotocol/servers
+
+  - name: Linear
+    category: dev-tools
+    description: "Find, create, and update issues, projects, and comments in Linear."
+    transport: http
+    url: https://mcp.linear.app/mcp
+    auth_type: oauth
+    vendor: Linear
+    homepage: https://linear.app
+
+  - name: Sentry
+    category: dev-tools
+    description: "Pull issues, traces, and release health so agents can debug from production data."
+    transport: http
+    url: https://mcp.sentry.dev/mcp
+    auth_type: oauth
+    vendor: Sentry
+    homepage: https://sentry.dev
+
+  - name: Playwright
+    category: dev-tools
+    description: "Browser automation — navigate, click, type, and snapshot web pages via accessibility tree."
+    transport: stdio
+    command: npx
+    args: ["-y", "@playwright/mcp@latest"]
+    auth_type: none
+    vendor: Microsoft
+    homepage: https://playwright.dev/mcp
+
+  # --- Databases ---
+
+  - name: PostgreSQL
+    category: databases
+    description: "Read-only SQL queries against a PostgreSQL database with schema introspection."
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-postgres"]
+    auth_type: api_key
+    env_template:
+      POSTGRES_CONNECTION_STRING: "{{credential_value}}"
+    vendor: Anthropic
+    homepage: https://github.com/modelcontextprotocol/servers
+
+  - name: SQLite
+    category: databases
+    description: "Query and introspect a local SQLite database file."
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-sqlite"]
+    auth_type: none
+    vendor: Anthropic
+    homepage: https://github.com/modelcontextprotocol/servers
+
+  - name: Supabase
+    category: databases
+    description: "Manage tables, fetch config, and query data in your Supabase projects."
+    transport: http
+    url: https://mcp.supabase.com/mcp
+    auth_type: oauth
+    vendor: Supabase
+    homepage: https://supabase.com/mcp
+
+  # --- DevOps & Infra ---
+
+  - name: Vercel
+    category: devops
+    description: "Inspect deployments, read build and runtime logs, manage env keys, and roll back."
+    transport: http
+    url: https://mcp.vercel.com
+    auth_type: oauth
+    vendor: Vercel
+    homepage: https://vercel.com
+
+  - name: Cloudflare
+    category: devops
+    description: "Manage Workers, DNS, R2, D1, and observability across your Cloudflare account."
+    transport: http
+    url: https://mcp.cloudflare.com/mcp
+    auth_type: oauth
+    vendor: Cloudflare
+    homepage: https://cloudflare.com
+
+  - name: Stripe
+    category: devops
+    description: "Query customers, subscriptions, charges, and create payment links."
+    transport: stdio
+    command: npx
+    args: ["-y", "@stripe/mcp"]
+    auth_type: api_key
+    env_template:
+      STRIPE_SECRET_KEY: "{{credential_value}}"
+    vendor: Stripe
+    homepage: https://stripe.com
+
+  # --- File & Storage ---
+
+  - name: Filesystem
+    category: files
+    description: "Read and write files in allowed directories on the local filesystem."
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem"]
+    auth_type: none
+    vendor: Anthropic
+    homepage: https://github.com/modelcontextprotocol/servers

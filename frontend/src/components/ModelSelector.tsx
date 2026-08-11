@@ -1,12 +1,21 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
+import { Search, Eye, Brain } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Provider, ModelInfo } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
+interface SelectedModel {
+  provider_id: string;
+  name: string;
+  supports_vision?: boolean;
+  supports_thinking?: boolean;
+  thinking_efforts?: string[];
+}
+
 interface ModelSelectorProps {
   defaultProviderId: string | null;
   defaultModelName: string | null;
-  onChange: (model: { provider_id: string; name: string } | null) => void;
+  onChange: (model: SelectedModel | null) => void;
 }
 
 interface ProviderModels {
@@ -21,6 +30,8 @@ export function ModelSelector({
 }: ModelSelectorProps) {
   const [providers, setProviders] = useState<ProviderModels[]>([]);
   const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
   const [selected, setSelected] = useState<string>(
     defaultProviderId && defaultModelName
       ? `${defaultProviderId}/${defaultModelName}`
@@ -46,10 +57,23 @@ export function ModelSelector({
     return () => { cancelled = true; };
   }, []);
 
-  const handleSelect = (providerId: string, modelName: string) => {
+  const handleSelect = (
+    providerId: string,
+    modelName: string,
+    supportsVision: boolean,
+    supportsThinking: boolean,
+    thinkingEfforts: string[],
+  ) => {
     setSelected(`${providerId}/${modelName}`);
     setOpen(false);
-    onChange({ provider_id: providerId, name: modelName });
+    setSearch("");
+    onChange({
+      provider_id: providerId,
+      name: modelName,
+      supports_vision: supportsVision,
+      supports_thinking: supportsThinking,
+      thinking_efforts: thinkingEfforts,
+    });
   };
 
   const handleUseDefault = () => {
@@ -59,8 +83,33 @@ export function ModelSelector({
         : "",
     );
     setOpen(false);
+    setSearch("");
     onChange(null);
   };
+
+  // Focus search input when dropdown opens
+  useEffect(() => {
+    if (open) {
+      setTimeout(() => searchRef.current?.focus(), 0);
+    } else {
+      setSearch("");
+    }
+  }, [open]);
+
+  // Filter models by search query (case-insensitive, matches model name or provider name)
+  const searchLower = search.toLowerCase();
+  const filteredProviders = search
+    ? providers
+        .map(({ provider, models }) => ({
+          provider,
+          models: models.filter(
+            (m) =>
+              m.name.toLowerCase().includes(searchLower) ||
+              provider.name.toLowerCase().includes(searchLower),
+          ),
+        }))
+        .filter(({ models }) => models.length > 0)
+    : providers;
 
   const isDefault =
     !selected || (defaultProviderId && defaultModelName && selected === `${defaultProviderId}/${defaultModelName}`);
@@ -85,7 +134,7 @@ export function ModelSelector({
           (e.currentTarget.style.borderColor = "var(--border)")
         }
       >
-        <span className="max-w-[200px] truncate">{selectedLabel}</span>
+        <span className="max-w-[200px] truncate" title={selectedLabel}>{selectedLabel}</span>
         <span
           className="text-[10px] opacity-60"
           style={{ transform: open ? "rotate(180deg)" : "none" }}
@@ -101,13 +150,50 @@ export function ModelSelector({
             onClick={() => setOpen(false)}
           />
           <div
-            className="absolute bottom-full left-0 z-50 mb-1 max-h-80 min-w-[200px] overflow-y-auto rounded-md border p-1 shadow-lg"
+            className="absolute bottom-full left-0 z-50 mb-1 max-h-80 min-w-[240px] overflow-y-auto rounded-md border p-1 shadow-lg"
             style={{
               borderColor: "var(--border)",
               background: "var(--white)",
               boxShadow: "0 4px 16px rgba(0,0,0,0.08)",
             }}
           >
+            {/* Search input */}
+            <div className="relative mb-1">
+              <Search
+                className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
+                style={{ color: "var(--ink-3)" }}
+              />
+              <input
+                ref={searchRef}
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search models…"
+                className="w-full rounded-[4px] border py-1.5 pl-7 pr-2 font-mono text-[12px] outline-none"
+                style={{
+                  borderColor: "var(--border)",
+                  background: "var(--surface)",
+                  color: "var(--ink)",
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") setOpen(false);
+                  e.stopPropagation();
+                }}
+              />
+            </div>
+
+            {/* Current model — highlighted at top so user always sees what's active */}
+            {!search && selected && !isDefault && (
+              <div
+                className="mb-1 flex items-center gap-2 rounded-[4px] px-3 py-1.5 font-mono text-[12px]"
+                style={{ background: "var(--surface)", color: "var(--accent)" }}
+              >
+                <span className="text-[10px] font-bold uppercase" style={{ color: "var(--accent)" }}>
+                  Current
+                </span>
+                <span className="truncate" title={selectedLabel}>{selectedLabel}</span>
+              </div>
+            )}
+
             {/* Default option */}
             <button
               onClick={handleUseDefault}
@@ -135,15 +221,17 @@ export function ModelSelector({
 
             <div style={{ borderTop: "1px solid var(--border)" }} />
 
-            {providers.length === 0 && (
+            {filteredProviders.length === 0 && (
               <div className="px-3 py-3 text-center font-mono text-[11px] text-[var(--ink-3)]">
-                No providers configured.
-                <br />
-                Add one in Settings.
+                {search
+                  ? `No models matching "${search}".`
+                  : providers.length === 0
+                    ? "No providers configured. Add one in Settings."
+                    : "No models available."}
               </div>
             )}
 
-            {providers.map(({ provider, models }) => (
+            {filteredProviders.map(({ provider, models }) => (
               <div key={provider.id}>
                 <div
                   className="px-3 py-1.5 font-mono text-[11px] text-[var(--ink-3)]"
@@ -151,34 +239,56 @@ export function ModelSelector({
                 >
                   {provider.name}
                 </div>
-                {models.length === 0 ? (
-                  <div className="px-3 py-1.5 font-mono text-[11px] italic text-[var(--ink-3)]">
-                    No models discovered — type model name manually
-                  </div>
-                ) : (
-                  models.map((model) => {
-                    const key = `${provider.id}/${model.id}`;
-                    return (
-                      <button
-                        key={key}
-                        onClick={() => handleSelect(provider.id, model.id)}
-                        className="flex w-full items-center px-3 py-1.5 text-left font-mono text-[12px] transition"
-                        style={{
-                          color:
-                            selected === key ? "var(--accent)" : "var(--ink)",
-                        }}
-                        onMouseEnter={(e) =>
-                          (e.currentTarget.style.background = "var(--surface)")
-                        }
-                        onMouseLeave={(e) =>
-                          (e.currentTarget.style.background = "none")
-                        }
-                      >
-                        {model.name}
-                      </button>
-                    );
-                  })
-                )}
+                {models.map((model) => {
+                  const key = `${provider.id}/${model.id}`;
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => handleSelect(
+                        provider.id, model.id,
+                        !!model.supports_vision,
+                        !!model.supports_thinking,
+                        model.thinking_efforts || [],
+                      )}
+                      className="flex w-full items-center gap-1 px-3 py-1.5 text-left font-mono text-[12px] transition"
+                      style={{
+                        color:
+                          selected === key ? "var(--accent)" : "var(--ink)",
+                      }}
+                      onMouseEnter={(e) =>
+                        (e.currentTarget.style.background = "var(--surface)")
+                      }
+                      onMouseLeave={(e) =>
+                        (e.currentTarget.style.background = "none")
+                      }
+                    >
+                      <span className="flex-1 truncate">{model.name}</span>
+                      {model.supports_thinking && (
+                        <Brain
+                          className="ml-1 h-3.5 w-3.5 shrink-0"
+                          style={{ color: "var(--ink-3)" }}
+                          title="Supports thinking/reasoning"
+                        />
+                      )}
+                      {model.supports_vision && (
+                        <Eye
+                          className="ml-1 h-3.5 w-3.5 shrink-0"
+                          style={{ color: "var(--ink-3)" }}
+                          title="Supports vision/image input"
+                        />
+                      )}
+                      {model.max_context_tokens && (
+                        <span
+                          className="ml-1 shrink-0 font-mono text-[10px]"
+                          style={{ color: "var(--ink-4)" }}
+                          title={`Context: ${(model.max_context_tokens / 1024).toFixed(0)}K tokens${model.max_output_tokens ? ` · Output: ${(model.max_output_tokens / 1024).toFixed(0)}K` : ""}`}
+                        >
+                          {(model.max_context_tokens / 1024).toFixed(0)}K
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             ))}
           </div>
@@ -192,7 +302,9 @@ function formatModelLabel(
   selected: string,
   providers: ProviderModels[],
 ): string {
-  const [providerId, modelName] = selected.split("/");
+  const slashIdx = selected.indexOf("/");
+  const providerId = slashIdx >= 0 ? selected.slice(0, slashIdx) : selected;
+  const modelName = slashIdx >= 0 ? selected.slice(slashIdx + 1) : "";
   const pm = providers.find((p) => p.provider.id === providerId);
   const providerName = pm?.provider.name || providerId.slice(0, 8);
   return `${modelName} · ${providerName}`;

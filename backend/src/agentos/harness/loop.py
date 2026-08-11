@@ -120,9 +120,15 @@ class Harness:
                 except Exception:
                     past_sessions = []
 
+        # Check if the model supports vision (for system prompt awareness)
+        supports_vision = None
+        if agent_config.model and agent_config.model.name:
+            from .litellm_adapter import _check_vision
+            supports_vision = _check_vision(agent_config.model.name)
+
         system_prompt = assemble_system_prompt(
             agent_config, message, kg_facts=kg_facts, recall_snippets=recall_snippets,
-            forced_skill=skill, past_sessions=past_sessions,
+            forced_skill=skill, past_sessions=past_sessions, supports_vision=supports_vision,
         )
         tool_schemas = assemble_tool_schemas(agent_config)
         history = build_message_history(system_prompt, recent_messages or [], message, attachments)
@@ -255,15 +261,41 @@ class Harness:
                     if response.thinking and event_emitter:
                         await self._emit(event_emitter, "thinking", {"content": response.thinking})
             except Exception as e:
+                import logging as _log
+                _log.getLogger("agentos.harness.loop").exception(
+                    "Model call failed: model=%s provider=%s",
+                    agent_config.model.name if agent_config.model else "?",
+                    agent_config.model.provider_id if agent_config.model else "?",
+                )
                 result.status = "failed"
                 result.error = str(e)
-                result.final_answer = (
-                    "I couldn't complete that request because the model connection "
-                    "timed out. Please try again."
-                    if isinstance(e, TimeoutError)
-                    else "I couldn't complete that request because the model connection "
-                    "failed. Please try again."
-                )
+                # Show the actual error to the user instead of a generic message
+                error_msg = str(e)
+                if "429" in error_msg or "RateLimit" in error_msg or "rate" in error_msg.lower():
+                    result.final_answer = (
+                        "The model is rate-limited right now. Please try again in a moment, "
+                        "or select a different model."
+                    )
+                elif isinstance(e, TimeoutError):
+                    result.final_answer = (
+                        "I couldn't complete that request because the model connection "
+                        "timed out. Please try again."
+                    )
+                elif "401" in error_msg or "Authentication" in error_msg or "auth" in error_msg.lower():
+                    result.final_answer = (
+                        "Authentication failed — check that the provider API key is valid."
+                    )
+                elif "tool use" in error_msg.lower() or "tool_use" in error_msg.lower() or "function" in error_msg.lower() and "not" in error_msg.lower():
+                    result.final_answer = (
+                        "This model doesn't support tool use (function calling). "
+                        "Please select a model that supports tools, or use a different provider."
+                    )
+                else:
+                    # Include the actual error so the user can diagnose the issue
+                    short_err = error_msg[:200] if len(error_msg) > 200 else error_msg
+                    result.final_answer = (
+                        f"I couldn't complete that request. Error: {short_err}"
+                    )
                 if event_emitter:
                     await self._emit(
                         event_emitter,

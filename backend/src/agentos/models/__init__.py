@@ -5,10 +5,11 @@ from .approval import ApprovalRequest
 from .audit import AuditRecord
 from .base import Base, IdMixin, TimestampMixin
 from .capability import AgentCapability, Capability
-from .connector import Connector, ConnectorCapability
+from .channel_config import ChannelConfig
 from .contact import Contact
 from .elicitation import ElicitationRequest
 from .memory import MemoryEntry, MemoryTriple
+from .mcp import ContactMcpBinding, McpServer, McpServerCredential, McpTool
 from .operator import Operator, OperatorAuditLog
 from .provider import Provider
 from .run import Message, Run
@@ -24,8 +25,10 @@ __all__ = [
     "Capability",
     "AgentCapability",
     "SubAgent",
-    "Connector",
-    "ConnectorCapability",
+    "McpServer",
+    "McpServerCredential",
+    "ContactMcpBinding",
+    "McpTool",
     "Provider",
     "Contact",
     "Session",
@@ -38,4 +41,5 @@ __all__ = [
     "MemoryTriple",
     "Operator",
     "OperatorAuditLog",
+    "ChannelConfig",
 ]

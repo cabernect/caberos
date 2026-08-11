@@ -46,6 +46,8 @@ export function Skills() {
     if (page === "vault") navigate("/vault");
     if (page === "skills") return;
     if (page === "scheduler") navigate("/scheduler");
+    if (page === "mcps") navigate("/mcps");
+    if (page === "channels") navigate("/channels");
   };
 
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {

@@ -34,6 +34,8 @@ export function ToolCallBlock({ call, subagentStream }: ToolCallBlockProps) {
   const [expanded, setExpanded] = useState(false);
   const [subExpanded, setSubExpanded] = useState(false);
   const [remember, setRemember] = useState(false);
+  const [rememberScope, setRememberScope] = useState<"exact" | "same_verb" | "pattern" | "capability">("exact");
+  const [rememberPattern, setRememberPattern] = useState("");
   const [approvalState, setApprovalState] = useState<
     "pending" | "approved" | "rejected" | "error"
   >(call.status === "pending_approval" ? "pending" : "pending");
@@ -58,7 +60,7 @@ export function ToolCallBlock({ call, subagentStream }: ToolCallBlockProps) {
   const handleApprove = async () => {
     if (!call.approval_id) return;
     try {
-      await api.approveCall(call.approval_id, remember);
+      await api.approveCall(call.approval_id, remember, rememberScope, rememberPattern || undefined);
       setApprovalState("approved");
     } catch {
       setApprovalState("error");
@@ -131,17 +133,62 @@ export function ToolCallBlock({ call, subagentStream }: ToolCallBlockProps) {
             )}
           </div>
           {approvalState === "pending" && (
-            <label className="mt-1.5 flex items-center gap-1.5 font-mono text-[10px] text-[var(--ink-3)]"
-              style={{ cursor: "pointer", userSelect: "none" }}
-            >
-              <input
-                type="checkbox"
-                checked={remember}
-                onChange={(e) => setRemember(e.target.checked)}
-                style={{ cursor: "pointer" }}
-              />
-              Remember for this session
-            </label>
+            <div className="mt-1.5">
+              <label className="flex items-center gap-1.5 font-mono text-[10px] text-[var(--ink-3)]"
+                style={{ cursor: "pointer", userSelect: "none" }}
+              >
+                <input
+                  type="checkbox"
+                  checked={remember}
+                  onChange={(e) => {
+                    setRemember(e.target.checked);
+                    if (!e.target.checked) setRememberScope("exact");
+                  }}
+                  style={{ cursor: "pointer" }}
+                />
+                Remember for this session
+              </label>
+              {remember && (
+                <>
+                  <select
+                    value={rememberScope}
+                    onChange={(e) => setRememberScope(e.target.value as "exact" | "same_verb" | "pattern" | "capability")}
+                    className="mt-1 rounded-[4px] border px-1.5 py-0.5 font-mono text-[10px]"
+                    style={{
+                      borderColor: "var(--border)",
+                      background: "var(--white)",
+                      color: "var(--ink-2)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <option value="exact">This exact call only</option>
+                    {call.capability === "terminal" && (
+                      <option value="same_verb">All "{(call.args?.command as string || "").trim().split(/\s+/)[0] || "cmd"}" commands</option>
+                    )}
+                    <option value="pattern">Custom pattern (wildcard)</option>
+                    <option value="capability">All {call.capability} calls</option>
+                  </select>
+                  {rememberScope === "pattern" && (
+                    <input
+                      type="text"
+                      value={rememberPattern}
+                      onChange={(e) => setRememberPattern(e.target.value)}
+                      placeholder={
+                        call.capability === "terminal"
+                          ? `${(call.args?.command as string || "").trim().split(/\s+/)[0] || "cmd"} *`
+                          : "*"
+                      }
+                      className="mt-1 w-full rounded-[4px] border px-1.5 py-0.5 font-mono text-[10px]"
+                      style={{
+                        borderColor: "var(--border)",
+                        background: "var(--white)",
+                        color: "var(--ink-2)",
+                      }}
+                    />
+                  )}
+                </>
+              )}
+            </div>
           )}
         </div>
       )}

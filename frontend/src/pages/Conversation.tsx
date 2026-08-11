@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowDown, PanelLeft, AlertCircle, FileIcon, Paperclip } from "lucide-react";
+import { ArrowDown, PanelLeft, AlertCircle, FileIcon, Paperclip, Loader2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api } from "@/lib/api";
@@ -96,6 +96,7 @@ export function Conversation() {
   const [contextTokens, setContextTokens] = useState<number | undefined>(undefined);
   const [maxContextTokens, setMaxContextTokens] = useState<number | undefined>(undefined);
   const [compacted, setCompacted] = useState(false);
+  const [compacting, setCompacting] = useState(false);
   const [contextBreakdown, setContextBreakdown] = useState<{ system_prompt: number; conversation: number; tools: number } | undefined>(undefined);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -114,11 +115,13 @@ export function Conversation() {
     sessionId: string;
     lastEventId: number;
     streaming: StreamingResponse | null;
+    elicitation: ActiveElicitation | null;
+    abortController: AbortController | null;  // active SSE connection (null = not streaming)
   }
   const runEntriesRef = useRef<Map<string, RunEntry>>(new Map()); // keyed by sessionId
 
-  // The session that has the run the user is currently viewing (for UI sync)
-  const [runningSessionId, setRunningSessionId] = useState<string | null>(null);
+  // Set of sessions with active (non-completed) runs — for sidebar spinners
+  const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(new Set());
 
   // Convenience getters for the currently-viewed run entry
   const getCurrentRunEntry = (): RunEntry | null => {
@@ -190,13 +193,23 @@ export function Conversation() {
             (m) => m.role === "user" || m.run_id !== runId,
           );
         }
-        // Preserve optimistic user messages that haven't been persisted yet
-        // (the run may have started but the user message isn't committed to
-        // the DB by the time we fetch).
+        // Deduplicate by content+role to avoid showing the same user message
+        // twice (optimistic message has a different ID than the persisted one).
+        // Only preserve optimistic messages that don't have a matching
+        // content+role in the API response.
         setMessages((prev) => {
-          const apiUserMsgs = new Set(mapped.filter((m) => m.role === "user").map((m) => m.id));
+          const apiUserContents = new Set(
+            mapped.filter((m) => m.role === "user").map((m) => m.content),
+          );
+          // Only keep optimistic messages from prev if they belong to THIS
+          // session (not from another session the user switched from).
+          // We can't track session per message, so we only preserve messages
+          // whose content isn't already in the API response.
           const optimistic = prev.filter(
-            (m) => m.role === "user" && !apiUserMsgs.has(m.id) && !mapped.some((mm) => mm.id === m.id),
+            (m) =>
+              m.role === "user" &&
+              !apiUserContents.has(m.content) &&
+              !mapped.some((mm) => mm.id === m.id),
           );
           return [...mapped, ...optimistic];
         });
@@ -355,14 +368,21 @@ export function Conversation() {
         break;
 
       case "clarifying_question":
-        // Set active elicitation — only if viewing this session
-        if (activeSessionRef.current === sessionId) {
-          setActiveElicitation({
-            id: data.id,
-            question: data.question,
-            options: data.options,
-            multiSelect: data.multi_select || false,
-          });
+        // Store elicitation per-session in the run entry
+        {
+          const entry = runEntriesRef.current.get(sessionId);
+          if (entry) {
+            entry.elicitation = {
+              id: data.id,
+              question: data.question,
+              options: data.options,
+              multiSelect: data.multi_select || false,
+            };
+            // Show it in the UI only if the user is viewing this session
+            if (activeSessionRef.current === sessionId) {
+              setActiveElicitation(entry.elicitation);
+            }
+          }
         }
         // Mark the tool call as pending_input so the ToolCallBlock shows "waiting"
         updateStreamingForSession(sessionId, (prev) => {
@@ -484,10 +504,15 @@ export function Conversation() {
             thinkingEndTime: prev.thinkingEndTime || Date.now(),
           };
         });
+        // Stop the SSE connection for this session
+        stopStreaming(sessionId);
         // Remove the run entry and update spinner state
         runEntriesRef.current.delete(sessionId);
-        const remaining = Array.from(runEntriesRef.current.keys());
-        setRunningSessionId(remaining.length > 0 ? remaining[0] : null);
+        setRunningSessionIds(new Set(runEntriesRef.current.keys()));
+        // Clear elicitation if this session had one
+        if (activeSessionRef.current === sessionId) {
+          setActiveElicitation(null);
+        }
         // Reload messages from the API so the response becomes a proper
         // MessageRow (with hover/copy/cost) instead of staying as a
         // StreamingMessage block. Also clears the streaming UI.
@@ -518,33 +543,45 @@ export function Conversation() {
     }
   };
 
-  // Stream events from a run, with reconnect support
-  const streamRun = async (agentId: string, runId: string, sessionId: string, fromSeq = 0) => {
+  // Stream events from a run, with reconnect + abort support.
+  // Only ONE session is actively streamed at a time (the one the user is
+  // viewing). When switching away, the abort controller closes the SSE
+  // connection. When switching back, streamRun reconnects with Last-Event-ID.
+  const streamRun = async (
+    agentId: string,
+    runId: string,
+    sessionId: string,
+    fromSeq = 0,
+    signal?: AbortSignal,
+  ) => {
     let lastEventId = fromSeq;
     try {
-      for await (const { event, data, id } of api.streamRunEvents(agentId, runId, lastEventId)) {
+      for await (const { event, data, id } of api.streamRunEvents(agentId, runId, lastEventId, signal)) {
         if (id > lastEventId) lastEventId = id;
-        // Update the run entry's lastEventId
         const entry = runEntriesRef.current.get(sessionId);
         if (entry) entry.lastEventId = lastEventId;
         handleEvent(event, data, sessionId);
       }
-    } catch {
-      // Stream disconnected — try to reconnect if the run is still active
+    } catch (err: any) {
+      // Aborted (user switched away) — just stop, don't reconnect
+      if (err?.name === "AbortError") return;
+
+      // Stream disconnected unexpectedly — reconnect if the run is still active
+      // AND the user is still viewing this session
       const entry = runEntriesRef.current.get(sessionId);
-      if (entry?.runId === runId) {
+      if (entry?.runId === runId && activeSessionRef.current === sessionId) {
         entry.lastEventId = lastEventId;
-        // Reconnect after a short delay
         await new Promise((r) => setTimeout(r, 1000));
-        if (runEntriesRef.current.get(sessionId)?.runId === runId) {
-          // Check if run is still active before reconnecting
+        if (runEntriesRef.current.get(sessionId)?.runId === runId && activeSessionRef.current === sessionId) {
           try {
             const status = await api.getRunStatus(agentId, runId);
             if (status.status === "running" || status.status === "awaiting_approval") {
-              await streamRun(agentId, runId, sessionId, lastEventId);
+              // Create a new abort controller for the reconnection
+              const newController = new AbortController();
+              entry.abortController = newController;
+              await streamRun(agentId, runId, sessionId, lastEventId, newController.signal);
             }
           } catch {
-            // Run gone — stop streaming
             if (activeSessionRef.current === sessionId) {
               setStreaming(null);
               setIsStreaming(false);
@@ -554,6 +591,30 @@ export function Conversation() {
         }
       }
     }
+  };
+
+  // Start streaming for a session (creates abort controller)
+  const startStreaming = (sessionId: string) => {
+    const entry = runEntriesRef.current.get(sessionId);
+    if (!entry || !agentId) return;
+    if (entry.abortController) return;  // already streaming
+    const controller = new AbortController();
+    entry.abortController = controller;
+    streamRun(agentId, entry.runId, sessionId, entry.lastEventId, controller.signal).catch(() => {
+      if (activeSessionRef.current === sessionId) {
+        setStreaming(null);
+        streamingRef.current = null;
+        setIsStreaming(false);
+      }
+    });
+  };
+
+  // Stop streaming for a session (aborts the SSE connection)
+  const stopStreaming = (sessionId: string) => {
+    const entry = runEntriesRef.current.get(sessionId);
+    if (!entry?.abortController) return;
+    entry.abortController.abort();
+    entry.abortController = null;
   };
 
   const handleScroll = () => {
@@ -579,21 +640,25 @@ export function Conversation() {
   };
 
   const handleNewChat = () => {
+    // Stop streaming the current session (close its SSE connection)
+    if (activeSessionRef.current) stopStreaming(activeSessionRef.current);
     // Just deselect — the empty state IS the new chat view.
     // A session is created automatically when the first message is sent.
     // NOTE: do NOT clear runEntriesRef here — a run may still be active
-    // may still be active in the previous session. The spinner stays so the
-    // user can see it, and the streaming state survives for when they switch back.
+    // in the previous session. The spinner stays so the user can see it,
+    // and the streaming state survives for when they switch back.
     activeSessionRef.current = null;
     setActiveSessionId(null);
     setMessages([]);
     setStreaming(null);
     setIsStreaming(false);
+    setActiveElicitation(null);
   };
 
   const handleSelectSession = (id: string) => {
     // Save completed streaming text before switching (only for the session we're leaving)
-    const leavingEntry = activeSessionRef.current ? runEntriesRef.current.get(activeSessionRef.current) : null;
+    const leavingSessionId = activeSessionRef.current;
+    const leavingEntry = leavingSessionId ? runEntriesRef.current.get(leavingSessionId) : null;
     if (leavingEntry?.streaming?.completed && leavingEntry.streaming.text) {
       setMessages((prev) => [
         ...prev,
@@ -606,8 +671,16 @@ export function Conversation() {
       ]);
     }
 
+    // Stop streaming the old session (close its SSE connection)
+    if (leavingSessionId) stopStreaming(leavingSessionId);
+
     // Update the ref immediately so SSE events route to the right session
     activeSessionRef.current = id;
+
+    // Clear messages immediately so the old session's messages don't
+    // bleed into the new session's view (the useEffect will fetch the
+    // new session's messages and populate them).
+    setMessages([]);
 
     // If switching to a session that has an active run, restore its streaming state
     const entry = runEntriesRef.current.get(id);
@@ -615,12 +688,18 @@ export function Conversation() {
       setStreaming(entry.streaming);
       setIsStreaming(!entry.streaming.completed);
       streamingRef.current = entry.streaming;
+      // Reconnect the SSE stream for this session (resumes from lastEventId)
+      if (!entry.streaming.completed) {
+        startStreaming(id);
+      }
     } else {
       // Switching to a session with no active run — hide streaming UI
       setStreaming(null);
       setIsStreaming(false);
       streamingRef.current = null;
     }
+    // Restore the elicitation for this session (if any)
+    setActiveElicitation(entry?.elicitation || null);
     setActiveSessionId(id);
     // Reset context bar when switching sessions
     setContextTokens(undefined);
@@ -633,6 +712,7 @@ export function Conversation() {
     if (!agentId || !activeSessionId) return;
     const entry = runEntriesRef.current.get(activeSessionId);
     if (!entry) return;
+    stopStreaming(activeSessionId);
     try {
       await api.stopRun(agentId, entry.runId);
     } catch {}
@@ -640,7 +720,7 @@ export function Conversation() {
     setStreaming(null);
     streamingRef.current = null;
     setIsStreaming(false);
-    setRunningSessionId(null);
+    setRunningSessionIds(new Set(runEntriesRef.current.keys()));
     // Reload messages so the partial response becomes persistent
     if (agentId && activeSessionId) {
       api.getSessionMessages(agentId, activeSessionId).then((msgs) => {
@@ -669,6 +749,7 @@ export function Conversation() {
       // If this session has an active run, stop it first
       const entry = runEntriesRef.current.get(id);
       if (entry) {
+        stopStreaming(id);
         try {
           await api.stopRun(agentId, entry.runId);
         } catch {}
@@ -677,8 +758,7 @@ export function Conversation() {
           setStreaming(null);
           setIsStreaming(false);
         }
-        const remaining = Array.from(runEntriesRef.current.keys());
-        setRunningSessionId(remaining.length > 0 ? remaining[0] : null);
+        setRunningSessionIds(new Set(runEntriesRef.current.keys()));
       }
       await api.deleteSession(agentId, id);
       if (activeSessionId === id) {
@@ -693,6 +773,11 @@ export function Conversation() {
     if (!activeElicitation) return;
     const el = activeElicitation;
     setActiveElicitation(null);
+    // Clear from the run entry too
+    if (activeSessionRef.current) {
+      const entry = runEntriesRef.current.get(activeSessionRef.current);
+      if (entry) entry.elicitation = null;
+    }
 
     // Build the question message (includes options if any)
     let questionContent = el.question;
@@ -733,7 +818,7 @@ export function Conversation() {
 
   const handleSend = async (
     text: string,
-    modelOverride: { provider_id: string; name: string } | null,
+    modelOverride: { provider_id: string; name: string; thinking_enabled?: boolean | null; thinking_effort?: string | null } | null,
     _context: ContextItem[],
     attachments?: { type: string; mimeType: string; data: string; filename: string }[],
     skill?: string,
@@ -780,6 +865,7 @@ export function Conversation() {
     ]);
 
     setInputWarnings([]);
+    setActiveElicitation(null);
     const newStreaming: StreamingResponse = {
       thinking: "",
       items: [],
@@ -830,11 +916,14 @@ export function Conversation() {
         sessionId: runSessionId,
         lastEventId: 0,
         streaming: newStreaming,
+        elicitation: null,
+        abortController: null,
       });
-      setRunningSessionId(runSessionId);
+      setRunningSessionIds(new Set([...runningSessionIds, runSessionId]));
 
-      // Step 2: Stream events from GET /runs/{id}/events
-      await streamRun(agentId, result.run_id, runSessionId, 0);
+      // Step 2: Start streaming events for this session.
+      // Only the currently-viewed session is actively streamed.
+      startStreaming(runSessionId);
     } catch {
       setStreaming(null);
       streamingRef.current = null;
@@ -900,6 +989,7 @@ export function Conversation() {
 
   const handleCompact = async () => {
     if (!agentId || !activeSessionId) return;
+    setCompacting(true);
     try {
       const result = await api.compactSession(agentId, activeSessionId);
       setContextTokens(result.compacted_tokens);
@@ -907,6 +997,8 @@ export function Conversation() {
       setCompacted(result.compacted);
     } catch (e) {
       console.error("Compact failed:", e);
+    } finally {
+      setCompacting(false);
     }
   };
 
@@ -923,7 +1015,7 @@ export function Conversation() {
       <ChatSidebar
         sessions={sessions}
         activeSessionId={activeSessionId}
-        runningSessionId={runningSessionId}
+        runningSessionIds={runningSessionIds}
         collapsed={sidebarCollapsed}
         onNewChat={handleNewChat}
         onSelectSession={handleSelectSession}
@@ -1080,6 +1172,14 @@ export function Conversation() {
               <StreamingMessage streaming={streaming} />
             )}
 
+            {/* Compacting indicator */}
+            {compacting && (
+              <div className="flex items-center justify-center gap-2 py-4">
+                <Loader2 className="h-4 w-4 animate-spin" style={{ color: "var(--accent)" }} />
+                <span className="text-[13px] text-[var(--ink-2)]">Compacting conversation…</span>
+              </div>
+            )}
+
             <div ref={messagesEndRef} />
           </div>
 
@@ -1136,6 +1236,7 @@ export function Conversation() {
           defaultModelName={agent?.model || null}
           disabled={
             (isStreaming && !activeElicitation) ||
+            compacting ||
             (!!agent && (!agent.provider_id || !agent.model))
           }
           onSend={handleSend}

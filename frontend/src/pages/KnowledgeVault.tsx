@@ -20,6 +20,8 @@ export function KnowledgeVault() {
     if (page === "skills") navigate("/skills");
     if (page === "vault") return;
     if (page === "scheduler") navigate("/scheduler");
+    if (page === "mcps") navigate("/mcps");
+    if (page === "channels") navigate("/channels");
   };
 
   return (

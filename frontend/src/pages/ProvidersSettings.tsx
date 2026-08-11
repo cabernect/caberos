@@ -78,6 +78,8 @@ export function ProvidersSettings() {
     if (page === "vault") navigate("/vault");
     if (page === "skills") navigate("/skills");
     if (page === "scheduler") navigate("/scheduler");
+    if (page === "mcps") navigate("/mcps");
+    if (page === "channels") navigate("/channels");
   };
 
   const handleDelete = async (id: string) => {

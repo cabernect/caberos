@@ -464,6 +464,8 @@ class Pipeline:
                         provider_id=message.model_override["provider_id"],
                         name=message.model_override["name"],
                         max_tokens=agent_config.model.max_tokens,
+                        thinking_enabled=message.model_override.get("thinking_enabled"),
+                        thinking_effort=message.model_override.get("thinking_effort"),
                     )
 
                 # Guard: refuse to run if no model is configured (and not a test run).

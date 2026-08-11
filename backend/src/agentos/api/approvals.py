@@ -65,7 +65,9 @@ async def list_approvals(
 
 
 class ApproveRequest(BaseModel):
-    remember: bool = False  # if True, auto-approve same capability+args for this session
+    remember: bool = False  # if True, auto-approve for this session
+    remember_scope: str = "exact"  # "exact", "same_verb", "pattern", or "capability"
+    remember_pattern: str | None = None  # wildcard pattern for "pattern" scope (e.g. "cd *")
 
 
 @router.post("/{approval_id}/approve")
@@ -77,9 +79,20 @@ async def approve(
 ) -> dict:
     """Approve a pending approval. Unblocks the paused run.
 
-    If `remember` is True, subsequent calls with the same capability+args
-    in the same session will be auto-approved (no operator interaction needed).
+    If `remember` is True, subsequent calls in the same session will be
+    auto-approved based on `remember_scope`:
+      - "exact":      same capability + same args (e.g. `cd abc` only)
+      - "same_verb":  same capability + same command verb (e.g. all `cd *`)
+      - "pattern":    wildcard pattern match (e.g. `git push *`, `npm test *`)
+      - "capability": same capability, any args (e.g. all terminal calls)
     """
+    from ..syscall.approval_registry import RememberScope
+
+    try:
+        scope = RememberScope(body.remember_scope)
+    except ValueError:
+        scope = RememberScope.EXACT
+
     result = await db.execute(select(ApprovalRequest).where(ApprovalRequest.id == approval_id))
     approval = result.scalar_one_or_none()
     if approval is None:
@@ -89,7 +102,9 @@ async def approve(
 
     # Resolve the asyncio.Event — unblocks the mediator
     resolved = approval_registry.resolve(
-        approval_id, "approved", operator.id, remember=body.remember
+        approval_id, "approved", operator.id,
+        remember=body.remember, remember_scope=scope,
+        remember_pattern=body.remember_pattern,
     )
     if not resolved:
         # The run may have timed out or been cancelled. Update the DB anyway.

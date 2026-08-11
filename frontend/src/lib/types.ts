@@ -20,6 +20,11 @@ export interface Provider {
 export interface ModelInfo {
   id: string;
   name: string;
+  supports_vision?: boolean;
+  supports_thinking?: boolean;
+  thinking_efforts?: string[];
+  max_context_tokens?: number | null;
+  max_output_tokens?: number | null;
 }
 
 export interface Agent {
@@ -201,4 +206,60 @@ export interface SchedulerAlert {
   threshold: number;
   last_error: string | null;
   timestamp: string;
+}
+
+export interface McpServerInfo {
+  id: string;
+  name: string;
+  transport: string;
+  command: string | null;
+  args: string[] | null;
+  url: string | null;
+  enabled: boolean;
+  connected: boolean;
+  tool_count: number;
+  tool_filter: string[] | null;
+  require_approval: boolean;
+  env_template: Record<string, string> | null;
+  oauth_config: { scope?: string; redirect_uri?: string } | null;
+  auth_type: "api_key" | "oauth" | "none";
+  has_credentials: boolean;
+  created_at: string | null;
+}
+
+export interface McpToolInfo {
+  id: string;
+  tool_name: string;
+  capability_name: string;
+  description: string;
+  parameters_schema: Record<string, unknown>;
+  egress: boolean;
+  require_approval: boolean;
+  subject_scoped: boolean;
+}
+
+export interface McpCatalogEntry {
+  name: string;
+  category: string;
+  description: string;
+  transport: string;
+  command: string | null;
+  args: string[] | null;
+  url: string | null;
+  auth_type: string; // "none", "api_key", "oauth"
+  env_template: Record<string, string> | null;
+  vendor: string;
+  homepage: string;
+}
+
+export interface ChannelInfo {
+  id: string;
+  platform: string;
+  agent_id: string;
+  enabled: boolean;
+  mode: string; // "polling" or "webhook"
+  webhook_secret: string;
+  webhook_url: string;
+  has_token: boolean;
+  extra_config: Record<string, unknown> | null;
 }

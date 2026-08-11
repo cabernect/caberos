@@ -19,6 +19,9 @@ class ModelConfig(BaseModel):
     # Override the model's max context window (input tokens).
     # If None, we try litellm's registry, then fall back to 32K.
     max_context_tokens: int | None = None
+    # Thinking/reasoning controls (per-model, per-message override)
+    thinking_enabled: bool | None = None  # None = use model default
+    thinking_effort: str | None = None  # "low", "medium", "high", "max", etc.
 
     @property
     def is_configured(self) -> bool:

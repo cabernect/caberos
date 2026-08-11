@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useImperativeHandle, forwardRef } from "react";
-import { Paperclip, FileText, Image as ImageIcon, Link, Wrench, ArrowUp, HelpCircle, Check, Sparkles, Square } from "lucide-react";
+import { Paperclip, FileText, Image as ImageIcon, Link, Wrench, ArrowUp, HelpCircle, Check, Sparkles, Square, Brain } from "lucide-react";
 import { ModelSelector } from "@/components/ModelSelector";
 import { api } from "@/lib/api";
 import type { SkillInfo } from "@/lib/types";
@@ -71,7 +71,12 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
   const [modelOverride, setModelOverride] = useState<{
     provider_id: string;
     name: string;
+    supports_vision?: boolean;
+    supports_thinking?: boolean;
+    thinking_efforts?: string[];
   } | null>(null);
+  const [thinkingEnabled, setThinkingEnabled] = useState<boolean | null>(null);
+  const [thinkingEffort, setThinkingEffort] = useState<string>("medium");
   const [contextItems, setContextItems] = useState<ContextItem[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [showContextMenu, setShowContextMenu] = useState(false);
@@ -163,7 +168,16 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
       messageText = slashMatch[2].trim() || messageText; // keep original if no text after skill
     }
 
-    onSend(messageText, modelOverride, contextItems, attachments.length > 0 ? attachments : undefined, skill);
+    // Attach thinking params to the model override if the selected model supports it
+    const overrideWithThinking = modelOverride
+      ? {
+          ...modelOverride,
+          thinking_enabled: thinkingEnabled,
+          thinking_effort: thinkingEnabled ? thinkingEffort : null,
+        }
+      : null;
+
+    onSend(messageText, overrideWithThinking, contextItems, attachments.length > 0 ? attachments : undefined, skill);
     setText("");
     setContextItems([]);
     setAttachments([]);
@@ -490,6 +504,49 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
         </div>
       )}
 
+      {/* Vision warning — image attached but selected model doesn't support vision */}
+      {!isElicitation && modelOverride && modelOverride.supports_vision === false &&
+        attachments.some((a) => a.type === "image") && (
+        <div className="mx-auto mb-2 flex max-w-[672px] items-center gap-2 rounded-[5px] border px-3 py-1.5 text-[12px]"
+          style={{ borderColor: "var(--warning)", background: "var(--surface)", color: "var(--ink-2)" }}
+        >
+          <ImageIcon className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--warning)" }} />
+          <span>
+            <strong>{modelOverride.name}</strong> may not support image input.
+            The image will be sent as text metadata instead.
+          </span>
+        </div>
+      )}
+
+      {/* Model selector + thinking controls + context indicator — above the input bar */}
+      {!isElicitation && (
+        <div className="mx-auto flex max-w-[672px] items-center gap-1.5 pb-1.5">
+          <ModelSelector
+            defaultProviderId={defaultProviderId}
+            defaultModelName={defaultModelName}
+            onChange={setModelOverride}
+          />
+          {/* Thinking toggle — only show when the selected model supports thinking */}
+          {modelOverride?.supports_thinking && (
+            <ThinkingToggle
+              enabled={thinkingEnabled}
+              effort={thinkingEffort}
+              efforts={modelOverride.thinking_efforts || ["low", "medium", "high"]}
+              onToggle={(enabled) => setThinkingEnabled(enabled)}
+              onEffortChange={setThinkingEffort}
+            />
+          )}
+          {contextTokens != null && maxContextTokens != null && maxContextTokens > 0 && (
+            <ContextCircle
+              contextTokens={contextTokens}
+              maxContextTokens={maxContextTokens}
+              compacted={compacted}
+              breakdown={contextBreakdown}
+            />
+          )}
+        </div>
+      )}
+
       <div className="relative mx-auto flex max-w-[672px] items-end gap-2">
         {/* Context chips above input */}
         {!isElicitation && contextItems.length > 0 && (
@@ -519,25 +576,6 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
                 </button>
               </span>
             ))}
-          </div>
-        )}
-
-        {/* Model selector + context indicator — hidden during elicitation */}
-        {!isElicitation && (
-          <div className="flex items-center gap-1.5">
-            <ModelSelector
-              defaultProviderId={defaultProviderId}
-              defaultModelName={defaultModelName}
-              onChange={setModelOverride}
-            />
-            {contextTokens != null && maxContextTokens != null && maxContextTokens > 0 && (
-              <ContextCircle
-                contextTokens={contextTokens}
-                maxContextTokens={maxContextTokens}
-                compacted={compacted}
-                breakdown={contextBreakdown}
-              />
-            )}
           </div>
         )}
 
@@ -979,6 +1017,59 @@ function ContextCircle({
             </div>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+
+/** Thinking toggle + effort selector — shown when the selected model supports reasoning. */
+function ThinkingToggle({
+  enabled,
+  effort,
+  efforts,
+  onToggle,
+  onEffortChange,
+}: {
+  enabled: boolean | null;
+  effort: string;
+  efforts: string[];
+  onToggle: (enabled: boolean) => void;
+  onEffortChange: (effort: string) => void;
+}) {
+  const isOn = enabled === true;
+
+  return (
+    <div className="flex items-center gap-1">
+      <button
+        type="button"
+        onClick={() => onToggle(!isOn)}
+        className="flex items-center gap-1 rounded-[4px] border px-2 py-1 font-mono text-[11px] transition"
+        style={{
+          borderColor: isOn ? "var(--accent)" : "var(--border)",
+          background: isOn ? "var(--surface)" : "transparent",
+          color: isOn ? "var(--accent)" : "var(--ink-3)",
+        }}
+        title={isOn ? "Thinking enabled — click to disable" : "Enable thinking/reasoning"}
+      >
+        <Brain className="h-3 w-3" />
+        <span>Think</span>
+      </button>
+      {isOn && efforts.length > 1 && (
+        <select
+          value={effort}
+          onChange={(e) => onEffortChange(e.target.value)}
+          className="rounded-[4px] border px-1.5 py-1 font-mono text-[11px] outline-none"
+          style={{
+            borderColor: "var(--border)",
+            background: "var(--surface)",
+            color: "var(--ink-2)",
+          }}
+        >
+          {efforts.map((e) => (
+            <option key={e} value={e}>{e}</option>
+          ))}
+        </select>
       )}
     </div>
   );

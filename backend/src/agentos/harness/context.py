@@ -9,7 +9,10 @@ has enabled. If capabilities is empty, all built-in tools are enabled by default
 """
 
 import json
+import logging
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 from ..config_schema import AgentConfig
 from ..models.run import Message
@@ -37,14 +40,21 @@ def _load_skill_menu(agent_config: AgentConfig) -> str:
 def get_enabled_capabilities(agent_config: AgentConfig) -> list[str]:
     """Return the list of enabled capability names for this agent.
 
-    - capabilities is None (omitted in YAML) → all registered tools enabled
+    - capabilities is None (omitted in YAML) → all built-in tools enabled
+      (tool, sub_agent, memory kinds). MCP tools are NOT included by default
+      — they must be explicitly listed to avoid flooding the context window
+      with potentially hundreds of MCP tool schemas.
     - capabilities is [] → no tools enabled
-    - capabilities: [web_search, read_file] → only those tools enabled
+    - capabilities: [web_search, read_file, mcp.notion.notion-search] → only
+      those tools enabled (including specific MCP tools)
     """
     from ..capabilities.registry import registry
 
     if agent_config.capabilities is None:
-        return [cap.name for cap in registry.list_all()]
+        # Default: all built-in tools, but NOT mcp_tool kind
+        # MCP tools are opt-in to keep context size manageable
+        caps = registry.list_all()
+        return [cap.name for cap in caps if cap.kind != "mcp_tool"]
 
     return [grant.name for grant in agent_config.capabilities]
 
@@ -56,6 +66,7 @@ def assemble_system_prompt(
     recall_snippets: list[dict[str, Any]] | None = None,
     forced_skill: str | None = None,
     past_sessions: list[dict[str, Any]] | None = None,
+    supports_vision: bool | None = None,
 ) -> str:
     """Build the system prompt from base prompt + agent identity (D35 order).
 
@@ -70,6 +81,7 @@ def assemble_system_prompt(
     8. Past sessions (episodic — session summaries for topical recall)
     9. Recall snippets (semantic recall fallback — D34)
     10. Forced skill (slash command — full body injected when user types /skillname)
+    11. Model capabilities (vision support — tells the agent if it can process images)
     """
     parts: list[str] = []
 
@@ -139,6 +151,24 @@ def assemble_system_prompt(
             parts.append(
                 f"## Active Skill: {skill['name']}\n\n"
                 f"{skill['body']}"
+            )
+
+    # 11. Model capabilities — tell the agent what its model can/can't do
+    if supports_vision is not None:
+        if supports_vision:
+            parts.append(
+                "## Model Capabilities\n\n"
+                "Your model supports vision/image input. You can see and analyze "
+                "images that the user attaches to their messages."
+            )
+        else:
+            parts.append(
+                "## Model Capabilities\n\n"
+                "Your model does NOT support vision/image input. If the user "
+                "attaches an image, you will receive it as text metadata only "
+                "(filename, dimensions) — you cannot see the actual image content. "
+                "Be honest about this limitation if asked. Do not claim you can "
+                "see or analyze images."
             )
 
     return "\n\n---\n\n".join(parts)

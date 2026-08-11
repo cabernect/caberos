@@ -1,10 +1,10 @@
 import { useEffect, useState, useCallback } from "react";
 import {
   X, Save, Copy, Download, Upload, Power, Plus, Trash2,
-  FileText, Folder, ChevronRight, FolderOpen,
+  FileText, Folder, ChevronRight, ChevronDown, FolderOpen,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import type { Agent, ModelInfo, Provider, Skill, SkillInfo, WorkspaceEntry } from "@/lib/types";
+import type { Agent, ChannelInfo, ModelInfo, Provider, Skill, SkillInfo, WorkspaceEntry } from "@/lib/types";
 import { ModelSelect } from "@/components/ModelSelect";
 
 interface CapabilityInfo {
@@ -104,7 +104,7 @@ export function SettingsOverlay({ agent, open, onClose, onSaved, providers }: Se
           {tab === "Memory" && <MemoryTab agentId={agent?.id || ""} onClose={onClose} showSaved={showSaved} />}
           {tab === "Skills" && <SkillsTab agentId={agent?.id || ""} showSaved={showSaved} />}
           {tab === "Workspace" && <WorkspaceTab agentId={agent?.id || ""} />}
-          {tab === "Channels" && <ChannelsTab />}
+          {tab === "Channels" && <ChannelsTab agentId={agent?.id || ""} />}
         </div>
       </div>
     </div>
@@ -490,45 +490,165 @@ function CapabilitiesTab({
     }
   };
 
+  // Group capabilities: built-in vs MCP (grouped by server)
+  const builtinCaps = allCaps.filter((c) => !c.name.startsWith("mcp."));
+  const mcpServers = new Map<string, CapabilityInfo[]>();
+  for (const cap of allCaps) {
+    if (cap.name.startsWith("mcp.")) {
+      // mcp.{server}.{tool} — server is the second segment
+      const parts = cap.name.split(".");
+      const serverName = parts.length >= 2 ? parts[1] : "other";
+      if (!mcpServers.has(serverName)) mcpServers.set(serverName, []);
+      mcpServers.get(serverName)!.push(cap);
+    }
+  }
+
   return (
     <div className="space-y-3">
       <p className="text-[12px] text-[var(--ink-3)]">
         Select which tools this agent can use. Egress tools (network access) can require approval.
       </p>
-      {allCaps.map((cap) => {
-        const isGranted = granted.has(cap.name);
-        const needsApproval = approvals.has(cap.name);
-        return (
-          <div
-            key={cap.name}
-            className="flex items-center justify-between rounded-[5px] border px-4 py-3"
-            style={{ borderColor: "var(--border)", background: "var(--surface)" }}
-          >
-            <div className="flex items-center gap-3">
-              <input type="checkbox" checked={isGranted} onChange={() => toggle(cap.name)} style={{ cursor: "pointer" }} />
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="font-mono text-[13px] font-medium text-[var(--ink)]">{cap.name}</span>
-                  {cap.egress && (
-                    <span className="rounded-full px-1.5 py-0.5 text-[10px] font-mono" style={{ background: "rgba(245,158,11,0.1)", color: "var(--warning)" }}>
-                      egress
-                    </span>
-                  )}
-                </div>
-                <p className="text-[12px] text-[var(--ink-2)]">{cap.desc}</p>
-              </div>
-            </div>
-            {isGranted && cap.egress && (
-              <label className="flex items-center gap-1.5 text-[12px] text-[var(--ink-2)]">
-                <input type="checkbox" checked={needsApproval} onChange={() => toggleApproval(cap.name)} style={{ cursor: "pointer" }} />
-                require approval
-              </label>
-            )}
-          </div>
-        );
-      })}
+      <CapabilityGroup
+        title="Built-in Tools"
+        caps={builtinCaps}
+        granted={granted}
+        approvals={approvals}
+        toggle={toggle}
+        toggleApproval={toggleApproval}
+        defaultExpanded
+      />
+      {Array.from(mcpServers.entries()).map(([serverName, caps]) => (
+        <CapabilityGroup
+          key={serverName}
+          title={`MCP: ${serverName}`}
+          caps={caps}
+          granted={granted}
+          approvals={approvals}
+          toggle={toggle}
+          toggleApproval={toggleApproval}
+          defaultExpanded={false}
+        />
+      ))}
       {saving && (
         <p className="font-mono text-[11px] text-[var(--ink-3)]">Saving…</p>
+      )}
+    </div>
+  );
+}
+
+function CapabilityGroup({
+  title,
+  caps,
+  granted,
+  approvals,
+  toggle,
+  toggleApproval,
+  defaultExpanded,
+}: {
+  title: string;
+  caps: CapabilityInfo[];
+  granted: Set<string>;
+  approvals: Set<string>;
+  toggle: (name: string) => void;
+  toggleApproval: (name: string) => void;
+  defaultExpanded: boolean;
+}) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
+  const [expandedDesc, setExpandedDesc] = useState<string | null>(null);
+  const grantedCount = caps.filter((c) => granted.has(c.name)).length;
+
+  const toggleAll = () => {
+    const allGranted = caps.every((c) => granted.has(c.name));
+    for (const cap of caps) {
+      if (allGranted && granted.has(cap.name)) toggle(cap.name);
+      else if (!allGranted && !granted.has(cap.name)) toggle(cap.name);
+    }
+  };
+
+  const allGranted = caps.every((c) => granted.has(c.name));
+  const someGranted = caps.some((c) => granted.has(c.name));
+
+  return (
+    <div className="rounded-[6px] border" style={{ borderColor: "var(--border)" }}>
+      {/* Group header */}
+      <div
+        className="flex items-center gap-2 px-4 py-2.5 cursor-pointer"
+        onClick={() => setExpanded(!expanded)}
+      >
+        {expanded ? (
+          <ChevronDown className="h-3.5 w-3.5" style={{ color: "var(--ink-3)" }} />
+        ) : (
+          <ChevronRight className="h-3.5 w-3.5" style={{ color: "var(--ink-3)" }} />
+        )}
+        <span className="font-mono text-[12px] font-medium uppercase tracking-wider" style={{ color: "var(--ink-2)" }}>
+          {title}
+        </span>
+        <span className="font-mono text-[11px]" style={{ color: "var(--ink-3)" }}>
+          {grantedCount}/{caps.length}
+        </span>
+        <button
+          onClick={(e) => { e.stopPropagation(); toggleAll(); }}
+          className="ml-auto rounded-[4px] px-2 py-0.5 font-mono text-[10px] transition"
+          style={{
+            background: "none",
+            border: "1px solid var(--border)",
+            color: "var(--ink-3)",
+            cursor: "pointer",
+          }}
+        >
+          {allGranted ? "Disable all" : "Enable all"}
+        </button>
+      </div>
+      {/* Tools list */}
+      {expanded && (
+        <div className="space-y-1.5 px-4 pb-3">
+          {caps.map((cap) => {
+            const isGranted = granted.has(cap.name);
+            const needsApproval = approvals.has(cap.name);
+            return (
+              <div
+                key={cap.name}
+                className="flex items-center justify-between rounded-[5px] px-3 py-2"
+                style={{ background: "var(--surface)" }}
+              >
+                <div className="flex items-center gap-2.5">
+                  <input type="checkbox" checked={isGranted} onChange={() => toggle(cap.name)} style={{ cursor: "pointer" }} />
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-[12px] font-medium text-[var(--ink)]">{cap.name}</span>
+                      {cap.egress && (
+                        <span className="rounded-full px-1.5 py-0.5 text-[9px] font-mono" style={{ background: "rgba(245,158,11,0.1)", color: "var(--warning)" }}>
+                          egress
+                        </span>
+                      )}
+                    </div>
+                    <p
+                      className="text-[11px] text-[var(--ink-2)]"
+                      style={{ cursor: cap.desc.length > 80 ? "pointer" : "default" }}
+                      title={cap.desc.length > 80 ? cap.desc : undefined}
+                      onClick={() => cap.desc.length > 80 && setExpandedDesc(expandedDesc === cap.name ? null : cap.name)}
+                    >
+                      {cap.desc.length > 80
+                        ? (expandedDesc === cap.name ? cap.desc : cap.desc.slice(0, 80) + "…")
+                        : cap.desc}
+                      {cap.desc.length > 80 && (
+                        <span className="ml-1 font-mono text-[10px] text-[var(--ink-3)]">
+                          {expandedDesc === cap.name ? "[-]" : "[+]"}
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                </div>
+                {isGranted && cap.egress && (
+                  <label className="flex items-center gap-1.5 text-[11px] text-[var(--ink-2)]">
+                    <input type="checkbox" checked={needsApproval} onChange={() => toggleApproval(cap.name)} style={{ cursor: "pointer" }} />
+                    require approval
+                  </label>
+                )}
+              </div>
+            );
+          })}
+        </div>
       )}
     </div>
   );
@@ -612,13 +732,6 @@ function SkillsTab({ agentId, showSaved }: { agentId: string; showSaved: (msg: s
     showSaved("Skill deleted");
   };
 
-  const handleDeleteSystemSkill = async (name: string) => {
-    if (!confirm(`Delete global skill "${name}"? This affects all agents.`)) return;
-    await api.deleteSkill(name);
-    load();
-    showSaved("Global skill deleted");
-  };
-
   const handlePromote = async (name: string) => {
     try {
       await api.promoteSkill(name, agentId);
@@ -664,14 +777,6 @@ function SkillsTab({ agentId, showSaved }: { agentId: string; showSaved: (msg: s
                     <p className="text-[12px] text-[var(--ink-2)] truncate">{skill.description}</p>
                   )}
                 </div>
-                <button
-                  onClick={() => handleDeleteSystemSkill(skill.name)}
-                  className="ml-2 text-[var(--ink-3)] transition hover:text-[var(--danger)]"
-                  style={{ border: "none", background: "none", cursor: "pointer" }}
-                  title="Delete global skill"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
               </div>
             ))}
           </div>
@@ -852,9 +957,26 @@ function WorkspaceTab({ agentId }: { agentId: string }) {
 
 // --- Channels Tab ---
 
-function ChannelsTab() {
+function ChannelsTab({ agentId }: { agentId: string }) {
+  const [channels, setChannels] = useState<ChannelInfo[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    api.listChannels()
+      .then((all) => setChannels(all.filter((c) => c.agent_id === agentId)))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [agentId]);
+
+  const platformIcons: Record<string, string> = {
+    telegram: "✈️",
+    discord: "🎮",
+    zalo: "💬",
+  };
+
   return (
     <div className="space-y-2">
+      {/* Dashboard chat — always active */}
       <div
         className="flex items-center justify-between rounded-[5px] border px-4 py-3"
         style={{ borderColor: "var(--border)", background: "var(--surface)" }}
@@ -867,8 +989,53 @@ function ChannelsTab() {
           Active
         </span>
       </div>
+
+      {/* External channels connected to this agent */}
+      {loading ? (
+        <p className="py-2 text-[12px] text-[var(--ink-3)]">Loading...</p>
+      ) : channels.length === 0 ? (
+        <div
+          className="rounded-[5px] border px-4 py-3"
+          style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+        >
+          <p className="text-[13px] text-[var(--ink-2)]">No external channels connected</p>
+          <p className="mt-1 text-[12px] text-[var(--ink-3)]">
+            Go to the Channels page to connect Telegram, Discord, and other messaging platforms to this agent.
+          </p>
+        </div>
+      ) : (
+        channels.map((ch) => (
+          <div
+            key={ch.id}
+            className="flex items-center justify-between rounded-[5px] border px-4 py-3"
+            style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-lg">{platformIcons[ch.platform] || "📡"}</span>
+              <div>
+                <p className="text-[13px] font-medium text-[var(--ink)]">
+                  {ch.platform.charAt(0).toUpperCase() + ch.platform.slice(1)}
+                </p>
+                <p className="text-[12px] text-[var(--ink-2)]">
+                  {ch.mode === "polling" ? "Polling" : "Webhook"} mode
+                </p>
+              </div>
+            </div>
+            <span
+              className="rounded-full px-2 py-0.5 text-[11px] font-mono"
+              style={{
+                background: ch.enabled ? "rgba(22,163,74,0.1)" : "rgba(100,100,100,0.1)",
+                color: ch.enabled ? "var(--success)" : "var(--ink-3)",
+              }}
+            >
+              {ch.enabled ? "Active" : "Disabled"}
+            </span>
+          </div>
+        ))
+      )}
+
       <p className="pt-2 text-[12px] text-[var(--ink-3)]">
-        More channels (Telegram, Slack, etc.) coming in a later release.
+        Manage channels in the <a href="/channels" className="underline">Channels page</a>.
       </p>
     </div>
   );

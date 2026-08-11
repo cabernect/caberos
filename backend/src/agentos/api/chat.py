@@ -54,6 +54,9 @@ class ModelOverride(BaseModel):
 
     provider_id: str
     name: str
+    supports_vision: bool | None = None
+    thinking_enabled: bool | None = None
+    thinking_effort: str | None = None  # "low", "medium", "high", "max", etc.
 
 
 class AttachmentIn(BaseModel):

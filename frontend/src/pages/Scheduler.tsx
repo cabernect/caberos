@@ -65,6 +65,8 @@ export function Scheduler() {
     if (page === "vault") navigate("/vault");
     if (page === "skills") navigate("/skills");
     if (page === "scheduler") return;
+    if (page === "mcps") navigate("/mcps");
+    if (page === "channels") navigate("/channels");
   };
 
   const handleToggle = async (agentId: string, enabled: boolean) => {

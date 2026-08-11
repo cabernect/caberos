@@ -62,6 +62,8 @@ class PostgresBackend(DatabaseBackend):
             ("messages", "attachments", "TEXT"),
             ("providers", "custom_models", "TEXT NOT NULL DEFAULT '[]'"),
             ("messages", "subagent_id", "VARCHAR(36)"),
+            ("mcp_servers", "require_approval", "BOOLEAN DEFAULT TRUE"),
+            ("mcp_servers", "oauth_config", "TEXT"),
         ]
         for table, column, col_type in patches:
             if not await self.column_exists(conn, table, column):

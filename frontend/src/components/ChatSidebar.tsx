@@ -6,7 +6,7 @@ import type { SessionInfo } from "@/lib/types";
 interface ChatSidebarProps {
   sessions: SessionInfo[];
   activeSessionId: string | null;
-  runningSessionId: string | null;
+  runningSessionIds: Set<string>;
   collapsed: boolean;
   onNewChat: () => void;
   onSelectSession: (id: string) => void;
@@ -18,7 +18,7 @@ interface ChatSidebarProps {
 export function ChatSidebar({
   sessions,
   activeSessionId,
-  runningSessionId,
+  runningSessionIds,
   collapsed,
   onNewChat,
   onSelectSession,
@@ -69,7 +69,7 @@ export function ChatSidebar({
           <SessionList
             sessions={sessions}
             activeSessionId={activeSessionId}
-            runningSessionId={runningSessionId}
+            runningSessionIds={runningSessionIds}
             onSelect={onSelectSession}
             onDelete={onDeleteSession}
           />
@@ -118,13 +118,13 @@ export function ChatSidebar({
 function SessionList({
   sessions,
   activeSessionId,
-  runningSessionId,
+  runningSessionIds,
   onSelect,
   onDelete,
 }: {
   sessions: SessionInfo[];
   activeSessionId: string | null;
-  runningSessionId: string | null;
+  runningSessionIds: Set<string>;
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
 }) {
@@ -144,7 +144,7 @@ function SessionList({
               key={s.id}
               session={s}
               active={s.id === activeSessionId}
-              running={s.id === runningSessionId}
+              running={runningSessionIds.has(s.id)}
               onSelect={() => onSelect(s.id)}
               onDelete={() => onDelete(s.id)}
             />

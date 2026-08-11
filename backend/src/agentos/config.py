@@ -3,19 +3,19 @@
 import os
 from pathlib import Path
 
-# Fix SSL cert verification for httpx on macOS (homebrew Python).
-# httpx doesn't pick up homebrew's OpenSSL certs by default, which breaks
-# litellm's live model registry fetch. Point SSL_CERT_FILE at the homebrew
-# CA bundle if it exists and SSL_CERT_FILE isn't already set.
-if "SSL_CERT_FILE" not in os.environ:
-    for cert_path in [
-        "/opt/homebrew/etc/ca-certificates/cert.pem",
-        "/usr/local/etc/ca-certificates/cert.pem",
-        "/etc/ssl/cert.pem",
-    ]:
-        if Path(cert_path).exists():
-            os.environ["SSL_CERT_FILE"] = cert_path
-            break
+# Fix SSL cert verification for httpx/litellm on macOS.
+# The Homebrew ca-certificates bundle includes corporate/proxy CAs (e.g. FPT
+# captive portal) that the system /etc/ssl/cert.pem may not have. Always
+# prefer the Homebrew bundle when available, even if SSL_CERT_FILE is already
+# set to a different path.
+for _cert_path in [
+    "/opt/homebrew/etc/ca-certificates/cert.pem",
+    "/usr/local/etc/ca-certificates/cert.pem",
+]:
+    if Path(_cert_path).exists():
+        os.environ["SSL_CERT_FILE"] = _cert_path
+        os.environ["REQUESTS_CA_BUNDLE"] = _cert_path
+        break
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 

@@ -144,6 +144,13 @@ def _build_capabilities_section(enabled_caps: list[str]) -> str:
         desc = TOOL_DESCRIPTIONS.get(name)
         if desc:
             lines.append(f"- **{name}** — {desc}")
+        elif name.startswith("mcp."):
+            # MCP tools — get description from the capability registry
+            from ..capabilities.registry import registry
+
+            cap = registry.get(name)
+            if cap and cap.description:
+                lines.append(f"- **{name}** — {cap.description}")
 
     # Add tool-specific guidance based on what's enabled
     extra_notes: list[str] = []

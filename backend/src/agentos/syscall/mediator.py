@@ -34,6 +34,7 @@ from ..models.approval import ApprovalRequest
 from ..models.audit import AuditRecord
 from ..models.contact import Contact
 from ..models.elicitation import ElicitationRequest
+from ..models.mcp import McpServer
 from .approval_registry import approval_registry
 from .elicitation_registry import elicitation_registry
 from .protocol import SyscallResult, ToolCall
@@ -170,7 +171,18 @@ class SyscallHandler:
                 run_id, call, agent_config, session, start, sub_agent_id
             )
 
-        # 6. Inject credentials — stubbed (no connectors/MCP yet)
+        # 6. Handle MCP tool calls — resolve binding, inject credentials, forward
+        if cap.kind == "mcp_tool":
+            return await self._execute_mcp_tool(
+                call=call,
+                cap=cap,
+                agent_config=agent_config,
+                session=session,
+                run_id=run_id,
+                subject_contact_id=subject_contact_id,
+                start=start,
+                sub_agent_id=sub_agent_id,
+            )
 
         # 7. Execute under timeout
         # (The harness emits the 'running' state before calling mediate)
@@ -241,6 +253,131 @@ class SyscallHandler:
             elapsed = int((time.monotonic() - start) * 1000)
             return await self._deny(
                 run_id, call, agent_config, f"execution error: {e}", start, sub_agent_id
+            )
+
+    async def _execute_mcp_tool(
+        self,
+        call: ToolCall,
+        cap: Any,
+        agent_config: AgentConfig,
+        session: Any,
+        run_id: str,
+        subject_contact_id: str | None,
+        start: float,
+        sub_agent_id: str | None,
+    ) -> SyscallResult:
+        """Execute an MCP tool call — resolve binding, inject creds, forward."""
+        import json as _json
+
+        from ..mcp import binding as mcp_binding
+        from ..mcp import credentials as mcp_creds
+        from ..mcp import registry as mcp_registry
+
+        # Resolve the capability name → (server_id, tool_name)
+        mapping = mcp_registry._tool_map.get(call.name)
+        if mapping is None:
+            return await self._deny(
+                run_id, call, agent_config, "MCP tool not registered", start, sub_agent_id
+            )
+        server_id, tool_name = mapping
+
+        # Look up the server config to check if it needs credentials
+        server_result = await self.db.execute(
+            select(McpServer).where(McpServer.id == server_id)
+        )
+        server = server_result.scalar_one_or_none()
+        if server is None:
+            return await self._deny(
+                run_id, call, agent_config, "MCP server config not found", start, sub_agent_id
+            )
+
+        # For servers that need credentials (env_template or headers), resolve
+        # the subject binding to get the decrypted credential.
+        # For no-auth servers (no env_template, no headers), skip the binding.
+        needs_creds = bool(server.env_template) or bool(server.headers)
+
+        if needs_creds:
+            if subject_contact_id is None:
+                return await self._deny(
+                    run_id, call, agent_config, "no subject binding (MCP tools require a Contact)", start, sub_agent_id
+                )
+
+            resolved = await mcp_binding.resolve_binding(self.db, subject_contact_id, server_id)
+            if resolved is None:
+                return await self._deny(
+                    run_id, call, agent_config, "no MCP server binding for this Contact", start, sub_agent_id
+                )
+            _binding, _server, cred = resolved
+
+            # Decrypt the credential
+            cred_value = mcp_creds.decrypt_credential(cred)
+
+            # Render env/headers templates with the credential
+            env_template = _json.loads(server.env_template) if server.env_template else {}
+            headers_template = _json.loads(server.headers) if server.headers else {}
+            env, headers = mcp_creds.inject_credential(env_template, headers_template, cred_value)
+        else:
+            env = {}
+            headers = {}
+
+        # Forward the call through the MCP client
+        try:
+            result = await mcp_registry.execute_mcp_tool(
+                call.name, call.args, env=env, headers=headers
+            )
+            elapsed = int((time.monotonic() - start) * 1000)
+
+            # Reduce result for the model
+            reduced = reduce_result(result)
+
+            # Write audit record
+            audit = AuditRecord(
+                id=str(uuid.uuid4()),
+                run_id=run_id,
+                agent_id=agent_config.id,
+                sub_agent_id=sub_agent_id,
+                capability_name=call.name,
+                subject_contact_id=subject_contact_id,
+                allowed=True,
+                denied_reason=None,
+                cost=0.0,
+                latency_ms=elapsed,
+                args=json.dumps(call.args),
+                result=json.dumps(result) if result else None,
+            )
+            async with self._db_lock:
+                self.db.add(audit)
+                await self.db.flush()
+
+            return SyscallResult(
+                output=reduced,
+                allowed=True,
+                cost=0.0,
+                latency_ms=elapsed,
+                audit_id=audit.id,
+            )
+        except Exception as e:
+            elapsed = int((time.monotonic() - start) * 1000)
+            # Write audit record for the failure
+            audit = AuditRecord(
+                id=str(uuid.uuid4()),
+                run_id=run_id,
+                agent_id=agent_config.id,
+                sub_agent_id=sub_agent_id,
+                capability_name=call.name,
+                subject_contact_id=subject_contact_id,
+                allowed=True,
+                denied_reason=None,
+                cost=0.0,
+                latency_ms=elapsed,
+                args=json.dumps(call.args),
+                result=json.dumps({"error": str(e)}),
+            )
+            async with self._db_lock:
+                self.db.add(audit)
+                await self.db.flush()
+            return await self._deny(
+                run_id, call, agent_config, f"MCP tool error: {e}", start, sub_agent_id
             )
 
     async def _deny(
@@ -354,7 +491,11 @@ class SyscallHandler:
 
         # If approved with "remember for this session", add to session allowlist
         if decision == "approved" and pending.remember:
-            approval_registry.remember_approval(session_id, call.name, call.args)
+            approval_registry.remember_approval(
+                session_id, call.name, call.args,
+                scope=pending.remember_scope,
+                pattern=pending.remember_pattern,
+            )
 
         # Update the ApprovalRequest row
         approval.status = decision

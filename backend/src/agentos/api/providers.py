@@ -67,6 +67,11 @@ class ProviderOut(BaseModel):
 class ModelInfo(BaseModel):
     id: str
     name: str
+    supports_vision: bool = False
+    supports_thinking: bool = False
+    thinking_efforts: list[str] = []
+    max_context_tokens: int | None = None
+    max_output_tokens: int | None = None
 
 
 @router.get("")

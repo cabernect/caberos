@@ -1,6 +1,6 @@
 // API client — the only way the frontend talks to the backend (D33)
 
-import type { Agent, AgentVersion, Approval, CapabilityGrant, HeartbeatConfig, Limits, Message, ModelInfo, Operator, Provider, SessionInfo, Skill, SkillInfo, WorkspaceEntry } from "./types";
+import type { Agent, AgentVersion, Approval, CapabilityGrant, ChannelInfo, HeartbeatConfig, Limits, Message, ModelInfo, Operator, Provider, SessionInfo, Skill, SkillInfo, WorkspaceEntry } from "./types";
 
 const BASE = ""; // same origin via Vite proxy
 
@@ -110,7 +110,7 @@ export const api = {
     agentId: string,
     text: string,
     isTest = false,
-    modelOverride?: { provider_id: string; name: string },
+    modelOverride?: { provider_id: string; name: string; thinking_enabled?: boolean | null; thinking_effort?: string | null },
     sessionId?: string,
     attachments?: { type: string; mime_type: string; data: string; filename: string }[],
     newSession = false,
@@ -137,12 +137,14 @@ export const api = {
     agentId: string,
     runId: string,
     lastEventId = 0,
+    signal?: AbortSignal,
   ): AsyncGenerator<{ event: string; data: any; id: number }> {
     const resp = await fetch(
       `${BASE}/api/chat/${agentId}/runs/${runId}/events`,
       {
         credentials: "include",
         headers: lastEventId > 0 ? { "Last-Event-ID": String(lastEventId) } : {},
+        signal,
       },
     );
     if (!resp.ok) {
@@ -250,10 +252,15 @@ export const api = {
   // Approvals
   listApprovals: (status = "pending") =>
     request<Approval[]>(`/api/approvals?status=${status}`),
-  approveCall: (id: string, remember = false) =>
+  approveCall: (
+    id: string,
+    remember = false,
+    rememberScope: "exact" | "same_verb" | "pattern" | "capability" = "exact",
+    rememberPattern?: string,
+  ) =>
     request<{ status: string }>(`/api/approvals/${id}/approve`, {
       method: "POST",
-      body: JSON.stringify({ remember }),
+      body: JSON.stringify({ remember, remember_scope: rememberScope, remember_pattern: rememberPattern }),
     }),
   rejectCall: (id: string) =>
     request<{ status: string }>(`/api/approvals/${id}/reject`, { method: "POST" }),
@@ -312,4 +319,101 @@ export const api = {
       `/api/scheduler/alerts/${agentId}/clear`,
       { method: "POST" },
     ),
+
+  // MCP servers
+  listMcpServers: () =>
+    request<McpServerInfo[]>("/api/mcp/servers"),
+  createMcpServer: (data: {
+    name: string;
+    transport: string;
+    command?: string;
+    args?: string[];
+    url?: string;
+    env_template?: Record<string, string>;
+    tool_filter?: string[];
+    enabled?: boolean;
+  }) =>
+    request<{ id: string; name: string; connected: boolean }>("/api/mcp/servers", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  deleteMcpServer: (id: string) =>
+    request<{ id: string; deleted: boolean }>(`/api/mcp/servers/${id}`, {
+      method: "DELETE",
+    }),
+  listMcpServerTools: (id: string) =>
+    request<McpToolInfo[]>(`/api/mcp/servers/${id}/tools`),
+  getMcpServerBlastRadius: (id: string) =>
+    request<{ agent_id: string; agent_name: string; capabilities: string[] }[]>(
+      `/api/mcp/servers/${id}/agents`,
+    ),
+  connectMcpServer: (id: string) =>
+    request<{ id: string; connected: boolean }>(`/api/mcp/servers/${id}/connect`, {
+      method: "POST",
+    }),
+  updateMcpServer: (id: string, data: { require_approval?: boolean; enabled?: boolean }) =>
+    request<{ id: string; require_approval: boolean; enabled: boolean; connected: boolean }>(
+      `/api/mcp/servers/${id}`,
+      { method: "PATCH", body: JSON.stringify(data) },
+    ),
+  storeMcpCredential: (serverId: string, data: {
+    credential_type: string;
+    value: string | Record<string, unknown>;
+    label?: string;
+  }) =>
+    request<{ id: string; credential_type: string; label: string | null; connected: boolean }>(
+      `/api/mcp/servers/${serverId}/credentials`,
+      { method: "POST", body: JSON.stringify(data) },
+    ),
+  listMcpCredentials: (serverId: string) =>
+    request<{ id: string; credential_type: string; label: string | null; created_at: string }[]>(
+      `/api/mcp/servers/${serverId}/credentials`,
+    ),
+  deleteMcpCredential: (serverId: string, credentialId: string) =>
+    request<{ deleted: boolean }>(
+      `/api/mcp/servers/${serverId}/credentials/${credentialId}`,
+      { method: "DELETE" },
+    ),
+  startMcpOAuth: (serverId: string) =>
+    request<{ authorize_url: string }>(
+      `/api/mcp/servers/${serverId}/oauth/start`,
+      { method: "POST" },
+    ),
+  getMcpOAuthStatus: (serverId: string) =>
+    request<{ status: string; authorize_url?: string; error?: string }>(
+      `/api/mcp/servers/${serverId}/oauth/status`,
+    ),
+
+  // MCP catalog (marketplace)
+  listMcpCatalog: (category?: string, q?: string) => {
+    const params = new URLSearchParams();
+    if (category) params.set("category", category);
+    if (q) params.set("q", q);
+    const qs = params.toString();
+    return request<McpCatalogEntry[]>(
+      `/api/mcp/catalog${qs ? "?" + qs : ""}`,
+    );
+  },
+  listMcpCatalogCategories: () =>
+    request<{ name: string; count: number }[]>("/api/mcp/catalog/categories"),
+  installFromCatalog: (name: string) =>
+    request<{ id: string; name: string; connected: boolean; auth_type: string; message: string | null }>(
+      "/api/mcp/catalog/install",
+      { method: "POST", body: JSON.stringify({ name, enabled: true }) },
+    ),
+
+  // Channels (external messaging — Telegram, Discord, Zalo, ...)
+  listChannels: () =>
+    request<ChannelInfo[]>("/api/channels"),
+  createChannel: (data: { platform: string; agent_id: string; bot_token: string; webhook_secret?: string; mode?: string }) =>
+    request<ChannelInfo>("/api/channels", { method: "POST", body: JSON.stringify(data) }),
+  updateChannel: (id: string, data: { bot_token?: string; webhook_secret?: string; enabled?: boolean; mode?: string }) =>
+    request<ChannelInfo>(`/api/channels/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  deleteChannel: (id: string) =>
+    request<{ status: string }>(`/api/channels/${id}`, { method: "DELETE" }),
+  testChannel: (id: string, chat_id: string) =>
+    request<{ success: boolean; error: string | null }>(`/api/channels/${id}/test`, {
+      method: "POST",
+      body: JSON.stringify({ chat_id }),
+    }),
 };
