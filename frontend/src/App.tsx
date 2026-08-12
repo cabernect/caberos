@@ -10,6 +10,7 @@ import { Skills } from "./pages/Skills";
 import { Scheduler } from "./pages/Scheduler";
 import { Mcps } from "./pages/Mcps";
 import { Channels } from "./pages/Channels";
+import { Observability } from "./pages/Observability";
 
 export default function App() {
   const [authed, setAuthed] = useState<boolean | null>(null);
@@ -61,6 +62,10 @@ export default function App() {
         <Route
           path="/channels"
           element={authed ? <Channels /> : <Navigate to="/login" />}
+        />
+        <Route
+          path="/observability"
+          element={authed ? <Observability /> : <Navigate to="/login" />}
         />
       </Routes>
     </BrowserRouter>

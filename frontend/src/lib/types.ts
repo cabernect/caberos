@@ -263,3 +263,100 @@ export interface ChannelInfo {
   has_token: boolean;
   extra_config: Record<string, unknown> | null;
 }
+
+// Observability (Ticket 09)
+
+export interface RunSummary {
+  id: string;
+  agent_id: string;
+  agent_name: string | null;
+  session_id: string;
+  status: string;
+  trigger: string;
+  tokens_in: number;
+  tokens_out: number;
+  cost: number;
+  latency_ms: number;
+  is_test: boolean;
+  started_at: string;
+  completed_at: string | null;
+  error: string | null;
+}
+
+export interface MessageOut {
+  id: string;
+  run_id: string;
+  role: string;
+  content: string;
+  seq: number;
+  created_at: string;
+  subagent_id: string | null;
+}
+
+export interface AuditOut {
+  id: string;
+  run_id: string;
+  agent_id: string;
+  capability_name: string;
+  allowed: boolean;
+  denied_reason: string | null;
+  cost: number;
+  latency_ms: number;
+  args: string;
+  result: string | null;
+  created_at: string | null;
+}
+
+export interface RunDetail {
+  id: string;
+  agent_id: string;
+  agent_name: string | null;
+  session_id: string;
+  status: string;
+  trigger: string;
+  tokens_in: number;
+  tokens_out: number;
+  cost: number;
+  latency_ms: number;
+  is_test: boolean;
+  started_at: string;
+  completed_at: string | null;
+  error: string | null;
+  messages: MessageOut[];
+  audit_records: AuditOut[];
+}
+
+export interface SpendBreakdown {
+  agent_id: string;
+  agent_name: string | null;
+  total_cost: number;
+  run_count: number;
+  tokens_in: number;
+  tokens_out: number;
+}
+
+export interface SpendSummary {
+  total_cost: number;
+  total_runs: number;
+  total_tokens_in: number;
+  total_tokens_out: number;
+  by_agent: SpendBreakdown[];
+  by_trigger: Record<string, number>;
+}
+
+export interface OperatorAuditOut {
+  id: string;
+  operator_id: string;
+  action: string;
+  target: string;
+  created_at: string;
+}
+
+export interface HealthStatus {
+  status: string;
+  database: string;
+  providers: number;
+  agents: number;
+  active_runs: number;
+  timestamp: string;
+}

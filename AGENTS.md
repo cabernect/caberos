@@ -143,26 +143,37 @@ The `messages.attachments` column stores attachment metadata (type, mime_type, f
 
 ## Current status
 
-Tickets **01–06 implemented**: smoke slice, real-model chat + SSE streaming, file ops + tool call UI, approval flow + elicitation (`agent.ask_user`), guardrails (input/output secret redaction + injection detection), run manager (reconnectable SSE, stop/poll), file-write diffs, agent management UI, global settings/providers, `run_subagent` tool, and now **memory + skills** (ticket 06): MEMORY.md, knowledge graph triples, FTS5 semantic recall, skill loading with trigger matching, full D35 context assembly.
+Tickets **01–08c implemented**: smoke slice, real-model chat + SSE streaming, file ops + tool call UI, approval flow + elicitation (`agent.ask_user`), guardrails, run manager, agent management UI, providers, `run_subagent`, memory + skills (ticket 06), scheduler/heartbeat (ticket 07), MCP client infrastructure (08a), MCP credentials/OAuth (08b), external channels (08c), and **observability + spend** (ticket 09, in progress).
 
-**Next up: Ticket 07 (Scheduler/Heartbeat)** — the sidebar "Scheduler" nav becomes a unified scheduling page with heartbeat as the first mode. Ticket 08 is split into 08a (generic MCP client) and 08b (Outlook OAuth). Ticket 10 note: write security tests per-ticket, not all deferred to the hardening pass.
+**Next up: Finish Ticket 09 (Observability)** — API endpoints done (runs, run detail, audit, spend, health, operator audit). Frontend Observability page done (tabs: Runs, Syscall Log, Spend, Health). Tests pending. Then Ticket 10 (Testing hardening).
 
-**Ticket 06 (Memory + skills):** IMPLEMENTED. Three-layer memory + skills:
-- **MEMORY.md** — agent-curated notebook in `~/agentos/agents/{id}/MEMORY.md`, always loaded into context. Agent updates via `memory_update` capability; user edits via `GET/PUT /api/agents/{id}/memory`.
-- **Knowledge graph** — `memory_triples` table (subject, predicate, object, contact_id, agent_id). `memory_remember_fact` and `memory_query_facts` capabilities (subject-scoped, D10). Note: triple's "subject" exposed as `entity` in the schema to avoid colliding with D10's reserved `subject` param.
-- **Semantic recall** — FTS5 (SQLite) or tsvector (Postgres) on conversation snippets. `memory_recall` and `memory_store` capabilities. Bounded: top 3 snippets auto-fetched as context fallback.
-- **Skills** — markdown `SKILL.md` with YAML frontmatter (name, description, triggers). System-level `skills/` + per-agent `workspace/skills/{id}/`. Trigger-matched against user message, injected into system prompt. Aligned with the [Agent Skills spec](https://agentskills.io/specification): supports `license`, `compatibility`, `metadata`, `allowed-tools` optional fields. 17 Anthropic skills ship out of the box (pdf, docx, pptx, xlsx, mcp-builder, skill-creator, frontend-design, webapp-testing, etc.).
-- **Full context assembly (D35):** base prompt → soul → persona → task → MEMORY.md → skills → KG facts → recall snippets. All loaded by the harness before the model call.
-- **Cross-contact isolation** — tested as a security property (3 tests: triples, recall, syscall-level). Contact A's memory is invisible to Contact B.
-- **DB backends pluggable** — SQLite (default) or Postgres via `AGENTOS_DATABASE_URL=postgresql+asyncpg://...`. `db_backends/` package with `DatabaseBackend` ABC, `SQLiteBackend`, `PostgresBackend`. FTS5 ↔ tsvector handled per-backend.
-- **149 backend tests pass.**
+**Ticket 07 (Scheduler/Heartbeat):** IMPLEMENTED. Heartbeat scheduler with multi-mode UI.
 
-**Recent fixes (this session):**
-- Fixed `Session is already flushing` crash in the approval flow (`syscall/mediator.py` now uses a separate DB session for `ApprovalRequest`).
-- Added model stream idle timeout (30s) + request timeout (120s) in `litellm_adapter.py` — prevents runs hanging forever on a stalled provider stream.
-- Fixed streaming text/tool-call ordering in the frontend (`Conversation.tsx`) — text now flushes into the ordered item list before a tool call/approval card, so approvals don't render above already-streamed text.
+**Ticket 08a (MCP Client Infrastructure):** IMPLEMENTED. MCP client (stdio/HTTP), server registry, credential store, DB models, 19 API routes, connectors page, agent bindings. 26 tests pass.
 
-**128 backend tests pass.** Frontend type-checks cleanly (`tsc --noEmit`). Ruff clean except long-line (E501) warnings.
+**Ticket 08b (MCP Credentials — API Key + OAuth):** IMPLEMENTED. API key flow, OAuth loopback flow with token refresh, revoke, catalog integration.
+
+**Ticket 08c (External Channels):** IMPLEMENTED. Four channels:
+- **Telegram** — polling + webhook, typing indicator, 4096-char split, Markdown
+- **Discord** — slash commands + message create + DM, 2000-char split, Markdown
+- **Zalo OA** — webhook, HMAC-SHA256 verification, `cs` message type, plain text
+- **Zalo Bot Platform** — polling + webhook, typing indicator, 2000-char split, `X-Bot-Api-Secret-Token` verification, Markdown
+- Channel registry, API routes, frontend Channels page, per-channel test state
+- **SSL fix:** `ssl_utils.py` — shared CA bundle path (Homebrew `ca-certificates`) for corporate firewall compatibility. All httpx clients use `verify=SSL_CERT_PATH`.
+- 68 channel tests pass (29 Telegram + 39 Discord/Zalo).
+
+**Ticket 09 (Observability + Spend):** IN PROGRESS.
+- **API:** `GET /api/runs` (filterable list), `GET /api/runs/{id}` (detail with messages + audit), `GET /api/audit` (syscall log), `GET /api/spend` (today/7d/30d breakdown by agent + trigger), `GET /api/operator-audit`, `GET /api/health`
+- **Frontend:** Observability page with 4 tabs (Runs, Syscall Log, Spend, Health). Run detail view with messages + audit records inline. Denied syscalls highlighted.
+- **Tests:** Pending.
+
+**Model discovery enhancements (this session):**
+- Thinking/reasoning metadata + per-message thinking controls (brain icon, effort slider)
+- `max_context_tokens` and `max_output_tokens` from OpenRouter live metadata
+- Image-generation models filtered from chat discovery (402 → 393 models)
+- OpenRouter discovery uses live metadata instead of LiteLLM static catalog
+
+**311 backend tests pass.** Frontend type-checks cleanly (`tsc --noEmit`).
 
 ## Build & test commands
 
@@ -208,6 +219,7 @@ backend/src/agentos/
 ├── config_schema.py     — Pydantic models (AgentConfig, ModelConfig, etc.)
 ├── agent_service.py     — agent CRUD, versioning, YAML import/export
 ├── secret_store.py      — Fernet encryption for provider keys
+├── ssl_utils.py         — shared SSL CA bundle path (corporate firewall fix)
 ├── seed.py              — seed default operator + capabilities
 ├── runner.py            — run_agent() + ScriptedModel demo (7-turn workspace check)
 ├── run_manager.py       — RunContext, _active_runs registry, start/stop/get run
@@ -237,7 +249,22 @@ backend/src/agentos/
 │   ├── providers.py     — provider CRUD, model discovery, validation
 │   ├── approvals.py     — approval list/approve/reject API
 │   ├── elicitation.py   — elicitation respond API
-│   └── agent_files.py   — MEMORY.md, skills, workspace, memory management (triples/clear)
+│   ├── agent_files.py   — MEMORY.md, skills, workspace, memory management (triples/clear)
+│   ├── mcp.py           — MCP server CRUD, credentials, OAuth, catalog, bindings
+│   ├── channels.py      — external channel CRUD, webhook receiver, test
+│   └── observability.py — runs list/detail, audit log, spend, health (Ticket 09)
+├── channels/            — external messaging channels (Ticket 08c)
+│   ├── base.py          — Channel ABC, OutboundMessage, OutputConstraints
+│   ├── registry.py      — channel class + active instance registry
+│   ├── telegram.py      — Telegram (polling + webhook)
+│   ├── discord.py       — Discord (slash commands, message create)
+│   ├── zalo_oa.py       — Zalo Official Account (webhook + HMAC)
+│   └── zalo_bot.py      — Zalo Bot Platform (polling + webhook + typing)
+├── mcp/                 — MCP client infrastructure (Ticket 08a/08b)
+│   ├── client.py        — MCP stdio/HTTP client
+│   ├── registry.py      — server registry, tool discovery
+│   ├── credentials.py   — encrypted credential storage
+│   └── oauth.py         — OAuth loopback flow
 ├── sandbox/             — process-level sandbox
 │   ├── base.py          — SandboxBackend ABC, get_backend()
 │   ├── seatbelt.py      — macOS sandbox-exec

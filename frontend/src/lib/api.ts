@@ -1,6 +1,6 @@
 // API client — the only way the frontend talks to the backend (D33)
 
-import type { Agent, AgentVersion, Approval, CapabilityGrant, ChannelInfo, HeartbeatConfig, Limits, Message, ModelInfo, Operator, Provider, SessionInfo, Skill, SkillInfo, WorkspaceEntry } from "./types";
+import type { Agent, AgentVersion, Approval, AuditOut, CapabilityGrant, ChannelInfo, HealthStatus, HeartbeatConfig, Limits, Message, ModelInfo, Operator, OperatorAuditOut, Provider, RunDetail, RunSummary, SessionInfo, Skill, SkillInfo, SpendSummary, WorkspaceEntry } from "./types";
 
 const BASE = ""; // same origin via Vite proxy
 
@@ -416,4 +416,39 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ chat_id }),
     }),
+
+  // Observability (Ticket 09)
+  listRuns: (params?: { agent_id?: string; status?: string; trigger?: string; is_test?: boolean; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.agent_id) qs.set("agent_id", params.agent_id);
+    if (params?.status) qs.set("status", params.status);
+    if (params?.trigger) qs.set("trigger", params.trigger);
+    if (params?.is_test !== undefined) qs.set("is_test", String(params.is_test));
+    if (params?.limit) qs.set("limit", String(params.limit));
+    if (params?.offset) qs.set("offset", String(params.offset));
+    const q = qs.toString();
+    return request<RunSummary[]>(`/api/runs${q ? `?${q}` : ""}`);
+  },
+  getRunDetail: (runId: string) =>
+    request<RunDetail>(`/api/runs/${runId}`),
+  listAudit: (params?: { agent_id?: string; capability_name?: string; allowed?: boolean; run_id?: string; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.agent_id) qs.set("agent_id", params.agent_id);
+    if (params?.capability_name) qs.set("capability_name", params.capability_name);
+    if (params?.allowed !== undefined) qs.set("allowed", String(params.allowed));
+    if (params?.run_id) qs.set("run_id", params.run_id);
+    if (params?.limit) qs.set("limit", String(params.limit));
+    if (params?.offset) qs.set("offset", String(params.offset));
+    const q = qs.toString();
+    return request<AuditOut[]>(`/api/audit${q ? `?${q}` : ""}`);
+  },
+  getSpend: (days = 1, agentId?: string) => {
+    const qs = new URLSearchParams({ days: String(days) });
+    if (agentId) qs.set("agent_id", agentId);
+    return request<SpendSummary>(`/api/spend?${qs.toString()}`);
+  },
+  listOperatorAudit: (limit = 50, offset = 0) =>
+    request<OperatorAuditOut[]>(`/api/operator-audit?limit=${limit}&offset=${offset}`),
+  getHealth: () =>
+    request<HealthStatus>("/api/health"),
 };
