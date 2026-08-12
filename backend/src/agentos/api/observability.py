@@ -6,6 +6,7 @@ GET  /api/audit          — paginated syscall/audit log
 GET  /api/spend          — spend summary (today + breakdowns)
 GET  /api/health         — system health (DB, providers)
 GET  /api/operator-audit — operator action audit trail
+GET  /api/stats          — dashboard stats (KPIs + time-series + per-agent)
 """
 
 import logging
@@ -422,4 +423,171 @@ async def system_health(
         agents=agent_count,
         active_runs=active_runs,
         timestamp=datetime.now(UTC),
+    )
+
+
+# --- Dashboard stats (Langfuse-style overview) ---
+
+
+class TimeSeriesPoint(BaseModel):
+    date: str  # YYYY-MM-DD
+    runs: int
+    cost: float
+    tokens: int
+    errors: int
+
+
+class AgentStat(BaseModel):
+    agent_id: str
+    agent_name: str | None = None
+    run_count: int
+    total_cost: float
+    total_tokens: int
+    error_count: int
+    last_active: datetime | None = None
+
+
+class DashboardStats(BaseModel):
+    total_runs: int
+    total_cost: float
+    total_tokens: int
+    error_count: int
+    error_rate: float
+    avg_latency_ms: float
+    time_series: list[TimeSeriesPoint]
+    by_agent: list[AgentStat]
+    recent_runs: list[RunSummary]
+
+
+@router.get("/stats")
+async def get_dashboard_stats(
+    days: int = Query(7, ge=1, le=90),
+    db: AsyncSession = Depends(get_db),
+    _op=Depends(require_operator),
+) -> DashboardStats:
+    """Dashboard overview stats — KPIs, time-series, per-agent, recent runs."""
+    from datetime import timedelta
+
+    now = datetime.now(UTC)
+    since = now - timedelta(days=days)
+
+    # --- KPIs ---
+    kpi_result = await db.execute(
+        select(
+            func.count(Run.id),
+            func.coalesce(func.sum(Run.cost), 0.0),
+            func.coalesce(func.sum(Run.tokens_in + Run.tokens_out), 0),
+            func.count(Run.id).filter(Run.status == "failed"),
+            func.coalesce(func.avg(Run.latency_ms), 0.0),
+        ).where(Run.is_test == False, Run.started_at >= since)  # noqa: E712
+    )
+    total_runs, total_cost, total_tokens, error_count, avg_latency = kpi_result.one()
+    error_rate = (error_count / total_runs * 100) if total_runs > 0 else 0.0
+
+    # --- Time series (daily aggregation) ---
+    # Use func.date to truncate to day
+    date_col = func.date(Run.started_at).label("run_date")
+    ts_result = await db.execute(
+        select(
+            date_col,
+            func.count(Run.id),
+            func.coalesce(func.sum(Run.cost), 0.0),
+            func.coalesce(func.sum(Run.tokens_in + Run.tokens_out), 0),
+            func.count(Run.id).filter(Run.status == "failed"),
+        )
+        .where(Run.is_test == False, Run.started_at >= since)  # noqa: E712
+        .group_by(date_col)
+        .order_by(date_col)
+    )
+    ts_map: dict[str, TimeSeriesPoint] = {}
+    for row in ts_result.all():
+        d = str(row[0])
+        ts_map[d] = TimeSeriesPoint(
+            date=d,
+            runs=row[1],
+            cost=row[2] or 0.0,
+            tokens=row[3] or 0,
+            errors=row[4],
+        )
+
+    # Fill missing days with zeros
+    time_series: list[TimeSeriesPoint] = []
+    for i in range(days):
+        day = (now - timedelta(days=days - 1 - i)).strftime("%Y-%m-%d")
+        if day in ts_map:
+            time_series.append(ts_map[day])
+        else:
+            time_series.append(TimeSeriesPoint(date=day, runs=0, cost=0.0, tokens=0, errors=0))
+
+    # --- Per-agent stats ---
+    agent_result = await db.execute(
+        select(
+            Run.agent_id,
+            func.count(Run.id),
+            func.coalesce(func.sum(Run.cost), 0.0),
+            func.coalesce(func.sum(Run.tokens_in + Run.tokens_out), 0),
+            func.count(Run.id).filter(Run.status == "failed"),
+            func.max(Run.started_at),
+        )
+        .where(Run.is_test == False, Run.started_at >= since)  # noqa: E712
+        .group_by(Run.agent_id)
+        .order_by(func.sum(Run.cost).desc())
+    )
+    agent_rows = agent_result.all()
+    agent_ids = {row[0] for row in agent_rows}
+    agent_names: dict[str, str] = {}
+    if agent_ids:
+        ag_result = await db.execute(select(Agent.id, Agent.name).where(Agent.id.in_(agent_ids)))
+        agent_names = {aid: name for aid, name in ag_result.all()}
+
+    by_agent = [
+        AgentStat(
+            agent_id=aid,
+            agent_name=agent_names.get(aid),
+            run_count=count,
+            total_cost=cost,
+            total_tokens=tokens,
+            error_count=errors,
+            last_active=last_active,
+        )
+        for aid, count, cost, tokens, errors, last_active in agent_rows
+    ]
+
+    # --- Recent runs (last 10) ---
+    recent_result = await db.execute(
+        select(Run)
+        .where(Run.is_test == False)  # noqa: E712
+        .order_by(Run.started_at.desc())
+        .limit(10)
+    )
+    recent_runs = [
+        RunSummary(
+            id=r.id,
+            agent_id=r.agent_id,
+            agent_name=agent_names.get(r.agent_id),
+            session_id=r.session_id,
+            status=r.status,
+            trigger=r.trigger,
+            tokens_in=r.tokens_in,
+            tokens_out=r.tokens_out,
+            cost=r.cost,
+            latency_ms=r.latency_ms,
+            is_test=r.is_test,
+            started_at=r.started_at,
+            completed_at=r.completed_at,
+            error=r.error,
+        )
+        for r in recent_result.scalars().all()
+    ]
+
+    return DashboardStats(
+        total_runs=total_runs or 0,
+        total_cost=total_cost or 0.0,
+        total_tokens=total_tokens or 0,
+        error_count=error_count or 0,
+        error_rate=round(error_rate, 1),
+        avg_latency_ms=round(float(avg_latency or 0), 0),
+        time_series=time_series,
+        by_agent=by_agent,
+        recent_runs=recent_runs,
     )

@@ -360,3 +360,33 @@ export interface HealthStatus {
   active_runs: number;
   timestamp: string;
 }
+
+export interface TimeSeriesPoint {
+  date: string;
+  runs: number;
+  cost: number;
+  tokens: number;
+  errors: number;
+}
+
+export interface AgentStat {
+  agent_id: string;
+  agent_name: string | null;
+  run_count: number;
+  total_cost: number;
+  total_tokens: number;
+  error_count: number;
+  last_active: string | null;
+}
+
+export interface DashboardStats {
+  total_runs: number;
+  total_cost: number;
+  total_tokens: number;
+  error_count: number;
+  error_rate: number;
+  avg_latency_ms: number;
+  time_series: TimeSeriesPoint[];
+  by_agent: AgentStat[];
+  recent_runs: RunSummary[];
+}

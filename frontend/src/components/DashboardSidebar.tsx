@@ -9,6 +9,7 @@ import {
   LogOut,
   PanelLeft,
   Database,
+  GitBranch,
 } from "lucide-react";
 import { LogoMark } from "@/components/LogoMark";
 
@@ -20,6 +21,7 @@ export type NavKey =
   | "channels"
   | "vault"
   | "observability"
+  | "traces"
   | "settings";
 
 interface DashboardSidebarProps {
@@ -70,7 +72,10 @@ export function DashboardSidebar({
     },
     {
       label: "Observability",
-      items: [{ key: "observability", label: "Overview", icon: Activity }],
+      items: [
+        { key: "observability", label: "Overview", icon: Activity },
+        { key: "traces", label: "Traces", icon: GitBranch },
+      ],
     },
   ];
 

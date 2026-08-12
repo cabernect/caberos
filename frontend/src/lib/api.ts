@@ -1,6 +1,6 @@
 // API client — the only way the frontend talks to the backend (D33)
 
-import type { Agent, AgentVersion, Approval, AuditOut, CapabilityGrant, ChannelInfo, HealthStatus, HeartbeatConfig, Limits, Message, ModelInfo, Operator, OperatorAuditOut, Provider, RunDetail, RunSummary, SessionInfo, Skill, SkillInfo, SpendSummary, WorkspaceEntry } from "./types";
+import type { Agent, AgentVersion, Approval, AuditOut, CapabilityGrant, ChannelInfo, DashboardStats, HealthStatus, HeartbeatConfig, Limits, Message, ModelInfo, Operator, OperatorAuditOut, Provider, RunDetail, RunSummary, SessionInfo, Skill, SkillInfo, SpendSummary, WorkspaceEntry } from "./types";
 
 const BASE = ""; // same origin via Vite proxy
 
@@ -451,4 +451,6 @@ export const api = {
     request<OperatorAuditOut[]>(`/api/operator-audit?limit=${limit}&offset=${offset}`),
   getHealth: () =>
     request<HealthStatus>("/api/health"),
+  getDashboardStats: (days = 7) =>
+    request<DashboardStats>(`/api/stats?days=${days}`),
 };

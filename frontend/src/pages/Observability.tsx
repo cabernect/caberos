@@ -1,94 +1,30 @@
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { Activity, ChevronRight, DollarSign, Shield, AlertCircle, Clock, Cpu } from "lucide-react";
+import { Activity, DollarSign, Zap, AlertTriangle, Clock, TrendingUp, ChevronRight } from "lucide-react";
 import { DashboardSidebar, type NavKey } from "@/components/DashboardSidebar";
 import { api } from "@/lib/api";
-import type { RunSummary, RunDetail, AuditOut, SpendSummary, HealthStatus, Agent } from "@/lib/types";
-
-type Tab = "runs" | "audit" | "spend" | "health";
+import type { DashboardStats, Agent } from "@/lib/types";
 
 export function Observability() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [tab, setTab] = useState<Tab>("runs");
+  const [stats, setStats] = useState<DashboardStats | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [days, setDays] = useState(7);
   const navigate = useNavigate();
 
-  // Runs state
-  const [runs, setRuns] = useState<RunSummary[]>([]);
-  const [runFilterAgent, setRunFilterAgent] = useState("");
-  const [runFilterStatus, setRunFilterStatus] = useState("");
-  const [selectedRun, setSelectedRun] = useState<RunDetail | null>(null);
-  const [loadingRuns, setLoadingRuns] = useState(false);
-
-  // Audit state
-  const [auditRecords, setAuditRecords] = useState<AuditOut[]>([]);
-  const [auditFilterAgent, setAuditFilterAgent] = useState("");
-  const [auditFilterAllowed, setAuditFilterAllowed] = useState("");
-  const [loadingAudit, setLoadingAudit] = useState(false);
-
-  // Spend state
-  const [spend, setSpend] = useState<SpendSummary | null>(null);
-  const [spendDays, setSpendDays] = useState(1);
-
-  // Health state
-  const [health, setHealth] = useState<HealthStatus | null>(null);
+  const fetchStats = useCallback(async () => {
+    try {
+      const data = await api.getDashboardStats(days);
+      setStats(data);
+    } catch {
+      setStats(null);
+    }
+  }, [days]);
 
   const fetchAgents = useCallback(async () => {
     try {
-      const ags = await api.listAgents();
-      setAgents(ags);
+      setAgents(await api.listAgents());
     } catch {}
-  }, []);
-
-  const fetchRuns = useCallback(async () => {
-    setLoadingRuns(true);
-    try {
-      const data = await api.listRuns({
-        agent_id: runFilterAgent || undefined,
-        status: runFilterStatus || undefined,
-        is_test: false,
-        limit: 100,
-      });
-      setRuns(data);
-    } catch {
-      setRuns([]);
-    } finally {
-      setLoadingRuns(false);
-    }
-  }, [runFilterAgent, runFilterStatus]);
-
-  const fetchAudit = useCallback(async () => {
-    setLoadingAudit(true);
-    try {
-      const data = await api.listAudit({
-        agent_id: auditFilterAgent || undefined,
-        allowed: auditFilterAllowed === "" ? undefined : auditFilterAllowed === "true",
-        limit: 100,
-      });
-      setAuditRecords(data);
-    } catch {
-      setAuditRecords([]);
-    } finally {
-      setLoadingAudit(false);
-    }
-  }, [auditFilterAgent, auditFilterAllowed]);
-
-  const fetchSpend = useCallback(async () => {
-    try {
-      const data = await api.getSpend(spendDays);
-      setSpend(data);
-    } catch {
-      setSpend(null);
-    }
-  }, [spendDays]);
-
-  const fetchHealth = useCallback(async () => {
-    try {
-      const data = await api.getHealth();
-      setHealth(data);
-    } catch {
-      setHealth(null);
-    }
   }, []);
 
   useEffect(() => {
@@ -96,11 +32,8 @@ export function Observability() {
   }, [fetchAgents]);
 
   useEffect(() => {
-    if (tab === "runs") fetchRuns();
-    if (tab === "audit") fetchAudit();
-    if (tab === "spend") fetchSpend();
-    if (tab === "health") fetchHealth();
-  }, [tab, fetchRuns, fetchAudit, fetchSpend, fetchHealth]);
+    fetchStats();
+  }, [fetchStats]);
 
   const handleLogout = async () => {
     try {
@@ -111,26 +44,34 @@ export function Observability() {
 
   const handleNavigate = (page: NavKey) => {
     if (page === "agents") navigate("/agents");
-    if (page === "settings") navigate("/settings");
-    if (page === "vault") navigate("/vault");
-    if (page === "skills") navigate("/skills");
-    if (page === "scheduler") navigate("/scheduler");
-    if (page === "mcps") navigate("/mcps");
-    if (page === "channels") navigate("/channels");
-    if (page === "observability") return;
+    else if (page === "settings") navigate("/settings");
+    else if (page === "vault") navigate("/vault");
+    else if (page === "skills") navigate("/skills");
+    else if (page === "scheduler") navigate("/scheduler");
+    else if (page === "mcps") navigate("/mcps");
+    else if (page === "channels") navigate("/channels");
+    else if (page === "observability") navigate("/observability");
+    else if (page === "traces") navigate("/traces");
   };
 
   const agentName = (id: string) => agents.find((a) => a.id === id)?.name || id.slice(0, 8);
-  const fmtCost = (c: number) => `$${c.toFixed(4)}`;
+  const fmtCost = (c: number) => (c < 0.01 ? `$${c.toFixed(6)}` : `$${c.toFixed(4)}`);
   const fmtDate = (d: string) => new Date(d).toLocaleString();
-  const fmtLatency = (ms: number) => (ms > 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`);
+  const fmtDay = (d: string) => {
+    const date = new Date(d + "T00:00:00");
+    return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  };
 
   const statusColor = (s: string) => {
-    if (s === "completed") return "var(--green, #22c55e)";
-    if (s === "failed") return "var(--red, #ef4444)";
-    if (s === "running") return "var(--blue, #3b82f6)";
+    if (s === "completed") return "#22c55e";
+    if (s === "failed") return "#ef4444";
+    if (s === "running") return "#3b82f6";
     return "var(--ink-3)";
   };
+
+  // Chart helpers (guard against null)
+  const maxRuns = stats ? Math.max(1, ...stats.time_series.map((t) => t.runs)) : 1;
+  const maxCost = stats ? Math.max(0.001, ...stats.time_series.map((t) => t.cost)) : 1;
 
   return (
     <div className="flex h-screen overflow-hidden" style={{ background: "var(--surface)" }}>
@@ -146,356 +87,189 @@ export function Observability() {
       <div className="flex min-w-0 flex-1 flex-col">
         {/* Header */}
         <div className="px-8 py-5" style={{ background: "var(--sidebar)", borderBottom: "1px solid var(--border)" }}>
-          <div className="flex items-center gap-2">
-            <Activity className="h-5 w-5" style={{ color: "var(--accent)" }} />
-            <h1 className="text-[18px] font-semibold text-[var(--ink)]">Observability</h1>
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="flex items-center gap-2">
+                <Activity className="h-5 w-5" style={{ color: "var(--accent)" }} />
+                <h1 className="text-[18px] font-semibold text-[var(--ink)]">Overview</h1>
+              </div>
+              <p className="mt-0.5 text-[13px] text-[var(--ink-2)]">
+                Agent observability dashboard
+              </p>
+            </div>
+            {/* Time range selector */}
+            <div className="flex gap-1">
+              {[
+                { d: 1, label: "Today" },
+                { d: 7, label: "7 days" },
+                { d: 30, label: "30 days" },
+              ].map((r) => (
+                <button
+                  key={r.d}
+                  onClick={() => setDays(r.d)}
+                  className="rounded-[4px] px-3 py-1.5 text-[12px] font-medium transition"
+                  style={{
+                    background: days === r.d ? "var(--accent)" : "transparent",
+                    color: days === r.d ? "white" : "var(--ink-2)",
+                    border: "1px solid var(--border)",
+                    cursor: "pointer",
+                  }}
+                >
+                  {r.label}
+                </button>
+              ))}
+            </div>
           </div>
-          <p className="mt-0.5 text-[13px] text-[var(--ink-2)]">
-            Audit every action — runs, syscalls, spend, and system health
-          </p>
         </div>
 
-        {/* Tabs */}
-        <div className="flex gap-1 px-8 pt-4" style={{ borderBottom: "1px solid var(--border)" }}>
-          {([
-            { key: "runs", label: "Runs", icon: Clock },
-            { key: "audit", label: "Syscall Log", icon: Shield },
-            { key: "spend", label: "Spend", icon: DollarSign },
-            { key: "health", label: "Health", icon: Cpu },
-          ] as { key: Tab; label: string; icon: typeof Clock }[]).map((t) => {
-            const Icon = t.icon;
-            return (
-              <button
-                key={t.key}
-                onClick={() => setTab(t.key)}
-                className="flex items-center gap-1.5 px-3 py-2 text-[13px] font-medium transition"
-                style={{
-                  color: tab === t.key ? "var(--accent)" : "var(--ink-2)",
-                  borderBottom: tab === t.key ? "2px solid var(--accent)" : "2px solid transparent",
-                  background: "none",
-                  cursor: "pointer",
-                }}
-              >
-                <Icon className="h-3.5 w-3.5" />
-                {t.label}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Content */}
+        {/* Dashboard content */}
         <div className="flex-1 overflow-y-auto px-8 py-6">
-          <div className="mx-auto max-w-5xl">
-            {/* Runs tab */}
-            {tab === "runs" && (
-              <div>
-                {/* Run detail modal */}
-                {selectedRun ? (
-                  <RunDetailView
-                    run={selectedRun}
-                    agentName={agentName(selectedRun.agent_id)}
-                    fmtCost={fmtCost}
-                    fmtDate={fmtDate}
-                    fmtLatency={fmtLatency}
-                    statusColor={statusColor}
-                    onBack={() => setSelectedRun(null)}
+          <div className="mx-auto max-w-6xl space-y-6">
+            {stats ? (
+              <>
+                {/* KPI cards */}
+                <div className="grid grid-cols-5 gap-4">
+                  <KpiCard
+                    icon={Activity}
+                    label="Total runs"
+                    value={stats.total_runs.toString()}
+                    sub={`${days === 1 ? "today" : `${days} days`}`}
                   />
-                ) : (
-                  <>
-                    {/* Filters */}
-                    <div className="mb-4 flex gap-3">
-                      <select
-                        value={runFilterAgent}
-                        onChange={(e) => setRunFilterAgent(e.target.value)}
-                        className="rounded-[4px] border px-2 py-1.5 text-[13px]"
-                        style={{ borderColor: "var(--border)", background: "var(--white)", color: "var(--ink)" }}
-                      >
-                        <option value="">All agents</option>
-                        {agents.map((a) => (
-                          <option key={a.id} value={a.id}>{a.name}</option>
-                        ))}
-                      </select>
-                      <select
-                        value={runFilterStatus}
-                        onChange={(e) => setRunFilterStatus(e.target.value)}
-                        className="rounded-[4px] border px-2 py-1.5 text-[13px]"
-                        style={{ borderColor: "var(--border)", background: "var(--white)", color: "var(--ink)" }}
-                      >
-                        <option value="">All statuses</option>
-                        <option value="completed">Completed</option>
-                        <option value="failed">Failed</option>
-                        <option value="running">Running</option>
-                      </select>
-                      <button
-                        onClick={fetchRuns}
-                        className="rounded-[4px] border px-3 py-1.5 text-[13px]"
-                        style={{ borderColor: "var(--border)", color: "var(--ink-2)" }}
-                      >
-                        Refresh
-                      </button>
-                    </div>
+                  <KpiCard
+                    icon={DollarSign}
+                    label="Total cost"
+                    value={fmtCost(stats.total_cost)}
+                    sub={`${days === 1 ? "today" : `${days} days`}`}
+                  />
+                  <KpiCard
+                    icon={Zap}
+                    label="Total tokens"
+                    value={stats.total_tokens.toLocaleString()}
+                    sub="in + out"
+                  />
+                  <KpiCard
+                    icon={AlertTriangle}
+                    label="Error rate"
+                    value={`${stats.error_rate}%`}
+                    sub={`${stats.error_count} failed`}
+                    color={stats.error_rate > 10 ? "#ef4444" : undefined}
+                  />
+                  <KpiCard
+                    icon={Clock}
+                    label="Avg latency"
+                    value={stats.avg_latency_ms > 1000
+                      ? `${(stats.avg_latency_ms / 1000).toFixed(1)}s`
+                      : `${stats.avg_latency_ms}ms`}
+                    sub="per run"
+                  />
+                </div>
 
-                    {/* Runs table */}
-                    {loadingRuns ? (
-                      <p className="py-8 text-center text-[13px] text-[var(--ink-3)]">Loading...</p>
-                    ) : runs.length === 0 ? (
-                      <p className="py-8 text-center text-[13px] text-[var(--ink-3)]">No runs found</p>
+                {/* Charts row */}
+                <div className="grid grid-cols-2 gap-4">
+                  {/* Runs per day */}
+                  <ChartCard title="Runs per day">
+                    <BarChart
+                      data={stats.time_series.map((t) => ({ label: fmtDay(t.date), value: t.runs, maxValue: maxRuns }))}
+                      color="#3b82f6"
+                      valueFormatter={(v) => `${v} runs`}
+                    />
+                  </ChartCard>
+
+                  {/* Cost per day */}
+                  <ChartCard title="Cost per day">
+                    <BarChart
+                      data={stats.time_series.map((t) => ({ label: fmtDay(t.date), value: t.cost, maxValue: maxCost }))}
+                      color="#22c55e"
+                      valueFormatter={(v) => fmtCost(v)}
+                    />
+                  </ChartCard>
+                </div>
+
+                {/* Bottom row: agents + recent runs */}
+                <div className="grid grid-cols-2 gap-4">
+                  {/* Top agents */}
+                  <div className="rounded-[8px] border p-4" style={{ borderColor: "var(--border)", background: "var(--white)" }}>
+                    <div className="mb-3 flex items-center gap-2">
+                      <TrendingUp className="h-4 w-4" style={{ color: "var(--accent)" }} />
+                      <h3 className="text-[14px] font-semibold text-[var(--ink)]">Top agents by cost</h3>
+                    </div>
+                    {stats.by_agent.length === 0 ? (
+                      <p className="text-[12px] text-[var(--ink-3)]">No agent activity</p>
                     ) : (
-                      <div className="overflow-x-auto rounded-[8px] border" style={{ borderColor: "var(--border)" }}>
-                        <table className="w-full text-[12px]">
-                          <thead style={{ background: "var(--surface)" }}>
-                            <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                              <th className="px-3 py-2 text-left font-medium text-[var(--ink-2)]">Agent</th>
-                              <th className="px-3 py-2 text-left font-medium text-[var(--ink-2)]">Status</th>
-                              <th className="px-3 py-2 text-left font-medium text-[var(--ink-2)]">Trigger</th>
-                              <th className="px-3 py-2 text-right font-medium text-[var(--ink-2)]">Cost</th>
-                              <th className="px-3 py-2 text-right font-medium text-[var(--ink-2)]">Tokens</th>
-                              <th className="px-3 py-2 text-right font-medium text-[var(--ink-2)]">Latency</th>
-                              <th className="px-3 py-2 text-left font-medium text-[var(--ink-2)]">Started</th>
-                              <th className="px-3 py-2"></th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {runs.map((r) => (
-                              <tr
-                                key={r.id}
-                                className="cursor-pointer transition hover:bg-[var(--surface)]"
-                                style={{ borderBottom: "1px solid var(--border)" }}
-                                onClick={async () => {
-                                  try {
-                                    const detail = await api.getRunDetail(r.id);
-                                    setSelectedRun(detail);
-                                  } catch {}
-                                }}
-                              >
-                                <td className="px-3 py-2 text-[var(--ink)]">{r.agent_name || agentName(r.agent_id)}</td>
-                                <td className="px-3 py-2">
-                                  <span style={{ color: statusColor(r.status), fontWeight: 500 }}>{r.status}</span>
-                                </td>
-                                <td className="px-3 py-2 text-[var(--ink-2)]">{r.trigger}</td>
-                                <td className="px-3 py-2 text-right text-[var(--ink-2)]">{fmtCost(r.cost)}</td>
-                                <td className="px-3 py-2 text-right text-[var(--ink-2)]">
-                                  {r.tokens_in + r.tokens_out}
-                                </td>
-                                <td className="px-3 py-2 text-right text-[var(--ink-2)]">{fmtLatency(r.latency_ms)}</td>
-                                <td className="px-3 py-2 text-[var(--ink-3)]">{fmtDate(r.started_at)}</td>
-                                <td className="px-3 py-2">
-                                  <ChevronRight className="h-3.5 w-3.5 text-[var(--ink-3)]" />
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                      <div className="space-y-3">
+                        {stats.by_agent.slice(0, 5).map((a) => {
+                          const pct = stats.total_cost > 0 ? (a.total_cost / stats.total_cost) * 100 : 0;
+                          return (
+                            <div
+                              key={a.agent_id}
+                              className="cursor-pointer rounded-[4px] p-2 transition hover:bg-[var(--surface)]"
+                              onClick={() => navigate(`/traces/${a.agent_id}`)}
+                            >
+                              <div className="flex items-center justify-between text-[12px]">
+                                <span className="font-medium text-[var(--ink)]">
+                                  {a.agent_name || agentName(a.agent_id)}
+                                </span>
+                                <span className="text-[var(--ink-2)]">
+                                  {fmtCost(a.total_cost)} · {a.run_count} runs
+                                </span>
+                              </div>
+                              <div className="mt-1 flex items-center gap-2">
+                                <div className="h-1.5 flex-1 rounded-full" style={{ background: "var(--border)" }}>
+                                  <div
+                                    className="h-1.5 rounded-full transition-all"
+                                    style={{ width: `${pct}%`, background: "var(--accent)" }}
+                                  />
+                                </div>
+                                <span className="text-[10px] text-[var(--ink-3)]">
+                                  {a.error_count > 0 ? `${a.error_count} errors` : "no errors"}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
-                  </>
-                )}
-              </div>
-            )}
+                  </div>
 
-            {/* Audit tab */}
-            {tab === "audit" && (
-              <div>
-                <div className="mb-4 flex gap-3">
-                  <select
-                    value={auditFilterAgent}
-                    onChange={(e) => setAuditFilterAgent(e.target.value)}
-                    className="rounded-[4px] border px-2 py-1.5 text-[13px]"
-                    style={{ borderColor: "var(--border)", background: "var(--white)", color: "var(--ink)" }}
-                  >
-                    <option value="">All agents</option>
-                    {agents.map((a) => (
-                      <option key={a.id} value={a.id}>{a.name}</option>
-                    ))}
-                  </select>
-                  <select
-                    value={auditFilterAllowed}
-                    onChange={(e) => setAuditFilterAllowed(e.target.value)}
-                    className="rounded-[4px] border px-2 py-1.5 text-[13px]"
-                    style={{ borderColor: "var(--border)", background: "var(--white)", color: "var(--ink)" }}
-                  >
-                    <option value="">All outcomes</option>
-                    <option value="true">Allowed</option>
-                    <option value="false">Denied</option>
-                  </select>
-                  <button
-                    onClick={fetchAudit}
-                    className="rounded-[4px] border px-3 py-1.5 text-[13px]"
-                    style={{ borderColor: "var(--border)", color: "var(--ink-2)" }}
-                  >
-                    Refresh
-                  </button>
-                </div>
-
-                {loadingAudit ? (
-                  <p className="py-8 text-center text-[13px] text-[var(--ink-3)]">Loading...</p>
-                ) : auditRecords.length === 0 ? (
-                  <p className="py-8 text-center text-[13px] text-[var(--ink-3)]">No syscall records found</p>
-                ) : (
-                  <div className="overflow-x-auto rounded-[8px] border" style={{ borderColor: "var(--border)" }}>
-                    <table className="w-full text-[12px]">
-                      <thead style={{ background: "var(--surface)" }}>
-                        <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                          <th className="px-3 py-2 text-left font-medium text-[var(--ink-2)]">Capability</th>
-                          <th className="px-3 py-2 text-left font-medium text-[var(--ink-2)]">Agent</th>
-                          <th className="px-3 py-2 text-left font-medium text-[var(--ink-2)]">Outcome</th>
-                          <th className="px-3 py-2 text-left font-medium text-[var(--ink-2)]">Reason</th>
-                          <th className="px-3 py-2 text-right font-medium text-[var(--ink-2)]">Cost</th>
-                          <th className="px-3 py-2 text-right font-medium text-[var(--ink-2)]">Latency</th>
-                          <th className="px-3 py-2 text-left font-medium text-[var(--ink-2)]">Run</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {auditRecords.map((a) => (
-                          <tr key={a.id} style={{ borderBottom: "1px solid var(--border)" }}>
-                            <td className="px-3 py-2 font-mono text-[var(--ink)]">{a.capability_name}</td>
-                            <td className="px-3 py-2 text-[var(--ink-2)]">{agentName(a.agent_id)}</td>
-                            <td className="px-3 py-2">
-                              {a.allowed ? (
-                                <span style={{ color: "var(--green, #22c55e)" }}>allowed</span>
-                              ) : (
-                                <span style={{ color: "var(--red, #ef4444)", fontWeight: 500 }}>DENIED</span>
-                              )}
-                            </td>
-                            <td className="px-3 py-2 text-[var(--ink-3)]">{a.denied_reason || "—"}</td>
-                            <td className="px-3 py-2 text-right text-[var(--ink-2)]">{a.cost > 0 ? fmtCost(a.cost) : "—"}</td>
-                            <td className="px-3 py-2 text-right text-[var(--ink-2)]">{a.latency_ms > 0 ? fmtLatency(a.latency_ms) : "—"}</td>
-                            <td className="px-3 py-2 font-mono text-[var(--ink-3)]">{a.run_id.slice(0, 8)}</td>
-                          </tr>
+                  {/* Recent runs */}
+                  <div className="rounded-[8px] border p-4" style={{ borderColor: "var(--border)", background: "var(--white)" }}>
+                    <div className="mb-3 flex items-center justify-between">
+                      <h3 className="text-[14px] font-semibold text-[var(--ink)]">Recent runs</h3>
+                      <button
+                        onClick={() => navigate("/traces")}
+                        className="text-[12px] text-[var(--accent)]"
+                        style={{ background: "none", border: "none", cursor: "pointer" }}
+                      >
+                        View all →
+                      </button>
+                    </div>
+                    {stats.recent_runs.length === 0 ? (
+                      <p className="text-[12px] text-[var(--ink-3)]">No recent runs</p>
+                    ) : (
+                      <div className="space-y-1">
+                        {stats.recent_runs.slice(0, 6).map((r) => (
+                          <div
+                            key={r.id}
+                            className="flex cursor-pointer items-center gap-2 rounded-[4px] p-2 text-[12px] transition hover:bg-[var(--surface)]"
+                            onClick={() => navigate(`/traces/${r.agent_id}/${r.id}`)}
+                          >
+                            <div className="h-1.5 w-1.5 rounded-full" style={{ background: statusColor(r.status) }} />
+                            <span className="flex-1 truncate text-[var(--ink)]">
+                              {r.agent_name || agentName(r.agent_id)}
+                            </span>
+                            <span className="text-[var(--ink-3)]">{fmtCost(r.cost)}</span>
+                            <span className="text-[var(--ink-3)]">{r.tokens_in + r.tokens_out} tok</span>
+                            <ChevronRight className="h-3 w-3 text-[var(--ink-3)]" />
+                          </div>
                         ))}
-                      </tbody>
-                    </table>
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-            )}
-
-            {/* Spend tab */}
-            {tab === "spend" && (
-              <div>
-                <div className="mb-4 flex gap-3">
-                  {[1, 7, 30].map((d) => (
-                    <button
-                      key={d}
-                      onClick={() => setSpendDays(d)}
-                      className="rounded-[4px] px-3 py-1.5 text-[13px] font-medium"
-                      style={{
-                        background: spendDays === d ? "var(--accent)" : "var(--surface)",
-                        color: spendDays === d ? "white" : "var(--ink-2)",
-                        border: "1px solid var(--border)",
-        cursor: "pointer",
-                      }}
-                    >
-                      {d === 1 ? "Today" : `${d} days`}
-                    </button>
-                  ))}
                 </div>
-
-                {spend ? (
-                  <div className="space-y-4">
-                    {/* Summary cards */}
-                    <div className="grid grid-cols-3 gap-4">
-                      <div className="rounded-[8px] border p-4" style={{ borderColor: "var(--border)", background: "var(--white)" }}>
-                        <p className="text-[11px] text-[var(--ink-3)]">Total spend</p>
-                        <p className="mt-1 text-[24px] font-semibold text-[var(--ink)]">{fmtCost(spend.total_cost)}</p>
-                      </div>
-                      <div className="rounded-[8px] border p-4" style={{ borderColor: "var(--border)", background: "var(--white)" }}>
-                        <p className="text-[11px] text-[var(--ink-3)]">Total runs</p>
-                        <p className="mt-1 text-[24px] font-semibold text-[var(--ink)]">{spend.total_runs}</p>
-                      </div>
-                      <div className="rounded-[8px] border p-4" style={{ borderColor: "var(--border)", background: "var(--white)" }}>
-                        <p className="text-[11px] text-[var(--ink-3)]">Total tokens</p>
-                        <p className="mt-1 text-[24px] font-semibold text-[var(--ink)]">
-                          {(spend.total_tokens_in + spend.total_tokens_out).toLocaleString()}
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* By agent */}
-                    <div className="rounded-[8px] border p-4" style={{ borderColor: "var(--border)", background: "var(--white)" }}>
-                      <h3 className="mb-3 text-[14px] font-semibold text-[var(--ink)]">By agent</h3>
-                      {spend.by_agent.length === 0 ? (
-                        <p className="text-[12px] text-[var(--ink-3)]">No spend data</p>
-                      ) : (
-                        <div className="space-y-2">
-                          {spend.by_agent
-                            .sort((a, b) => b.total_cost - a.total_cost)
-                            .map((a) => {
-                              const pct = spend.total_cost > 0 ? (a.total_cost / spend.total_cost) * 100 : 0;
-                              return (
-                                <div key={a.agent_id}>
-                                  <div className="flex justify-between text-[12px]">
-                                    <span className="text-[var(--ink)]">{a.agent_name || agentName(a.agent_id)}</span>
-                                    <span className="text-[var(--ink-2)]">
-                                      {fmtCost(a.total_cost)} · {a.run_count} runs
-                                    </span>
-                                  </div>
-                                  <div className="mt-1 h-1.5 rounded-full" style={{ background: "var(--border)" }}>
-                                    <div
-                                      className="h-1.5 rounded-full"
-                                      style={{ width: `${pct}%`, background: "var(--accent)" }}
-                                    />
-                                  </div>
-                                </div>
-                              );
-                            })}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* By trigger */}
-                    <div className="rounded-[8px] border p-4" style={{ borderColor: "var(--border)", background: "var(--white)" }}>
-                      <h3 className="mb-3 text-[14px] font-semibold text-[var(--ink)]">By trigger</h3>
-                      {Object.keys(spend.by_trigger).length === 0 ? (
-                        <p className="text-[12px] text-[var(--ink-3)]">No spend data</p>
-                      ) : (
-                        <div className="space-y-2">
-                          {Object.entries(spend.by_trigger).map(([trigger, cost]) => (
-                            <div key={trigger} className="flex justify-between text-[12px]">
-                              <span className="text-[var(--ink)]">{trigger}</span>
-                              <span className="text-[var(--ink-2)]">{fmtCost(cost)}</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  <p className="py-8 text-center text-[13px] text-[var(--ink-3)]">Loading spend data...</p>
-                )}
-              </div>
-            )}
-
-            {/* Health tab */}
-            {tab === "health" && (
-              <div>
-                {health ? (
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="rounded-[8px] border p-4" style={{ borderColor: "var(--border)", background: "var(--white)" }}>
-                      <div className="flex items-center gap-2">
-                        <div className="h-2 w-2 rounded-full" style={{ background: "var(--green, #22c55e)" }} />
-                        <p className="text-[14px] font-semibold text-[var(--ink)]">System status</p>
-                      </div>
-                      <p className="mt-2 text-[24px] font-semibold" style={{ color: "var(--green, #22c55e)" }}>
-                        {health.status.toUpperCase()}
-                      </p>
-                    </div>
-                    <div className="rounded-[8px] border p-4" style={{ borderColor: "var(--border)", background: "var(--white)" }}>
-                      <p className="text-[14px] font-semibold text-[var(--ink)]">Database</p>
-                      <p className="mt-2 text-[16px] text-[var(--ink-2)]">{health.database}</p>
-                    </div>
-                    <div className="rounded-[8px] border p-4" style={{ borderColor: "var(--border)", background: "var(--white)" }}>
-                      <p className="text-[14px] font-semibold text-[var(--ink)]">Agents</p>
-                      <p className="mt-2 text-[24px] font-semibold text-[var(--ink)]">{health.agents}</p>
-                    </div>
-                    <div className="rounded-[8px] border p-4" style={{ borderColor: "var(--border)", background: "var(--white)" }}>
-                      <p className="text-[14px] font-semibold text-[var(--ink)]">Active runs</p>
-                      <p className="mt-2 text-[24px] font-semibold text-[var(--ink)]">{health.active_runs}</p>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="py-8 text-center text-[13px] text-[var(--ink-3)]">Loading health...</p>
-                )}
+              </>
+            ) : (
+              <div className="py-20 text-center">
+                <p className="text-[14px] text-[var(--ink-3)]">Loading dashboard...</p>
               </div>
             )}
           </div>
@@ -505,134 +279,84 @@ export function Observability() {
   );
 }
 
-// --- Run detail view ---
+// --- Reusable components ---
 
-function RunDetailView({
-  run,
-  agentName,
-  fmtCost,
-  fmtDate,
-  fmtLatency,
-  statusColor,
-  onBack,
+function KpiCard({
+  icon: Icon,
+  label,
+  value,
+  sub,
+  color,
 }: {
-  run: RunDetail;
-  agentName: string;
-  fmtCost: (c: number) => string;
-  fmtDate: (d: string) => string;
-  fmtLatency: (ms: number) => string;
-  statusColor: (s: string) => string;
-  onBack: () => void;
+  icon: typeof Activity;
+  label: string;
+  value: string;
+  sub: string;
+  color?: string;
 }) {
   return (
-    <div>
-      <button
-        onClick={onBack}
-        className="mb-4 flex items-center gap-1 text-[13px] text-[var(--ink-2)]"
-        style={{ background: "none", border: "none", cursor: "pointer" }}
-      >
-        ← Back to runs
-      </button>
-
-      {/* Run header */}
-      <div className="mb-4 rounded-[8px] border p-4" style={{ borderColor: "var(--border)", background: "var(--white)" }}>
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="text-[16px] font-semibold text-[var(--ink)]">
-              Run {run.id.slice(0, 8)} · {agentName}
-            </h3>
-            <p className="mt-1 text-[12px] text-[var(--ink-2)]">
-              {run.trigger} · <span style={{ color: statusColor(run.status) }}>{run.status}</span> · {fmtDate(run.started_at)}
-            </p>
-          </div>
-          <div className="text-right text-[12px] text-[var(--ink-2)]">
-            <p>Cost: {fmtCost(run.cost)}</p>
-            <p>Tokens: {run.tokens_in + run.tokens_out} (in: {run.tokens_in}, out: {run.tokens_out})</p>
-            <p>Latency: {fmtLatency(run.latency_ms)}</p>
-          </div>
-        </div>
-        {run.error && (
-          <div className="mt-3 flex items-start gap-2 rounded-[4px] p-2" style={{ background: "var(--red-bg, rgba(239,68,68,0.1))" }}>
-            <AlertCircle className="h-4 w-4 flex-shrink-0" style={{ color: "var(--red, #ef4444)" }} />
-            <p className="text-[12px]" style={{ color: "var(--red, #ef4444)" }}>{run.error}</p>
-          </div>
-        )}
+    <div className="rounded-[8px] border p-4" style={{ borderColor: "var(--border)", background: "var(--white)" }}>
+      <div className="flex items-center gap-2">
+        <Icon className="h-3.5 w-3.5" style={{ color: color || "var(--ink-3)" }} />
+        <p className="text-[11px] font-medium uppercase tracking-wide text-[var(--ink-3)]">{label}</p>
       </div>
+      <p className="mt-2 text-[22px] font-semibold" style={{ color: color || "var(--ink)" }}>
+        {value}
+      </p>
+      <p className="mt-0.5 text-[11px] text-[var(--ink-3)]">{sub}</p>
+    </div>
+  );
+}
 
-      {/* Messages */}
-      <div className="mb-4">
-        <h4 className="mb-2 text-[13px] font-semibold text-[var(--ink)]">Messages ({run.messages.length})</h4>
-        <div className="space-y-2">
-          {run.messages.map((m) => (
+function ChartCard({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="rounded-[8px] border p-4" style={{ borderColor: "var(--border)", background: "var(--white)" }}>
+      <h3 className="mb-3 text-[14px] font-semibold text-[var(--ink)]">{title}</h3>
+      {children}
+    </div>
+  );
+}
+
+function BarChart({
+  data,
+  color,
+  valueFormatter,
+}: {
+  data: { label: string; value: number; maxValue: number }[];
+  color: string;
+  valueFormatter: (v: number) => string;
+}) {
+  return (
+    <div className="flex h-32 items-end gap-1">
+      {data.map((d, i) => {
+        const heightPct = d.maxValue > 0 ? (d.value / d.maxValue) * 100 : 0;
+        return (
+          <div key={i} className="group relative flex flex-1 flex-col items-center justify-end" style={{ height: "100%" }}>
+            {/* Tooltip */}
             <div
-              key={m.id}
-              className="rounded-[6px] border p-3"
-              style={{ borderColor: "var(--border)", background: "var(--white)" }}
+              className="pointer-events-none absolute -top-8 z-10 whitespace-nowrap rounded-[3px] px-2 py-1 text-[10px] opacity-0 transition group-hover:opacity-100"
+              style={{ background: "var(--ink)", color: "var(--white)" }}
             >
-              <div className="flex items-center gap-2">
-                <span
-                  className="rounded-[3px] px-1.5 py-0.5 text-[10px] font-medium"
-                  style={{
-                    background: m.role === "user" ? "var(--accent)" : m.role === "assistant" ? "var(--green, #22c55e)" : "var(--border)",
-                    color: m.role === "user" || m.role === "assistant" ? "white" : "var(--ink-2)",
-                  }}
-                >
-                  {m.role}
-                </span>
-                <span className="text-[11px] text-[var(--ink-3)]">{fmtDate(m.created_at)}</span>
-                {m.subagent_id && (
-                  <span className="text-[10px] text-[var(--ink-3)]">sub: {m.subagent_id.slice(0, 8)}</span>
-                )}
-              </div>
-              <p className="mt-1.5 whitespace-pre-wrap text-[12px] text-[var(--ink)]">
-                {m.content.length > 500 ? m.content.slice(0, 500) + "..." : m.content}
-              </p>
+              {d.label}: {valueFormatter(d.value)}
             </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Audit records */}
-      {run.audit_records.length > 0 && (
-        <div>
-          <h4 className="mb-2 text-[13px] font-semibold text-[var(--ink)]">
-            Syscalls ({run.audit_records.length})
-          </h4>
-          <div className="space-y-2">
-            {run.audit_records.map((a) => (
-              <div
-                key={a.id}
-                className="rounded-[6px] border p-3"
-                style={{
-                  borderColor: a.allowed ? "var(--border)" : "var(--red, #ef4444)",
-                  background: a.allowed ? "var(--white)" : "var(--red-bg, rgba(239,68,68,0.05))",
-                }}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="font-mono text-[12px] font-medium text-[var(--ink)]">{a.capability_name}</span>
-                  <span
-                    className="text-[11px] font-medium"
-                    style={{ color: a.allowed ? "var(--green, #22c55e)" : "var(--red, #ef4444)" }}
-                  >
-                    {a.allowed ? "allowed" : "DENIED"}
-                  </span>
-                </div>
-                {a.denied_reason && (
-                  <p className="mt-1 text-[11px]" style={{ color: "var(--red, #ef4444)" }}>Reason: {a.denied_reason}</p>
-                )}
-                <p className="mt-1 text-[11px] text-[var(--ink-3)]">
-                  Args: {a.args.slice(0, 200)}{a.args.length > 200 ? "..." : ""}
-                </p>
-                {a.result && (
-                  <p className="mt-0.5 text-[11px] text-[var(--ink-3)]">
-                    Result: {a.result.slice(0, 200)}{a.result.length > 200 ? "..." : ""}
-                  </p>
-                )}
-              </div>
-            ))}
+            {/* Bar */}
+            <div
+              className="w-full rounded-t-[2px] transition-all"
+              style={{
+                height: `${Math.max(heightPct, 2)}%`,
+                background: d.value > 0 ? color : "var(--border)",
+                minHeight: 2,
+              }}
+            />
+            {/* Label (every Nth bar to avoid crowding) */}
+            {data.length <= 7 || i % Math.ceil(data.length / 7) === 0 ? (
+              <span className="mt-1 text-[9px] text-[var(--ink-3)]">{d.label}</span>
+            ) : (
+              <span className="mt-1 text-[9px] opacity-0">.</span>
+            )}
           </div>
-        </div>
-      )}
+        );
+      })}
     </div>
   );
 }
