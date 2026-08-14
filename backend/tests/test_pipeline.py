@@ -11,7 +11,7 @@ from agentos.harness.loop import Harness
 from agentos.harness.scripted_model import ScriptedModel, ScriptedResponse
 from agentos.models.audit import AuditRecord
 from agentos.models.run import Message, Run
-from agentos.pipeline import InboundMessage, Pipeline
+from agentos.pipeline import Attachment, InboundMessage, Pipeline
 
 
 @pytest.mark.asyncio
@@ -81,6 +81,48 @@ async def test_pipeline_full_run(db, workspace, tmp_path, monkeypatch):
     assert len(audits) == 1
     assert audits[0].capability_name == "terminal"
     assert audits[0].allowed is True
+
+
+@pytest.mark.asyncio
+async def test_pipeline_stores_attachments_for_existing_file_tools(db, tmp_path, monkeypatch):
+    """Attachments are stored in the workspace instead of sent inline."""
+    from agentos.sandbox.workspace import WorkspaceManager
+
+    ws_dir = tmp_path / "ws"
+    ws_dir.mkdir(exist_ok=True)
+    monkeypatch.setattr(WorkspaceManager, "create_workspace", lambda self, aid: ws_dir)
+
+    config = AgentConfig(
+        id="pipe-attachments",
+        name="Attachment Test",
+        model=ModelConfig(provider_id="test", name="scripted"),
+        capabilities=[],
+    )
+    await create_agent(db, config)
+
+    model = ScriptedModel([ScriptedResponse(content="I can use the file tools.")])
+    pipeline = Pipeline(db=db, harness=Harness(model=model))
+    inbound = InboundMessage(
+        channel="test",
+        bot_id="pipe-attachments",
+        external_user_id="test-user",
+        text="Inspect the attachment",
+        message_id=str(uuid.uuid4()),
+        attachments=[
+            Attachment(
+                type="file",
+                mime_type="text/plain",
+                data="private attachment text",
+                filename="notes.txt",
+            )
+        ],
+    )
+
+    run = await pipeline.handle_inbound(inbound, is_test=True)
+
+    assert run.status == "completed"
+    stored = ws_dir / "attachments" / "attachment_1_notes.txt"
+    assert stored.read_text() == "private attachment text"
 
 
 @pytest.mark.asyncio

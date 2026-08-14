@@ -30,11 +30,19 @@ def register_builtin_capabilities() -> None:
         CapabilityDef(
             name="read_file",
             kind="tool",
-            description="Read a file from the agent's workspace",
+            description="Read a full file or an inclusive line range from the agent's workspace",
             parameters_schema={
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Relative path within the workspace"}
+                    "path": {"type": "string", "description": "Relative path within the workspace"},
+                    "start_line": {
+                        "type": "integer",
+                        "description": "First line to read, 1-based and inclusive",
+                    },
+                    "end_line": {
+                        "type": "integer",
+                        "description": "Last line to read, 1-based and inclusive",
+                    },
                 },
                 "required": ["path"],
             },

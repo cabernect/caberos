@@ -94,10 +94,12 @@ export function Conversation() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
   const [contextTokens, setContextTokens] = useState<number | undefined>(undefined);
+  const [cachedTokens, setCachedTokens] = useState<number | undefined>(undefined);
   const [maxContextTokens, setMaxContextTokens] = useState<number | undefined>(undefined);
   const [compacted, setCompacted] = useState(false);
   const [compacting, setCompacting] = useState(false);
   const [contextBreakdown, setContextBreakdown] = useState<{ system_prompt: number; conversation: number; tools: number } | undefined>(undefined);
+  const [hasModelSelected, setHasModelSelected] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -441,6 +443,7 @@ export function Conversation() {
         break;
 
       case "turn_complete":
+        setCachedTokens(data.cached_tokens ?? undefined);
         updateStreamingForSession(sessionId, (prev) => {
           if (!prev) return prev;
           // Push the current turn's thinking into the items list, then reset
@@ -518,21 +521,44 @@ export function Conversation() {
         // StreamingMessage block. Also clears the streaming UI.
         if (activeSessionRef.current === sessionId && agentId) {
           api.getSessionMessages(agentId, sessionId).then((msgs) => {
-            setMessages(
-              msgs.map((m: Message) => ({
-                id: m.id,
-                role: m.role,
-                content: m.content,
-                created_at: m.created_at,
-                run_id: m.run_id,
-                run_status: m.run_status,
-                tokens_in: m.tokens_in,
-                tokens_out: m.tokens_out,
-                cost: m.cost,
-                subagent_id: m.subagent_id,
-                attachments: m.attachments,
-              })),
-            );
+            const mappedMessages = msgs.map((m: Message) => ({
+              id: m.id,
+              role: m.role,
+              content: m.content,
+              created_at: m.created_at,
+              run_id: m.run_id,
+              run_status: m.run_status,
+              tokens_in: m.tokens_in,
+              tokens_out: m.tokens_out,
+              cost: m.cost,
+              subagent_id: m.subagent_id,
+              attachments: m.attachments,
+            }));
+
+            // A top-level run failure can happen before the pipeline stores
+            // an assistant message. Keep that failure visible instead of
+            // clearing the stream and leaving the conversation blank.
+            if (
+              data.status === "failed" &&
+              data.error &&
+              !mappedMessages.some((m) => m.run_id === data.run_id && m.role === "assistant")
+            ) {
+              mappedMessages.push({
+                id: `failed-${sessionId}-${Date.now()}`,
+                role: "assistant",
+                content: "I couldn't complete this run because an internal error occurred. Please try again.",
+                created_at: new Date().toISOString(),
+                run_id: data.run_id || `failed-${sessionId}`,
+                run_status: "failed",
+                tokens_in: undefined,
+                tokens_out: undefined,
+                cost: undefined,
+                subagent_id: undefined,
+                attachments: null,
+              });
+            }
+
+            setMessages(mappedMessages);
             setStreaming(null);
             streamingRef.current = null;
             setIsStreaming(false);
@@ -703,6 +729,7 @@ export function Conversation() {
     setActiveSessionId(id);
     // Reset context bar when switching sessions
     setContextTokens(undefined);
+    setCachedTokens(undefined);
     setMaxContextTokens(undefined);
     setCompacted(false);
     setContextBreakdown(undefined);
@@ -1200,8 +1227,8 @@ export function Conversation() {
           )}
         </div>
 
-        {/* No model configured banner */}
-        {agent && (!agent.provider_id || !agent.model) && (
+        {/* No model configured banner — only show if no default AND no model selected */}
+        {agent && (!agent.provider_id || !agent.model) && !hasModelSelected && (
           <div
             className="flex items-center justify-between gap-3 px-4 py-3"
             style={{
@@ -1234,16 +1261,19 @@ export function Conversation() {
           ref={inputBarRef}
           defaultProviderId={agent?.provider_id || null}
           defaultModelName={agent?.model || null}
+          defaultThinkingEnabled={agent?.thinking_enabled ?? null}
+          defaultThinkingEffort={agent?.thinking_effort ?? null}
           disabled={
             (isStreaming && !activeElicitation) ||
-            compacting ||
-            (!!agent && (!agent.provider_id || !agent.model))
+            compacting
           }
+          onModelChange={setHasModelSelected}
           onSend={handleSend}
           onStop={handleStop}
           activeElicitation={activeElicitation}
           onElicitationRespond={handleElicitationRespond}
           contextTokens={contextTokens}
+          cachedTokens={cachedTokens}
           maxContextTokens={maxContextTokens}
           compacted={compacted}
           contextBreakdown={contextBreakdown}

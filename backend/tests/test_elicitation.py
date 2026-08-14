@@ -6,8 +6,11 @@ import json
 import pytest
 from sqlalchemy import select
 
+from agentos.api.approvals import ApproveRequest, approve
 from agentos.config_schema import AgentConfig, CapabilityGrant, ModelConfig
+from agentos.models.approval import ApprovalRequest
 from agentos.models.elicitation import ElicitationRequest
+from agentos.syscall.approval_registry import approval_registry
 from agentos.syscall.elicitation_registry import elicitation_registry
 from agentos.syscall.mediator import SyscallHandler
 from agentos.syscall.protocol import ToolCall
@@ -39,6 +42,38 @@ class FakeSession:
 @pytest.mark.asyncio
 async def test_elicitation_basic_flow(db, workspace, agent_config):
     """Agent calls agent.ask_user → mediator pauses → user responds → agent gets answer."""
+    # Create minimal FK rows so the elicitation's run_id FK is valid
+    import uuid as _uuid
+
+    from agentos.models.agent import Agent, AgentVersion
+    from agentos.models.contact import Contact
+    from agentos.models.run import Run
+    from agentos.models.session import Session
+
+    agent_id = "elicit-test"
+    session_id = "test-session-1"
+    contact_id = "test-contact-1"
+    run_id = "test-run-1"
+
+    db.add(Agent(id=agent_id, name="Elicit Test"))
+    db.add(
+        Contact(
+            id=contact_id, channel="dashboard_chat", bot_id=agent_id, external_user_id="test-user"
+        )
+    )
+    db.add(Session(id=session_id, agent_id=agent_id, contact_id=contact_id))
+    db.add(
+        Run(
+            id=run_id,
+            session_id=session_id,
+            contact_id=contact_id,
+            agent_id=agent_id,
+            status="running",
+            trigger="user_message",
+        )
+    )
+    await db.commit()
+
     handler = SyscallHandler(db=db, workspace_path=workspace)
     call = ToolCall(
         id="call_1",
@@ -56,11 +91,19 @@ async def test_elicitation_basic_flow(db, workspace, agent_config):
         )
     )
     # Give it a moment to create the ElicitationRequest and register the event
-    await asyncio.sleep(0.1)
+    # The mediator creates it in a separate session, so we need to poll a bit
+    # and query from a fresh session to see the committed data.
+    from agentos.db import async_session_factory
 
-    # Verify the ElicitationRequest was created
-    result = await db.execute(select(ElicitationRequest))
-    elicitations = result.scalars().all()
+    elicitations = []
+    for _ in range(10):
+        await asyncio.sleep(0.1)
+        async with async_session_factory() as fresh:
+            result = await fresh.execute(select(ElicitationRequest))
+            elicitations = result.scalars().all()
+            if elicitations:
+                break
+
     assert len(elicitations) == 1
     assert elicitations[0].status == "pending"
     assert elicitations[0].question == "Which file?"
@@ -81,16 +124,50 @@ async def test_elicitation_basic_flow(db, workspace, agent_config):
     assert syscall_result.allowed is True
     assert syscall_result.output == {"response": "a.txt"}
 
-    # Verify the ElicitationRequest was updated
-    await db.refresh(elicitations[0])
-    assert elicitations[0].status == "answered"
-    assert elicitations[0].response == "a.txt"
-    assert elicitations[0].responded_by == "operator-1"
+    # Verify the ElicitationRequest was updated (query from a fresh session
+    # since the mediator updates it in a separate session)
+    async with async_session_factory() as fresh:
+        result = await fresh.execute(
+            select(ElicitationRequest).where(ElicitationRequest.id == elicitation_id)
+        )
+        updated = result.scalar_one()
+        assert updated.status == "answered"
+        assert updated.response == "a.txt"
+        assert updated.responded_by == "operator-1"
 
 
 @pytest.mark.asyncio
 async def test_elicitation_free_text(db, workspace, agent_config):
     """Elicitation without options → user provides free-text response."""
+    # Create minimal FK rows
+    from agentos.models.agent import Agent
+    from agentos.models.contact import Contact
+    from agentos.models.run import Run
+    from agentos.models.session import Session
+
+    agent_id = "elicit-test"
+    session_id = "test-session-2"
+    contact_id = "test-contact-2"
+    run_id = "test-run-2"
+
+    db.add(
+        Contact(
+            id=contact_id, channel="dashboard_chat", bot_id=agent_id, external_user_id="test-user-2"
+        )
+    )
+    db.add(Session(id=session_id, agent_id=agent_id, contact_id=contact_id))
+    db.add(
+        Run(
+            id=run_id,
+            session_id=session_id,
+            contact_id=contact_id,
+            agent_id=agent_id,
+            status="running",
+            trigger="user_message",
+        )
+    )
+    await db.commit()
+
     handler = SyscallHandler(db=db, workspace_path=workspace)
     call = ToolCall(
         id="call_2",
@@ -103,14 +180,22 @@ async def test_elicitation_free_text(db, workspace, agent_config):
             call=call,
             session=FakeSession(),
             agent_config=agent_config,
-            run_id="test-run-2",
+            run_id=run_id,
         )
     )
-    await asyncio.sleep(0.1)
 
-    # Verify no options were stored
-    result = await db.execute(select(ElicitationRequest))
-    elicitations = result.scalars().all()
+    # Poll for the ElicitationRequest from a fresh session
+    from agentos.db import async_session_factory
+
+    elicitations = []
+    for _ in range(10):
+        await asyncio.sleep(0.1)
+        async with async_session_factory() as fresh:
+            result = await fresh.execute(select(ElicitationRequest))
+            elicitations = result.scalars().all()
+            if elicitations:
+                break
+
     assert len(elicitations) == 1
     assert elicitations[0].options is None
 
@@ -236,3 +321,69 @@ async def test_elicitation_writes_audit_record(db, workspace, agent_config):
     assert audits[0].capability_name == "agent_ask_user"
     assert audits[0].allowed is True
     assert json.loads(audits[0].result) == {"response": "yes"}
+
+
+@pytest.mark.asyncio
+async def test_approval_persists_before_unblocking_mediator(db):
+    """Operator approval commits before waking a waiting run on SQLite."""
+    from types import SimpleNamespace
+
+    from agentos.models.agent import Agent
+    from agentos.models.contact import Contact
+    from agentos.models.run import Run
+    from agentos.models.session import Session
+
+    agent_id = "approval-test-agent"
+    contact_id = "approval-test-contact"
+    session_id = "approval-test-session"
+    run_id = "approval-test-run"
+    approval_id = "approval-test-request"
+
+    db.add(Agent(id=agent_id, name="Approval Test"))
+    db.add(
+        Contact(
+            id=contact_id,
+            channel="dashboard_chat",
+            bot_id=agent_id,
+            external_user_id="approval-user",
+        )
+    )
+    db.add(Session(id=session_id, agent_id=agent_id, contact_id=contact_id))
+    db.add(
+        Run(
+            id=run_id,
+            session_id=session_id,
+            contact_id=contact_id,
+            agent_id=agent_id,
+            status="running",
+            trigger="user_message",
+        )
+    )
+    db.add(
+        ApprovalRequest(
+            id=approval_id,
+            run_id=run_id,
+            capability_name="terminal",
+            args='{"command":"echo attached"}',
+            status="pending",
+        )
+    )
+    await db.commit()
+
+    pending = approval_registry.register(approval_id)
+    try:
+        result = await approve(
+            approval_id,
+            ApproveRequest(),
+            operator=SimpleNamespace(id="approval-operator"),
+            db=db,
+        )
+
+        assert result == {"status": "approved"}
+        assert pending.decision == "approved"
+        refreshed = await db.get(ApprovalRequest, approval_id)
+        assert refreshed is not None
+        assert refreshed.status == "approved"
+        assert refreshed.decided_by == "approval-operator"
+    finally:
+        approval_registry.cleanup(approval_id)

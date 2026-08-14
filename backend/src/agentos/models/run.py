@@ -41,9 +41,9 @@ class Message(Base, IdMixin):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     seq: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    # Multimodal: JSON array of attachment metadata (type, mime_type, filename, url/data_ref)
-    # Does NOT store base64 data — too large for SQLite. Images are sent to the model
-    # at runtime from the InboundMessage; only metadata is persisted for history display.
+    # JSON array of attachment metadata (type, mime_type, filename, URL when applicable).
+    # Does NOT store base64 data — uploaded bytes live in the workspace and are read
+    # through existing tools when the agent requests them.
     attachments: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Sub-agent messages: tagged with subagent_id so the frontend can nest them
     # under the parent's run_subagent tool call. Null for parent-level messages.

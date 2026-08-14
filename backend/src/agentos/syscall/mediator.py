@@ -1,4 +1,4 @@
-"""Syscall mediator — the real implementation of the mediation pipeline (D10, D11, D18).
+"""Syscall mediator — the real implementation of the mediation pipeline (D10, D11).
 
 For each tool call, in order:
 1. Resolve capability from the registry
@@ -13,8 +13,7 @@ For each tool call, in order:
    the user responds. The response becomes the tool call result.
 6. Inject credentials (stubbed — no connectors yet)
 7. Execute under timeout
-8. Reduce oversized results (D18)
-9. Write audit record
+8. Write audit record
 """
 
 import asyncio
@@ -39,32 +38,12 @@ from .approval_registry import approval_registry
 from .elicitation_registry import elicitation_registry
 from .protocol import SyscallResult, ToolCall
 
-# D18 — result reduction threshold (in characters of JSON)
-MAX_RESULT_CHARS = 8000
-TRUNCATED_SUFFIX = "\n... [truncated by syscall layer — full result in audit record]"
-
-
-def reduce_result(result: Any) -> Any:
-    """D18 — reduce oversized tool results before they enter model context."""
-    if result is None:
-        return None
-    try:
-        serialized = json.dumps(result)
-        if len(serialized) > MAX_RESULT_CHARS:
-            # Truncate the serialized form, then parse back
-            truncated = serialized[:MAX_RESULT_CHARS] + TRUNCATED_SUFFIX
-            return {"truncated": True, "preview": truncated}
-        return result
-    except (TypeError, ValueError):
-        return result
-
 
 class SyscallHandler:
     """Real syscall handler — mediates every capability call (I2, I3, I4).
 
     Replaces StubSyscallHandler from ticket 01. Adds:
     - Subject resolution from session Contact (D10)
-    - Result reduction (D18)
     - Running state emission via event_emitter
     """
 
@@ -74,6 +53,7 @@ class SyscallHandler:
         self.sandbox_mode = sandbox_mode
         self._event_emitter: Any = None
         self._spawn_context: dict[str, Any] = {}
+        self.supports_vision = False
         # Serialize DB operations — asyncio.gather may run multiple tool
         # calls concurrently, but SQLAlchemy async sessions are not safe
         # for concurrent flush/commit.
@@ -113,7 +93,9 @@ class SyscallHandler:
         if cap.subject_scoped:
             # Resolve the Contact from the session
             async with self._db_lock:
-                result = await self.db.execute(select(Contact).where(Contact.id == session.contact_id))
+                result = await self.db.execute(
+                    select(Contact).where(Contact.id == session.contact_id)
+                )
             contact = result.scalar_one_or_none()
             if contact is None:
                 return await self._deny(
@@ -137,7 +119,7 @@ class SyscallHandler:
             else None
         )
         needs_approval = grant.require_approval if grant else cap.require_approval
-        if needs_approval:
+        if needs_approval and not settings.yolo_mode:
             # Check session-scoped allowlist first — if the operator previously
             # approved this exact capability+args with "remember for this session",
             # skip the approval gate.
@@ -211,6 +193,9 @@ class SyscallHandler:
         if call.name in ("skills_list", "skills_load", "skills_read_resource"):
             extra_kwargs["agent_id"] = agent_config.id
 
+        if call.name == "read_file":
+            extra_kwargs["supports_vision"] = self.supports_vision
+
         try:
             result = await cap.execute(
                 args=call.args,
@@ -220,10 +205,14 @@ class SyscallHandler:
             )
             elapsed = int((time.monotonic() - start) * 1000)
 
-            # 8. Reduce result (D18)
-            reduced = reduce_result(result)
+            # Some existing tools can request provider-native content (for
+            # example, an image returned by read_file). Keep that payload out
+            # of the UI and audit record; it is only for the next model call.
+            model_content = None
+            if isinstance(result, dict):
+                model_content = result.pop("_model_content", None)
 
-            # 9. Write audit record (with full, unreduced result)
+            # 8. Write audit record
             audit = AuditRecord(
                 id=str(uuid.uuid4()),
                 run_id=run_id,
@@ -243,11 +232,12 @@ class SyscallHandler:
                 await self.db.flush()
 
             return SyscallResult(
-                output=reduced,
+                output=result,
                 allowed=True,
                 cost=0.0,
                 latency_ms=elapsed,
                 audit_id=audit.id,
+                model_content=model_content,
             )
         except Exception as e:
             elapsed = int((time.monotonic() - start) * 1000)
@@ -282,9 +272,7 @@ class SyscallHandler:
         server_id, tool_name = mapping
 
         # Look up the server config to check if it needs credentials
-        server_result = await self.db.execute(
-            select(McpServer).where(McpServer.id == server_id)
-        )
+        server_result = await self.db.execute(select(McpServer).where(McpServer.id == server_id))
         server = server_result.scalar_one_or_none()
         if server is None:
             return await self._deny(
@@ -299,13 +287,23 @@ class SyscallHandler:
         if needs_creds:
             if subject_contact_id is None:
                 return await self._deny(
-                    run_id, call, agent_config, "no subject binding (MCP tools require a Contact)", start, sub_agent_id
+                    run_id,
+                    call,
+                    agent_config,
+                    "no subject binding (MCP tools require a Contact)",
+                    start,
+                    sub_agent_id,
                 )
 
             resolved = await mcp_binding.resolve_binding(self.db, subject_contact_id, server_id)
             if resolved is None:
                 return await self._deny(
-                    run_id, call, agent_config, "no MCP server binding for this Contact", start, sub_agent_id
+                    run_id,
+                    call,
+                    agent_config,
+                    "no MCP server binding for this Contact",
+                    start,
+                    sub_agent_id,
                 )
             _binding, _server, cred = resolved
 
@@ -327,9 +325,6 @@ class SyscallHandler:
             )
             elapsed = int((time.monotonic() - start) * 1000)
 
-            # Reduce result for the model
-            reduced = reduce_result(result)
-
             # Write audit record
             audit = AuditRecord(
                 id=str(uuid.uuid4()),
@@ -350,7 +345,7 @@ class SyscallHandler:
                 await self.db.flush()
 
             return SyscallResult(
-                output=reduced,
+                output=result,
                 allowed=True,
                 cost=0.0,
                 latency_ms=elapsed,
@@ -437,7 +432,12 @@ class SyscallHandler:
         )
         # Use a separate session to avoid "Session is already flushing" errors
         # when the event emitter's persistence layer triggers a flush concurrently.
+        # Also commit the main session to release any pending write lock
+        # so the separate session can write the approval request.
         from ..db import async_session_factory
+
+        async with self._db_lock:
+            await self.db.commit()
 
         async with async_session_factory() as session:
             session.add(approval)
@@ -492,18 +492,31 @@ class SyscallHandler:
         # If approved with "remember for this session", add to session allowlist
         if decision == "approved" and pending.remember:
             approval_registry.remember_approval(
-                session_id, call.name, call.args,
+                session_id,
+                call.name,
+                call.args,
                 scope=pending.remember_scope,
                 pattern=pending.remember_pattern,
             )
 
-        # Update the ApprovalRequest row
-        approval.status = decision
-        approval.decided_by = pending.decided_by
-        approval.decided_at = datetime.now(UTC)
-        async with self._db_lock:
-            await self.db.flush()
-            await self.db.commit()
+        # Update the ApprovalRequest row in a separate session
+        # (the approval was created in a separate session above, so we
+        # can't update it via self.db which may be mid-flush)
+        from ..db import async_session_factory
+
+        async with async_session_factory() as upd_session:
+            result = await upd_session.execute(
+                select(ApprovalRequest).where(ApprovalRequest.id == approval_id)
+            )
+            ap = result.scalar_one_or_none()
+            # The approval API persists operator decisions before waking this
+            # task. Only write here for timeout/cancellation decisions that
+            # still leave the row pending.
+            if ap and ap.status == "pending":
+                ap.status = decision
+                ap.decided_by = pending.decided_by
+                ap.decided_at = datetime.now(UTC)
+                await upd_session.commit()
 
         return decision == "approved"
 
@@ -549,11 +562,16 @@ class SyscallHandler:
             options=json.dumps(options) if options else None,
             status="pending",
         )
+        # Use a separate session to avoid "database is locked" errors.
+        # Commit the main session first to release any pending write lock.
+        from ..db import async_session_factory
+
         async with self._db_lock:
-            self.db.add(elicitation)
-            await self.db.flush()
-            # Commit immediately so the elicitation API (separate session) can see it
             await self.db.commit()
+
+        async with async_session_factory() as el_session:
+            el_session.add(elicitation)
+            await el_session.commit()
 
         # Register the asyncio.Event so the API can resolve it
         pending = elicitation_registry.register(elicitation_id)
@@ -616,14 +634,20 @@ class SyscallHandler:
         responded_by = pending.responded_by
         elicitation_registry.cleanup(elicitation_id)
 
-        # Update the ElicitationRequest row
-        elicitation.status = "answered"
-        elicitation.response = response
-        elicitation.responded_by = responded_by
-        elicitation.responded_at = datetime.now(UTC)
-        async with self._db_lock:
-            await self.db.flush()
-            await self.db.commit()
+        # Update the ElicitationRequest row in a separate session
+        from ..db import async_session_factory
+
+        async with async_session_factory() as upd_session:
+            result = await upd_session.execute(
+                select(ElicitationRequest).where(ElicitationRequest.id == elicitation_id)
+            )
+            el = result.scalar_one_or_none()
+            if el:
+                el.status = "answered"
+                el.response = response
+                el.responded_by = responded_by
+                el.responded_at = datetime.now(UTC)
+                await upd_session.commit()
 
         # Emit tool_call complete event
         if self._event_emitter:

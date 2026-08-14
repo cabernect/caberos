@@ -27,7 +27,7 @@ task: |
   3. Design the agent's soul, persona, and task based on the user's description.
   4. By default, leave capabilities empty — the agent gets all built-in tools.
      Only list capabilities if the user wants to restrict the agent (e.g. read-only, no shell).
-  5. Set reasonable limits (max_turns_per_run: 15, max_context_tokens: 32000, max_cost_per_run: 1.0).
+  5. Set reasonable limits (max_turns_per_run: 15, max_context_tokens: null, max_cost_per_run: 1.0).
   6. Output the complete YAML config in a code block so the user can copy it.
   7. Explain briefly what the agent will do.
 
@@ -47,7 +47,7 @@ task: |
   # capabilities: [read_file, write_file, web_search]  # omit = all tools; [] = none
   limits:
     max_turns_per_run: 15
-    max_context_tokens: 32000
+    max_context_tokens: null
     max_cost_per_run: 1.0
   ```
 
@@ -59,5 +59,5 @@ model:
 # capabilities omitted = all tools enabled
 limits:
   max_turns_per_run: 15
-  max_context_tokens: 32000
+  max_context_tokens: null
   max_cost_per_run: 1.0

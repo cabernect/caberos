@@ -6,6 +6,7 @@ import {
 import { api } from "@/lib/api";
 import type { Agent, ChannelInfo, ModelInfo, Provider, Skill, SkillInfo, WorkspaceEntry } from "@/lib/types";
 import { ModelSelect } from "@/components/ModelSelect";
+import { ThinkingToggle } from "@/components/ThinkingToggle";
 
 interface CapabilityInfo {
   name: string;
@@ -137,8 +138,10 @@ function GeneralTab({
   const [maxTurns, setMaxTurns] = useState(15);
   const [maxCost, setMaxCost] = useState(500);
   const [idleTimeout, setIdleTimeout] = useState(60);
-  const [maxContext, setMaxContext] = useState(24000);
+  const [maxContext, setMaxContext] = useState<number | null>(null);
   const [sandboxMode, setSandboxMode] = useState<"strict" | "open">("strict");
+  const [thinkingEnabled, setThinkingEnabled] = useState<boolean | null>(null);
+  const [thinkingEffort, setThinkingEffort] = useState<string>("medium");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -156,6 +159,8 @@ function GeneralTab({
         setMaxContext(agent.limits.max_context_tokens);
       }
       setSandboxMode(agent.sandbox_mode || "strict");
+      setThinkingEnabled(agent.thinking_enabled ?? null);
+      setThinkingEffort(agent.thinking_effort || "medium");
     }
   }, [agent]);
 
@@ -178,6 +183,8 @@ function GeneralTab({
     try {
       await api.updateAgent(agent.id, {
         name, provider_id: providerId, model_name: modelName,
+        thinking_enabled: thinkingEnabled,
+        thinking_effort: thinkingEnabled ? thinkingEffort : null,
         soul, persona, task,
         sandbox_mode: sandboxMode,
         limits: {
@@ -290,6 +297,30 @@ function GeneralTab({
             />
           </Field>
         </div>
+        {(() => {
+          const selectedModel = models.find((m) => m.id === modelName || m.name === modelName);
+          if (!selectedModel?.supports_thinking) return null;
+          return (
+            <Field label="Default Thinking">
+              <div className="flex items-center gap-2">
+                <ThinkingToggle
+                  enabled={thinkingEnabled}
+                  effort={thinkingEffort}
+                  efforts={selectedModel.thinking_efforts || ["low", "medium", "high"]}
+                  onToggle={(enabled) => setThinkingEnabled(enabled)}
+                  onEffortChange={setThinkingEffort}
+                />
+                <span className="text-[11px] text-[var(--ink-3)]">
+                  {thinkingEnabled === null
+                    ? "Model default — no explicit thinking"
+                    : thinkingEnabled
+                    ? "Thinking enabled by default for all messages"
+                    : "Thinking disabled by default"}
+                </span>
+              </div>
+            </Field>
+          );
+        })()}
       </Section>
 
       {/* Section: Identity */}
@@ -341,16 +372,16 @@ function GeneralTab({
         </Field>
         <div className="grid grid-cols-2 gap-4">
           <Field label="Max turns per run">
-            <NumberInput value={maxTurns} onChange={setMaxTurns} />
+            <NumberInput value={maxTurns} onChange={(v) => setMaxTurns(v ?? 0)} />
           </Field>
           <Field label="Max cost per run ($)">
-            <NumberInput value={maxCost} onChange={setMaxCost} step={0.01} />
+            <NumberInput value={maxCost} onChange={(v) => setMaxCost(v ?? 0)} step={0.01} />
           </Field>
           <Field label="Session idle timeout (min)">
-            <NumberInput value={idleTimeout} onChange={setIdleTimeout} />
+            <NumberInput value={idleTimeout} onChange={(v) => setIdleTimeout(v ?? 0)} />
           </Field>
           <Field label="Max context tokens">
-            <NumberInput value={maxContext} onChange={setMaxContext} />
+            <NumberInput value={maxContext} onChange={setMaxContext} placeholder="auto (model default)" />
           </Field>
         </div>
         <p className="text-[12px] text-[var(--ink-3)]">
@@ -427,6 +458,23 @@ function CapabilitiesTab({
   const [approvals, setApprovals] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
   const [allCaps, setAllCaps] = useState<CapabilityInfo[]>(FALLBACK_CAPABILITIES);
+  const [yoloMode, setYoloMode] = useState(false);
+
+  // Fetch YOLO mode state
+  useEffect(() => {
+    api.getYoloMode().then((r) => setYoloMode(r.yolo_mode)).catch(() => {});
+  }, []);
+
+  const toggleYolo = async () => {
+    const next = !yoloMode;
+    setYoloMode(next);
+    try {
+      await api.setYoloMode(next);
+      showSaved(next ? "YOLO mode ON — approvals disabled" : "YOLO mode OFF");
+    } catch {
+      setYoloMode(!next); // revert on error
+    }
+  };
 
   // Fetch capability list from backend (single source of truth)
   useEffect(() => {
@@ -470,6 +518,16 @@ function CapabilitiesTab({
     void saveCapabilities(granted, next);
   };
 
+  const toggleAll = (capNames: string[], enable: boolean) => {
+    const next = new Set(granted);
+    for (const name of capNames) {
+      if (enable) next.add(name);
+      else next.delete(name);
+    }
+    setGranted(next);
+    void saveCapabilities(next, approvals);
+  };
+
   const saveCapabilities = async (grantedSet: Set<string>, approvalSet: Set<string>) => {
     if (!agent) return;
     setSaving(true);
@@ -505,6 +563,44 @@ function CapabilitiesTab({
 
   return (
     <div className="space-y-3">
+      {/* YOLO mode banner */}
+      <div
+        className="flex items-center justify-between rounded-[6px] border px-4 py-3"
+        style={{
+          borderColor: yoloMode ? "var(--danger)" : "var(--border)",
+          background: yoloMode ? "rgba(239,68,68,0.05)" : "transparent",
+        }}
+      >
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="text-[13px] font-semibold text-[var(--ink)]">YOLO Mode</span>
+            {yoloMode && (
+              <span
+                className="rounded-full px-2 py-0.5 text-[9px] font-mono uppercase"
+                style={{ background: "var(--danger)", color: "#fff" }}
+              >
+                Active
+              </span>
+            )}
+          </div>
+          <p className="mt-0.5 text-[11px] text-[var(--ink-3)]">
+            Skip all approval gates. Tools execute immediately without confirmation.
+          </p>
+        </div>
+        <button
+          onClick={toggleYolo}
+          className="rounded-[5px] px-3 py-1.5 text-[12px] font-medium transition"
+          style={{
+            border: "1px solid var(--border)",
+            background: yoloMode ? "var(--danger)" : "none",
+            color: yoloMode ? "#fff" : "var(--ink-2)",
+            cursor: "pointer",
+          }}
+        >
+          {yoloMode ? "Disable" : "Enable"}
+        </button>
+      </div>
+
       <p className="text-[12px] text-[var(--ink-3)]">
         Select which tools this agent can use. Egress tools (network access) can require approval.
       </p>
@@ -515,6 +611,7 @@ function CapabilitiesTab({
         approvals={approvals}
         toggle={toggle}
         toggleApproval={toggleApproval}
+        toggleAll={toggleAll}
         defaultExpanded
       />
       {Array.from(mcpServers.entries()).map(([serverName, caps]) => (
@@ -526,6 +623,7 @@ function CapabilitiesTab({
           approvals={approvals}
           toggle={toggle}
           toggleApproval={toggleApproval}
+          toggleAll={toggleAll}
           defaultExpanded={false}
         />
       ))}
@@ -543,6 +641,7 @@ function CapabilityGroup({
   approvals,
   toggle,
   toggleApproval,
+  toggleAll,
   defaultExpanded,
 }: {
   title: string;
@@ -551,18 +650,16 @@ function CapabilityGroup({
   approvals: Set<string>;
   toggle: (name: string) => void;
   toggleApproval: (name: string) => void;
+  toggleAll: (capNames: string[], enable: boolean) => void;
   defaultExpanded: boolean;
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [expandedDesc, setExpandedDesc] = useState<string | null>(null);
   const grantedCount = caps.filter((c) => granted.has(c.name)).length;
 
-  const toggleAll = () => {
+  const handleToggleAll = () => {
     const allGranted = caps.every((c) => granted.has(c.name));
-    for (const cap of caps) {
-      if (allGranted && granted.has(cap.name)) toggle(cap.name);
-      else if (!allGranted && !granted.has(cap.name)) toggle(cap.name);
-    }
+    toggleAll(caps.map((c) => c.name), !allGranted);
   };
 
   const allGranted = caps.every((c) => granted.has(c.name));
@@ -587,7 +684,7 @@ function CapabilityGroup({
           {grantedCount}/{caps.length}
         </span>
         <button
-          onClick={(e) => { e.stopPropagation(); toggleAll(); }}
+          onClick={(e) => { e.stopPropagation(); handleToggleAll(); }}
           className="ml-auto rounded-[4px] px-2 py-0.5 font-mono text-[10px] transition"
           style={{
             background: "none",
@@ -1063,13 +1160,17 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function NumberInput({ value, onChange, step }: { value: number; onChange: (v: number) => void; step?: number }) {
+function NumberInput({ value, onChange, step, placeholder }: { value: number | null; onChange: (v: number | null) => void; step?: number; placeholder?: string }) {
   return (
     <input
       type="number"
-      value={value}
+      value={value ?? ""}
       step={step || 1}
-      onChange={(e) => onChange(parseFloat(e.target.value) || 0)}
+      placeholder={placeholder}
+      onChange={(e) => {
+        const v = e.target.value;
+        onChange(v === "" ? null : parseFloat(v) || 0);
+      }}
       className="w-full rounded-[5px] border px-3 py-2 text-[13px] text-[var(--ink)] outline-none"
       style={{ borderColor: "var(--border)", background: "var(--surface)" }}
     />

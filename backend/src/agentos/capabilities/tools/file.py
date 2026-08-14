@@ -5,7 +5,9 @@ search_files merges the old file_search (grep), file_glob (find by pattern),
 and file_list (list directory) into one tool with a `mode` parameter.
 """
 
+import base64
 import fnmatch
+import mimetypes
 import os
 import re
 from typing import Any
@@ -14,14 +16,67 @@ from ...sandbox.workspace import WorkspaceManager
 
 
 async def read_file(args: dict[str, Any], workspace_path: str, **kwargs: Any) -> dict[str, Any]:
-    """Read a file from the workspace (or anywhere if sandbox is open)."""
+    """Read a complete file or an inclusive line range from the workspace."""
     wm = WorkspaceManager()
     path = wm.validate_path(workspace_path, args["path"], kwargs.get("sandbox_mode", "strict"))
     if not os.path.isfile(path):
         return {"error": f"File not found: {args['path']}"}
+
+    mime_type, _ = mimetypes.guess_type(path)
+    if mime_type and mime_type.startswith("image/"):
+        if not kwargs.get("supports_vision", False):
+            return {
+                "error": "The selected model cannot inspect image files.",
+                "path": args["path"],
+                "mime_type": mime_type,
+            }
+        with open(path, "rb") as f:
+            encoded = base64.b64encode(f.read()).decode("ascii")
+        return {
+            "path": args["path"],
+            "mime_type": mime_type,
+            "bytes": os.path.getsize(path),
+            "_model_content": [
+                {"type": "text", "text": f"Image file: {args['path']}"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime_type};base64,{encoded}"},
+                },
+            ],
+        }
+
+    start_line = args.get("start_line")
+    end_line = args.get("end_line")
+    if start_line is None and end_line is None:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return {"content": f.read(), "path": args["path"]}
+
+    if start_line is None:
+        start_line = 1
+    if end_line is None:
+        end_line = 2**31 - 1
+    if not isinstance(start_line, int) or not isinstance(end_line, int):
+        return {"error": "start_line and end_line must be integers"}
+    if start_line < 1 or end_line < start_line:
+        return {"error": "start_line must be at least 1 and end_line must not be before start_line"}
+
     with open(path, encoding="utf-8", errors="replace") as f:
-        content = f.read()
-    return {"content": content, "path": args["path"]}
+        lines = f.readlines()
+
+    total_lines = len(lines)
+    selected_end = min(end_line, total_lines)
+    content = "".join(lines[start_line - 1 : selected_end]) if start_line <= total_lines else ""
+    result: dict[str, Any] = {
+        "content": content,
+        "path": args["path"],
+        "start_line": start_line,
+        "end_line": selected_end,
+        "total_lines": total_lines,
+        "has_more": selected_end < total_lines,
+    }
+    if result["has_more"]:
+        result["next_start_line"] = selected_end + 1
+    return result
 
 
 async def write_file(args: dict[str, Any], workspace_path: str, **kwargs: Any) -> dict[str, Any]:

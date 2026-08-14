@@ -12,6 +12,9 @@ from agentos.harness.context import assemble_system_prompt
 from agentos.harness.litellm_adapter import LiteLLMAdapter
 from agentos.harness.loop import Harness
 from agentos.harness.scripted_model import ScriptedModel, ScriptedResponse
+from agentos.models.provider import Provider
+from agentos.providers import ProviderRegistry
+from agentos.providers.registry import LiteLLMProviderAdapter, OpenCodeZenProviderAdapter
 from agentos.syscall.mediator import StubSyscallHandler
 
 
@@ -88,15 +91,9 @@ async def test_harness_reports_stream_timeout_to_the_user(db, workspace):
 
     assert result.status == "failed"
     assert "timed out" in result.final_answer
-    assert events[-1] == (
-        "message_complete",
-        {
-            "run_id": run_id,
-            "total_cost": 0.0,
-            "total_turns": 1,
-            "status": "failed",
-        },
-    )
+    # message_complete is no longer emitted by the loop — it's emitted by
+    # runner.py after the pipeline finishes, with full context metadata.
+    # The loop now just returns the result without emitting message_complete.
 
 
 def test_base_system_prompt_present():
@@ -148,8 +145,8 @@ def test_base_prompt_before_soul():
     assert base_pos < soul_pos, "Base prompt must come before soul"
 
 
-def test_multimodal_message_with_image():
-    """When attachments are present, the user message is a multimodal content array."""
+def test_attachment_references_do_not_enter_model_context():
+    """Attachments are metadata-only until the agent uses an existing tool."""
     from agentos.harness.context import build_message_history
     from agentos.pipeline import Attachment
 
@@ -159,70 +156,53 @@ def test_multimodal_message_with_image():
             mime_type="image/png",
             data="iVBORw0KGgoAAAANSUhEUg==",
             filename="screenshot.png",
-        )
-    ]
-    history = build_message_history("system prompt", [], "What's in this image?", attachments)
-
-    # System message is plain text
-    assert history[0]["role"] == "system"
-    assert history[0]["content"] == "system prompt"
-
-    # User message is a content array
-    user_msg = history[1]
-    assert user_msg["role"] == "user"
-    assert isinstance(user_msg["content"], list)
-
-    # First part is text, second is image_url
-    parts = user_msg["content"]
-    assert parts[0]["type"] == "text"
-    assert parts[0]["text"] == "What's in this image?"
-    assert parts[1]["type"] == "image_url"
-    assert "data:image/png;base64," in parts[1]["image_url"]["url"]
-
-
-def test_multimodal_message_with_url():
-    """URL attachments are sent as image_url with the URL directly."""
-    from agentos.harness.context import build_message_history
-    from agentos.pipeline import Attachment
-
-    attachments = [
+        ),
         Attachment(
             type="url",
-            mime_type="image/jpeg",
-            data="https://example.com/photo.jpg",
+            mime_type="text/uri-list",
+            data="https://example.com",
             filename="",
-        )
-    ]
-    history = build_message_history("sys", [], "Describe this", attachments)
-    user_msg = history[1]
-    parts = user_msg["content"]
-    assert parts[1]["type"] == "image_url"
-    assert parts[1]["image_url"]["url"] == "https://example.com/photo.jpg"
-
-
-def test_multimodal_message_with_text_file():
-    """Text file attachments are appended to the message content."""
-    from agentos.harness.context import build_message_history
-    from agentos.pipeline import Attachment
-
-    attachments = [
+        ),
         Attachment(
             type="file",
             mime_type="text/plain",
             data="Hello world from the file!",
             filename="notes.txt",
-        )
+        ),
     ]
-    history = build_message_history("sys", [], "Read this file", attachments)
+    history = build_message_history("system prompt", [], "Inspect these", attachments)
+
     user_msg = history[1]
-    parts = user_msg["content"]
-    # Should have text part + file content part
-    assert len(parts) == 2
-    assert parts[0]["type"] == "text"
-    assert "Read this file" in parts[0]["text"]
-    assert parts[1]["type"] == "text"
-    assert "Hello world from the file!" in parts[1]["text"]
-    assert "notes.txt" in parts[1]["text"]
+    assert user_msg["role"] == "user"
+    assert isinstance(user_msg["content"], str)
+    assert "screenshot.png" in user_msg["content"]
+    assert "https://example.com" in user_msg["content"]
+    assert "notes.txt" in user_msg["content"]
+    assert "iVBORw0KGgoAAAANSUhEUg==" not in user_msg["content"]
+    assert "Hello world from the file!" not in user_msg["content"]
+
+
+def test_workspace_attachment_references_are_used():
+    """Prepared attachment records expose paths without exposing file contents."""
+    from agentos.harness.context import build_message_history
+
+    history = build_message_history(
+        "sys",
+        [],
+        "Read this file",
+        [
+            {
+                "id": "attachment_1",
+                "type": "file",
+                "mime_type": "text/plain",
+                "filename": "notes.txt",
+                "path": "attachments/attachment_1_notes.txt",
+            }
+        ],
+    )
+    content = history[1]["content"]
+    assert "attachments/attachment_1_notes.txt" in content
+    assert "Hello world" not in content
 
 
 def test_no_attachments_plain_text():
@@ -236,24 +216,24 @@ def test_no_attachments_plain_text():
     assert user_msg["content"] == "Hello"
 
 
-def test_multimodal_multiple_attachments():
-    """Multiple attachments produce multiple content parts."""
+def test_multiple_attachments_produce_one_reference_message():
+    """Multiple attachments are listed without inline content."""
     from agentos.harness.context import build_message_history
     from agentos.pipeline import Attachment
 
     attachments = [
         Attachment(type="image", mime_type="image/png", data="abc123==", filename="a.png"),
         Attachment(type="image", mime_type="image/jpeg", data="def456==", filename="b.jpg"),
-        Attachment(type="url", mime_type="image/gif", data="https://x.com/c.gif", filename=""),
+        Attachment(type="url", mime_type="text/uri-list", data="https://x.com", filename=""),
     ]
     history = build_message_history("sys", [], "Compare these", attachments)
-    parts = history[1]["content"]
-    # 1 text + 3 attachments = 4 parts
-    assert len(parts) == 4
-    assert parts[0]["type"] == "text"
-    assert parts[1]["type"] == "image_url"
-    assert parts[2]["type"] == "image_url"
-    assert parts[3]["type"] == "image_url"
+    content = history[1]["content"]
+    assert isinstance(content, str)
+    assert "a.png" in content
+    assert "b.jpg" in content
+    assert "https://x.com" in content
+    assert "abc123==" not in content
+    assert "def456==" not in content
 
 
 @pytest.mark.asyncio
@@ -300,6 +280,38 @@ async def test_harness_tool_call_then_answer(db, workspace):
     assert result.tool_calls_made[0]["allowed"] is True
     assert "hello" in result.tool_calls_made[0]["result"]["stdout"]
     assert result.final_answer == "The command output: hello"
+
+
+def test_litellm_cached_token_usage_is_extracted():
+    usage = SimpleNamespace(
+        prompt_tokens_details=SimpleNamespace(cached_tokens=350),
+    )
+    assert LiteLLMAdapter._cached_tokens(usage) == 350
+
+    anthropic_usage = SimpleNamespace(cache_read_input_tokens=275)
+    assert LiteLLMAdapter._cached_tokens(anthropic_usage) == 275
+
+
+@pytest.mark.asyncio
+async def test_harness_preserves_cached_token_usage(db, workspace):
+    config = AgentConfig(
+        id="harness-cached-tokens",
+        name="Cached Tokens Test",
+        model=ModelConfig(provider_id="test", name="scripted"),
+        capabilities=[],
+    )
+    model = ScriptedModel([ScriptedResponse(content="Done", tokens_in=500, cached_tokens=350)])
+
+    result = await Harness(model=model).run(
+        agent_config=config,
+        session=None,
+        message="test",
+        syscall_handler=StubSyscallHandler(db=db, workspace_path=workspace),
+        run_id=str(uuid.uuid4()),
+    )
+
+    assert result.tokens_in == 500
+    assert result.cached_tokens == 350
 
 
 @pytest.mark.asyncio
@@ -383,7 +395,8 @@ async def test_harness_event_emitter(db, workspace):
     assert "typing" in event_types
     assert "tool_call" in event_types
     assert "turn_complete" in event_types
-    assert "message_complete" in event_types
+    # message_complete is now emitted by runner.py, not the loop
+    assert "message_complete" not in event_types
 
     # Check tool_call events have the right statuses
     tool_call_events = [e for e in events if e[0] == "tool_call"]
@@ -424,3 +437,180 @@ async def test_harness_denied_capability(db, workspace):
 
     assert len(result.tool_calls_made) == 1
     assert result.tool_calls_made[0]["allowed"] is False
+
+
+@pytest.mark.asyncio
+async def test_provider_registry_selects_litellm_adapter(db):
+    db.add(
+        Provider(
+            id="provider-openai",
+            name="OpenAI",
+            type="openai",
+            base_url="https://api.openai.com/v1",
+        )
+    )
+    db.add(
+        Provider(
+            id="provider-zen",
+            name="OpenCode Zen",
+            type="openai",
+            base_url="https://opencode.ai/zen/v1",
+        )
+    )
+    await db.commit()
+
+    registry = ProviderRegistry(db)
+    assert isinstance(await registry.for_provider("provider-openai"), LiteLLMProviderAdapter)
+    assert isinstance(await registry.for_provider("provider-zen"), OpenCodeZenProviderAdapter)
+
+
+def test_opencode_zen_routes_by_model_family():
+    provider = {"type": "openai", "base_url": "https://opencode.ai/zen/v1"}
+
+    assert OpenCodeZenProviderAdapter._model_family(provider, "gpt-5.2") == "responses"
+    assert OpenCodeZenProviderAdapter._model_family(provider, "grok-4.5") == "responses"
+    assert (
+        OpenCodeZenProviderAdapter._model_family(provider, "claude-opus-4-8")
+        == "anthropic_messages"
+    )
+    assert OpenCodeZenProviderAdapter._model_family(provider, "qwen3.7-max") == "anthropic_messages"
+    assert OpenCodeZenProviderAdapter._model_family(provider, "gemini-3.5-flash") == "gemini"
+    assert OpenCodeZenProviderAdapter._model_family(provider, "big-pickle") == "chat_completions"
+
+    assert OpenCodeZenProviderAdapter._route_model(provider, "claude-opus-4-8")[0] == (
+        "anthropic/claude-opus-4-8"
+    )
+    assert OpenCodeZenProviderAdapter._route_model(provider, "gpt-5.2")[0] == "openai/gpt-5.2"
+    assert OpenCodeZenProviderAdapter._route_model(provider, "big-pickle")[0] == "openai/big-pickle"
+
+
+@pytest.mark.asyncio
+async def test_opencode_gpt_uses_responses_reasoning(monkeypatch):
+    adapter = OpenCodeZenProviderAdapter(db=None)
+    provider = {
+        "type": "openai",
+        "base_url": "https://opencode.ai/zen/v1",
+        "api_key": "zen-key",
+        "org_id": None,
+        "extra_params": {},
+    }
+
+    async def load_provider(_provider_id):
+        return provider
+
+    captured = {}
+
+    async def fake_aresponses(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            output=[
+                SimpleNamespace(
+                    type="message",
+                    content=[SimpleNamespace(type="output_text", text="done")],
+                )
+            ],
+            usage=SimpleNamespace(input_tokens=4, output_tokens=1),
+            cost=0.0,
+        )
+
+    monkeypatch.setattr(adapter, "_load_provider", load_provider)
+    monkeypatch.setattr("agentos.harness.litellm_adapter.litellm.aresponses", fake_aresponses)
+
+    result = await adapter.complete(
+        agent_model=ModelConfig(
+            provider_id="zen",
+            name="gpt-5.2",
+            thinking_enabled=True,
+            thinking_effort="high",
+        ),
+        messages=[{"role": "user", "content": "Review this"}],
+    )
+
+    assert result.content == "done"
+    assert captured["model"] == "openai/gpt-5.2"
+    assert captured["api_base"] == "https://opencode.ai/zen/v1"
+    assert captured["reasoning"] == {"effort": "high"}
+    assert "reasoning_effort" not in captured
+
+
+def test_opencode_zen_reasoning_fields_match_endpoint():
+    provider = {"type": "openai", "base_url": "https://opencode.ai/zen/v1"}
+
+    kwargs: dict = {}
+    OpenCodeZenProviderAdapter._apply_thinking_kwargs(
+        kwargs,
+        ModelConfig(provider_id="p", name="gpt-5.2", thinking_enabled=True, thinking_effort="high"),
+        provider,
+        "responses",
+    )
+    assert kwargs == {}
+
+    kwargs = {}
+    OpenCodeZenProviderAdapter._apply_thinking_kwargs(
+        kwargs,
+        ModelConfig(
+            provider_id="p",
+            name="claude-opus-4-8",
+            thinking_enabled=True,
+            thinking_effort="high",
+        ),
+        provider,
+        "anthropic_messages",
+    )
+    assert kwargs == {"thinking": {"type": "enabled", "budget_tokens": 16384}}
+
+    kwargs = {}
+    OpenCodeZenProviderAdapter._apply_thinking_kwargs(
+        kwargs,
+        ModelConfig(
+            provider_id="p",
+            name="gemini-3.5-flash",
+            thinking_enabled=True,
+            thinking_effort="medium",
+        ),
+        provider,
+        "gemini",
+    )
+    assert kwargs == {
+        "extra_body": {"generationConfig": {"thinkingConfig": {"thinkingBudget": 8192}}}
+    }
+
+    kwargs = {}
+    OpenCodeZenProviderAdapter._apply_thinking_kwargs(
+        kwargs,
+        ModelConfig(
+            provider_id="p",
+            name="big-pickle",
+            thinking_enabled=True,
+            thinking_effort="high",
+        ),
+        provider,
+        "chat_completions",
+    )
+    assert kwargs == {"extra_body": {"reasoning_effort": "high"}}
+
+
+def test_responses_input_converts_tool_turns():
+    result = OpenCodeZenProviderAdapter._responses_input(
+        [
+            {"role": "user", "content": "Use the tool"},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "call-1", "function": {"name": "lookup", "arguments": '{"q":"x"}'}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call-1", "content": "result"},
+        ]
+    )
+    assert result[1] == {
+        "type": "function_call",
+        "call_id": "call-1",
+        "name": "lookup",
+        "arguments": '{"q":"x"}',
+    }
+    assert result[2] == {
+        "type": "function_call_output",
+        "call_id": "call-1",
+        "output": "result",
+    }

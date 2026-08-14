@@ -34,7 +34,13 @@ async def index_message(
                 "INSERT INTO messages_fts (message_id, run_id, session_id, agent_id, content) "
                 "VALUES (:mid, :rid, :sid, :aid, :content)"
             ),
-            {"mid": message_id, "rid": run_id, "sid": session_id, "aid": agent_id, "content": content},
+            {
+                "mid": message_id,
+                "rid": run_id,
+                "sid": session_id,
+                "aid": agent_id,
+                "content": content,
+            },
         )
         await db.flush()
     except Exception:
@@ -169,18 +175,17 @@ async def _generate_session_summary(
 ) -> None:
     """Generate a 3-5 sentence summary of the session and index it in FTS5."""
     try:
-        from ..harness.litellm_adapter import LiteLLMAdapter
+        from ..providers import ProviderRegistry
 
         prompt = (
             "Summarize this conversation in 3-5 sentences. Capture:\n"
             "- What the user asked for\n"
             "- What the agent did (tools used, files touched)\n"
             "- The outcome or result\n\n"
-            "Output ONLY the summary, no preamble.\n\n"
-            + "\n".join(convo)
+            "Output ONLY the summary, no preamble.\n\n" + "\n".join(convo)
         )
 
-        adapter = LiteLLMAdapter(db)
+        adapter = await ProviderRegistry(db).for_model(agent_config.model.provider_id)
         response = await adapter.complete(
             agent_model=agent_config.model,
             messages=[{"role": "user", "content": prompt}],
@@ -221,7 +226,7 @@ async def _extract_kg_triples(
 ) -> None:
     """Extract KG triples from the conversation, with dedup against existing triples."""
     try:
-        from ..harness.litellm_adapter import LiteLLMAdapter
+        from ..providers import ProviderRegistry
         from .triples import query_facts, remember_fact
 
         # Get existing triples for dedup
@@ -237,7 +242,9 @@ async def _extract_kg_triples(
             "- If no new facts, output exactly: NO_NEW_FACTS\n\n"
         )
         if existing_lines:
-            prompt += "## Existing triples (don't duplicate)\n\n" + "\n".join(existing_lines) + "\n\n"
+            prompt += (
+                "## Existing triples (don't duplicate)\n\n" + "\n".join(existing_lines) + "\n\n"
+            )
         prompt += "## Conversation\n\n" + "\n".join(convo) + "\n\n"
         prompt += (
             "Output format (one per line):\n"
@@ -248,7 +255,7 @@ async def _extract_kg_triples(
             "project | uses | pdftotext\n"
         )
 
-        adapter = LiteLLMAdapter(db)
+        adapter = await ProviderRegistry(db).for_model(agent_config.model.provider_id)
         response = await adapter.complete(
             agent_model=agent_config.model,
             messages=[{"role": "user", "content": prompt}],

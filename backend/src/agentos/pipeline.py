@@ -41,9 +41,9 @@ async def _generate_session_title(
     Uses the same model/provider as the agent, with a cheap 1-turn call.
     """
     try:
-        from .harness.litellm_adapter import LiteLLMAdapter
+        from .providers import ProviderRegistry
 
-        adapter = LiteLLMAdapter(db)
+        adapter = await ProviderRegistry(db).for_model(agent_config.model.provider_id)
         prompt = (
             f"Summarize this conversation in 3-5 words. "
             f"Output ONLY the title, no quotes, no punctuation at the end.\n\n"
@@ -72,7 +72,7 @@ async def _generate_session_title_from_history(
     Returns a 3-5 word title, or None if generation fails.
     """
     try:
-        from .harness.litellm_adapter import LiteLLMAdapter
+        from .providers import ProviderRegistry
 
         # Extract user and assistant messages only
         convo = []
@@ -85,7 +85,7 @@ async def _generate_session_title_from_history(
         if not convo:
             return None
 
-        adapter = LiteLLMAdapter(db)
+        adapter = await ProviderRegistry(db).for_model(agent_config.model.provider_id)
         prompt = (
             "Summarize this conversation in 3-5 words. "
             "Output ONLY the title, no quotes, no punctuation at the end.\n\n" + "\n".join(convo)
@@ -123,7 +123,7 @@ async def _auto_extract_memory(
     memory entries opens a short write transaction.
     """
     try:
-        from .harness.litellm_adapter import LiteLLMAdapter
+        from .providers import ProviderRegistry
         from .memory.notebook import read_memory, write_memory
         from .memory.recall import get_run_entries, clear_run_entries
 
@@ -177,7 +177,7 @@ async def _auto_extract_memory(
 
         # Phase 2: LLM call (db session is open but no transaction is held
         # — we committed above, and LiteLLMAdapter only reads the provider)
-        adapter = LiteLLMAdapter(db)
+        adapter = await ProviderRegistry(db).for_model(agent_config.model.provider_id)
         response = await adapter.complete(
             agent_model=agent_config.model,
             messages=[{"role": "user", "content": prompt}],
@@ -197,7 +197,11 @@ async def _auto_extract_memory(
         if existing:
             # Avoid duplicate lines
             existing_lines = set(l.strip().lower() for l in existing.split("\n") if l.strip())
-            new_lines = [l for l in result.split("\n") if l.strip() and l.strip().lower() not in existing_lines]
+            new_lines = [
+                l
+                for l in result.split("\n")
+                if l.strip() and l.strip().lower() not in existing_lines
+            ]
             if not new_lines:
                 if run_id:
                     await clear_run_entries(db, run_id)
@@ -219,21 +223,74 @@ async def _auto_extract_memory(
 
 @dataclass
 class Attachment:
-    """A multimodal attachment on a user message (image, URL, or workspace file).
+    """An attachment supplied with an inbound user message.
 
-    For images: type="image", data is base64-encoded with mime type
-        → sent to the model as {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}
-    For URLs: type="url", data is the URL
-        → sent to the model as {"type": "image_url", "image_url": {"url": "https://..."}}
-        (the model fetches and processes the URL)
-    For workspace files: type="file", data is the file content (text or base64)
-        → text files are appended to the message; images are sent as image_url
+    ``data`` is transport input only: base64 for uploaded files/images, a URL
+    for URL attachments, and text for text files. The pipeline stores uploaded
+    content in the workspace and exposes a run-scoped attachment manifest to
+    the agent. Attachment bytes and fetched webpage contents are never added
+    to the initial model context automatically.
     """
 
-    type: str  # "image", "url", "file"
+    type: str  # "image", "url", "image_url", or "file"
     mime_type: str  # e.g. "image/png", "text/plain", "application/pdf"
-    data: str  # base64 for images, URL for urls, text content for files
+    data: str  # transport data; not persisted or sent to the model directly
     filename: str = ""  # original filename (for display + audit)
+
+
+async def _prepare_attachment_context(
+    attachments: list[Attachment], workspace_path: str
+) -> list[dict[str, Any]]:
+    """Store uploaded attachments and return safe run-scoped tool records."""
+    import asyncio
+    import base64
+
+    attachment_dir = Path(workspace_path) / "attachments"
+    records: list[dict[str, Any]] = []
+
+    for index, attachment in enumerate(attachments, start=1):
+        attachment_id = f"attachment_{index}"
+        record: dict[str, Any] = {
+            "id": attachment_id,
+            "type": attachment.type,
+            "mime_type": attachment.mime_type,
+            "filename": attachment.filename or attachment_id,
+        }
+
+        if attachment.type in ("url", "image_url"):
+            record["url"] = attachment.data
+            records.append(record)
+            continue
+
+        safe_name = Path(attachment.filename).name or attachment_id
+        file_path = attachment_dir / f"{attachment_id}_{safe_name}"
+
+        if attachment.type == "file" and (
+            attachment.mime_type.startswith("text/") or attachment.mime_type == "application/json"
+        ):
+            raw = attachment.data.encode("utf-8")
+        else:
+            try:
+                raw = base64.b64decode(attachment.data, validate=True)
+            except (ValueError, TypeError):
+                record["error"] = "Attachment data was not valid base64"
+                records.append(record)
+                continue
+
+        def _save(path: Path, content: bytes) -> None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+
+        try:
+            await asyncio.to_thread(_save, file_path, raw)
+        except OSError as exc:
+            record["error"] = f"Could not save attachment: {exc}"
+        else:
+            record["path"] = str(file_path.relative_to(Path(workspace_path)))
+            record["size"] = len(raw)
+        records.append(record)
+
+    return records
 
 
 @dataclass
@@ -249,7 +306,7 @@ class InboundMessage:
     model_override: dict[str, str] | None = None  # {provider_id, name} or None
     session_id: str | None = None  # explicit session to use, else auto-resume
     new_session: bool = False  # if true, force create a new session (ignore auto-resume)
-    attachments: list[Attachment] = None  # multimodal attachments (images, URLs, files)
+    attachments: list[Attachment] = None  # user attachments stored for tool-mediated access
     skill: str | None = None  # slash command: /skillname → auto-load this skill into context
 
 
@@ -324,61 +381,6 @@ class Pipeline:
             if hasattr(result_emit, "__await__"):
                 await result_emit
 
-        # Save binary file attachments to the workspace so the agent can
-        # process them with its skills (pdf, docx, etc.). Text files and
-        # images are passed inline to the model; binary files (PDF, docx,
-        # xlsx, etc.) are saved to disk and a note is appended to the
-        # message telling the agent where to find them.
-        import asyncio as _aio
-        import base64 as _b64
-
-        processed_attachments: list[Attachment] = []
-        has_binary = False
-        for att in (message.attachments or []):
-            if att.type == "file" and not (
-                att.mime_type.startswith("text/")
-                or att.mime_type == "application/json"
-                or att.mime_type.startswith("image/")
-            ):
-                # Binary file — save to workspace (in a thread to avoid
-                # blocking the event loop during file I/O)
-                wm = WorkspaceManager()
-                workspace = Path(wm.create_workspace(message.bot_id))
-                uploads_dir = workspace / "uploads"
-                safe_name = Path(att.filename).name
-                file_path = uploads_dir / safe_name
-
-                def _save_file(uploads_dir: Path, file_path: Path, raw: bytes) -> None:
-                    uploads_dir.mkdir(parents=True, exist_ok=True)
-                    file_path.write_bytes(raw)
-
-                try:
-                    raw = _b64.b64decode(att.data)
-                    await _aio.to_thread(_save_file, uploads_dir, file_path, raw)
-                    rel_path = f"uploads/{safe_name}"
-                    # Don't pass the base64 data to the model — too large.
-                    # The agent will read the file from the workspace instead.
-                    # build_message_history sends the path note as a text
-                    # content part alongside the user's message.
-                    processed_attachments.append(
-                        Attachment(
-                            type="file",
-                            mime_type=att.mime_type,
-                            data=f"[Saved to workspace: {rel_path}]",
-                            filename=att.filename,
-                        )
-                    )
-                    has_binary = True
-                except Exception:
-                    processed_attachments.append(att)
-            else:
-                processed_attachments.append(att)
-
-        # Replace attachments with processed ones (binary files have their
-        # base64 data replaced with a workspace path note).
-        if has_binary:
-            message.attachments = processed_attachments
-
         # Apply input guardrails — redact secrets, detect prompt injection (D2)
         input_guardrail = apply_input_guardrails(message.text)
         guardrailed_text = input_guardrail.content  # DB + frontend + model
@@ -401,11 +403,17 @@ class Pipeline:
             attachment_meta = _json.dumps(
                 [
                     {
-                        "type": a.type,
-                        "mime_type": a.mime_type,
-                        "filename": a.filename,
+                        "id": f"attachment_{index}",
+                        "type": attachment.type,
+                        "mime_type": attachment.mime_type,
+                        "filename": attachment.filename,
+                        **(
+                            {"url": attachment.data}
+                            if attachment.type in ("url", "image_url")
+                            else {}
+                        ),
                     }
-                    for a in message.attachments
+                    for index, attachment in enumerate(message.attachments, start=1)
                 ]
             )
 
@@ -490,6 +498,12 @@ class Pipeline:
                     workspace_path = agent_config.workspace
                 else:
                     agent_config.workspace = str(workspace_path)
+
+                # Store uploads in the workspace. Only metadata and relative
+                # paths are passed to the model; tools read content on demand.
+                attachment_context = await _prepare_attachment_context(
+                    message.attachments or [], str(workspace_path)
+                )
 
                 # Set up syscall handler
                 syscall_handler = SyscallHandler(
@@ -622,7 +636,7 @@ class Pipeline:
                     recent_messages=recent_msgs,
                     trigger=trigger,
                     event_emitter=_persisting_emitter,
-                    attachments=message.attachments,
+                    attachments=attachment_context,
                     skill=message.skill,
                 )
 
@@ -653,6 +667,11 @@ class Pipeline:
                 run.tokens_out = result.tokens_out
                 run.cost = result.total_cost
                 run.completed_at = datetime.now(UTC)
+                run.latency_ms = (
+                    int((run.completed_at - run.started_at).total_seconds() * 1000)
+                    if run.started_at
+                    else 0
+                )
                 if result.error:
                     run.error = result.error
 
@@ -706,6 +725,7 @@ class Pipeline:
                                     # Phase 3: write title (short transaction)
                                     from sqlalchemy import update as sa_update
                                     from ..models.session import Session as SessionModel
+
                                     async with async_session_factory() as bg_db:
                                         await bg_db.execute(
                                             sa_update(SessionModel)
@@ -751,6 +771,11 @@ class Pipeline:
                 run.status = "failed"
                 run.error = str(e)
                 run.completed_at = datetime.now(UTC)
+                run.latency_ms = (
+                    int((run.completed_at - run.started_at).total_seconds() * 1000)
+                    if run.started_at
+                    else 0
+                )
                 await self.db.commit()
                 raise
 

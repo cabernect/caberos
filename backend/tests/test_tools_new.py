@@ -200,6 +200,64 @@ async def test_read_file(workspace):
 
 
 @pytest.mark.asyncio
+async def test_read_file_line_range(workspace):
+    with open(os.path.join(workspace, "lines.md"), "w") as f:
+        f.write("line 1\nline 2\nline 3\nline 4\n")
+
+    result = await read_file(
+        {"path": "lines.md", "start_line": 2, "end_line": 3},
+        workspace_path=workspace,
+    )
+
+    assert result["content"] == "line 2\nline 3\n"
+    assert result["start_line"] == 2
+    assert result["end_line"] == 3
+    assert result["total_lines"] == 4
+    assert result["has_more"] is True
+    assert result["next_start_line"] == 4
+
+
+@pytest.mark.asyncio
+async def test_read_file_line_range_last_chunk(workspace):
+    with open(os.path.join(workspace, "lines.md"), "w") as f:
+        f.write("line 1\nline 2\nline 3\nline 4\n")
+
+    result = await read_file(
+        {"path": "lines.md", "start_line": 3, "end_line": 4},
+        workspace_path=workspace,
+    )
+
+    assert result["content"] == "line 3\nline 4\n"
+    assert result["has_more"] is False
+    assert "next_start_line" not in result
+
+
+@pytest.mark.asyncio
+async def test_read_file_image_requires_vision(workspace):
+    from agentos.capabilities.tools.file import read_file
+
+    with open(os.path.join(workspace, "image.png"), "wb") as f:
+        f.write(b"fake image bytes")
+
+    result = await read_file({"path": "image.png"}, workspace_path=workspace, supports_vision=False)
+    assert result["mime_type"] == "image/png"
+    assert "cannot inspect" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_read_file_image_returns_model_content_for_vision(workspace):
+    from agentos.capabilities.tools.file import read_file
+
+    with open(os.path.join(workspace, "image.png"), "wb") as f:
+        f.write(b"fake image bytes")
+
+    result = await read_file({"path": "image.png"}, workspace_path=workspace, supports_vision=True)
+    assert result["mime_type"] == "image/png"
+    assert result["_model_content"][1]["type"] == "image_url"
+    assert result["_model_content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+@pytest.mark.asyncio
 async def test_write_file_creates(workspace):
     result = await write_file(
         {"path": "new.txt", "content": "new content"}, workspace_path=workspace

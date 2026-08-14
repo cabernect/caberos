@@ -33,6 +33,8 @@ export interface Agent {
   enabled: boolean;
   model: string | null;
   provider_id: string | null;
+  thinking_enabled?: boolean | null;
+  thinking_effort?: string | null;
   soul: string;
   persona: string;
   task: string;
@@ -54,7 +56,7 @@ export interface Limits {
   max_turns_per_run: number;
   max_cost_per_run: number;
   session_idle_timeout_min: number;
-  max_context_tokens: number;
+  max_context_tokens: number | null;
 }
 
 export interface HeartbeatConfig {

@@ -80,7 +80,7 @@ def get_model_max_tokens(model_str: str, override: int | None = None) -> int:
       1. Explicit override from agent config (max_context_tokens)
       2. litellm's registry (exact match on model_str)
       3. Fuzzy match — strip provider prefix and try known model families
-      4. Conservative default (32K)
+      4. Default (200K) — modern models typically have ≥200K context
 
     Results are cached per model_str.
     """
@@ -159,9 +159,9 @@ def get_model_max_tokens(model_str: str, override: int | None = None) -> int:
     except Exception:
         pass
 
-    # 4. Conservative default
-    _token_cache[cache_key] = 32000
-    return 32000
+    # 4. Default — modern models typically have ≥200K context
+    _token_cache[cache_key] = 200000
+    return 200000
 
 
 # --- Phase 1: Prune old tool results ---

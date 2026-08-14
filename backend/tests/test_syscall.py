@@ -1,11 +1,11 @@
-"""Tests for the real syscall layer (ticket 03 — D10, D11, D18)."""
+"""Tests for the real syscall layer (ticket 03 — D10, D11)."""
 
 import pytest
 
 from agentos.capabilities.builtin import register_builtin_capabilities
 from agentos.capabilities.registry import registry
 from agentos.config_schema import AgentConfig, CapabilityGrant, ModelConfig
-from agentos.syscall.mediator import SyscallHandler, reduce_result
+from agentos.syscall.mediator import SyscallHandler
 from agentos.syscall.protocol import ToolCall
 
 
@@ -31,23 +31,6 @@ def _make_session(contact_id: str):
     from types import SimpleNamespace
 
     return SimpleNamespace(contact_id=contact_id, id="test-session-id")
-
-
-class TestReduceResult:
-    def test_small_result_passes_through(self):
-        result = {"stdout": "hello", "exit_code": 0}
-        assert reduce_result(result) == result
-
-    def test_large_result_is_truncated(self):
-        big = {"content": "x" * 10000}
-        reduced = reduce_result(big)
-        assert reduced is not None
-        assert isinstance(reduced, dict)
-        assert reduced.get("truncated") is True
-        assert "preview" in reduced
-
-    def test_none_passes_through(self):
-        assert reduce_result(None) is None
 
 
 class TestSyscallHandler:
@@ -233,11 +216,9 @@ class TestSyscallHandler:
         assert records[0].allowed is False
         assert records[0].denied_reason == "not granted"
 
-    async def test_result_reduction_applied(self, db, workspace):
-        """D18 — oversized results are reduced before entering model context."""
+    async def test_large_read_file_output_is_not_truncated(self, db, workspace):
         import os
 
-        # Create a file with lots of content
         big_content = "x" * 10000
         with open(os.path.join(workspace, "big.txt"), "w") as f:
             f.write(big_content)
@@ -254,9 +235,47 @@ class TestSyscallHandler:
         )
 
         assert result.allowed is True
-        # The output should be reduced (truncated)
-        assert isinstance(result.output, dict)
-        assert result.output.get("truncated") is True
+        assert result.output == {"content": big_content, "path": "big.txt"}
+
+    async def test_paginated_read_file_stays_complete_per_chunk(self, db, workspace):
+        import os
+
+        expected_lines = [f"line {line_number}\n" for line_number in range(1, 401)]
+        with open(os.path.join(workspace, "large.md"), "w") as f:
+            f.writelines(expected_lines)
+
+        handler = SyscallHandler(db=db, workspace_path=workspace)
+        agent_config = _make_agent_config(["read_file"])
+        session = _make_session("contact-1")
+
+        first = await handler.mediate(
+            call=ToolCall(
+                id="1",
+                name="read_file",
+                args={"path": "large.md", "start_line": 1, "end_line": 200},
+            ),
+            session=session,
+            agent_config=agent_config,
+            run_id="run-1",
+        )
+        second = await handler.mediate(
+            call=ToolCall(
+                id="2",
+                name="read_file",
+                args={"path": "large.md", "start_line": 201, "end_line": 400},
+            ),
+            session=session,
+            agent_config=agent_config,
+            run_id="run-1",
+        )
+
+        assert first.output["content"] == "".join(expected_lines[:200])
+        assert second.output["content"] == "".join(expected_lines[200:])
+        assert first.output["has_more"] is True
+        assert first.output["next_start_line"] == 201
+        assert second.output["has_more"] is False
+        assert "truncated" not in first.output
+        assert "truncated" not in second.output
 
 
 class TestNoneCapabilities:

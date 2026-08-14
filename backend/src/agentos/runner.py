@@ -47,9 +47,10 @@ from typing import Any
 
 from sqlalchemy import select
 
+from .agent_service import get_active_config
 from .db import async_session_factory
-from .harness.litellm_adapter import LiteLLMAdapter
 from .harness.loop import Harness
+from .providers import ProviderRegistry
 from .harness.scripted_model import ScriptedModel, ScriptedResponse
 from .models.agent import Agent
 from .pipeline import Attachment, InboundMessage, Pipeline
@@ -209,7 +210,7 @@ async def run_agent(
         is_test: If True, uses the ScriptedModel demo (no real LLM call)
         model_override: Optional {provider_id, name} to override the agent's model
         session_id: Optional session to use (else auto-resume most recent)
-        attachments: Optional multimodal attachments (images, URLs, files)
+        attachments: Optional user attachments stored in the workspace and accessed through tools
         event_callback: Optional async callback for events (typing, token, tool_call, etc.)
         trigger: What triggered this run ("user_message" or "heartbeat")
         channel: Source channel ("dashboard_chat", "heartbeat", ...)
@@ -249,7 +250,9 @@ async def run_agent(
         if is_test:
             model = ScriptedModel(_DEMO_SCRIPT)
         else:
-            model = LiteLLMAdapter(db)
+            config = await get_active_config(db, agent_id)
+            provider_id = (model_override or {}).get("provider_id") or config.model.provider_id
+            model = await ProviderRegistry(db).for_model(provider_id)
 
         # Wire up the harness + pipeline
         harness = Harness(model=model)

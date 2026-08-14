@@ -46,6 +46,9 @@ export function Mcps() {
     if (page === "skills") navigate("/skills");
     if (page === "scheduler") navigate("/scheduler");
     if (page === "mcps") return;
+    if (page === "channels") navigate("/channels");
+    if (page === "observability") navigate("/observability");
+    if (page === "traces") navigate("/traces");
   };
 
   const toggleExpand = async (serverId: string) => {
@@ -219,12 +222,14 @@ export function Mcps() {
 }
 
 function AddServerForm({ onAdded }: { onAdded: () => void }) {
+  const [mode, setMode] = useState<"form" | "json">("form");
   const [name, setName] = useState("");
   const [transport, setTransport] = useState("stdio");
   const [command, setCommand] = useState("");
   const [args, setArgs] = useState("");
   const [url, setUrl] = useState("");
   const [envTemplate, setEnvTemplate] = useState("");
+  const [jsonText, setJsonText] = useState("");
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -262,105 +267,266 @@ function AddServerForm({ onAdded }: { onAdded: () => void }) {
     }
   };
 
+  const handleJsonSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAdding(true);
+    setError(null);
+    try {
+      const parsed = JSON.parse(jsonText);
+      // Support two JSON formats:
+      // 1. CaberOS format: { name, transport, command, args, url, ... }
+      // 2. Claude Desktop format: { "mcpServers": { "name": { "command": ..., "args": [...] } } }
+      //    or just { "name": { "command": ..., "args": [...] } }
+      let data: Record<string, unknown>;
+
+      if (parsed.mcpServers && typeof parsed.mcpServers === "object") {
+        // Claude Desktop config — take the first server
+        const entries = Object.entries(parsed.mcpServers);
+        if (entries.length === 0) {
+          setError("No servers found in mcpServers object");
+          setAdding(false);
+          return;
+        }
+        const [serverName, serverConfig] = entries[0];
+        data = { name: serverName, enabled: true, ...serverConfig };
+        if (!data.transport) {
+          data.transport = serverConfig.url ? "http" : "stdio";
+        }
+      } else if (parsed.command || parsed.url) {
+        // Direct CaberOS format
+        data = { enabled: true, ...parsed };
+        if (!data.transport) {
+          data.transport = parsed.url ? "http" : "stdio";
+        }
+        if (!data.name) {
+          setError("JSON must include a \"name\" field");
+          setAdding(false);
+          return;
+        }
+      } else {
+        // Maybe it's a single { "name": { config } } object
+        const entries = Object.entries(parsed);
+        if (entries.length === 1 && typeof entries[0][1] === "object") {
+          const [serverName, serverConfig] = entries[0];
+          data = { name: serverName, enabled: true, ...serverConfig };
+          if (!data.transport) {
+            data.transport = serverConfig.url ? "http" : "stdio";
+          }
+        } else {
+          setError("Unrecognized JSON format. Use CaberOS format ({ name, command, args }) or Claude Desktop format ({ mcpServers: { ... } })");
+          setAdding(false);
+          return;
+        }
+      }
+
+      await api.createMcpServer(data as Parameters<typeof api.createMcpServer>[0]);
+      onAdded();
+    } catch (e) {
+      if (e instanceof SyntaxError) {
+        setError("Invalid JSON: " + e.message);
+      } else {
+        setError(e instanceof Error ? e.message : "Failed to add server");
+      }
+    } finally {
+      setAdding(false);
+    }
+  };
+
   return (
-    <form
-      onSubmit={handleSubmit}
+    <div
       className="mb-4 rounded-[8px] border p-4"
       style={{ borderColor: "var(--border)", background: "var(--white)" }}
     >
-      <h3 className="mb-3 text-[14px] font-semibold text-[var(--ink)]">Add MCP Server</h3>
-      <div className="space-y-3">
-        <div>
-          <label className="mb-1 block font-mono text-[11px] uppercase tracking-wider text-[var(--ink-3)]">Name</label>
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. Outlook"
-            required
-            className="w-full rounded-[5px] border px-3 py-2 text-[13px]"
-            style={{ borderColor: "#E0DFDC", background: "var(--surface)", color: "var(--ink)" }}
-          />
-        </div>
-        <div>
-          <label className="mb-1 block font-mono text-[11px] uppercase tracking-wider text-[var(--ink-3)]">Transport</label>
-          <select
-            value={transport}
-            onChange={(e) => setTransport(e.target.value)}
-            className="w-full rounded-[5px] border px-3 py-2 text-[13px]"
-            style={{ borderColor: "#E0DFDC", background: "var(--surface)", color: "var(--ink)" }}
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="text-[14px] font-semibold text-[var(--ink)]">Add MCP Server</h3>
+        {/* Mode toggle */}
+        <div className="flex gap-1 rounded-[5px] p-0.5" style={{ background: "var(--surface)" }}>
+          <button
+            type="button"
+            onClick={() => { setMode("form"); setError(null); }}
+            className="rounded-[4px] px-2.5 py-1 text-[11px] font-mono transition"
+            style={{
+              background: mode === "form" ? "var(--white)" : "none",
+              color: mode === "form" ? "var(--ink)" : "var(--ink-3)",
+              border: "none",
+              cursor: "pointer",
+            }}
           >
-            <option value="stdio">stdio (local process)</option>
-            <option value="http">http (remote server)</option>
-          </select>
+            Form
+          </button>
+          <button
+            type="button"
+            onClick={() => { setMode("json"); setError(null); }}
+            className="rounded-[4px] px-2.5 py-1 text-[11px] font-mono transition"
+            style={{
+              background: mode === "json" ? "var(--white)" : "none",
+              color: mode === "json" ? "var(--ink)" : "var(--ink-3)",
+              border: "none",
+              cursor: "pointer",
+            }}
+          >
+            JSON
+          </button>
         </div>
-        {transport === "stdio" ? (
-          <>
-            <div>
-              <label className="mb-1 block font-mono text-[11px] uppercase tracking-wider text-[var(--ink-3)]">Command</label>
-              <input
-                value={command}
-                onChange={(e) => setCommand(e.target.value)}
-                placeholder="e.g. uvx outlook-graph-mcp"
-                required
-                className="w-full rounded-[5px] border px-3 py-2 font-mono text-[13px]"
-                style={{ borderColor: "#E0DFDC", background: "var(--surface)", color: "var(--ink)" }}
-              />
-            </div>
-            <div>
-              <label className="mb-1 block font-mono text-[11px] uppercase tracking-wider text-[var(--ink-3)]">Arguments (space-separated)</label>
-              <input
-                value={args}
-                onChange={(e) => setArgs(e.target.value)}
-                placeholder="e.g. --port 3000"
-                className="w-full rounded-[5px] border px-3 py-2 font-mono text-[13px]"
-                style={{ borderColor: "#E0DFDC", background: "var(--surface)", color: "var(--ink)" }}
-              />
-            </div>
-          </>
-        ) : (
-          <div>
-            <label className="mb-1 block font-mono text-[11px] uppercase tracking-wider text-[var(--ink-3)]">URL</label>
-            <input
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              placeholder="https://mcp-server.example.com"
-              required
-              className="w-full rounded-[5px] border px-3 py-2 font-mono text-[13px]"
-              style={{ borderColor: "#E0DFDC", background: "var(--surface)", color: "var(--ink)" }}
-            />
-          </div>
-        )}
-        <div>
-          <label className="mb-1 block font-mono text-[11px] uppercase tracking-wider text-[var(--ink-3)]">
-            Env template (JSON, optional)
-          </label>
-          <textarea
-            value={envTemplate}
-            onChange={(e) => setEnvTemplate(e.target.value)}
-            placeholder='{"API_KEY": "{{credential_value}}"}'
-            rows={2}
-            className="w-full rounded-[5px] border px-3 py-2 font-mono text-[12px]"
-            style={{ borderColor: "#E0DFDC", background: "var(--surface)", color: "var(--ink)" }}
-          />
-        </div>
-        {error && (
-          <p className="text-[12px]" style={{ color: "var(--danger)" }}>{error}</p>
-        )}
-        <button
-          type="submit"
-          disabled={adding}
-          className="rounded-[6px] px-4 py-2 text-[13px] font-medium transition"
-          style={{
-            background: adding ? "var(--surface)" : "var(--accent)",
-            color: adding ? "var(--ink-3)" : "#fff",
-            cursor: adding ? "not-allowed" : "pointer",
-            border: "none",
-          }}
-        >
-          {adding ? "Adding…" : "Add Server"}
-        </button>
       </div>
-    </form>
+
+      {mode === "form" ? (
+        <form onSubmit={handleSubmit}>
+          <div className="space-y-3">
+            <div>
+              <label className="mb-1 block font-mono text-[11px] uppercase tracking-wider text-[var(--ink-3)]">Name</label>
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="e.g. Outlook"
+                required
+                className="w-full rounded-[5px] border px-3 py-2 text-[13px]"
+                style={{ borderColor: "#E0DFDC", background: "var(--surface)", color: "var(--ink)" }}
+              />
+            </div>
+            <div>
+              <label className="mb-1 block font-mono text-[11px] uppercase tracking-wider text-[var(--ink-3)]">Transport</label>
+              <select
+                value={transport}
+                onChange={(e) => setTransport(e.target.value)}
+                className="w-full rounded-[5px] border px-3 py-2 text-[13px]"
+                style={{ borderColor: "#E0DFDC", background: "var(--surface)", color: "var(--ink)" }}
+              >
+                <option value="stdio">stdio (local process)</option>
+                <option value="http">http (remote server)</option>
+              </select>
+            </div>
+            {transport === "stdio" ? (
+              <>
+                <div>
+                  <label className="mb-1 block font-mono text-[11px] uppercase tracking-wider text-[var(--ink-3)]">Command</label>
+                  <input
+                    value={command}
+                    onChange={(e) => setCommand(e.target.value)}
+                    placeholder="e.g. uvx outlook-graph-mcp"
+                    required
+                    className="w-full rounded-[5px] border px-3 py-2 font-mono text-[13px]"
+                    style={{ borderColor: "#E0DFDC", background: "var(--surface)", color: "var(--ink)" }}
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block font-mono text-[11px] uppercase tracking-wider text-[var(--ink-3)]">Arguments (space-separated)</label>
+                  <input
+                    value={args}
+                    onChange={(e) => setArgs(e.target.value)}
+                    placeholder="e.g. --port 3000"
+                    className="w-full rounded-[5px] border px-3 py-2 font-mono text-[13px]"
+                    style={{ borderColor: "#E0DFDC", background: "var(--surface)", color: "var(--ink)" }}
+                  />
+                </div>
+              </>
+            ) : (
+              <div>
+                <label className="mb-1 block font-mono text-[11px] uppercase tracking-wider text-[var(--ink-3)]">URL</label>
+                <input
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  placeholder="https://mcp-server.example.com"
+                  required
+                  className="w-full rounded-[5px] border px-3 py-2 font-mono text-[13px]"
+                  style={{ borderColor: "#E0DFDC", background: "var(--surface)", color: "var(--ink)" }}
+                />
+              </div>
+            )}
+            <div>
+              <label className="mb-1 block font-mono text-[11px] uppercase tracking-wider text-[var(--ink-3)]">
+                Env template (JSON, optional)
+              </label>
+              <textarea
+                value={envTemplate}
+                onChange={(e) => setEnvTemplate(e.target.value)}
+                placeholder='{"API_KEY": "{{credential_value}}"}'
+                rows={2}
+                className="w-full rounded-[5px] border px-3 py-2 font-mono text-[12px]"
+                style={{ borderColor: "#E0DFDC", background: "var(--surface)", color: "var(--ink)" }}
+              />
+            </div>
+            {error && (
+              <p className="text-[12px]" style={{ color: "var(--danger)" }}>{error}</p>
+            )}
+            <button
+              type="submit"
+              disabled={adding}
+              className="rounded-[6px] px-4 py-2 text-[13px] font-medium transition"
+              style={{
+                background: adding ? "var(--surface)" : "var(--accent)",
+                color: adding ? "var(--ink-3)" : "#fff",
+                cursor: adding ? "not-allowed" : "pointer",
+                border: "none",
+              }}
+            >
+              {adding ? "Adding…" : "Add Server"}
+            </button>
+          </div>
+        </form>
+      ) : (
+        <form onSubmit={handleJsonSubmit}>
+          <div className="space-y-3">
+            <div>
+              <label className="mb-1 block font-mono text-[11px] uppercase tracking-wider text-[var(--ink-3)]">
+                Server config (JSON)
+              </label>
+              <p className="mb-2 text-[11px] text-[var(--ink-3)]">
+                Paste a CaberOS config or Claude Desktop config. Examples:
+              </p>
+              <pre
+                className="mb-2 rounded-[4px] p-2 font-mono text-[10px] overflow-x-auto"
+                style={{ background: "var(--surface)", color: "var(--ink-3)" }}
+              >
+{`// CaberOS format:
+{
+  "name": "my-server",
+  "transport": "stdio",
+  "command": "uvx",
+  "args": ["my-mcp-server"],
+  "env_template": { "API_KEY": "{{credential_value}}" }
+}
+
+// Claude Desktop format:
+{
+  "mcpServers": {
+    "my-server": {
+      "command": "uvx",
+      "args": ["my-mcp-server"]
+    }
+  }
+}`}
+              </pre>
+              <textarea
+                value={jsonText}
+                onChange={(e) => setJsonText(e.target.value)}
+                placeholder='{\n  "name": "my-server",\n  "command": "uvx",\n  "args": ["my-mcp-server"]\n}'
+                rows={10}
+                required
+                className="w-full rounded-[5px] border px-3 py-2 font-mono text-[12px]"
+                style={{ borderColor: "#E0DFDC", background: "var(--surface)", color: "var(--ink)" }}
+              />
+            </div>
+            {error && (
+              <p className="text-[12px]" style={{ color: "var(--danger)" }}>{error}</p>
+            )}
+            <button
+              type="submit"
+              disabled={adding}
+              className="rounded-[6px] px-4 py-2 text-[13px] font-medium transition"
+              style={{
+                background: adding ? "var(--surface)" : "var(--accent)",
+                color: adding ? "var(--ink-3)" : "#fff",
+                cursor: adding ? "not-allowed" : "pointer",
+                border: "none",
+              }}
+            >
+              {adding ? "Adding…" : "Add Server"}
+            </button>
+          </div>
+        </form>
+      )}
+    </div>
   );
 }
 

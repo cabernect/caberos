@@ -20,7 +20,7 @@ if "SSL_CERT_FILE" not in os.environ:
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api import agent_files, agents, approvals, channels, chat, elicitation, mcp, observability, providers, scheduler, skills
+from .api import agent_files, agents, approvals, channels, chat, elicitation, mcp, observability, providers, scheduler, settings, skills
 from .auth import router as auth_router
 from .capabilities.builtin import register_builtin_capabilities
 from .db import init_db
@@ -178,6 +178,7 @@ app.include_router(scheduler.router)
 app.include_router(mcp.router)
 app.include_router(channels.router)
 app.include_router(observability.router)
+app.include_router(settings.router)
 
 
 @app.get("/health")

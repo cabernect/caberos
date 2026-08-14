@@ -1,13 +1,14 @@
 import { useState, useRef, useEffect, useImperativeHandle, forwardRef } from "react";
-import { Paperclip, FileText, Image as ImageIcon, Link, Wrench, ArrowUp, HelpCircle, Check, Sparkles, Square, Brain } from "lucide-react";
+import { Paperclip, FileText, Image as ImageIcon, Link, Wrench, ArrowUp, HelpCircle, Check, Sparkles, Square } from "lucide-react";
 import { ModelSelector } from "@/components/ModelSelector";
+import { ThinkingToggle } from "@/components/ThinkingToggle";
 import { api } from "@/lib/api";
 import type { SkillInfo } from "@/lib/types";
 
 export interface Attachment {
   type: "image" | "url" | "file";
   mimeType: string;
-  data: string; // base64 for images/files, URL for urls
+  data: string; // base64 for uploaded files/images, URL for URL attachments
   filename: string;
 }
 
@@ -35,7 +36,10 @@ export interface ActiveElicitation {
 interface ChatInputBarProps {
   defaultProviderId: string | null;
   defaultModelName: string | null;
+  defaultThinkingEnabled?: boolean | null;
+  defaultThinkingEffort?: string | null;
   disabled?: boolean;
+  onModelChange?: (hasModel: boolean) => void;
   onSend: (
     text: string,
     modelOverride: { provider_id: string; name: string } | null,
@@ -47,6 +51,7 @@ interface ChatInputBarProps {
   activeElicitation?: ActiveElicitation | null;
   onElicitationRespond?: (response: string) => void;
   contextTokens?: number;
+  cachedTokens?: number;
   maxContextTokens?: number;
   compacted?: boolean;
   contextBreakdown?: { system_prompt: number; conversation: number; tools: number };
@@ -56,12 +61,16 @@ interface ChatInputBarProps {
 export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(function ChatInputBar({
   defaultProviderId,
   defaultModelName,
+  defaultThinkingEnabled,
+  defaultThinkingEffort,
   disabled,
+  onModelChange,
   onSend,
   onStop,
   activeElicitation,
   onElicitationRespond,
   contextTokens,
+  cachedTokens,
   maxContextTokens,
   compacted,
   contextBreakdown,
@@ -75,8 +84,8 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
     supports_thinking?: boolean;
     thinking_efforts?: string[];
   } | null>(null);
-  const [thinkingEnabled, setThinkingEnabled] = useState<boolean | null>(null);
-  const [thinkingEffort, setThinkingEffort] = useState<string>("medium");
+  const [thinkingEnabled, setThinkingEnabled] = useState<boolean | null>(defaultThinkingEnabled ?? null);
+  const [thinkingEffort, setThinkingEffort] = useState<string>(defaultThinkingEffort || "medium");
   const [contextItems, setContextItems] = useState<ContextItem[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [showContextMenu, setShowContextMenu] = useState(false);
@@ -91,6 +100,30 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
   const imageInputRef = useRef<HTMLInputElement>(null);
 
   const isElicitation = !!activeElicitation;
+
+  // Notify parent whether a model is available (default or user-selected)
+  const hasDefaultModel = !!(defaultProviderId && defaultModelName);
+  const hasModel = hasDefaultModel || !!modelOverride;
+  useEffect(() => {
+    onModelChange?.(hasModel);
+  }, [hasModel, onModelChange]);
+
+  // Sync thinking effort when the model changes — the default "medium"
+  // may not be in the new model's supported effort list
+  useEffect(() => {
+    const efforts = modelOverride?.thinking_efforts;
+    if (efforts && efforts.length > 0 && !efforts.includes(thinkingEffort)) {
+      setThinkingEffort(efforts[0]);
+    }
+  }, [modelOverride, thinkingEffort]);
+
+  // Sync thinking from agent defaults whenever they change (e.g. after
+  // saving in Settings). The user can still override per-message by
+  // clicking the toggle — this just resets to the agent default.
+  useEffect(() => {
+    setThinkingEnabled(defaultThinkingEnabled ?? null);
+    setThinkingEffort(defaultThinkingEffort || "medium");
+  }, [defaultThinkingEnabled, defaultThinkingEffort]);
 
   // Load skills for slash command autocomplete
   useEffect(() => {
@@ -168,10 +201,17 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
       messageText = slashMatch[2].trim() || messageText; // keep original if no text after skill
     }
 
-    // Attach thinking params to the model override if the selected model supports it
-    const overrideWithThinking = modelOverride
+    // Attach thinking params to the model override.
+    // When using the default model (no override), still send an override
+    // with the default provider/model so thinking params reach the backend.
+    const baseModel = modelOverride
+      ? modelOverride
+      : hasDefaultModel
+        ? { provider_id: defaultProviderId!, name: defaultModelName! }
+        : null;
+    const overrideWithThinking = baseModel
       ? {
-          ...modelOverride,
+          ...baseModel,
           thinking_enabled: thinkingEnabled,
           thinking_effort: thinkingEnabled ? thinkingEffort : null,
         }
@@ -300,7 +340,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
     if (!urlValue.trim()) return;
     setAttachments((prev) => [...prev, {
       type: "url",
-      mimeType: "image/jpeg", // assume image — model will handle
+      mimeType: "text/uri-list",
       data: urlValue.trim(),
       filename: "",
     }]);
@@ -539,6 +579,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
           {contextTokens != null && maxContextTokens != null && maxContextTokens > 0 && (
             <ContextCircle
               contextTokens={contextTokens}
+              cachedTokens={cachedTokens}
               maxContextTokens={maxContextTokens}
               compacted={compacted}
               breakdown={contextBreakdown}
@@ -547,38 +588,38 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
         </div>
       )}
 
-      <div className="relative mx-auto flex max-w-[672px] items-end gap-2">
-        {/* Context chips above input */}
-        {!isElicitation && contextItems.length > 0 && (
-          <div className="absolute -top-9 left-0 flex flex-wrap gap-1.5">
-            {contextItems.map((item, i) => (
-              <span
-                key={i}
-                className="flex items-center gap-1 rounded-[5px] border px-2 py-1 text-[11px]"
-                style={{
-                  borderColor: "var(--border)",
-                  background: "var(--white)",
-                  color: "var(--ink-2)",
-                }}
-              >
-                {item.type === "file" && <FileText className="h-3 w-3" />}
-                {item.type === "image" && <ImageIcon className="h-3 w-3" />}
-                {item.type === "url" && <Link className="h-3 w-3" />}
-                {item.type === "skill" && <Wrench className="h-3 w-3" />}
-                <span className="max-w-[150px] truncate font-mono">
-                  {item.label}
-                </span>
-                <button
-                  onClick={() => removeAttachment(i)}
-                  className="text-[var(--ink-3)] hover:text-[var(--ink)]"
-                >
-                  ×
-                </button>
+      {/* Attachment chips stay in normal flow below the model controls. */}
+      {!isElicitation && contextItems.length > 0 && (
+        <div className="mx-auto mb-1 flex max-w-[672px] flex-wrap gap-1.5">
+          {contextItems.map((item, i) => (
+            <span
+              key={i}
+              className="flex items-center gap-1 rounded-[5px] border px-2 py-1 text-[11px]"
+              style={{
+                borderColor: "var(--border)",
+                background: "var(--white)",
+                color: "var(--ink-2)",
+              }}
+            >
+              {item.type === "file" && <FileText className="h-3 w-3" />}
+              {item.type === "image" && <ImageIcon className="h-3 w-3" />}
+              {item.type === "url" && <Link className="h-3 w-3" />}
+              {item.type === "skill" && <Wrench className="h-3 w-3" />}
+              <span className="max-w-[150px] truncate font-mono">
+                {item.label}
               </span>
-            ))}
-          </div>
-        )}
+              <button
+                onClick={() => removeAttachment(i)}
+                className="text-[var(--ink-3)] hover:text-[var(--ink)]"
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
 
+      <div className="relative mx-auto flex max-w-[672px] items-end gap-2">
         {/* Attach button + context menu — hidden during elicitation */}
         {!isElicitation && (
         <div className="relative shrink-0">
@@ -588,7 +629,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
             type="file"
             accept="image/*"
             multiple
-            style={{ display: "none" }}
+            className="sr-only"
             onChange={handleImageSelect}
           />
           <input
@@ -596,25 +637,28 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
             type="file"
             accept="*/*"
             multiple
-            style={{ display: "none" }}
+            className="sr-only"
             onChange={handleFileSelect}
           />
           <button
-            onClick={() => setShowContextMenu(!showContextMenu)}
+            onClick={() => setShowContextMenu((open) => !open)}
             className="flex h-8 w-8 items-center justify-center rounded-[5px] border text-[var(--ink-2)] transition"
             style={{
-              borderColor: "var(--border)",
-              background: "none",
+              borderColor: showContextMenu ? "var(--accent)" : "var(--border)",
+              background: showContextMenu ? "var(--surface)" : "none",
             }}
             onMouseEnter={(e) => {
               e.currentTarget.style.borderColor = "var(--ink-3)";
               e.currentTarget.style.color = "var(--ink)";
             }}
             onMouseLeave={(e) => {
-              e.currentTarget.style.borderColor = "var(--border)";
+              e.currentTarget.style.borderColor = showContextMenu ? "var(--accent)" : "var(--border)";
               e.currentTarget.style.color = "var(--ink-2)";
             }}
-            title="Attach context"
+            title="Add attachment"
+            aria-label="Add attachment"
+            aria-haspopup="menu"
+            aria-expanded={showContextMenu}
           >
             <Paperclip className="h-3.5 w-3.5" />
           </button>
@@ -625,61 +669,94 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
                 onClick={() => setShowContextMenu(false)}
               />
               <div
-                className="absolute bottom-full left-0 z-50 mb-1 min-w-[180px] rounded-md border p-1 shadow-lg"
+                className="absolute bottom-full left-0 z-50 mb-2 min-w-[236px] rounded-lg border p-1.5 shadow-lg"
                 style={{
                   borderColor: "var(--border)",
                   background: "var(--white)",
-                  boxShadow: "0 4px 16px rgba(0,0,0,0.08)",
+                  boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
                 }}
+                role="menu"
+                aria-label="Add attachment"
               >
+                <div className="px-2.5 pb-1.5 pt-1 text-[11px] font-medium uppercase tracking-wide" style={{ color: "var(--ink-3)" }}>
+                  Add attachment
+                </div>
                 <ContextMenuItem
                   icon={<ImageIcon className="h-4 w-4" />}
                   label="Image"
-                  onClick={() => imageInputRef.current?.click()}
+                  description="PNG, JPG, GIF, or WebP"
+                  onClick={() => { imageInputRef.current?.click(); setShowContextMenu(false); }}
                 />
                 <ContextMenuItem
                   icon={<FileText className="h-4 w-4" />}
                   label="File"
-                  onClick={() => fileInputRef.current?.click()}
+                  description="PDF, DOCX, XLSX, or text"
+                  onClick={() => { fileInputRef.current?.click(); setShowContextMenu(false); }}
                 />
                 <ContextMenuItem
                   icon={<Link className="h-4 w-4" />}
-                  label="URL"
+                  label="Web URL"
+                  description="Read a webpage with the agent"
                   onClick={() => { setShowUrlInput(true); setShowContextMenu(false); }}
                 />
               </div>
             </>
           )}
           {showUrlInput && (
-            <div
-              className="absolute bottom-full left-0 z-50 mb-1 flex gap-1.5 rounded-md border p-2 shadow-lg"
-              style={{
-                borderColor: "var(--border)",
-                background: "var(--white)",
-                boxShadow: "0 4px 16px rgba(0,0,0,0.08)",
-              }}
-            >
-              <input
-                type="url"
-                value={urlValue}
-                onChange={(e) => setUrlValue(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") { e.preventDefault(); handleUrlSubmit(); }
-                  if (e.key === "Escape") { setShowUrlInput(false); setUrlValue(""); }
-                }}
-                placeholder="https://example.com/image.jpg"
-                className="w-[220px] rounded-[4px] px-2 py-1 text-[12px]"
-                style={{ border: "1px solid var(--border)", background: "var(--white)", color: "var(--ink)" }}
-                autoFocus
+            <>
+              <div
+                className="fixed inset-0 z-40"
+                onClick={() => { setShowUrlInput(false); setUrlValue(""); }}
               />
-              <button
-                onClick={handleUrlSubmit}
-                className="rounded-[4px] px-2 py-1 text-[12px] font-medium"
-                style={{ background: "var(--ink)", color: "var(--white)", border: "none", cursor: "pointer" }}
+              <div
+                className="absolute bottom-full left-0 z-50 mb-2 w-[280px] rounded-lg border p-3 shadow-lg"
+                style={{
+                  borderColor: "var(--border)",
+                  background: "var(--white)",
+                  boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
+                }}
               >
-                Add
-              </button>
-            </div>
+                <div className="mb-2 flex items-center justify-between">
+                  <div>
+                    <div className="text-[13px] font-medium" style={{ color: "var(--ink)" }}>Add web URL</div>
+                    <div className="text-[11px]" style={{ color: "var(--ink-3)" }}>The agent will read it with web tools.</div>
+                  </div>
+                  <button
+                    type="button"
+                    aria-label="Close URL input"
+                    onClick={() => { setShowUrlInput(false); setUrlValue(""); }}
+                    className="flex h-6 w-6 items-center justify-center rounded text-[16px]"
+                    style={{ color: "var(--ink-3)" }}
+                  >
+                    ×
+                  </button>
+                </div>
+                <div className="flex gap-1.5">
+                  <input
+                    type="url"
+                    value={urlValue}
+                    onChange={(e) => setUrlValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") { e.preventDefault(); handleUrlSubmit(); }
+                      if (e.key === "Escape") { setShowUrlInput(false); setUrlValue(""); }
+                    }}
+                    placeholder="https://example.com"
+                    aria-label="Web URL"
+                    className="min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-[12px]"
+                    style={{ border: "1px solid var(--border)", background: "var(--white)", color: "var(--ink)" }}
+                    autoFocus
+                  />
+                  <button
+                    onClick={handleUrlSubmit}
+                    disabled={!urlValue.trim()}
+                    className="rounded-[4px] px-2.5 py-1 text-[12px] font-medium"
+                    style={{ background: "var(--ink)", color: "var(--white)", border: "none", cursor: urlValue.trim() ? "pointer" : "default", opacity: urlValue.trim() ? 1 : 0.45 }}
+                  >
+                    Add
+                  </button>
+                </div>
+              </div>
+            </>
           )}
         </div>
         )}
@@ -844,33 +921,41 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
 function ContextMenuItem({
   icon,
   label,
+  description,
   onClick,
 }: {
   icon: React.ReactNode;
   label: string;
+  description: string;
   onClick: () => void;
 }) {
   return (
     <button
       onClick={onClick}
-      className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] transition"
+      className="flex w-full items-start gap-2 rounded-md px-2.5 py-2 text-left transition"
       style={{ color: "var(--ink)" }}
       onMouseEnter={(e) => (e.currentTarget.style.background = "var(--surface)")}
       onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
+      role="menuitem"
     >
-      {icon}
-      {label}
+      <span className="mt-0.5 text-[var(--ink-2)]">{icon}</span>
+      <span className="min-w-0">
+        <span className="block text-[13px] font-medium">{label}</span>
+        <span className="block text-[11px] leading-[1.35] text-[var(--ink-3)]">{description}</span>
+      </span>
     </button>
   );
 }
 
 function ContextCircle({
   contextTokens,
+  cachedTokens,
   maxContextTokens,
   compacted,
   breakdown,
 }: {
   contextTokens: number;
+  cachedTokens?: number;
   maxContextTokens: number;
   compacted?: boolean;
   breakdown?: { system_prompt: number; conversation: number; tools: number };
@@ -981,6 +1066,7 @@ function ContextCircle({
                   <span style={{ color: "var(--ink-2)" }}>Total Used</span>
                   <span className="tabular-nums font-medium" style={{ color: isWarning ? color : "var(--ink)" }}>
                     {contextTokens.toLocaleString()}
+                    {cachedTokens != null && ` (${cachedTokens.toLocaleString()} cached)`}
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
@@ -997,6 +1083,7 @@ function ContextCircle({
                 <span>Used</span>
                 <span className="tabular-nums" style={{ color: isWarning ? color : "var(--ink)" }}>
                   {contextTokens.toLocaleString()} tokens
+                  {cachedTokens != null && ` (${cachedTokens.toLocaleString()} cached)`}
                 </span>
               </div>
               <div className="flex justify-between">
@@ -1017,59 +1104,6 @@ function ContextCircle({
             </div>
           )}
         </div>
-      )}
-    </div>
-  );
-}
-
-
-/** Thinking toggle + effort selector — shown when the selected model supports reasoning. */
-function ThinkingToggle({
-  enabled,
-  effort,
-  efforts,
-  onToggle,
-  onEffortChange,
-}: {
-  enabled: boolean | null;
-  effort: string;
-  efforts: string[];
-  onToggle: (enabled: boolean) => void;
-  onEffortChange: (effort: string) => void;
-}) {
-  const isOn = enabled === true;
-
-  return (
-    <div className="flex items-center gap-1">
-      <button
-        type="button"
-        onClick={() => onToggle(!isOn)}
-        className="flex items-center gap-1 rounded-[4px] border px-2 py-1 font-mono text-[11px] transition"
-        style={{
-          borderColor: isOn ? "var(--accent)" : "var(--border)",
-          background: isOn ? "var(--surface)" : "transparent",
-          color: isOn ? "var(--accent)" : "var(--ink-3)",
-        }}
-        title={isOn ? "Thinking enabled — click to disable" : "Enable thinking/reasoning"}
-      >
-        <Brain className="h-3 w-3" />
-        <span>Think</span>
-      </button>
-      {isOn && efforts.length > 1 && (
-        <select
-          value={effort}
-          onChange={(e) => onEffortChange(e.target.value)}
-          className="rounded-[4px] border px-1.5 py-1 font-mono text-[11px] outline-none"
-          style={{
-            borderColor: "var(--border)",
-            background: "var(--surface)",
-            color: "var(--ink-2)",
-          }}
-        >
-          {efforts.map((e) => (
-            <option key={e} value={e}>{e}</option>
-          ))}
-        </select>
       )}
     </div>
   );

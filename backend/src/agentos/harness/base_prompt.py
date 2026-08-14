@@ -10,23 +10,6 @@ agent's enabled tools, so the agent only sees descriptions of tools it can
 actually use.
 """
 
-# Tool descriptions for the adaptive capabilities section.
-# Each entry: (capability_name, short_description, requires_approval)
-TOOL_DESCRIPTIONS = {
-    "read_file": "read a file from the workspace",
-    "write_file": "write a file to the workspace",
-    "search_files": "search files (grep content, find by name, or list directory)",
-    "terminal": "execute a shell command in the sandbox (requires approval)",
-    "read_terminal": "read output from a background terminal session",
-    "close_terminal": "close a background terminal session",
-    "datetime_now": "get the current date and time",
-    "web_search": "search the web via DuckDuckGo (requires approval)",
-    "web_fetch": "fetch a URL and return its text content (requires approval)",
-    "run_subagent": "run a sub-agent for a one-off task (delegation — see below)",
-    "read_subagent": "read the status/result of a background sub-agent",
-    "agent_ask_user": "ask the user a clarifying question (see below)",
-}
-
 # Static sections of the base prompt (everything except the Capabilities section)
 _BASE_PROMPT_HEADER = """\
 # CaberOS Agent Operating Instructions
@@ -61,13 +44,20 @@ _BASE_PROMPT_FOOTER = """\
 - **Use tools for work, not for trivia.** Reading files, editing code, running
   commands — yes. Searching the web for "what year is it" — no.
 
-## Multimodal Input
+## Attachments
 
-The user may attach images, URLs, or text files to their messages. These are
-sent alongside the text and appear in your context as image content. You can
-see and analyze images directly — describe what's in them, extract text,
-answer questions about them. No special tool call is needed; the image is
-already in your context.
+The user may attach images, URLs, or files. Attachments are not opened or sent
+to the model automatically. The user message contains only attachment metadata
+and a workspace-relative path when applicable.
+
+- Use `read_file` for a local text or binary attachment when you need its content.
+  By default it reads the full file. For a large file, pass `start_line` and
+  `end_line` (both 1-based and inclusive) and continue with the next line range
+  when needed. Do not switch to `terminal` just to read the rest of the same file.
+- Use `web_fetch` for a URL attachment when you need to read the webpage.
+- If the model supports vision, `read_file` can return an image for inspection.
+- If the model does not support vision, be honest that you cannot inspect image
+  pixels. Do not claim to have seen an image just because it is attached.
 
 ## Memory
 
@@ -122,6 +112,8 @@ already in your context.
 
 def _build_capabilities_section(enabled_caps: list[str]) -> str:
     """Build the adaptive Capabilities section based on enabled tools."""
+    from ..capabilities.registry import registry
+
     # Separate regular tools from delegation/interaction mechanisms
     regular_tools = [
         n for n in enabled_caps if n not in ("run_subagent", "read_subagent", "agent_ask_user")
@@ -140,21 +132,17 @@ def _build_capabilities_section(enabled_caps: list[str]) -> str:
         "",
     ]
 
+    has_approval = False
     for name in regular_tools:
-        desc = TOOL_DESCRIPTIONS.get(name)
-        if desc:
-            lines.append(f"- **{name}** — {desc}")
-        elif name.startswith("mcp."):
-            # MCP tools — get description from the capability registry
-            from ..capabilities.registry import registry
-
-            cap = registry.get(name)
-            if cap and cap.description:
-                lines.append(f"- **{name}** — {cap.description}")
+        cap = registry.get(name)
+        if cap and cap.description:
+            lines.append(f"- **{name}** — {cap.description}")
+            if cap.require_approval:
+                has_approval = True
 
     # Add tool-specific guidance based on what's enabled
     extra_notes: list[str] = []
-    if any("requires approval" in (TOOL_DESCRIPTIONS.get(n, "")) for n in enabled_caps):
+    if has_approval:
         extra_notes.append(
             "- **Some tools require approval.** When you call one, the run pauses"
             " and the operator is asked to approve or deny. If denied, you'll receive a"

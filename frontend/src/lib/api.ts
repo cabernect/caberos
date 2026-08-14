@@ -44,6 +44,8 @@ export const api = {
     name?: string;
     provider_id?: string;
     model_name?: string;
+    thinking_enabled?: boolean | null;
+    thinking_effort?: string | null;
     soul?: string;
     persona?: string;
     task?: string;
@@ -453,4 +455,13 @@ export const api = {
     request<HealthStatus>("/api/health"),
   getDashboardStats: (days = 7) =>
     request<DashboardStats>(`/api/stats?days=${days}`),
+
+  // Global settings
+  getYoloMode: () =>
+    request<{ yolo_mode: boolean }>("/api/settings/yolo"),
+  setYoloMode: (enabled: boolean) =>
+    request<{ yolo_mode: boolean }>("/api/settings/yolo", {
+      method: "PUT",
+      body: JSON.stringify({ yolo_mode: enabled }),
+    }),
 };

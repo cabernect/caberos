@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     # before auto-rejecting. 0 = wait forever (not recommended for production).
     hitl_timeout: int = 300  # 5 minutes
 
+    # YOLO mode — skip all approval gates. Tools execute immediately without
+    # waiting for operator confirmation. Useful for local dev/trusted environments.
+    # Can be toggled at runtime via PUT /api/settings/yolo.
+    yolo_mode: bool = False
+
     @property
     def db_url(self) -> str:
         """Active database URL — custom backend if set, SQLite default otherwise."""

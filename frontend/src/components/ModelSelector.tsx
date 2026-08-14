@@ -23,6 +23,8 @@ interface ProviderModels {
   models: ModelInfo[];
 }
 
+const modelCache = new Map<string, ModelInfo[]>();
+
 export function ModelSelector({
   defaultProviderId,
   defaultModelName,
@@ -40,20 +42,40 @@ export function ModelSelector({
 
   useEffect(() => {
     let cancelled = false;
-    api.listProviders().then(async (provs) => {
-      // Fetch all providers' models in parallel (not sequentially)
-      const entries = await Promise.all(
-        provs.map(async (p) => {
-          try {
-            const resp = await api.listModels(p.id);
-            return { provider: p, models: resp.models };
-          } catch {
-            return { provider: p, models: [] };
-          }
-        }),
+
+    api.listProviders().then((provs) => {
+      if (cancelled) return;
+
+      // Render providers immediately. Each model list arrives independently so
+      // one slow or unavailable provider cannot block the whole selector.
+      setProviders(
+        provs.map((provider) => ({
+          provider,
+          models: modelCache.get(provider.id) || [],
+        })),
       );
-      if (!cancelled) setProviders(entries);
+
+      for (const provider of provs) {
+        if (modelCache.has(provider.id)) continue;
+
+        api.listModels(provider.id).then((resp) => {
+          if (cancelled) return;
+          modelCache.set(provider.id, resp.models);
+          setProviders((current) =>
+            current.map((entry) =>
+              entry.provider.id === provider.id
+                ? { ...entry, models: resp.models }
+                : entry,
+            ),
+          );
+        }).catch(() => {
+          // Keep the provider visible even when its discovery endpoint fails.
+        });
+      }
+    }).catch(() => {
+      if (!cancelled) setProviders([]);
     });
+
     return () => { cancelled = true; };
   }, []);
 
@@ -84,8 +106,38 @@ export function ModelSelector({
     );
     setOpen(false);
     setSearch("");
-    onChange(null);
+    // Look up the default model's capabilities from the providers list
+    // so thinking/vision toggles work with the default model too
+    const defaultModel = lookupDefaultModel();
+    onChange(defaultModel);
   };
+
+  // Find the default model's metadata (capabilities) from loaded providers
+  const lookupDefaultModel = (): SelectedModel | null => {
+    if (!defaultProviderId || !defaultModelName) return null;
+    const pm = providers.find((p) => p.provider.id === defaultProviderId);
+    if (!pm) return null;
+    const model = pm.models.find((m) => m.name === defaultModelName);
+    if (!model) return null;
+    return {
+      provider_id: defaultProviderId,
+      name: defaultModelName,
+      supports_vision: model.supports_vision,
+      supports_thinking: model.supports_thinking,
+      thinking_efforts: model.thinking_efforts,
+    };
+  };
+
+  // When providers load and no model is explicitly selected (using default),
+  // emit the default model's capabilities so thinking/vision toggles work
+  useEffect(() => {
+    if (providers.length === 0) return;
+    if (!selected && defaultProviderId && defaultModelName) {
+      const defaultModel = lookupDefaultModel();
+      if (defaultModel) onChange(defaultModel);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [providers, defaultProviderId, defaultModelName]);
 
   // Focus search input when dropdown opens
   useEffect(() => {
@@ -113,8 +165,11 @@ export function ModelSelector({
 
   const isDefault =
     !selected || (defaultProviderId && defaultModelName && selected === `${defaultProviderId}/${defaultModelName}`);
+  const defaultProviderName = providers.find((p) => p.provider.id === defaultProviderId)?.provider.name;
   const selectedLabel = isDefault
-    ? `${defaultModelName || "Default"} (Default)`
+    ? defaultModelName
+      ? `${defaultModelName} · ${defaultProviderName || defaultProviderId?.slice(0, 8)} (default)`
+      : "Select a model…"
     : formatModelLabel(selected, providers);
 
   return (
@@ -126,6 +181,7 @@ export function ModelSelector({
           borderColor: "var(--border)",
           background: "none",
           color: "var(--ink-2)",
+          cursor: "pointer",
         }}
         onMouseEnter={(e) =>
           (e.currentTarget.style.borderColor = "var(--ink-3)")
@@ -215,7 +271,9 @@ export function ModelSelector({
             >
               <span style={{ color: "var(--ink-2)" }}>Agent default</span>
               {defaultModelName && (
-                <span style={{ color: "var(--ink-3)" }}>{defaultModelName}</span>
+                <span style={{ color: "var(--ink-3)" }}>
+                  {defaultModelName} · {defaultProviderName || defaultProviderId?.slice(0, 8)}
+                </span>
               )}
             </button>
 

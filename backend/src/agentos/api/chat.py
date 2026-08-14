@@ -60,11 +60,11 @@ class ModelOverride(BaseModel):
 
 
 class AttachmentIn(BaseModel):
-    """A multimodal attachment sent from the frontend."""
+    """An attachment sent from the frontend for tool-mediated access."""
 
     type: str  # "image", "url", "file"
     mime_type: str = ""
-    data: str  # base64 for images, URL for urls, text content for files
+    data: str  # base64 for uploads, URL for urls, text content for text files
     filename: str = ""
 
 
@@ -74,7 +74,7 @@ class SendMessageRequest(BaseModel):
     model_override: ModelOverride | None = None
     session_id: str | None = None  # if provided, use this session; else auto-resume
     new_session: bool = False  # if true, force create a new session (ignore auto-resume)
-    attachments: list[AttachmentIn] = []  # multimodal attachments
+    attachments: list[AttachmentIn] = []  # attachments exposed through existing tools
     skill: str | None = None  # slash command: /skillname → auto-load skill into context
 
 
@@ -106,9 +106,9 @@ async def send_message(
             raise HTTPException(status_code=404, detail="Agent not found")
 
         # Pre-check: refuse to start if no model is configured (and not a test run).
-        # This gives the user an immediate, clear error instead of a confusing
-        # LiteLLM failure after the run starts.
-        if not body.is_test:
+        # Skip this check if the user provided a model_override — they're
+        # explicitly choosing a model for this message.
+        if not body.is_test and not body.model_override:
             config = await get_active_config(check_db, agent_id)
             if config and not config.model.is_configured:
                 raise HTTPException(
@@ -123,7 +123,12 @@ async def send_message(
         user_id=operator.id,
         is_test=body.is_test,
         model_override=(
-            {"provider_id": body.model_override.provider_id, "name": body.model_override.name}
+            {
+                "provider_id": body.model_override.provider_id,
+                "name": body.model_override.name,
+                "thinking_enabled": body.model_override.thinking_enabled,
+                "thinking_effort": body.model_override.thinking_effort,
+            }
             if body.model_override
             else None
         ),
@@ -162,11 +167,11 @@ async def compact_session(
     """
     from ..agent_service import get_active_config
     from ..db import async_session_factory
-    from ..harness.compaction import compact_context, count_tokens, get_model_max_tokens
+    from ..harness.compaction import compact_context, get_model_max_tokens
     from ..harness.context import assemble_system_prompt, build_message_history
-    from ..harness.litellm_adapter import LiteLLMAdapter
     from ..models.run import Message, Run
     from ..models.session import Session
+    from ..providers import ProviderRegistry
 
     async with async_session_factory() as db:
         # Load agent config
@@ -185,9 +190,7 @@ async def compact_session(
         # Load all messages from the session
         msg_result = await db.execute(
             select(Message)
-            .where(Message.run_id.in_(
-                select(Run.id).where(Run.session_id == session.id)
-            ))
+            .where(Message.run_id.in_(select(Run.id).where(Run.session_id == session.id)))
             .order_by(Message.seq)
         )
         all_messages = msg_result.scalars().all()
@@ -204,9 +207,9 @@ async def compact_session(
         model_str = "gpt-4o"
         api_key = None
         base_url = None
-        adapter = LiteLLMAdapter(db)
         if config.model.is_configured:
             try:
+                adapter = await ProviderRegistry(db).for_model(config.model.provider_id)
                 info = await adapter.get_model_info(config.model)
                 model_str = info["model_str"]
                 api_key = info["api_key"]
@@ -216,7 +219,7 @@ async def compact_session(
 
         # Run compaction (force=True)
         system_msgs = [history[0]] if history and history[0].get("role") == "system" else []
-        conversation_msgs = history[len(system_msgs):]
+        conversation_msgs = history[len(system_msgs) :]
 
         compaction_result = await compact_context(
             messages=conversation_msgs,

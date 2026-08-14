@@ -26,6 +26,9 @@ class SyscallResult:
     cost: float = 0.0
     latency_ms: int = 0
     audit_id: str | None = None
+    # Optional provider-native content to add to the next model request.
+    # Normal tool output remains safe for the UI and audit log.
+    model_content: Any = None
 
 
 class SyscallHandler(Protocol):

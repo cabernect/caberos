@@ -17,7 +17,7 @@ class ModelConfig(BaseModel):
     name: str = ""
     max_tokens: int | None = None
     # Override the model's max context window (input tokens).
-    # If None, we try litellm's registry, then fall back to 32K.
+    # If None, we try litellm's registry, then fall back to 200K.
     max_context_tokens: int | None = None
     # Thinking/reasoning controls (per-model, per-message override)
     thinking_enabled: bool | None = None  # None = use model default
@@ -40,7 +40,7 @@ class Limits(BaseModel):
     max_turns_per_run: int = 15
     max_cost_per_run: float = 500.0
     session_idle_timeout_min: int = 30
-    max_context_tokens: int = 24000
+    max_context_tokens: int | None = None  # None = use model's actual context window
 
 
 class Fallback(BaseModel):

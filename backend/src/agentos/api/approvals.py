@@ -100,20 +100,26 @@ async def approve(
     if approval.status != "pending":
         raise HTTPException(status_code=400, detail=f"Approval already {approval.status}")
 
-    # Resolve the asyncio.Event — unblocks the mediator
-    resolved = approval_registry.resolve(
-        approval_id, "approved", operator.id,
-        remember=body.remember, remember_scope=scope,
+    # Persist before resolving the in-process event. Otherwise the mediator
+    # can wake up and write the same row while this request still holds a
+    # SQLite read transaction, producing "database is locked".
+    approval.status = "approved"
+    approval.decided_by = operator.id
+    from datetime import UTC, datetime
+
+    approval.decided_at = datetime.now(UTC)
+    await db.commit()
+
+    # Resolve the asyncio.Event — unblocks the mediator. Persisting first also
+    # handles approvals for detached runs with no in-memory event.
+    approval_registry.resolve(
+        approval_id,
+        "approved",
+        operator.id,
+        remember=body.remember,
+        remember_scope=scope,
         remember_pattern=body.remember_pattern,
     )
-    if not resolved:
-        # The run may have timed out or been cancelled. Update the DB anyway.
-        approval.status = "approved"
-        approval.decided_by = operator.id
-        from datetime import UTC, datetime
-
-        approval.decided_at = datetime.now(UTC)
-        await db.commit()
 
     return {"status": "approved"}
 
@@ -132,13 +138,14 @@ async def reject(
     if approval.status != "pending":
         raise HTTPException(status_code=400, detail=f"Approval already {approval.status}")
 
-    resolved = approval_registry.resolve(approval_id, "rejected", operator.id)
-    if not resolved:
-        approval.status = "rejected"
-        approval.decided_by = operator.id
-        from datetime import UTC, datetime
+    # Persist before resolving the in-process event for the same reason as
+    # approval: the mediator must not race this request on the SQLite row.
+    approval.status = "rejected"
+    approval.decided_by = operator.id
+    from datetime import UTC, datetime
 
-        approval.decided_at = datetime.now(UTC)
-        await db.commit()
+    approval.decided_at = datetime.now(UTC)
+    await db.commit()
+    approval_registry.resolve(approval_id, "rejected", operator.id)
 
     return {"status": "rejected"}

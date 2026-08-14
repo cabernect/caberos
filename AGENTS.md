@@ -118,15 +118,22 @@ Registered in `capabilities/builtin.py`. Two kinds: `tool` (workspace/shell/web 
 | `skills_load` | tool | no | no | Load a skill's full content + resource listing |
 | `skills_read_resource` | tool | no | no | Read a resource file from a skill directory (scoped to skill dir) |
 
-## Multimodal input
+## Attachments
 
-Users can attach images, URLs, and text files to their chat messages. These are sent as multimodal content to the LLM (OpenAI/LiteLLM format):
+Users can attach images, URLs, and files to their chat messages. Attachments are
+stored in the agent workspace and the initial model message contains only
+metadata and workspace-relative references.
 
-- **Images**: base64-encoded `data:image/png;base64,...` → `{"type": "image_url", "image_url": {"url": "..."}}`
-- **URLs**: sent directly → `{"type": "image_url", "image_url": {"url": "https://..."}}` (model fetches)
-- **Text files**: content appended to the message as `{"type": "text", "text": "--- filename ---\n..."}`
+- **Local files**: use the existing `read_file`, `search_files`, `terminal`, or
+  file-processing skills.
+- **Web URLs**: use the existing `web_fetch` capability; URLs are never sent as
+  image inputs automatically.
+- **Images**: `read_file` returns image content only when the selected model
+  supports vision. Otherwise it returns a clear limitation.
 
-The `messages.attachments` column stores attachment metadata (type, mime_type, filename) — not the base64 data (too large for SQLite). The actual image data is carried in the `InboundMessage.attachments` list and passed to `build_message_history` at runtime.
+The `messages.attachments` column stores metadata (type, MIME type, filename,
+and URL when applicable), never base64 content. Uploaded bytes are stored under
+the workspace `attachments/` directory.
 
 ## Storage summary
 

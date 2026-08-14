@@ -70,6 +70,8 @@ class UpdateAgentRequest(BaseModel):
     name: str | None = None
     provider_id: str | None = None
     model_name: str | None = None
+    thinking_enabled: bool | None = None
+    thinking_effort: str | None = None
     soul: str | None = None
     persona: str | None = None
     task: str | None = None
@@ -134,6 +136,8 @@ async def get_agent_route(
         "enabled": agent.enabled if agent else True,
         "model": config.model.name,
         "provider_id": config.model.provider_id,
+        "thinking_enabled": config.model.thinking_enabled,
+        "thinking_effort": config.model.thinking_effort,
         "soul": config.soul,
         "persona": config.persona,
         "task": config.task,
@@ -189,6 +193,10 @@ async def update_agent_route(
         config.model.provider_id = req.provider_id
     if req.model_name is not None:
         config.model.name = req.model_name
+    if req.thinking_enabled is not None:
+        config.model.thinking_enabled = req.thinking_enabled
+    if req.thinking_effort is not None:
+        config.model.thinking_effort = req.thinking_effort
     if req.soul is not None:
         config.soul = req.soul
     if req.persona is not None:

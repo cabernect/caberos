@@ -22,6 +22,8 @@ export function KnowledgeVault() {
     if (page === "scheduler") navigate("/scheduler");
     if (page === "mcps") navigate("/mcps");
     if (page === "channels") navigate("/channels");
+    if (page === "observability") navigate("/observability");
+    if (page === "traces") navigate("/traces");
   };
 
   return (

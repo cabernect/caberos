@@ -80,9 +80,17 @@ async def db_engine():
 
 
 @pytest_asyncio.fixture
-async def db(db_engine):
-    """Yield an async DB session for tests."""
+async def db(db_engine, monkeypatch):
+    """Yield an async DB session for tests.
+
+    Also patches agentos.db.async_session_factory so that code which
+    creates its own session (e.g. the mediator for approval/elicitation)
+    uses the same in-memory test engine.
+    """
     factory = async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
+    import agentos.db as db_module
+
+    monkeypatch.setattr(db_module, "async_session_factory", factory)
     async with factory() as session:
         yield session
 

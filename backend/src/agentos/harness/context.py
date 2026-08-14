@@ -148,27 +148,23 @@ def assemble_system_prompt(
 
         skill = load_skill(agent_config.id, forced_skill)
         if skill:
-            parts.append(
-                f"## Active Skill: {skill['name']}\n\n"
-                f"{skill['body']}"
-            )
+            parts.append(f"## Active Skill: {skill['name']}\n\n{skill['body']}")
 
     # 11. Model capabilities — tell the agent what its model can/can't do
     if supports_vision is not None:
         if supports_vision:
             parts.append(
                 "## Model Capabilities\n\n"
-                "Your model supports vision/image input. You can see and analyze "
-                "images that the user attaches to their messages."
+                "Your model supports vision/image input. Use read_file when you "
+                "need to inspect an attached image; images are not opened automatically."
             )
         else:
             parts.append(
                 "## Model Capabilities\n\n"
                 "Your model does NOT support vision/image input. If the user "
-                "attaches an image, you will receive it as text metadata only "
-                "(filename, dimensions) — you cannot see the actual image content. "
-                "Be honest about this limitation if asked. Do not claim you can "
-                "see or analyze images."
+                "attaches an image, read_file will return metadata only — you cannot "
+                "see the actual image content. Be honest about this limitation if "
+                "asked. Do not claim you can see or analyze images."
             )
 
     return "\n\n---\n\n".join(parts)
@@ -208,11 +204,9 @@ def build_message_history(
 ) -> list[dict[str, Any]]:
     """Build the message history for the model call.
 
-    When attachments are present (images, URLs), the user message is built as a
-    multimodal content array (OpenAI/LiteLLM format):
-        [{"type": "text", "text": "..."}, {"type": "image_url", "image_url": {"url": "..."}}]
-
-    When no attachments, the user message is a plain string (saves tokens).
+    Attachments are represented by metadata and workspace-relative references
+    only. The agent uses the existing file and web tools when it chooses to
+    inspect an attachment; raw file contents are never injected automatically.
     """
     history: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
 
@@ -263,55 +257,31 @@ def build_message_history(
             continue
         history.append({"role": msg.role, "content": msg.content})
 
-    # Build the user message — multimodal if attachments are present
+    # Build the user message with attachment references only. The agent can
+    # choose read_file for local attachments or web_fetch for URL attachments.
     if attachments:
-        content_parts: list[dict[str, Any]] = [{"type": "text", "text": user_message}]
-        for att in attachments:
-            if att.type == "image":
-                # base64 data URI — model sees the image directly
-                content_parts.append(
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{att.mime_type};base64,{att.data}"},
-                    }
-                )
-            elif att.type == "url":
-                # URL — model fetches and processes it
-                content_parts.append(
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": att.data},
-                    }
-                )
-            elif att.type == "file":
-                # Text file — append content to the message text
-                if att.mime_type.startswith("text/") or att.mime_type == "application/json":
-                    content_parts.append(
-                        {
-                            "type": "text",
-                            "text": f"\n\n--- {att.filename} ---\n{att.data}\n--- end {att.filename} ---",
-                        }
-                    )
-                elif att.mime_type.startswith("image/"):
-                    # Image file — send as image_url
-                    content_parts.append(
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:{att.mime_type};base64,{att.data}"},
-                        }
-                    )
-                else:
-                    # Binary file (PDF, docx, etc.) — already saved to workspace
-                    # by the pipeline. The data field contains a path note.
-                    # The file note is already in the message text, so we just
-                    # add a brief reference here.
-                    content_parts.append(
-                        {
-                            "type": "text",
-                            "text": f"\n[Attachment: {att.filename} — {att.data}]",
-                        }
-                    )
-        history.append({"role": "user", "content": content_parts})
+        lines = [user_message, "", "Attachments available through tools:"]
+        for index, attachment in enumerate(attachments, start=1):
+            if isinstance(attachment, dict):
+                attachment_id = attachment.get("id", f"attachment_{index}")
+                attachment_type = attachment.get("type", "file")
+                mime_type = attachment.get("mime_type", "")
+                filename = attachment.get("filename", attachment_id)
+                path = attachment.get("path")
+                url = attachment.get("url")
+            else:
+                attachment_id = f"attachment_{index}"
+                attachment_type = getattr(attachment, "type", "file")
+                mime_type = getattr(attachment, "mime_type", "")
+                filename = getattr(attachment, "filename", "") or attachment_id
+                path = None
+                url = getattr(attachment, "data", None) if attachment_type == "url" else None
+
+            reference = path or url or "unavailable"
+            lines.append(
+                f"- {attachment_id}: {filename} ({attachment_type}, {mime_type}) — {reference}"
+            )
+        history.append({"role": "user", "content": "\n".join(lines)})
     else:
         history.append({"role": "user", "content": user_message})
 

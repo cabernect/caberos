@@ -26,6 +26,7 @@ class RunResult:
     total_turns: int = 0
     tokens_in: int = 0
     tokens_out: int = 0
+    cached_tokens: int | None = None
     total_cost: float = 0.0
     tool_calls_made: list[dict[str, Any]] = field(default_factory=list)
     status: str = "completed"  # completed, failed, limit_exceeded
@@ -123,12 +124,20 @@ class Harness:
         # Check if the model supports vision (for system prompt awareness)
         supports_vision = None
         if agent_config.model and agent_config.model.name:
-            from .litellm_adapter import _check_vision
+            from ..providers.model_catalog import _check_vision
+
             supports_vision = _check_vision(agent_config.model.name)
+        if hasattr(syscall_handler, "supports_vision"):
+            syscall_handler.supports_vision = bool(supports_vision)
 
         system_prompt = assemble_system_prompt(
-            agent_config, message, kg_facts=kg_facts, recall_snippets=recall_snippets,
-            forced_skill=skill, past_sessions=past_sessions, supports_vision=supports_vision,
+            agent_config,
+            message,
+            kg_facts=kg_facts,
+            recall_snippets=recall_snippets,
+            forced_skill=skill,
+            past_sessions=past_sessions,
+            supports_vision=supports_vision,
         )
         tool_schemas = assemble_tool_schemas(agent_config)
         history = build_message_history(system_prompt, recent_messages or [], message, attachments)
@@ -139,7 +148,13 @@ class Harness:
         # Runs before the first LLM call. If auto-compaction is on and the
         # context exceeds the threshold, older messages are summarized.
         # The system prompt (history[0]) is always protected.
-        from .compaction import compact_context, count_tokens, count_text_tokens, count_tool_tokens, get_model_max_tokens
+        from .compaction import (
+            compact_context,
+            count_tokens,
+            count_text_tokens,
+            count_tool_tokens,
+            get_model_max_tokens,
+        )
 
         compaction_summary = getattr(session, "conversation_summary", None)
 
@@ -159,7 +174,7 @@ class Harness:
         if agent_config.compaction.auto_compaction and len(history) > 1:
             # Compact the message portion (exclude system prompt — always kept)
             system_msgs = [history[0]] if history and history[0].get("role") == "system" else []
-            conversation_msgs = history[len(system_msgs):]
+            conversation_msgs = history[len(system_msgs) :]
 
             compaction_result = await compact_context(
                 messages=conversation_msgs,
@@ -172,7 +187,8 @@ class Harness:
 
             history = system_msgs + compaction_result.messages
             result.max_context_tokens = get_model_max_tokens(
-                model_str, agent_config.limits.max_context_tokens,
+                model_str,
+                agent_config.limits.max_context_tokens,
             )
             result.compacted = compaction_result.compacted
 
@@ -200,12 +216,13 @@ class Harness:
         else:
             # No compaction — still report token count for the context bar
             result.max_context_tokens = get_model_max_tokens(
-                model_str, agent_config.limits.max_context_tokens,
+                model_str,
+                agent_config.limits.max_context_tokens,
             )
 
             # Per-section breakdown for the context tooltip
             system_msgs = [history[0]] if history and history[0].get("role") == "system" else []
-            conversation_msgs = history[len(system_msgs):]
+            conversation_msgs = history[len(system_msgs) :]
             result.context_breakdown = {
                 "system_prompt": count_tokens(system_msgs, model_str),
                 "conversation": count_tokens(conversation_msgs, model_str),
@@ -262,6 +279,7 @@ class Harness:
                         await self._emit(event_emitter, "thinking", {"content": response.thinking})
             except Exception as e:
                 import logging as _log
+
                 _log.getLogger("agentos.harness.loop").exception(
                     "Model call failed: model=%s provider=%s",
                     agent_config.model.name if agent_config.model else "?",
@@ -281,11 +299,20 @@ class Harness:
                         "I couldn't complete that request because the model connection "
                         "timed out. Please try again."
                     )
-                elif "401" in error_msg or "Authentication" in error_msg or "auth" in error_msg.lower():
+                elif (
+                    "401" in error_msg
+                    or "Authentication" in error_msg
+                    or "auth" in error_msg.lower()
+                ):
                     result.final_answer = (
                         "Authentication failed — check that the provider API key is valid."
                     )
-                elif "tool use" in error_msg.lower() or "tool_use" in error_msg.lower() or "function" in error_msg.lower() and "not" in error_msg.lower():
+                elif (
+                    "tool use" in error_msg.lower()
+                    or "tool_use" in error_msg.lower()
+                    or "function" in error_msg.lower()
+                    and "not" in error_msg.lower()
+                ):
                     result.final_answer = (
                         "This model doesn't support tool use (function calling). "
                         "Please select a model that supports tools, or use a different provider."
@@ -293,25 +320,17 @@ class Harness:
                 else:
                     # Include the actual error so the user can diagnose the issue
                     short_err = error_msg[:200] if len(error_msg) > 200 else error_msg
-                    result.final_answer = (
-                        f"I couldn't complete that request. Error: {short_err}"
-                    )
-                if event_emitter:
-                    await self._emit(
-                        event_emitter,
-                        "message_complete",
-                        {
-                            "run_id": run_id,
-                            "total_cost": result.total_cost,
-                            "total_turns": result.total_turns,
-                            "status": "failed",
-                        },
-                    )
+                    result.final_answer = f"I couldn't complete that request. Error: {short_err}"
+                # Note: message_complete is emitted by runner.py after the
+                # pipeline finishes, with full context metadata (context_tokens,
+                # max_context_tokens, etc.). Don't emit it here — the frontend
+                # closes the SSE connection on the first message_complete.
                 return result
 
             # Accumulate tokens/cost
             result.tokens_in += response.tokens_in
             result.tokens_out += response.tokens_out
+            result.cached_tokens = response.cached_tokens
             result.total_cost += response.cost
 
             # Step 9: Process tool calls
@@ -428,7 +447,13 @@ class Harness:
                         history.append(
                             {
                                 "role": "tool",
-                                "content": json.dumps(output) if output else "",
+                                "content": (
+                                    syscall_result.model_content
+                                    if syscall_result.model_content is not None
+                                    else json.dumps(output)
+                                    if output
+                                    else ""
+                                ),
                                 "tool_call_id": call.id,
                                 "name": call.name,
                             }
@@ -462,6 +487,7 @@ class Harness:
                             "turn_number": result.total_turns,
                             "tokens_in": response.tokens_in,
                             "tokens_out": response.tokens_out,
+                            "cached_tokens": response.cached_tokens,
                             "cost": response.cost,
                         },
                     )
@@ -508,6 +534,7 @@ class Harness:
                         "turn_number": result.total_turns,
                         "tokens_in": response.tokens_in,
                         "tokens_out": response.tokens_out,
+                        "cached_tokens": response.cached_tokens,
                         "cost": response.cost,
                     },
                 )
@@ -525,18 +552,10 @@ class Harness:
             result.status = "limit_exceeded"
             result.final_answer = "I've reached my turn limit for this run."
 
-        # Emit message_complete
-        if event_emitter:
-            await self._emit(
-                event_emitter,
-                "message_complete",
-                {
-                    "run_id": run_id,
-                    "total_cost": result.total_cost,
-                    "total_turns": result.total_turns,
-                    "status": result.status,
-                },
-            )
+        # Note: message_complete is emitted by runner.py after the pipeline
+        # finishes, with full context metadata (context_tokens, max_context_tokens,
+        # compacted, context_breakdown). Don't emit it here — the frontend closes
+        # the SSE connection on the first message_complete it receives.
 
         return result
 
