@@ -125,13 +125,6 @@ export function Conversation() {
   // Set of sessions with active (non-completed) runs — for sidebar spinners
   const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(new Set());
 
-  // Convenience getters for the currently-viewed run entry
-  const getCurrentRunEntry = (): RunEntry | null => {
-    const sid = activeSessionRef.current;
-    if (!sid) return null;
-    return runEntriesRef.current.get(sid) || null;
-  };
-
   useEffect(() => {
     activeSessionRef.current = activeSessionId;
   }, [activeSessionId]);
@@ -1352,7 +1345,7 @@ function StreamingMessage({ streaming }: { streaming: StreamingResponse }) {
           call={item.data}
           subagentStream={
             item.data.capability === "run_subagent" && streaming.subagents.size > 0
-              ? Array.from(streaming.subagents.entries()).map(([id, s]) => ({
+              ? Array.from(streaming.subagents.entries()).map(([, s]) => ({
                   thinking: s.thinking,
                   items: s.items,
                   text: s.text,

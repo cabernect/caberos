@@ -14,11 +14,10 @@ export function Login() {
     setLoading(true);
     try {
       await api.login(username, password);
-      // Force a full reload so App re-checks auth via api.me()
-      // (navigate("/") alone doesn't update the authed state in App)
-      window.location.assign("/agents");
-    } catch {
-      setError("Invalid credentials");
+      // Reload so App re-checks auth via api.me() with the stored bearer token
+      window.location.reload();
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Sign-in failed");
       setLoading(false);
     }
   };

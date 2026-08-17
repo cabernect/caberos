@@ -1,13 +1,22 @@
 import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, Trash2, Key, Save, X, RefreshCw, Check, Info, Settings, Server, Cpu } from "lucide-react";
+import { Plus, Trash2, Save, X, RefreshCw, Check, Info, Settings, Server, Cpu } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Provider, ModelInfo, Operator } from "@/lib/types";
 import { DashboardSidebar, type NavKey } from "@/components/DashboardSidebar";
 import { LogoMark } from "@/components/LogoMark";
 
 // Preset providers — known services with sensible defaults
-const PRESET_PROVIDERS = [
+interface ProviderPreset {
+  type: string;
+  name: string;
+  description: string;
+  defaultBaseUrl: string;
+  needsKey: boolean;
+  compatOnly?: boolean;
+}
+
+const PRESET_PROVIDERS: ProviderPreset[] = [
   { type: "openai", name: "OpenAI", description: "GPT-4o, o1, o3, and more", defaultBaseUrl: "", needsKey: true },
   { type: "anthropic", name: "Anthropic", description: "Claude 3.5 Sonnet, Opus, Haiku", defaultBaseUrl: "", needsKey: true },
   { type: "gemini", name: "Google Gemini", description: "Gemini 2.0 Flash, Pro, and more", defaultBaseUrl: "", needsKey: true },
@@ -38,7 +47,7 @@ const PRESET_PROVIDERS = [
   { type: "openai", name: "OpenCode Zen", description: "Pay-per-use — GPT-5.x, Claude, Gemini, open models", defaultBaseUrl: "https://opencode.ai/zen/v1", needsKey: true, compatOnly: true },
   { type: "openai", name: "OpenCode Go", description: "$10/mo subscription — GLM, Kimi, DeepSeek, MiMo", defaultBaseUrl: "https://opencode.ai/zen/go/v1", needsKey: true, compatOnly: true },
   { type: "openai", name: "Ollama Cloud", description: "Hosted Ollama — gpt-oss, kimi-k2, llama4, and more", defaultBaseUrl: "https://ollama.com/v1", needsKey: true, compatOnly: true },
-] as const;
+];
 
 type SettingsTab = "general" | "providers" | "models" | "about";
 

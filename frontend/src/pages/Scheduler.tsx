@@ -10,7 +10,7 @@ type ScheduleMode = "heartbeat" | "cron" | "event";
 interface ModeDef {
   key: ScheduleMode;
   label: string;
-  icon: React.ComponentType<{ className?: string }>;
+  icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>;
   desc: string;
   available: boolean;
 }
@@ -487,7 +487,7 @@ function ComingSoon({
   title,
   desc,
 }: {
-  icon: React.ComponentType<{ className?: string }>;
+  icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>;
   title: string;
   desc: string;
 }) {

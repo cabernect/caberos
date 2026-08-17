@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import {
-  X, Save, Copy, Download, Upload, Power, Plus, Trash2,
+  X, Save, Copy, Download, Upload, Power, Trash2,
   FileText, Folder, ChevronRight, ChevronDown, FolderOpen,
 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -446,7 +446,6 @@ const FALLBACK_CAPABILITIES: CapabilityInfo[] = [];
 function CapabilitiesTab({
   agent,
   onSaved,
-  onClose,
   showSaved,
 }: {
   agent: Agent | null;
@@ -663,7 +662,6 @@ function CapabilityGroup({
   };
 
   const allGranted = caps.every((c) => granted.has(c.name));
-  const someGranted = caps.some((c) => granted.has(c.name));
 
   return (
     <div className="rounded-[6px] border" style={{ borderColor: "var(--border)" }}>
@@ -753,7 +751,7 @@ function CapabilityGroup({
 
 // --- Memory Tab ---
 
-function MemoryTab({ agentId, onClose, showSaved }: { agentId: string; onClose: () => void; showSaved: (msg: string) => void }) {
+function MemoryTab({ agentId, onClose }: { agentId: string; onClose: () => void; showSaved: (msg: string) => void }) {
   const [content, setContent] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);

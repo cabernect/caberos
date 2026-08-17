@@ -325,14 +325,14 @@ export function ModelSelector({
                         <Brain
                           className="ml-1 h-3.5 w-3.5 shrink-0"
                           style={{ color: "var(--ink-3)" }}
-                          title="Supports thinking/reasoning"
+                          aria-label="Supports thinking/reasoning"
                         />
                       )}
                       {model.supports_vision && (
                         <Eye
                           className="ml-1 h-3.5 w-3.5 shrink-0"
                           style={{ color: "var(--ink-3)" }}
-                          title="Supports vision/image input"
+                          aria-label="Supports vision/image input"
                         />
                       )}
                       {model.max_context_tokens && (

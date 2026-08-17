@@ -1,8 +1,64 @@
 // API client — the only way the frontend talks to the backend (D33)
 
-import type { Agent, AgentVersion, Approval, AuditOut, CapabilityGrant, ChannelInfo, DashboardStats, HealthStatus, HeartbeatConfig, Limits, Message, ModelInfo, Operator, OperatorAuditOut, Provider, RunDetail, RunSummary, SessionInfo, Skill, SkillInfo, SpendSummary, WorkspaceEntry } from "./types";
+import type {
+  Agent,
+  AgentVersion,
+  Approval,
+  AuditOut,
+  CapabilityGrant,
+  ChannelInfo,
+  DashboardStats,
+  HealthStatus,
+  HeartbeatConfig,
+  HeartbeatStatus,
+  Limits,
+  McpCatalogEntry,
+  McpServerInfo,
+  McpToolInfo,
+  Message,
+  ModelInfo,
+  Operator,
+  OperatorAuditOut,
+  Provider,
+  RunDetail,
+  RunSummary,
+  SchedulerAlert,
+  SessionInfo,
+  Skill,
+  SkillInfo,
+  SpendSummary,
+  WorkspaceEntry,
+} from "./types";
 
-const BASE = ""; // same origin via Vite proxy
+const isDesktopShell =
+  typeof window !== "undefined" &&
+  (window.location.protocol === "tauri:" || window.location.hostname === "tauri.localhost");
+const configuredBase = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "");
+const BASE = configuredBase || (isDesktopShell ? "http://127.0.0.1:8081" : "");
+
+const SESSION_TOKEN_KEY = "agentos_session_token";
+
+function getSessionToken(): string | null {
+  try {
+    return localStorage.getItem(SESSION_TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function setSessionToken(token: string | null) {
+  try {
+    if (token) localStorage.setItem(SESSION_TOKEN_KEY, token);
+    else localStorage.removeItem(SESSION_TOKEN_KEY);
+  } catch {
+    // localStorage may be unavailable in some contexts
+  }
+}
+
+function authHeaders(): Record<string, string> {
+  const token = getSessionToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
 async function request<T>(
   path: string,
@@ -10,7 +66,7 @@ async function request<T>(
 ): Promise<T> {
   const resp = await fetch(`${BASE}${path}`, {
     credentials: "include",
-    headers: { "Content-Type": "application/json", ...options.headers },
+    headers: { "Content-Type": "application/json", ...authHeaders(), ...options.headers },
     ...options,
   });
   if (!resp.ok) {
@@ -22,13 +78,22 @@ async function request<T>(
 }
 
 export const api = {
+  gatewayHealth: () => request<{ status: string }>("/health"),
+
   // Auth
   login: (username: string, password: string) =>
-    request<{ operator: Operator; must_change_password: boolean }>(
+    request<{ operator: Operator; must_change_password: boolean; session_token: string }>(
       "/api/auth/login",
       { method: "POST", body: JSON.stringify({ username, password }) },
-    ),
-  logout: () => request<{ status: string }>("/api/auth/logout", { method: "POST" }),
+    ).then((resp) => {
+      if (resp.session_token) setSessionToken(resp.session_token);
+      return resp;
+    }),
+  logout: () =>
+    request<{ status: string }>("/api/auth/logout", { method: "POST" }).then((resp) => {
+      setSessionToken(null);
+      return resp;
+    }),
   me: () => request<Operator>("/api/auth/me"),
 
   // Agents
@@ -49,6 +114,7 @@ export const api = {
     soul?: string;
     persona?: string;
     task?: string;
+    sandbox_mode?: "strict" | "open";
     capabilities?: CapabilityGrant[] | null;
     limits?: Limits;
     heartbeat?: HeartbeatConfig;
@@ -145,7 +211,10 @@ export const api = {
       `${BASE}/api/chat/${agentId}/runs/${runId}/events`,
       {
         credentials: "include",
-        headers: lastEventId > 0 ? { "Last-Event-ID": String(lastEventId) } : {},
+        headers: {
+          ...authHeaders(),
+          ...(lastEventId > 0 ? { "Last-Event-ID": String(lastEventId) } : {}),
+        },
         signal,
       },
     );
@@ -280,9 +349,10 @@ export const api = {
   importSkillZip: (file: File) => {
     const formData = new FormData();
     formData.append("file", file);
-    return fetch("/api/skills/import", {
+    return fetch(`${BASE}/api/skills/import`, {
       method: "POST",
       credentials: "include",
+      headers: { ...authHeaders() },
       body: formData,
     }).then(async (r) => {
       if (!r.ok) {

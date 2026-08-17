@@ -1,0 +1,86 @@
+# CaberOS — Docker Compose
+#
+# Usage:
+#   docker compose up --build
+#
+# Then open http://localhost:8080
+# Default login: admin / admin
+#
+# The backend uses bubblewrap (bwrap) for shell sandboxing. bwrap requires
+# Linux user namespaces, which are restricted inside Docker. The backend
+# container runs with --cap-add=SYS_ADMIN to enable this. If your Docker
+# setup blocks that, you can add `privileged: true` as a fallback.
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: caberos-backend
+    restart: unless-stopped
+    # bwrap needs SYS_ADMIN for user namespaces
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - apparmor=unconfined
+    volumes:
+      - caberos-data:/data
+    environment:
+      - AGENTOS_CONTROL_PLANE_HOST=0.0.0.0
+      - AGENTOS_CONTROL_PLANE_PORT=8081
+      - AGENTOS_DB_PATH=/data/agentos.db
+      - AGENTOS_SECRET_KEY_PATH=/data/secret.key
+      - AGENTOS_WORKSPACE_ROOT=/data/workspaces
+      - AGENTOS_AGENT_HOME_ROOT=/data/agents
+      - AGENTOS_SKILLS_DIR=/opt/caberos/skills
+      # Uncomment to use Postgres instead of SQLite:
+      # - AGENTOS_DATABASE_URL=postgresql+asyncpg://caberos:caberos@db:5432/caberos
+      - PYDANTIC_DISABLE_PLUGINS=1
+      # YOLO mode — skip approval gates (useful for headless/Docker)
+      - AGENTOS_YOLO_MODE=${AGENTOS_YOLO_MODE:-false}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8081/health"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 5
+    networks:
+      - caberos
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: caberos-frontend
+    restart: unless-stopped
+    ports:
+      - "${CABEROS_PORT:-8080}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - caberos
+
+  # Optional: Postgres database (uncomment to use instead of SQLite)
+  # db:
+  #   image: postgres:16-alpine
+  #   container_name: caberos-db
+  #   restart: unless-stopped
+  #   environment:
+  #     POSTGRES_DB: caberos
+  #     POSTGRES_USER: caberos
+  #     POSTGRES_PASSWORD: caberos
+  #   volumes:
+  #     - caberos-pg:/var/lib/postgresql/data
+  #   networks:
+  #     - caberos
+
+volumes:
+  caberos-data:
+    driver: local
+  # caberos-pg:
+  #   driver: local
+
+networks:
+  caberos:
+    driver: bridge

@@ -11,7 +11,32 @@ from agentos.harness.loop import Harness
 from agentos.harness.scripted_model import ScriptedModel, ScriptedResponse
 from agentos.models.audit import AuditRecord
 from agentos.models.run import Message, Run
+from agentos.memory.auto_extract import merge_auto_extracted_memory
 from agentos.pipeline import Attachment, InboundMessage, Pipeline
+
+
+def test_auto_extracted_memory_uses_one_deduplicated_section():
+    existing = (
+        "# Memory\n\n"
+        "## Auto-extracted\n\n"
+        "- User speaks Vietnamese.\n\n"
+        "## Auto-extracted\n\n"
+        "- User uses Notion.\n"
+    )
+
+    merged = merge_auto_extracted_memory(
+        existing,
+        ["- User speaks Vietnamese.", "- User studies agentic loops."],
+    )
+
+    assert merged == (
+        "# Memory\n\n"
+        "## Auto-extracted\n\n"
+        "- User speaks Vietnamese.\n"
+        "- User uses Notion.\n"
+        "- User studies agentic loops.\n"
+    )
+    assert merged.count("## Auto-extracted") == 1
 
 
 @pytest.mark.asyncio

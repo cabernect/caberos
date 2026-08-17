@@ -19,14 +19,15 @@ from .agent_service import get_active_config
 from .capabilities.builtin import register_builtin_capabilities
 from .harness.guardrails import apply_input_guardrails
 from .harness.loop import Harness, RunResult
+from .memory.auto_extract import auto_extract_memory
 from .models.contact import Contact
 from .models.run import Message, Run
 from .models.session import Session
 from .sandbox.workspace import WorkspaceManager
 from .syscall.lock import session_locks
+from .syscall.mediator import SyscallHandler
 
 logger = logging.getLogger(__name__)
-from .syscall.mediator import SyscallHandler
 
 
 async def _generate_session_title(
@@ -99,126 +100,6 @@ async def _generate_session_title_from_history(
         return title if title else None
     except Exception:
         return None
-
-
-async def _auto_extract_memory(
-    db: AsyncSession,
-    agent_config: Any,
-    agent_id: str,
-    messages: list,
-    run_id: str | None = None,
-) -> None:
-    """After a run, review the conversation and update MEMORY.md.
-
-    Uses a cheap 1-turn LLM call to extract durable facts worth remembering:
-    user preferences, project context, recurring patterns, etc.
-    Merges with existing MEMORY.md content (doesn't overwrite).
-
-    Also reads working memory entries for this run (if any) and includes
-    them in the consolidation prompt. After writing MEMORY.md, deletes
-    all working entries for this run — promotion = inclusion in MEMORY.md.
-
-    DB locking: reads + LLM call happen with the session closed (no write
-    lock held during the slow LLM call). Only the final cleanup of working
-    memory entries opens a short write transaction.
-    """
-    try:
-        from .providers import ProviderRegistry
-        from .memory.notebook import read_memory, write_memory
-        from .memory.recall import get_run_entries, clear_run_entries
-
-        # Build a compact conversation excerpt
-        convo = []
-        for msg in messages:
-            if msg.role in ("user", "assistant") and msg.content:
-                role = "User" if msg.role == "user" else "Assistant"
-                convo.append(f"{role}: {msg.content[:300]}")
-            if len(convo) >= 8:
-                break
-
-        if not convo:
-            return
-
-        # Phase 1: read working memory entries (short transaction)
-        working_entries = []
-        if run_id:
-            working_entries = await get_run_entries(db, run_id)
-        await db.commit()  # release the read transaction
-
-        existing = read_memory(agent_id)
-
-        prompt = (
-            "You are a memory extraction system. Review this conversation and extract "
-            "durable facts worth remembering for future sessions.\n\n"
-            "Extract ONLY:\n"
-            "- User preferences and working habits\n"
-            "- Project context (names, file formats, recurring tasks)\n"
-            "- Important decisions or constraints\n"
-            "- Patterns that will recur in future conversations\n\n"
-            "Do NOT extract:\n"
-            "- One-off task results (e.g. 'extracted 3 rows from PDF')\n"
-            "- Transient state or temporary file contents\n"
-            "- Things already in the existing memory\n\n"
-        )
-        if existing:
-            prompt += f"## Existing MEMORY.md\n\n{existing}\n\n"
-            prompt += "Only extract NEW information not already captured above.\n\n"
-        if working_entries:
-            prompt += "## Working memory notes (agent flagged these as important)\n\n"
-            for e in working_entries:
-                prompt += f"- [{e['key']}] {e['value']}\n"
-            prompt += "\n"
-        prompt += f"## Recent conversation\n\n" + "\n".join(convo) + "\n\n"
-        prompt += (
-            "Output a markdown list of new facts to remember, one per line, "
-            "prefixed with '- '. If there is nothing worth remembering, "
-            "output exactly: NOTHING_TO_REMEMBER"
-        )
-
-        # Phase 2: LLM call (db session is open but no transaction is held
-        # — we committed above, and LiteLLMAdapter only reads the provider)
-        adapter = await ProviderRegistry(db).for_model(agent_config.model.provider_id)
-        response = await adapter.complete(
-            agent_model=agent_config.model,
-            messages=[{"role": "user", "content": prompt}],
-            tools=None,
-        )
-        await db.commit()  # release any read lock from provider load
-
-        result = response.content.strip()
-        if not result or result == "NOTHING_TO_REMEMBER":
-            # Even if nothing to remember, clean up working entries
-            if run_id:
-                await clear_run_entries(db, run_id)
-                await db.commit()
-            return
-
-        # Merge with existing memory — append new facts
-        if existing:
-            # Avoid duplicate lines
-            existing_lines = set(l.strip().lower() for l in existing.split("\n") if l.strip())
-            new_lines = [
-                l
-                for l in result.split("\n")
-                if l.strip() and l.strip().lower() not in existing_lines
-            ]
-            if not new_lines:
-                if run_id:
-                    await clear_run_entries(db, run_id)
-                    await db.commit()
-                return
-            merged = existing.rstrip() + "\n\n## Auto-extracted\n\n" + "\n".join(new_lines) + "\n"
-        else:
-            merged = "# Memory\n\n## Auto-extracted\n\n" + result + "\n"
-
-        write_memory(agent_id, merged)
-
-        # Phase 3: clean up working memory entries (short write transaction)
-        if run_id:
-            await clear_run_entries(db, run_id)
-            await db.commit()
-    except Exception:
-        pass
 
 
 @dataclass
@@ -756,7 +637,7 @@ class Pipeline:
                                 )
                                 rows = (await bg_db.execute(stmt)).scalars().all()
                                 all_msgs = list(reversed(rows))
-                                await _auto_extract_memory(
+                                await auto_extract_memory(
                                     bg_db, agent_config, agent_config.id, all_msgs, run_id=run.id
                                 )
                         except Exception:

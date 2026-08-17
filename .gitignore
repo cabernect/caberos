@@ -36,3 +36,13 @@ Thumbs.db
 image.png
 design-system/caberos/assets/
 frontend/public/_logo*
+
+# Tauri desktop build artifacts
+frontend/src-tauri/target/
+frontend/src-tauri/gen/
+
+# Docker local env (keep .example tracked)
+.env.docker
+
+# PyInstaller build artifacts
+backend/build/work/

@@ -92,6 +92,18 @@ class TestAuth:
         cookies = resp.cookies
         assert "agentos_session" in cookies
 
+    async def test_desktop_login_cookie_uses_same_site_attributes(self, client, db_engine):
+        await _seed_operator(db_engine, "admin", "admin")
+        resp = await client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "admin"},
+            headers={"Origin": "http://tauri.localhost"},
+        )
+        assert resp.status_code == 200
+        cookie = resp.headers["set-cookie"].lower()
+        assert "samesite=lax" in cookie
+        assert "secure" not in cookie
+
     async def test_me_without_auth(self, client):
         resp = await client.get("/api/auth/me")
         assert resp.status_code == 401
@@ -117,6 +129,57 @@ class TestAuth:
         # After logout, /me should fail
         resp = await client.get("/api/auth/me")
         assert resp.status_code == 401
+
+    async def test_login_returns_session_token(self, client, db_engine):
+        """Login response includes a session_token for bearer-token auth (desktop shell)."""
+        await _seed_operator(db_engine, "admin", "admin")
+        resp = await client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "admin"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "session_token" in data
+        assert data["session_token"]
+
+    async def test_me_with_bearer_token(self, client, db_engine):
+        """/api/auth/me works with Authorization: Bearer <token> (no cookie)."""
+        await _seed_operator(db_engine, "admin", "admin")
+        resp = await client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "admin"},
+        )
+        token = resp.json()["session_token"]
+        # Use a fresh client (no cookies) with only the bearer token
+        resp2 = await client.get(
+            "/api/auth/me",
+            headers={"Authorization": f"Bearer {token}"},
+            cookies={},
+        )
+        assert resp2.status_code == 200
+        assert resp2.json()["username"] == "admin"
+
+    async def test_logout_with_bearer_token(self, client, db_engine):
+        """Logout works with bearer token and invalidates the session."""
+        await _seed_operator(db_engine, "admin", "admin")
+        resp = await client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "admin"},
+        )
+        token = resp.json()["session_token"]
+        resp2 = await client.post(
+            "/api/auth/logout",
+            headers={"Authorization": f"Bearer {token}"},
+            cookies={},
+        )
+        assert resp2.status_code == 200
+        # Token should now be invalid
+        resp3 = await client.get(
+            "/api/auth/me",
+            headers={"Authorization": f"Bearer {token}"},
+            cookies={},
+        )
+        assert resp3.status_code == 401
 
     async def test_change_password(self, client, db_engine):
         await _seed_operator(db_engine, "admin", "admin")

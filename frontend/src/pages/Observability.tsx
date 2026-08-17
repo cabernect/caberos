@@ -56,7 +56,6 @@ export function Observability() {
 
   const agentName = (id: string) => agents.find((a) => a.id === id)?.name || id.slice(0, 8);
   const fmtCost = (c: number) => (c < 0.01 ? `$${c.toFixed(6)}` : `$${c.toFixed(4)}`);
-  const fmtDate = (d: string) => new Date(d).toLocaleString();
   const fmtDay = (d: string) => {
     const date = new Date(d + "T00:00:00");
     return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });

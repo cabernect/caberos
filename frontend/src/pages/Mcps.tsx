@@ -7,6 +7,10 @@ import type { McpServerInfo, McpToolInfo, McpCatalogEntry } from "@/lib/types";
 
 type Tab = "mine" | "browse";
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export function Mcps() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [servers, setServers] = useState<McpServerInfo[]>([]);
@@ -287,10 +291,15 @@ function AddServerForm({ onAdded }: { onAdded: () => void }) {
           setAdding(false);
           return;
         }
-        const [serverName, serverConfig] = entries[0];
-        data = { name: serverName, enabled: true, ...serverConfig };
+        const [serverName, rawConfig] = entries[0];
+        if (!isRecord(rawConfig)) {
+          setError("MCP server configuration must be an object");
+          setAdding(false);
+          return;
+        }
+        data = { name: serverName, enabled: true, ...rawConfig };
         if (!data.transport) {
-          data.transport = serverConfig.url ? "http" : "stdio";
+          data.transport = rawConfig.url ? "http" : "stdio";
         }
       } else if (parsed.command || parsed.url) {
         // Direct CaberOS format
@@ -306,7 +315,7 @@ function AddServerForm({ onAdded }: { onAdded: () => void }) {
       } else {
         // Maybe it's a single { "name": { config } } object
         const entries = Object.entries(parsed);
-        if (entries.length === 1 && typeof entries[0][1] === "object") {
+        if (entries.length === 1 && isRecord(entries[0][1])) {
           const [serverName, serverConfig] = entries[0];
           data = { name: serverName, enabled: true, ...serverConfig };
           if (!data.transport) {

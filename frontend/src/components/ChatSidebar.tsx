@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus, Settings, Trash2, ArrowLeft, Loader2, Check } from "lucide-react";
+import { Plus, Settings, Trash2, ArrowLeft, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { SessionInfo } from "@/lib/types";
 

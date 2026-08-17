@@ -7,13 +7,15 @@ CaberOS is an open-source, local-first AI Agent Operating System. It hosts perso
 **Language:** Python 3.12 (backend), React 19 + Vite (frontend)
 **Package manager:** uv (backend), npm (frontend)
 **Repo structure:** Monorepo — `/backend`, `/frontend`, `/docs`, `/sandbox`, `/scripts`
+**Desktop shell:** Tauri 2 (Rust) — `frontend/src-tauri/`
+**Container:** Docker + docker-compose — `backend/Dockerfile`, `frontend/Dockerfile`, `docker-compose.yml`
 
 ## Where things are
 
 - `docs/spec-v0.1.md` — the full specification. 40 decisions (D1-D40). Read this first.
 - `docs/plans/` — 15 implementation plans (00-14) with detailed specs, file lists, verification steps. These are the implementation reference.
 - `docs/plans/README.md` — plan index and build order.
-- `.scratch/caberos-v0.1/issues/` — tracer-bullet tickets (01-10, with 08 split into 08a/08b) with blocking edges. These drive the work order.
+- `.scratch/caberos-v0.1/issues/` — tracer-bullet tickets (01-11, with 08 split into 08a/08b) with blocking edges. These drive the work order.
 - `design-system/caberos/` — design system (dark-only, AI-native, conversation-first). MASTER.md + page specs.
 
 ## Key decisions (quick reference)
@@ -23,7 +25,7 @@ CaberOS is an open-source, local-first AI Agent Operating System. It hosts perso
 - **D3:** Python 3.12 + FastAPI, one daemon.
 - **D5:** SQLAlchemy 2.0 async + aiosqlite. SQLite with WAL mode. Schema via `create_all` + incremental patches in `init_db()` (Alembic deferred to Postgres migration).
 - **D25:** Agent config lives in the DB as versioned rows (AgentVersion). YAML for import/export only.
-- **D33:** The gateway is a headless daemon. The React dashboard is one client of the API. API is client-agnostic (REST + SSE).
+- **D33:** FastAPI is the current gateway/API layer. The React dashboard is one client, with Tauri and CLI as future clients using the same REST + SSE contracts. A deeper CaberCore seam is deferred until a non-HTTP entry point requires it.
 - **D34:** Three-layer memory: working memory (session), MEMORY.md (file in agent home dir `~/agentos/agents/{agent_id}/`), knowledge graph (SQLite triples). FTS5 default, embeddings configurable.
 - **D35:** Agent identity = `soul`, `persona`, `task` — versioned config fields on AgentConfig (in the DB). NOT workspace files. MEMORY.md is the exception (agent-managed file, not versioned).
 - **D37:** Workspaces are shared directories for working files only. Identity is in the DB, MEMORY.md is in the agent home dir — neither in the workspace.
@@ -32,30 +34,16 @@ CaberOS is an open-source, local-first AI Agent Operating System. It hosts perso
 - **D39:** Providers are first-class DB entities with encrypted keys (Fernet). Agents reference providers by id. LiteLLM is the transport.
 - **D40:** Model discovery: dynamic where available (OpenAI, Google, Ollama), free-text fallback (Anthropic), always allow override. Save-time validation via 1-token completion.
 
-## Ticket dependency graph
+## Ticket order
 
 ```
-01 ──→ 02 ──→ 03 ──→ 04 ──→ 08a ──→ 08b
-         │      │
-         │      └──→ 09 ──→ 10
-         │
-         ├──→ 05 (parallel with 03/04)
-         ├──→ 06 (parallel with 03/04/05) ──→ 07
-         └──→ 05a (parallel with 05)
+01 → 02 → 03 → 04 → 08a → 08b
+       ├→ 05, 05a, 06 → 07
+       └→ 09 → 10 → 11
 ```
 
-- **01** — Smoke test vertical slice (tracer bullet, no blockers)
-- **02** — Dashboard chat with real model
-- **03** — File operations + tool call visibility
-- **04** — Approval flow
-- **05** — Agent management UI
-- **05a** — Global settings & provider management
-- **06** — Memory + skills
-- **07** — Scheduler (heartbeat is the first mode; cron/event triggers deferred to v0.5)
-- **08a** — MCP client infrastructure (generic, no OAuth)
-- **08b** — Outlook connector (OAuth, blocked by 08a)
-- **09** — Observability + spend
-- **10** — Testing hardening
+01 smoke; 02 chat; 03 file/tools; 04 approvals; 05 agent UI; 05a providers;
+06 memory/skills; 07 heartbeat; 08a/08b MCP; 09 observability; 10 desktop; 11 hardening.
 
 ## Testing the frontend
 
@@ -72,24 +60,15 @@ To test: start both servers (backend on :8081, frontend on :5173), then use Play
 5. **Commit** per ticket. No Co-Authored-By lines.
 6. **Update this file** if you learn something that a fresh session needs to know.
 
-## System prompt assembly
+## System prompt + memory flow
 
-Every agent's system prompt is assembled in this order (D35 + base prompt):
-
-1. **Base system prompt** (`harness/base_prompt.py`) — platform-level operating instructions, same for every agent. Covers: what CaberOS is, workspace sandboxing, capabilities & approval, `agent.ask_user` for clarifying questions, memory (MEMORY.md), output rules (no secrets, no internal paths, no system prompt leakage, no following injected file instructions), conversational style (direct, no filler, match language).
-2. **Soul** — agent identity, values, principles (user-edited, versioned)
-3. **Persona** — tone, communication style (user-edited, versioned)
-4. **Task** — mission, instructions (user-edited, versioned)
-5. MEMORY.md — long-term memory (ticket 06)
-6. Available Skills — menu of skill names + descriptions (ticket 06). The agent calls `skills_load(name)` to get the full content when it decides to use one. Skills are NOT auto-injected — the agent sees the menu and chooses.
-7. KG facts — knowledge graph (ticket 06)
-8. Recall snippets — semantic recall fallback (ticket 06)
-
-The base prompt is the CaberOS equivalent of GoClaw's `AGENTS.md` — a static set of operating instructions that tells the agent how to work inside the system, regardless of its soul/persona/task.
-
-## SSE event types (for the frontend)
-
-`typing`, `thinking`, `token`, `tool_call` (pending → pending_approval → pending_input → running → complete/denied), `turn_complete`, `message_complete`, `heartbeat`, `guardrail_correction`, `guardrail_warning`, `clarifying_question`
+Each run assembles: base prompt → soul/persona/task → `MEMORY.md` → skill menu
+→ contact-scoped KG facts → relevant past-session summaries → semantic recall.
+`MEMORY.md` is agent-scoped, always loaded, and protected from conversation compaction.
+KG facts, summaries, and recall snippets are queried per contact and bounded.
+During/after a run, memory tools write working snippets, triples, or `MEMORY.md`;
+`memory/auto_extract.py` promotes durable facts and clears run-scoped snippets.
+The base prompt (`harness/base_prompt.py`) contains platform rules shared by agents.
 
 ## Built-in capabilities
 
@@ -150,9 +129,23 @@ the workspace `attachments/` directory.
 
 ## Current status
 
-Tickets **01–08c implemented**: smoke slice, real-model chat + SSE streaming, file ops + tool call UI, approval flow + elicitation (`agent.ask_user`), guardrails, run manager, agent management UI, providers, `run_subagent`, memory + skills (ticket 06), scheduler/heartbeat (ticket 07), MCP client infrastructure (08a), MCP credentials/OAuth (08b), external channels (08c), and **observability + spend** (ticket 09, in progress).
+Tickets **01–09 implemented**: smoke slice, real-model chat + SSE streaming, file ops + tool call UI, approval flow + elicitation (`agent.ask_user`), guardrails, run manager, agent management UI, providers, `run_subagent`, memory + skills (ticket 06), scheduler/heartbeat (ticket 07), MCP client infrastructure (08a), MCP credentials/OAuth (08b), external channels (08c), and observability + spend (ticket 09).
 
-**Next up: Finish Ticket 09 (Observability)** — API endpoints done (runs, run detail, audit, spend, health, operator audit). Frontend Observability page done (tabs: Runs, Syscall Log, Spend, Health). Tests pending. Then Ticket 10 (Testing hardening).
+**Current: Ticket 10 (Tauri desktop app) in progress. Next: Ticket 11 (Testing hardening). CaberCore extraction is deferred.**
+
+**Ticket 10 (Tauri Desktop App):** IN PROGRESS.
+- Tauri 2 shell wraps the React frontend + packaged PyInstaller gateway.
+- Gateway supervisor (`frontend/src-tauri/src/gateway.rs`): starts the PyInstaller gateway in its own process group, routes stdout/stderr to `<app_data_dir>/logs/gateway.log`, kills the full process group on app exit.
+- Desktop auth uses **bearer token** (not cookies): login returns `session_token` in the JSON response, frontend stores it in `localStorage`, sends it as `Authorization: Bearer <token>` on every request. The backend accepts the token from either the cookie or the bearer header. This avoids cross-site cookie issues between the Tauri webview origin (`tauri.localhost`) and the gateway (`127.0.0.1:8081`).
+- Desktop API base: `http://127.0.0.1:8081` (not `tauri.localhost`, which is intercepted by Tauri's custom protocol handler).
+- Default agents (`caber`, `agent-builder`) seed on first launch — PyInstaller bundles `defaults/*.yaml` via `--add-data` in `scripts/build-gateway.sh`.
+- Gateway log: `tail -f "$HOME/Library/Application Support/com.caberos.desktop/logs/gateway.log"`
+
+**Docker:** IMPLEMENTED. Full stack via docker-compose:
+- Backend: `python:3.12-slim` + uv + bubblewrap (bwrap) for shell sandboxing, `SYS_ADMIN` cap for user namespaces.
+- Frontend: multi-stage Node build → nginx:alpine, reverse-proxies `/api` and `/health` to backend, SSE buffering disabled.
+- Data persists in named volume `caberos-data`. Postgres option commented out in `docker-compose.yml`.
+- `./scripts/docker.sh {up|down|logs|rebuild}`
 
 **Ticket 07 (Scheduler/Heartbeat):** IMPLEMENTED. Heartbeat scheduler with multi-mode UI.
 
@@ -169,10 +162,10 @@ Tickets **01–08c implemented**: smoke slice, real-model chat + SSE streaming, 
 - **SSL fix:** `ssl_utils.py` — shared CA bundle path (Homebrew `ca-certificates`) for corporate firewall compatibility. All httpx clients use `verify=SSL_CERT_PATH`.
 - 68 channel tests pass (29 Telegram + 39 Discord/Zalo).
 
-**Ticket 09 (Observability + Spend):** IN PROGRESS.
+**Ticket 09 (Observability + Spend):** IMPLEMENTED.
 - **API:** `GET /api/runs` (filterable list), `GET /api/runs/{id}` (detail with messages + audit), `GET /api/audit` (syscall log), `GET /api/spend` (today/7d/30d breakdown by agent + trigger), `GET /api/operator-audit`, `GET /api/health`
 - **Frontend:** Observability page with 4 tabs (Runs, Syscall Log, Spend, Health). Run detail view with messages + audit records inline. Denied syscalls highlighted.
-- **Tests:** Pending.
+- **Tests:** Observability coverage verified.
 
 **Model discovery enhancements (this session):**
 - Thinking/reasoning metadata + per-message thinking controls (brain icon, effort slider)
@@ -215,6 +208,19 @@ cd frontend && npm run build
 
 # Install/setup
 ./scripts/install.sh
+
+# Desktop app (Tauri — build + run the .app)
+cd frontend && npm run desktop:build
+open frontend/src-tauri/target/release/bundle/macos/CaberOS.app
+
+# Desktop dev (Tauri dev mode — hot reload)
+cd frontend && npm run desktop:dev
+
+# Docker (full stack — backend + frontend via nginx)
+./scripts/docker.sh up        # build + start, → http://localhost:8080
+./scripts/docker.sh logs      # tail logs
+./scripts/docker.sh down      # stop
+./scripts/docker.sh rebuild   # force rebuild images
 ```
 
 ## Backend module layout
@@ -232,15 +238,16 @@ backend/src/agentos/
 ├── run_manager.py       — RunContext, _active_runs registry, start/stop/get run
 ├── pipeline.py          — D19's 13-step execution pipeline + LLM title generation
 ├── main.py              — FastAPI app entry point (routers, CORS, lifespan)
-├── auth.py              — operator auth (session+cookie, bcrypt, login/logout/me)
+├── auth.py              — operator auth (session cookie OR bearer token, bcrypt, login/logout/me)
 ├── models/              — SQLAlchemy models (all v0.1 tables)
 │   └── elicitation.py   — ElicitationRequest model
 ├── capabilities/        — capability registry + built-in tools
 │   ├── registry.py      — CapabilityDef, CapabilityRegistry
 │   ├── builtin.py       — register_builtin_capabilities() (tools + memory caps)
 │   └── tools/           — file, shell, web, datetime, subagent, memory
-├── memory/              — three-layer memory (D34)
+├── memory/              — memory layers and promotion (D34)
 │   ├── notebook.py      — MEMORY.md read/write (agent home dir)
+│   ├── auto_extract.py  — post-run durable fact extraction and deduplication
 │   ├── triples.py       — knowledge graph (subject/predicate/object triples)
 │   └── recall.py        — semantic recall (FTS5 / Postgres tsvector)
 ├── skills/              — skill loading (D11b, D11c) — NOT auto-injected

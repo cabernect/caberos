@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useImperativeHandle, forwardRef } from "react";
+import { useState, useRef, useEffect, useImperativeHandle, useCallback, forwardRef } from "react";
 import { Paperclip, FileText, Image as ImageIcon, Link, Wrench, ArrowUp, HelpCircle, Check, Sparkles, Square } from "lucide-react";
 import { ModelSelector } from "@/components/ModelSelector";
 import { ThinkingToggle } from "@/components/ThinkingToggle";
@@ -74,7 +74,6 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
   maxContextTokens,
   compacted,
   contextBreakdown,
-  onCompact,
 }, ref) {
   const [text, setText] = useState("");
   const [modelOverride, setModelOverride] = useState<{
@@ -93,7 +92,6 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
   const [urlValue, setUrlValue] = useState("");
   const [selectedOptions, setSelectedOptions] = useState<Set<number>>(new Set());
   const [skills, setSkills] = useState<SkillInfo[]>([]);
-  const [skillQuery, setSkillQuery] = useState<string | null>(null);
   const [skillIndex, setSkillIndex] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -151,7 +149,6 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
   const showSkillMenu = skillQueryStr !== null && allFiltered.length > 0;
 
   useEffect(() => {
-    setSkillQuery(skillQueryStr);
     setSkillIndex(0);
   }, [skillQueryStr]);
 
@@ -169,7 +166,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
       // Focus the textarea for free-text input
       setTimeout(() => textareaRef.current?.focus(), 50);
     }
-  }, [activeElicitation?.id]);
+  }, [activeElicitation?.id, isElicitation]);
 
   const handleSend = () => {
     if (isElicitation) {
@@ -239,7 +236,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
     }
   };
 
-  const fileToBase64 = (file: File): Promise<string> => {
+  const fileToBase64 = useCallback((file: File): Promise<string> => {
     return new Promise((resolve) => {
       const reader = new FileReader();
       reader.onload = () => {
@@ -250,12 +247,12 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
       };
       reader.readAsDataURL(file);
     });
-  };
+  }, []);
 
   // Process dropped/selected files and add them as attachments.
   // Exposed via ref so the parent (Conversation) can forward drops
   // from the entire chat view, not just the input bar.
-  const addFiles = async (files: File[]) => {
+  const addFiles = useCallback(async (files: File[]) => {
     if (isElicitation) return;
     for (const file of files) {
       if (file.type.startsWith("image/")) {
@@ -285,9 +282,9 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
       }
       setContextItems((prev) => [...prev, { type: "file", label: file.name }]);
     }
-  };
+  }, [fileToBase64, isElicitation]);
 
-  useImperativeHandle(ref, () => ({ addFiles }), [isElicitation]);
+  useImperativeHandle(ref, () => ({ addFiles }), [addFiles]);
 
   const handleImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -384,7 +381,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
       }
       if (e.key === "Escape") {
         e.preventDefault();
-        setSkillQuery(null);
+        setText("");
         return;
       }
       if (e.key === "Tab") {

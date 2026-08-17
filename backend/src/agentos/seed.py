@@ -40,8 +40,13 @@ async def seed_default_agents() -> None:
     """Create default agents from YAML files in agentos/defaults/ if they don't exist."""
     from .config_schema import AgentConfig
 
+    yaml_files = sorted(DEFAULTS_DIR.glob("*.yaml"))
+    if not yaml_files:
+        print(f"[seed] WARNING: no default agent YAMLs found in {DEFAULTS_DIR}")
+        return
+
     async with async_session_factory() as db:
-        for yaml_path in sorted(DEFAULTS_DIR.glob("*.yaml")):
+        for yaml_path in yaml_files:
             data = yaml.safe_load(yaml_path.read_text())
             agent_id = data.get("id", "")
             if not agent_id:

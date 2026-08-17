@@ -30,3 +30,15 @@ If you are developing a production application, we recommend enabling type-aware
 ```
 
 See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+
+## CaberOS desktop app
+
+The Tauri desktop shell uses the same FastAPI REST/SSE gateway as the browser dashboard.
+
+```bash
+npm run desktop:dev
+npm run desktop:build
+npm run desktop:build:dmg
+```
+
+`desktop:dev` starts or reuses the local gateway at `http://127.0.0.1:8081` and starts Vite. `desktop:build` produces the native `.app` bundle; `desktop:build:dmg` packages that app into a macOS disk image with `hdiutil`. Native builds require Rust and the platform's desktop build tools. The packaged app starts its bundled gateway automatically; `CABEROS_GATEWAY_EXECUTABLE` can override the executable for diagnostics or development. The gateway uses a PyInstaller onedir bundle to avoid one-file extraction delays during startup.

@@ -15,7 +15,11 @@ export interface ToolCallData {
 
 export interface SubAgentStreamData {
   thinking: string;
-  items: { type: "thinking" | "tool"; id: string; data: ThinkingBlockData | ToolCallData }[];
+  items: {
+    type: "thinking" | "tool" | "text";
+    id: string;
+    data: ThinkingBlockData | ToolCallData | { content: string };
+  }[];
   text: string;
   completed: boolean;
 }
@@ -194,7 +198,7 @@ export function ToolCallBlock({ call, subagentStream }: ToolCallBlockProps) {
       )}
 
       {/* Elicitation — waiting for user input (the chat bar handles the actual input) */}
-      {call.status === "pending_input" && call.elicitation_id && (
+      {call.status === "pending_input" && Boolean(call.elicitation_id) && (
         <div className="mb-2 rounded-[5px] border p-2.5"
           style={{ borderColor: "var(--warning)", background: "var(--surface)" }}
         >
@@ -205,7 +209,7 @@ export function ToolCallBlock({ call, subagentStream }: ToolCallBlockProps) {
       )}
 
       {/* Diff block for write_file results */}
-      {call.status === "complete" && call.capability === "write_file" && call.result &&
+      {call.status === "complete" && call.capability === "write_file" && Boolean(call.result) &&
         typeof call.result === "object" && call.result !== null &&
         "action" in (call.result as Record<string, unknown>) && (
         <DiffBlock
@@ -271,8 +275,11 @@ export function ToolCallBlock({ call, subagentStream }: ToolCallBlockProps) {
                   const td = item.data as ThinkingBlockData;
                   return <ThinkingBlock key={item.id} content={td.content} isStreaming={false} durationSec={td.durationSec ?? undefined} />;
                 }
-                const td = item.data as ToolCallData;
-                return <ToolCallBlock key={item.id} call={td} />;
+                if (item.type === "text") {
+                  const text = item.data as { content: string };
+                  return <div key={item.id} className="whitespace-pre-wrap text-[12px] text-[var(--ink-1)]">{text.content}</div>;
+                }
+                return <ToolCallBlock key={item.id} call={item.data as ToolCallData} />;
               })}
               {subagentStream?.thinking && (
                 <ThinkingBlock content={subagentStream.thinking} isStreaming={!subagentStream.completed} />
@@ -326,5 +333,5 @@ function formatResult(result: unknown): string {
         .join("\n");
     }
   }
-  return JSON.stringify(result, null, 2);
+  return JSON.stringify(result, null, 2) ?? "";
 }

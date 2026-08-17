@@ -52,11 +52,22 @@ def create_session_token() -> str:
     return secrets.token_urlsafe(32)
 
 
+def extract_session_token(request: Request) -> str | None:
+    """Extract the session token from the cookie or Authorization: Bearer header."""
+    token = request.cookies.get(SESSION_COOKIE)
+    if token:
+        return token
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        return auth_header[7:].strip()
+    return None
+
+
 async def get_operator_from_session(
     request: Request, db: AsyncSession = Depends(get_db)
 ) -> Operator | None:
-    """Extract the operator from the session cookie. Returns None if not authenticated."""
-    token = request.cookies.get(SESSION_COOKIE)
+    """Extract the operator from the session cookie or bearer token. Returns None if not authenticated."""
+    token = extract_session_token(request)
     if not token:
         return None
 
@@ -113,12 +124,13 @@ async def login(
             must_change_password=operator.must_change_password,
         ),
         "must_change_password": operator.must_change_password,
+        "session_token": token,
     }
 
 
 @router.post("/logout")
 async def logout(request: Request, response: Response) -> dict:
-    token = request.cookies.get(SESSION_COOKIE)
+    token = extract_session_token(request)
     if token:
         from .main import _sessions
 

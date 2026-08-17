@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { GitBranch, ChevronRight, ArrowLeft, Clock, DollarSign, AlertCircle, Layers, MessageSquare, Shield } from "lucide-react";
+import { GitBranch, ChevronRight, ArrowLeft, Clock, AlertCircle, Layers, MessageSquare, Shield } from "lucide-react";
 import { DashboardSidebar, type NavKey } from "@/components/DashboardSidebar";
 import { api } from "@/lib/api";
-import type { Agent, RunSummary, RunDetail, AuditOut, AgentStat, DashboardStats } from "@/lib/types";
+import type { Agent, RunSummary, RunDetail, AgentStat } from "@/lib/types";
 
 export function Traces() {
   const { agentId, runId } = useParams();
