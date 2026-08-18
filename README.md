@@ -183,7 +183,7 @@ Pushing a `v*.*.*` tag triggers the [release workflow](.github/workflows/release
 ┌─────────────────────────────────────────────────────┐
 │  Agent Pipeline (13-step, D19)                      │
 │  ┌──────────────────────────────────────────────┐   │
-│  │  Harness (Pydantic AI)                       │   │
+│  │  Harness (custom)                           │   │
 │  │  ┌─────────────┐  ┌──────────────────────┐   │   │
 │  │  │ Model       │  │ SyscallHandler       │   │   │
 │  │  │ (LiteLLM)   │  │ ┌──────────────────┐ │   │   │
@@ -208,7 +208,7 @@ Pushing a `v*.*.*` tag triggers the [release workflow](.github/workflows/release
 |---|---|
 | Backend | Python 3.12, FastAPI, Uvicorn |
 | Database | SQLAlchemy 2.0 async, SQLite (WAL + FTS5) / Postgres (asyncpg) |
-| Agent harness | Pydantic AI |
+| Agent harness | Custom (async loop + LiteLLM) |
 | Model transport | LiteLLM |
 | Frontend | React 19, Vite, TypeScript, Tailwind CSS 4 |
 | Desktop | Tauri 2 (Rust) |
@@ -218,7 +218,7 @@ Pushing a `v*.*.*` tag triggers the [release workflow](.github/workflows/release
 ### Key design decisions
 
 - **D1:** Agents are configuration, not code. AgentConfig is a DB row, versioned.
-- **D2:** Pydantic AI is the harness. LiteLLM is the model transport.
+- **D2:** Custom async harness. LiteLLM is the model transport.
 - **D33:** FastAPI is the gateway/API layer. The React dashboard, Tauri desktop, and future CLI are all clients of the same REST + SSE contracts.
 - **D34:** Three-layer memory: working memory (session), MEMORY.md (file), knowledge graph (SQLite triples).
 - **D35:** Agent identity = soul, persona, task — versioned config fields, NOT workspace files.
@@ -390,7 +390,7 @@ foundation-agentos/
 │   │   ├── channels/         # External channels (Telegram, Discord, Zalo)
 │   │   ├── sandbox/          # Process sandbox (seatbelt/bwrap)
 │   │   ├── syscall/          # The single boundary every capability crosses
-│   │   ├── harness/          # Agent loop (Pydantic AI + LiteLLM)
+│   │   ├── harness/          # Agent loop (custom harness + LiteLLM)
 │   │   ├── defaults/         # Default agent YAMLs (caber, agent-builder)
 │   │   └── ...
 │   ├── tests/                # 348 tests

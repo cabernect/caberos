@@ -15,7 +15,7 @@ The goal: one agent, seeded from a config file, reachable through the dashboard 
 | 1 | [00-project-scaffold.md](00-project-scaffold.md) | Monorepo, uv, Python project, frontend skeleton, dev scripts, pytest infrastructure |
 | 2 | [01-database-layer.md](01-database-layer.md) | SQLAlchemy models, Alembic, SQLite — all tables the slice writes to |
 | 3 | [02-agent-config.md](02-agent-config.md) | Pydantic config models, YAML load, versioning — seed one agent from file |
-| 4 | [03-harness.md](03-harness.md) | Pydantic AI + LiteLLM adapter, the agent loop, context assembly (soul, persona, task, MEMORY.md, skills), compaction |
+| 4 | [03-harness.md](03-harness.md) | Custom harness + LiteLLM adapter, the agent loop, context assembly (soul, persona, task, MEMORY.md, skills), compaction |
 | 5 | [04-syscall-layer.md](04-syscall-layer.md) | Subject injection, scope, approval (asyncio Event), audit — the mediation boundary |
 | 6 | [05-capabilities.md](05-capabilities.md) | Capability registry, tool + sub-agent kinds (MCP tools added in plan 10) |
 | 7 | [06-sandbox.md](06-sandbox.md) | Process-level sandbox (sandbox-exec/bwrap), clean env, workspace, shell.run + file tools |

@@ -257,7 +257,7 @@ backend/src/agentos/
 ├── channels/            # External channels (Telegram, Discord, Zalo)
 ├── sandbox/             # Process sandbox (seatbelt/bwrap)
 ├── syscall/             # The single boundary every capability crosses
-├── harness/             # Agent loop (Pydantic AI + LiteLLM adapter)
+├── harness/             # Agent loop (custom harness + LiteLLM adapter)
 └── models/              # SQLAlchemy models (all v0.1 tables)
 ```
 
