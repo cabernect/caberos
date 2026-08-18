@@ -6,6 +6,21 @@ import type { Provider, ModelInfo, Operator } from "@/lib/types";
 import { DashboardSidebar, type NavKey } from "@/components/DashboardSidebar";
 import { LogoMark } from "@/components/LogoMark";
 
+// Open URLs in the system browser when running inside Tauri,
+// fall back to normal browser navigation otherwise.
+async function openExternal(e: React.MouseEvent<HTMLAnchorElement>) {
+  const href = e.currentTarget.href;
+  if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+    e.preventDefault();
+    try {
+      const { openUrl } = await import("@tauri-apps/plugin-opener");
+      await openUrl(href);
+    } catch {
+      window.open(href, "_blank", "noopener,noreferrer");
+    }
+  }
+}
+
 // Preset providers — known services with sensible defaults
 interface ProviderPreset {
   type: string;
@@ -715,6 +730,7 @@ function AboutTab() {
               target="_blank"
               rel="noopener noreferrer"
               className="block text-[13px] text-[var(--accent)] hover:underline"
+              onClick={openExternal}
             >
               GitHub Repository →
             </a>
@@ -723,6 +739,7 @@ function AboutTab() {
               target="_blank"
               rel="noopener noreferrer"
               className="block text-[13px] text-[var(--accent)] hover:underline"
+              onClick={openExternal}
             >
               Report an Issue →
             </a>
@@ -731,6 +748,7 @@ function AboutTab() {
               target="_blank"
               rel="noopener noreferrer"
               className="block text-[13px] text-[var(--accent)] hover:underline"
+              onClick={openExternal}
             >
               Security →
             </a>
