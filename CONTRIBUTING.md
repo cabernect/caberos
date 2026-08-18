@@ -67,9 +67,9 @@ cd frontend && npm run dev
 
 2. **Read the relevant docs:**
    - `AGENTS.md` — full architecture reference, module layout, key decisions
-   - `.docs/spec-v0.1.md` — the 40-decision specification
-   - `.docs/plans/NN-*.md` — implementation plans with detailed specs
-   - `.scratch/caberos-v0.1/issues/NN-*.md` — tracer-bullet tickets
+   - `docs/spec-v0.1.md` — the 40-decision specification
+   - `docs/plans/NN-*.md` — implementation plans with detailed specs
+   - `.scratch/caberos-v0.1/issues/NN-*.md` — tracer-bullet tickets (gitignored — use GitHub Issues)
 
 3. **Implement end-to-end** (vertical slice: DB + API + harness + sandbox + frontend)
 

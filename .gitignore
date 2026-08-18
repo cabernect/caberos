@@ -46,3 +46,9 @@ frontend/src-tauri/gen/
 
 # PyInstaller build artifacts
 backend/build/work/
+
+# Scratch (internal ticket tracking — use GitHub Issues instead)
+.scratch/
+
+# Devin CLI skills (local agent tooling, not part of the project)
+.devin/

@@ -205,7 +205,7 @@ tail -f "$HOME/Library/Application Support/com.caberos.desktop/logs/gateway.log"
 - **D35:** Agent identity = soul, persona, task — versioned config fields, NOT workspace files.
 - **D38:** MCP tools in v0.1. CLI/TUI deferred to v0.2.
 
-See `.docs/spec-v0.1.md` for the full 40-decision specification.
+See `docs/spec-v0.1.md` for the full 40-decision specification.
 
 ## Configuration
 
@@ -387,8 +387,8 @@ foundation-agentos/
 ├── scripts/                  # dev, install, docker, build-gateway, build-dmg, desktop-dev
 ├── sandbox/                  # Sandbox profiles (seatbelt SBPL, bwrap defaults)
 ├── docker-compose.yml
-├── .docs/                    # Spec + implementation plans
-├── .design-system/           # Design system (dark-only, AI-native)
+├── docs/                     # Spec + implementation plans
+├── design-system/            # Design system docs (warm light, olive accent)
 ├── AGENTS.md                 # Full architecture reference for AI agents
 ├── CONTRIBUTING.md
 ├── LICENSE

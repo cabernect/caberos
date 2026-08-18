@@ -15,8 +15,8 @@ CaberOS is an open-source, local-first AI Agent Operating System. It hosts perso
 - `docs/spec-v0.1.md` — the full specification. 40 decisions (D1-D40). Read this first.
 - `docs/plans/` — 15 implementation plans (00-14) with detailed specs, file lists, verification steps. These are the implementation reference.
 - `docs/plans/README.md` — plan index and build order.
-- `.scratch/caberos-v0.1/issues/` — tracer-bullet tickets (01-11, with 08 split into 08a/08b) with blocking edges. These drive the work order.
-- `design-system/caberos/` — design system (dark-only, AI-native, conversation-first). MASTER.md + page specs.
+- `.scratch/caberos-v0.1/issues/` — tracer-bullet tickets (01-11, with 08 split into 08a/08b) with blocking edges. These drive the work order. (gitignored — use GitHub Issues for public tracking)
+- `design-system/caberos/` — design system documentation. MASTER.md describes the actual implemented theme (warm light, olive accent). Page specs for agent-list and conversation.
 
 ## Key decisions (quick reference)
 
