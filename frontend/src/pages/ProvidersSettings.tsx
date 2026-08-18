@@ -747,7 +747,7 @@ function AboutTab() {
         >
           <div className="space-y-2">
             <p className="text-[13px] text-[var(--ink-2)]">
-              CaberOS is open-source software.
+              MIT License — Copyright (c) 2025 HoangPH25
             </p>
             <p className="text-[13px] text-[var(--ink-2)]">
               Fonts: Inter (OFL) &amp; JetBrains Mono (Apache 2.0).
