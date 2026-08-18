@@ -34,6 +34,7 @@ router = APIRouter(prefix="/api/channels", tags=["channels"])
 
 # --- Models ---
 
+
 class ChannelCreate(BaseModel):
     platform: str  # "telegram", "discord", "zalo", ...
     agent_id: str
@@ -46,6 +47,7 @@ class ChannelCreate(BaseModel):
 
 class ChannelUpdate(BaseModel):
     """Partial update — all fields optional. bot_token=None means keep existing."""
+
     bot_token: str | None = None  # if provided, re-encrypt and update
     webhook_secret: str | None = None
     enabled: bool | None = None
@@ -69,6 +71,7 @@ class ChannelTest(BaseModel):
 
 
 # --- Routes ---
+
 
 @router.get("")
 async def list_channels(

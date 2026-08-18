@@ -119,10 +119,13 @@ class ZaloOAChannel(Channel):
         last_msg_id = None
         for chunk in chunks:
             try:
-                resp = await self._call_api("cs", {
-                    "recipient": {"user_id": outbound.chat_id},
-                    "message": {"text": chunk},
-                })
+                resp = await self._call_api(
+                    "cs",
+                    {
+                        "recipient": {"user_id": outbound.chat_id},
+                        "message": {"text": chunk},
+                    },
+                )
                 # Zalo OA returns {"data": {"message_id": "..."}, "error": 0, "message": "Success"}
                 if resp.get("error") == 0 or resp.get("error") is None:
                     last_msg_id = resp.get("data", {}).get("message_id")

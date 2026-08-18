@@ -244,7 +244,7 @@ class TestSkills:
         (skill_dir / "SKILL.md").write_text(
             "---\nname: pdf\ndescription: PDF processing\n"
             "license: Apache-2.0\ncompatibility: Requires Python 3.12+\n"
-            'allowed-tools: read_file write_file terminal\n---\n\nBody.'
+            "allowed-tools: read_file write_file terminal\n---\n\nBody."
         )
 
         monkeypatch.chdir(tmp_path)
@@ -619,7 +619,9 @@ class TestSkillCapabilities:
         (skill_dir / "SKILL.md").write_text(
             "---\nname: research\ndescription: Research skill\n---\n\nFollow the checklist."
         )
-        (skill_dir / "checklist.md").write_text("# Research Checklist\n\n- [ ] Define scope\n- [ ] Search")
+        (skill_dir / "checklist.md").write_text(
+            "# Research Checklist\n\n- [ ] Define scope\n- [ ] Search"
+        )
 
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr("agentos.config.settings.skills_dir", tmp_path / "skills")
@@ -644,7 +646,9 @@ class TestSkillCapabilities:
         assert result.output["resource"] == "checklist.md"
         assert "Research Checklist" in result.output["content"]
 
-    async def test_skills_read_resource_path_escape_blocked(self, db, workspace, tmp_path, monkeypatch):
+    async def test_skills_read_resource_path_escape_blocked(
+        self, db, workspace, tmp_path, monkeypatch
+    ):
         """skills_read_resource blocks path traversal outside the skill dir."""
         skill_dir = tmp_path / "skills" / "research"
         skill_dir.mkdir(parents=True)

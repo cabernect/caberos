@@ -40,16 +40,20 @@ async def get_skills(
             skill = _load_skill_from_dir(entry, "system")
             if skill:
                 # Count resources
-                resource_count = sum(1 for f in entry.rglob("*") if f.is_file() and f.name != "SKILL.md")
-                skills.append({
-                    "name": skill.name,
-                    "description": skill.description,
-                    "source": "system",
-                    "path": str(entry),
-                    "resource_count": resource_count,
-                    "license": skill.license,
-                    "compatibility": skill.compatibility,
-                })
+                resource_count = sum(
+                    1 for f in entry.rglob("*") if f.is_file() and f.name != "SKILL.md"
+                )
+                skills.append(
+                    {
+                        "name": skill.name,
+                        "description": skill.description,
+                        "source": "system",
+                        "path": str(entry),
+                        "resource_count": resource_count,
+                        "license": skill.license,
+                        "compatibility": skill.compatibility,
+                    }
+                )
 
     return {"skills": skills, "count": len(skills)}
 
@@ -107,7 +111,9 @@ async def import_skill_zip(
     fm, _ = _parse_frontmatter(skill_md_content)
     skill_name = fm.get("name", "")
     if not skill_name:
-        raise HTTPException(status_code=400, detail="SKILL.md must have a 'name' field in frontmatter")
+        raise HTTPException(
+            status_code=400, detail="SKILL.md must have a 'name' field in frontmatter"
+        )
 
     # Validate name (Agent Skills spec: lowercase, numbers, hyphens)
     import re
@@ -136,7 +142,7 @@ async def import_skill_zip(
             continue
         # Strip the top-level dir prefix if present
         if top_dir:
-            rel = name[len(top_dir) + 1:]
+            rel = name[len(top_dir) + 1 :]
         else:
             rel = name
         if not rel:

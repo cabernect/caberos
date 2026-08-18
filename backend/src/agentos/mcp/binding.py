@@ -67,9 +67,7 @@ async def list_bindings(db: AsyncSession, mcp_server_id: str | None = None) -> l
 
 async def delete_binding(db: AsyncSession, binding_id: str) -> bool:
     """Delete a binding. Returns True if deleted."""
-    result = await db.execute(
-        select(ContactMcpBinding).where(ContactMcpBinding.id == binding_id)
-    )
+    result = await db.execute(select(ContactMcpBinding).where(ContactMcpBinding.id == binding_id))
     binding = result.scalar_one_or_none()
     if binding is None:
         return False
@@ -91,9 +89,7 @@ async def resolve_binding(
     if binding is None:
         return None
 
-    server_result = await db.execute(
-        select(McpServer).where(McpServer.id == mcp_server_id)
-    )
+    server_result = await db.execute(select(McpServer).where(McpServer.id == mcp_server_id))
     server = server_result.scalar_one_or_none()
     if server is None:
         return None

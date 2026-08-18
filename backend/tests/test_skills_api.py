@@ -75,7 +75,9 @@ class TestSkillsAPI:
         # Create a zip with SKILL.md at root
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w") as zf:
-            zf.writestr("SKILL.md", "---\nname: my-skill\ndescription: Test skill\n---\n\nInstructions.")
+            zf.writestr(
+                "SKILL.md", "---\nname: my-skill\ndescription: Test skill\n---\n\nInstructions."
+            )
             zf.writestr("reference.md", "# Reference\n\nDetails.")
         buf.seek(0)
 

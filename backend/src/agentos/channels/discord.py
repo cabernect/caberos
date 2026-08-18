@@ -71,9 +71,7 @@ class DiscordChannel(Channel):
             # Build text from options first, then fall back to value, then command name
             options = data.get("options", [])
             if options:
-                text = " ".join(
-                    str(opt.get("value", "")) for opt in options if opt.get("value")
-                )
+                text = " ".join(str(opt.get("value", "")) for opt in options if opt.get("value"))
             else:
                 text = data.get("value") or data.get("name", "")
             if not text or not channel_id:

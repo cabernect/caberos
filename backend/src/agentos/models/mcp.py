@@ -17,11 +17,19 @@ class McpServer(Base, IdMixin, TimestampMixin):
     args: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON array (stdio)
     url: Mapped[str | None] = mapped_column(String(2048), nullable=True)  # http
     headers: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON of headers (http)
-    env_template: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON of env var templates
-    oauth_config: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON: OAuth client config
-    tool_filter: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON array of allowed tool names
+    env_template: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )  # JSON of env var templates
+    oauth_config: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )  # JSON: OAuth client config
+    tool_filter: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )  # JSON array of allowed tool names
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    require_approval: Mapped[bool] = mapped_column(Boolean, default=True)  # per-server approval gate
+    require_approval: Mapped[bool] = mapped_column(
+        Boolean, default=True
+    )  # per-server approval gate
 
 
 class McpServerCredential(Base, IdMixin, TimestampMixin):
@@ -29,8 +37,12 @@ class McpServerCredential(Base, IdMixin, TimestampMixin):
 
     __tablename__ = "mcp_server_credentials"
 
-    mcp_server_id: Mapped[str] = mapped_column(String(36), ForeignKey("mcp_servers.id"), nullable=False)
-    credential_type: Mapped[str] = mapped_column(String(50), nullable=False)  # oauth_token, api_key, bearer
+    mcp_server_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("mcp_servers.id"), nullable=False
+    )
+    credential_type: Mapped[str] = mapped_column(
+        String(50), nullable=False
+    )  # oauth_token, api_key, bearer
     encrypted_value: Mapped[str] = mapped_column(Text, nullable=False)  # Fernet-encrypted JSON
     label: Mapped[str | None] = mapped_column(String(255), nullable=True)  # human-readable label
 
@@ -41,8 +53,12 @@ class ContactMcpBinding(Base, IdMixin, TimestampMixin):
     __tablename__ = "contact_mcp_bindings"
 
     contact_id: Mapped[str] = mapped_column(String(36), ForeignKey("contacts.id"), nullable=False)
-    mcp_server_id: Mapped[str] = mapped_column(String(36), ForeignKey("mcp_servers.id"), nullable=False)
-    credential_id: Mapped[str] = mapped_column(String(36), ForeignKey("mcp_server_credentials.id"), nullable=False)
+    mcp_server_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("mcp_servers.id"), nullable=False
+    )
+    credential_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("mcp_server_credentials.id"), nullable=False
+    )
 
 
 class McpTool(Base, IdMixin, TimestampMixin):
@@ -50,7 +66,9 @@ class McpTool(Base, IdMixin, TimestampMixin):
 
     __tablename__ = "mcp_tools"
 
-    mcp_server_id: Mapped[str] = mapped_column(String(36), ForeignKey("mcp_servers.id"), nullable=False)
+    mcp_server_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("mcp_servers.id"), nullable=False
+    )
     tool_name: Mapped[str] = mapped_column(String(255), nullable=False)  # MCP server's tool name
     capability_name: Mapped[str] = mapped_column(String(255), nullable=False)  # mcp.{server}.{tool}
     parameters_schema: Mapped[str] = mapped_column(Text, nullable=False)  # JSON schema

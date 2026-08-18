@@ -51,6 +51,7 @@ class OAuthFlowState:
         self.authorize_url = url
         # Extract state from the authorize URL query params
         from urllib.parse import parse_qs, urlparse
+
         parsed = urlparse(url)
         params = parse_qs(parsed.query)
         if "state" in params:
@@ -235,9 +236,7 @@ async def start_oauth_flow(server: McpServer) -> str:
     )
 
 
-async def _run_oauth_flow(
-    server_id: str, server_url: str, auth, flow: OAuthFlowState
-) -> None:
+async def _run_oauth_flow(server_id: str, server_url: str, auth, flow: OAuthFlowState) -> None:
     """Run the OAuth flow in the background.
 
     Makes an initial request to the server URL using httpx with the

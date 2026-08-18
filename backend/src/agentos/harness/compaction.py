@@ -194,9 +194,7 @@ def prune_tool_results(
 # --- Phase 2: Determine boundaries ---
 
 
-def _align_boundary_backward(
-    messages: list[dict[str, Any]], boundary: int
-) -> int:
+def _align_boundary_backward(messages: list[dict[str, Any]], boundary: int) -> int:
     """Move the boundary backward to avoid splitting tool_call/tool_result pairs.
 
     If the message at `boundary` is a tool result, move back to include the
@@ -454,11 +452,13 @@ def _sanitize_tool_pairs(messages: list[dict[str, Any]]) -> list[dict[str, Any]]
                 tc_id = tc.get("id", "")
                 if tc_id and tc_id not in result_ids:
                     # Inject stub result
-                    sanitized.append({
-                        "role": "tool",
-                        "tool_call_id": tc_id,
-                        "content": "[Tool result not available after compaction]",
-                    })
+                    sanitized.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc_id,
+                            "content": "[Tool result not available after compaction]",
+                        }
+                    )
         else:
             sanitized.append(msg)
 
@@ -511,6 +511,7 @@ def reassemble(
 @dataclass
 class CompactionResult:
     """Result of a compaction run."""
+
     messages: list[dict[str, Any]]
     summary: str | None
     compacted: bool
@@ -586,8 +587,12 @@ async def compact_context(
 
     # Phase 1: Prune old tool results in head and middle
     # (tail is protected — no pruning)
-    pruned_head = prune_tool_results(head, tail_start=len(head), prune_over=config.prune_tool_results_over)
-    pruned_middle = prune_tool_results(middle, tail_start=len(middle), prune_over=config.prune_tool_results_over)
+    pruned_head = prune_tool_results(
+        head, tail_start=len(head), prune_over=config.prune_tool_results_over
+    )
+    pruned_middle = prune_tool_results(
+        middle, tail_start=len(middle), prune_over=config.prune_tool_results_over
+    )
 
     # Phase 3: Generate structured summary
     summary = await generate_summary(

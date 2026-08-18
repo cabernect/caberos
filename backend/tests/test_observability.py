@@ -69,26 +69,38 @@ def _make_run(
             )
             db.add(run)
             # Messages
-            db.add(Message(
-                id=str(uuid.uuid4()), run_id=run.id,
-                role="user", content="Hello", seq=0,
-            ))
-            db.add(Message(
-                id=str(uuid.uuid4()), run_id=run.id,
-                role="assistant", content="Hi there!", seq=1,
-            ))
+            db.add(
+                Message(
+                    id=str(uuid.uuid4()),
+                    run_id=run.id,
+                    role="user",
+                    content="Hello",
+                    seq=0,
+                )
+            )
+            db.add(
+                Message(
+                    id=str(uuid.uuid4()),
+                    run_id=run.id,
+                    role="assistant",
+                    content="Hi there!",
+                    seq=1,
+                )
+            )
             # Audit record
-            db.add(AuditRecord(
-                id=str(uuid.uuid4()),
-                run_id=run.id,
-                agent_id=agent_id,
-                capability_name="read_file",
-                allowed=True,
-                cost=0.0,
-                latency_ms=10,
-                args='{"path": "/tmp/test"}',
-                result='{"content": "hello"}',
-            ))
+            db.add(
+                AuditRecord(
+                    id=str(uuid.uuid4()),
+                    run_id=run.id,
+                    agent_id=agent_id,
+                    capability_name="read_file",
+                    allowed=True,
+                    cost=0.0,
+                    latency_ms=10,
+                    args='{"path": "/tmp/test"}',
+                    result='{"content": "hello"}',
+                )
+            )
             await db.commit()
             return run.id
 
@@ -224,20 +236,21 @@ class TestObservabilityAPI:
         # Add a denied audit record
         import asyncio
 
-
         async def _add_denied():
             async with db_session() as db:
-                db.add(AuditRecord(
-                    id=str(uuid.uuid4()),
-                    run_id=run_id,
-                    agent_id="agent-1",
-                    capability_name="terminal",
-                    allowed=False,
-                    denied_reason="Approval denied by operator",
-                    cost=0.0,
-                    latency_ms=0,
-                    args='{"command": "rm -rf /"}',
-                ))
+                db.add(
+                    AuditRecord(
+                        id=str(uuid.uuid4()),
+                        run_id=run_id,
+                        agent_id="agent-1",
+                        capability_name="terminal",
+                        allowed=False,
+                        denied_reason="Approval denied by operator",
+                        cost=0.0,
+                        latency_ms=0,
+                        args='{"command": "rm -rf /"}',
+                    )
+                )
                 await db.commit()
 
         asyncio.get_event_loop().run_until_complete(_add_denied())
@@ -330,22 +343,28 @@ class TestObservabilityAPI:
             async with db_session() as db:
                 # Need an operator first
                 op = Operator(
-                    id="op-1", username="admin",
-                    password_hash="hash", must_change_password=False,
+                    id="op-1",
+                    username="admin",
+                    password_hash="hash",
+                    must_change_password=False,
                 )
                 db.add(op)
-                db.add(OperatorAuditLog(
-                    id=str(uuid.uuid4()),
-                    operator_id="op-1",
-                    action="login",
-                    target="",
-                ))
-                db.add(OperatorAuditLog(
-                    id=str(uuid.uuid4()),
-                    operator_id="op-1",
-                    action="change_password",
-                    target="op-1",
-                ))
+                db.add(
+                    OperatorAuditLog(
+                        id=str(uuid.uuid4()),
+                        operator_id="op-1",
+                        action="login",
+                        target="",
+                    )
+                )
+                db.add(
+                    OperatorAuditLog(
+                        id=str(uuid.uuid4()),
+                        operator_id="op-1",
+                        action="change_password",
+                        target="op-1",
+                    )
+                )
                 await db.commit()
 
         asyncio.get_event_loop().run_until_complete(_insert_audit())

@@ -86,9 +86,13 @@ class McpClient:
         self._conn_task = asyncio.create_task(self._connection_loop())
         # Wait for the connection to complete (or fail)
         try:
-            await asyncio.wait_for(asyncio.shield(self._connect_event.wait()), timeout=self.timeout + 5)
+            await asyncio.wait_for(
+                asyncio.shield(self._connect_event.wait()), timeout=self.timeout + 5
+            )
         except TimeoutError:
-            self._connect_error = TimeoutError(f"MCP connection timed out after {self.timeout + 5}s")
+            self._connect_error = TimeoutError(
+                f"MCP connection timed out after {self.timeout + 5}s"
+            )
 
         if self._connect_error:
             # Clean up the task

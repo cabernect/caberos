@@ -185,9 +185,7 @@ async def mcp_server(db):
 @pytest_asyncio.fixture
 async def mcp_credential(db, mcp_server):
     """Create a test credential."""
-    cred = await mcp_creds.store_credential(
-        db, mcp_server.id, "api_key", "test-key", label="Test"
-    )
+    cred = await mcp_creds.store_credential(db, mcp_server.id, "api_key", "test-key", label="Test")
     await db.flush()
     return cred
 
@@ -195,9 +193,7 @@ async def mcp_credential(db, mcp_server):
 @pytest.mark.asyncio
 async def test_create_and_get_binding(db, contact, mcp_server, mcp_credential):
     """Bindings can be created and retrieved."""
-    binding = await mcp_binding.create_binding(
-        db, contact.id, mcp_server.id, mcp_credential.id
-    )
+    binding = await mcp_binding.create_binding(db, contact.id, mcp_server.id, mcp_credential.id)
     await db.flush()
 
     retrieved = await mcp_binding.get_binding(db, contact.id, mcp_server.id)
@@ -210,9 +206,7 @@ async def test_create_and_get_binding(db, contact, mcp_server, mcp_credential):
 @pytest.mark.asyncio
 async def test_resolve_binding(db, contact, mcp_server, mcp_credential):
     """resolve_binding returns (binding, server, credential)."""
-    await mcp_binding.create_binding(
-        db, contact.id, mcp_server.id, mcp_credential.id
-    )
+    await mcp_binding.create_binding(db, contact.id, mcp_server.id, mcp_credential.id)
     await db.flush()
 
     resolved = await mcp_binding.resolve_binding(db, contact.id, mcp_server.id)
@@ -232,9 +226,7 @@ async def test_resolve_unbound_contact(db, contact, mcp_server):
 @pytest.mark.asyncio
 async def test_delete_binding(db, contact, mcp_server, mcp_credential):
     """Bindings can be deleted."""
-    binding = await mcp_binding.create_binding(
-        db, contact.id, mcp_server.id, mcp_credential.id
-    )
+    binding = await mcp_binding.create_binding(db, contact.id, mcp_server.id, mcp_credential.id)
     await db.flush()
 
     deleted = await mcp_binding.delete_binding(db, binding.id)
@@ -358,8 +350,16 @@ def _make_capturing_client(captured_env: dict):
     """Create a MockMcpClient subclass that accepts McpClient's constructor args."""
 
     class CapturingClient(MockMcpClient):
-        def __init__(self, transport=None, command=None, args=None, url=None,
-                     headers=None, env=None, **kwargs):
+        def __init__(
+            self,
+            transport=None,
+            command=None,
+            args=None,
+            url=None,
+            headers=None,
+            env=None,
+            **kwargs,
+        ):
             super().__init__()
             self.env = env or {}
             self.headers = headers or {}
@@ -513,7 +513,9 @@ async def test_oauth_token_storage_roundtrip(db, monkeypatch):
         name="oauth-test",
         transport="http",
         url="https://example.com/mcp",
-        oauth_config=json.dumps({"scope": "read", "redirect_uri": "http://localhost:8081/api/mcp/oauth/callback"}),
+        oauth_config=json.dumps(
+            {"scope": "read", "redirect_uri": "http://localhost:8081/api/mcp/oauth/callback"}
+        ),
     )
     db.add(server)
     await db.commit()

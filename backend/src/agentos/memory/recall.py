@@ -174,9 +174,7 @@ async def clear_run_entries(db: AsyncSession, run_id: str) -> int:
     from sqlalchemy import delete, select
 
     # Get entry IDs for FTS cleanup
-    result = await db.execute(
-        select(MemoryEntry.id).where(MemoryEntry.run_id == run_id)
-    )
+    result = await db.execute(select(MemoryEntry.id).where(MemoryEntry.run_id == run_id))
     entry_ids = [row[0] for row in result.fetchall()]
 
     if not entry_ids:
@@ -191,9 +189,7 @@ async def clear_run_entries(db: AsyncSession, run_id: str) -> int:
             )
 
     # Delete the entries themselves
-    result = await db.execute(
-        delete(MemoryEntry).where(MemoryEntry.run_id == run_id)
-    )
+    result = await db.execute(delete(MemoryEntry).where(MemoryEntry.run_id == run_id))
     await db.flush()
     return result.rowcount or 0
 

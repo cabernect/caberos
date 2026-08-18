@@ -79,6 +79,7 @@ def _extract_command_str(capability: str, args: dict[str, Any]) -> str | None:
 @dataclass
 class PendingApproval:
     """Tracks a pending approval and its resolution."""
+
     event: asyncio.Event
     decision: str | None = None  # "approved" or "rejected" — set by the API
     decided_by: str | None = None
@@ -160,7 +161,7 @@ class ApprovalEventRegistry:
         if command_str:
             for key in allowed:
                 if key.startswith(f"pattern:{capability}:"):
-                    pattern = key[len(f"pattern:{capability}:"):]
+                    pattern = key[len(f"pattern:{capability}:") :]
                     if fnmatch.fnmatch(command_str, pattern):
                         return True
 

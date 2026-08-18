@@ -124,10 +124,13 @@ class ZaloBotChannel(Channel):
         last_message_id = None
         for chunk in chunks:
             try:
-                resp = await self._call_api("sendMessage", {
-                    "chat_id": outbound.chat_id,
-                    "text": chunk,
-                })
+                resp = await self._call_api(
+                    "sendMessage",
+                    {
+                        "chat_id": outbound.chat_id,
+                        "text": chunk,
+                    },
+                )
                 last_message_id = resp.get("message_id")
             except Exception as e:
                 log.error("Zalo Bot deliver failed: %s", e)
@@ -138,10 +141,13 @@ class ZaloBotChannel(Channel):
     async def send_typing(self, chat_id: str) -> None:
         """Send typing indicator via Zalo Bot API: POST /sendChatAction."""
         try:
-            await self._call_api("sendChatAction", {
-                "chat_id": chat_id,
-                "action": "typing",
-            })
+            await self._call_api(
+                "sendChatAction",
+                {
+                    "chat_id": chat_id,
+                    "action": "typing",
+                },
+            )
         except Exception:
             pass
 
@@ -189,10 +195,13 @@ class ZaloBotChannel(Channel):
         log.info("Zalo Bot poll loop started for agent %s", self.agent_id)
         while True:
             try:
-                resp = await self._call_api("getUpdates", {
-                    "offset": self._last_update_id + 1,
-                    "timeout": POLL_TIMEOUT,
-                })
+                resp = await self._call_api(
+                    "getUpdates",
+                    {
+                        "offset": self._last_update_id + 1,
+                        "timeout": POLL_TIMEOUT,
+                    },
+                )
 
                 updates = resp if isinstance(resp, list) else resp.get("updates", [])
                 for update in updates:

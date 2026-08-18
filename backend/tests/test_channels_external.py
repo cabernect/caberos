@@ -18,6 +18,7 @@ from agentos.channels.zalo_oa import ZaloOAChannel
 
 # --- Discord channel ---
 
+
 class TestDiscordChannel:
     @pytest.mark.asyncio
     async def test_receive_slash_command(self):
@@ -157,7 +158,9 @@ class TestDiscordChannel:
             text="Hello",
             chat_id="channel-123",
         )
-        with patch.object(ch, "_call_api", new_callable=AsyncMock, side_effect=Exception("401 Unauthorized")):
+        with patch.object(
+            ch, "_call_api", new_callable=AsyncMock, side_effect=Exception("401 Unauthorized")
+        ):
             result = await ch.deliver(outbound)
         assert result["success"] is False
         assert "401" in result["error"]
@@ -180,6 +183,7 @@ class TestDiscordChannel:
 
 
 # --- Zalo OA channel ---
+
 
 class TestZaloOAChannel:
     @pytest.mark.asyncio
@@ -300,6 +304,7 @@ class TestZaloOAChannel:
 
 # --- Zalo Bot channel ---
 
+
 class TestZaloBotChannel:
     @pytest.mark.asyncio
     async def test_receive_text_message(self):
@@ -405,7 +410,9 @@ class TestZaloBotChannel:
             text="Hello",
             chat_id="chat-abc-123",
         )
-        with patch.object(ch, "_call_api", new_callable=AsyncMock, side_effect=Exception("401 Unauthorized")):
+        with patch.object(
+            ch, "_call_api", new_callable=AsyncMock, side_effect=Exception("401 Unauthorized")
+        ):
             result = await ch.deliver(outbound)
         assert result["success"] is False
         assert "401" in result["error"]
@@ -415,15 +422,20 @@ class TestZaloBotChannel:
         ch = ZaloBotChannel(bot_token="bot_id:secret_key", agent_id="agent-1")
         with patch.object(ch, "_call_api", new_callable=AsyncMock, return_value={}) as mock_api:
             await ch.send_typing("chat-123")
-            mock_api.assert_called_once_with("sendChatAction", {
-                "chat_id": "chat-123",
-                "action": "typing",
-            })
+            mock_api.assert_called_once_with(
+                "sendChatAction",
+                {
+                    "chat_id": "chat-123",
+                    "action": "typing",
+                },
+            )
 
     @pytest.mark.asyncio
     async def test_send_typing_silent_failure(self):
         ch = ZaloBotChannel(bot_token="bot_id:secret_key", agent_id="agent-1")
-        with patch.object(ch, "_call_api", new_callable=AsyncMock, side_effect=Exception("network error")):
+        with patch.object(
+            ch, "_call_api", new_callable=AsyncMock, side_effect=Exception("network error")
+        ):
             # Should not raise — typing is best-effort
             await ch.send_typing("chat-123")
 

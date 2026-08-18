@@ -110,7 +110,9 @@ class SQLiteBackend(DatabaseBackend):
 
         # 3. Session summaries FTS (episodic — topical recall at run start)
         result = await conn.execute(
-            text("SELECT name FROM sqlite_master WHERE type='table' AND name='session_summaries_fts'")
+            text(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='session_summaries_fts'"
+            )
         )
         if result.fetchone() is None:
             await conn.execute(

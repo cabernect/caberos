@@ -124,9 +124,7 @@ class TestSessionSummaries:
         )
         await db.commit()
 
-        results = await search_session_summaries(
-            db, "test-agent", "contact-1", "PDF timesheet"
-        )
+        results = await search_session_summaries(db, "test-agent", "contact-1", "PDF timesheet")
         assert len(results) == 1
         assert "PDF timesheet" in results[0]["summary"]
 
@@ -186,15 +184,9 @@ class TestWorkingMemory:
 
         await _create_contact(db, "contact-1")
 
-        await store_snippet(
-            db, "contact-1", "test-agent", "note1", "value1", run_id="run-1"
-        )
-        await store_snippet(
-            db, "contact-1", "test-agent", "note2", "value2", run_id="run-1"
-        )
-        await store_snippet(
-            db, "contact-1", "test-agent", "note3", "value3", run_id="run-2"
-        )
+        await store_snippet(db, "contact-1", "test-agent", "note1", "value1", run_id="run-1")
+        await store_snippet(db, "contact-1", "test-agent", "note2", "value2", run_id="run-1")
+        await store_snippet(db, "contact-1", "test-agent", "note3", "value3", run_id="run-2")
         await db.commit()
 
         # Delete run-1 entries
@@ -215,18 +207,14 @@ class TestWorkingMemory:
 
         await _create_contact(db, "contact-1")
 
-        await store_snippet(
-            db, "contact-1", "test-agent", "permanent", "always remember this"
-        )
+        await store_snippet(db, "contact-1", "test-agent", "permanent", "always remember this")
         await db.commit()
 
         # Clearing any run_id should not affect entries without run_id
         await clear_run_entries(db, "some-run")
         await db.commit()
 
-        result = await db.execute(
-            select(MemoryEntry).where(MemoryEntry.key == "permanent")
-        )
+        result = await db.execute(select(MemoryEntry).where(MemoryEntry.key == "permanent"))
         assert result.scalar_one_or_none() is not None
 
 

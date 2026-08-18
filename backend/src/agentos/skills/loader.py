@@ -30,6 +30,7 @@ from typing import Any
 @dataclass
 class Skill:
     """A loaded skill."""
+
     name: str
     description: str
     body: str = ""
@@ -167,26 +168,32 @@ def load_skill(agent_id: str, name: str) -> dict[str, Any] | None:
             if entry.name == "SKILL.md":
                 continue
             if entry.is_file():
-                resources.append({
-                    "name": entry.name,
-                    "type": "file",
-                    "size": entry.stat().st_size,
-                })
+                resources.append(
+                    {
+                        "name": entry.name,
+                        "type": "file",
+                        "size": entry.stat().st_size,
+                    }
+                )
             elif entry.is_dir():
                 # Subdirectory (scripts/, references/, assets/) — list its contents
                 sub_files = []
                 for sub in sorted(entry.iterdir()):
                     if sub.is_file():
-                        sub_files.append({
-                            "name": f"{entry.name}/{sub.name}",
-                            "type": "file",
-                            "size": sub.stat().st_size,
-                        })
-                resources.append({
-                    "name": entry.name,
-                    "type": "directory",
-                    "files": sub_files,
-                })
+                        sub_files.append(
+                            {
+                                "name": f"{entry.name}/{sub.name}",
+                                "type": "file",
+                                "size": sub.stat().st_size,
+                            }
+                        )
+                resources.append(
+                    {
+                        "name": entry.name,
+                        "type": "directory",
+                        "files": sub_files,
+                    }
+                )
 
     result: dict[str, Any] = {
         "name": skill.name,

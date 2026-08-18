@@ -20,6 +20,7 @@ from typing import Any
 @dataclass
 class OutputConstraints:
     """Platform-specific output limits."""
+
     max_length: int | None = None  # None = no hard limit
     supported_formatting: list[str] = field(default_factory=lambda: ["plain"])
     supports_typing_indicator: bool = False
@@ -28,6 +29,7 @@ class OutputConstraints:
 @dataclass
 class OutboundMessage:
     """Normalized outbound reply (produced by pipeline, consumed by channels)."""
+
     session_id: str
     text: str
     chat_id: str  # platform-specific chat/channel ID to deliver to
@@ -85,6 +87,7 @@ class Channel(ABC):
             return text
         # Strip basic markdown to plain text
         import re
+
         plain = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
         plain = re.sub(r"`(.+?)`", r"\1", plain)
         plain = re.sub(r"\[(.+?)\]\(.+?\)", r"\1", plain)

@@ -136,9 +136,7 @@ async def _sync_agents() -> None:
             if state is None or state.task is None or state.task.done():
                 state = HeartbeatState(agent_id=agent.id)
                 _states[agent.id] = state
-                state.task = asyncio.create_task(
-                    _agent_heartbeat_loop(agent.id, state)
-                )
+                state.task = asyncio.create_task(_agent_heartbeat_loop(agent.id, state))
                 log.info("Started heartbeat for agent %s", agent.id)
 
         # Stop tasks for agents that no longer have heartbeat enabled
@@ -166,9 +164,7 @@ async def _agent_heartbeat_loop(agent_id: str, state: HeartbeatState) -> None:
             agent_name = agent.name if agent else agent_id
 
         # Wait for the interval
-        state.next_fire = datetime.fromtimestamp(
-            _now().timestamp() + interval_sec, tz=UTC
-        )
+        state.next_fire = datetime.fromtimestamp(_now().timestamp() + interval_sec, tz=UTC)
         await asyncio.sleep(interval_sec)
 
         # Fire the heartbeat

@@ -88,21 +88,31 @@ class TelegramChannel(Channel):
         last_message_id = None
         for chunk in chunks:
             try:
-                resp = await self._call_api("sendMessage", {
-                    "chat_id": outbound.chat_id,
-                    "text": chunk,
-                    "parse_mode": "Markdown",
-                    "reply_to_message_id": outbound.reply_to_message_id if last_message_id is None else None,
-                })
+                resp = await self._call_api(
+                    "sendMessage",
+                    {
+                        "chat_id": outbound.chat_id,
+                        "text": chunk,
+                        "parse_mode": "Markdown",
+                        "reply_to_message_id": outbound.reply_to_message_id
+                        if last_message_id is None
+                        else None,
+                    },
+                )
                 if resp.get("ok"):
                     last_message_id = resp.get("result", {}).get("message_id")
                 else:
                     # Markdown parse failed — retry as plain text
-                    resp = await self._call_api("sendMessage", {
-                        "chat_id": outbound.chat_id,
-                        "text": chunk,
-                        "reply_to_message_id": outbound.reply_to_message_id if last_message_id is None else None,
-                    })
+                    resp = await self._call_api(
+                        "sendMessage",
+                        {
+                            "chat_id": outbound.chat_id,
+                            "text": chunk,
+                            "reply_to_message_id": outbound.reply_to_message_id
+                            if last_message_id is None
+                            else None,
+                        },
+                    )
                     if resp.get("ok"):
                         last_message_id = resp.get("result", {}).get("message_id")
             except Exception as e:
@@ -114,10 +124,13 @@ class TelegramChannel(Channel):
     async def send_typing(self, chat_id: str) -> None:
         """Send 'typing...' chat action to Telegram."""
         try:
-            await self._call_api("sendChatAction", {
-                "chat_id": chat_id,
-                "action": "typing",
-            })
+            await self._call_api(
+                "sendChatAction",
+                {
+                    "chat_id": chat_id,
+                    "action": "typing",
+                },
+            )
         except Exception:
             pass
 
@@ -164,11 +177,14 @@ class TelegramChannel(Channel):
         log.info("Telegram poll loop started for agent %s", self.agent_id)
         while True:
             try:
-                resp = await self._call_api("getUpdates", {
-                    "offset": self._last_update_id + 1,
-                    "timeout": POLL_TIMEOUT,
-                    "allowed_updates": ["message", "channel_post"],
-                })
+                resp = await self._call_api(
+                    "getUpdates",
+                    {
+                        "offset": self._last_update_id + 1,
+                        "timeout": POLL_TIMEOUT,
+                        "allowed_updates": ["message", "channel_post"],
+                    },
+                )
 
                 if not resp.get("ok"):
                     log.error("Telegram getUpdates failed: %s", resp.get("description"))

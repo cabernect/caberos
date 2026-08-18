@@ -94,9 +94,7 @@ async def list_servers(
         # Determine auth type for the frontend
         if oauth_config:
             auth_type = "oauth"
-        elif env_template and any(
-            "{{credential_value}}" in v for v in env_template.values()
-        ):
+        elif env_template and any("{{credential_value}}" in v for v in env_template.values()):
             auth_type = "api_key"
         else:
             auth_type = "none"
@@ -212,9 +210,7 @@ async def update_server(
         # Update all registered tools' require_approval flag
         from ..models.mcp import McpTool
 
-        tool_result = await db.execute(
-            select(McpTool).where(McpTool.mcp_server_id == server_id)
-        )
+        tool_result = await db.execute(select(McpTool).where(McpTool.mcp_server_id == server_id))
         tools = tool_result.scalars().all()
         for tool in tools:
             tool.require_approval = req.require_approval
@@ -453,7 +449,9 @@ async def list_bindings(
     for b in bindings:
         contact_result = await db.execute(select(Contact).where(Contact.id == b["contact_id"]))
         contact = contact_result.scalar_one_or_none()
-        server_result = await db.execute(select(McpServer).where(McpServer.id == b["mcp_server_id"]))
+        server_result = await db.execute(
+            select(McpServer).where(McpServer.id == b["mcp_server_id"])
+        )
         server = server_result.scalar_one_or_none()
         out.append(
             {
@@ -557,10 +555,12 @@ async def install_from_catalog(
     # Build oauth_config for OAuth servers
     oauth_config_json = None
     if entry.get("auth_type") == "oauth":
-        oauth_config_json = json.dumps({
-            "scope": entry.get("oauth_scope", ""),
-            "redirect_uri": "http://localhost:8081/api/mcp/oauth/callback",
-        })
+        oauth_config_json = json.dumps(
+            {
+                "scope": entry.get("oauth_scope", ""),
+                "redirect_uri": "http://localhost:8081/api/mcp/oauth/callback",
+            }
+        )
 
     server = McpServer(
         name=entry["name"],

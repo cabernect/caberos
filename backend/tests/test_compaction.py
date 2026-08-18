@@ -46,7 +46,11 @@ class TestPhase1PruneToolResults:
     def test_prunes_long_tool_result_outside_tail(self):
         msgs = [
             {"role": "user", "content": "Read this file"},
-            {"role": "assistant", "content": "", "tool_calls": [{"id": "tc1", "function": {"name": "file.read"}}]},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "tc1", "function": {"name": "file.read"}}],
+            },
             {"role": "tool", "tool_call_id": "tc1", "content": "x" * 5000},
             {"role": "assistant", "content": "Here's the file content"},
         ]
@@ -60,7 +64,11 @@ class TestPhase1PruneToolResults:
     def test_preserves_tool_result_inside_tail(self):
         msgs = [
             {"role": "user", "content": "Read this file"},
-            {"role": "assistant", "content": "", "tool_calls": [{"id": "tc1", "function": {"name": "file.read"}}]},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "tc1", "function": {"name": "file.read"}}],
+            },
             {"role": "tool", "tool_call_id": "tc1", "content": "x" * 5000},
         ]
         # tail_start=0 means everything is inside the tail → no pruning
@@ -104,7 +112,11 @@ class TestPhase2DetermineBoundaries:
             {"role": "user", "content": "msg 0"},
             {"role": "user", "content": "msg 1"},
             {"role": "user", "content": "msg 2"},
-            {"role": "assistant", "content": "", "tool_calls": [{"id": "tc1", "function": {"name": "file.read"}}]},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "tc1", "function": {"name": "file.read"}}],
+            },
             {"role": "tool", "tool_call_id": "tc1", "content": "result"},
             {"role": "assistant", "content": "msg 5"},
             {"role": "user", "content": "msg 6"},
@@ -144,7 +156,11 @@ class TestPhase4SanitizeToolPairs:
     def test_injects_stub_for_orphaned_tool_call(self):
         msgs = [
             {"role": "user", "content": "read file"},
-            {"role": "assistant", "content": "", "tool_calls": [{"id": "tc1", "function": {"name": "file.read"}}]},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "tc1", "function": {"name": "file.read"}}],
+            },
             {"role": "assistant", "content": "Here's the result"},
         ]
         sanitized = _sanitize_tool_pairs(msgs)
@@ -158,7 +174,11 @@ class TestPhase4SanitizeToolPairs:
     def test_preserves_matched_pairs(self):
         msgs = [
             {"role": "user", "content": "read file"},
-            {"role": "assistant", "content": "", "tool_calls": [{"id": "tc1", "function": {"name": "file.read"}}]},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "tc1", "function": {"name": "file.read"}}],
+            },
             {"role": "tool", "tool_call_id": "tc1", "content": "file contents"},
             {"role": "assistant", "content": "Done"},
         ]
@@ -233,17 +253,21 @@ class TestCompactContext:
 
     async def test_compaction_forced(self):
         """Force compaction even when under threshold."""
-        config = _make_agent_config(CompactionConfig(
-            auto_compaction=True,
-            protect_first_n=2,
-            protect_last_n=2,
-            tail_budget_fraction=0.20,
-        ))
+        config = _make_agent_config(
+            CompactionConfig(
+                auto_compaction=True,
+                protect_first_n=2,
+                protect_last_n=2,
+                tail_budget_fraction=0.20,
+            )
+        )
         msgs = _make_messages(10)
 
         # Mock the summary LLM call and use a small context window
-        with patch("agentos.harness.compaction.generate_summary", new_callable=AsyncMock) as mock, \
-             patch("agentos.harness.compaction.get_model_max_tokens", return_value=500):
+        with (
+            patch("agentos.harness.compaction.generate_summary", new_callable=AsyncMock) as mock,
+            patch("agentos.harness.compaction.get_model_max_tokens", return_value=500),
+        ):
             mock.return_value = "## Goal\nTest summary"
             result = await compact_context(msgs, config, "test-model", force=True)
 
@@ -257,17 +281,21 @@ class TestCompactContext:
 
     async def test_compaction_with_previous_summary(self):
         """Later compaction passes previous summary to LLM."""
-        config = _make_agent_config(CompactionConfig(
-            auto_compaction=True,
-            protect_first_n=2,
-            protect_last_n=2,
-            tail_budget_fraction=0.20,
-        ))
+        config = _make_agent_config(
+            CompactionConfig(
+                auto_compaction=True,
+                protect_first_n=2,
+                protect_last_n=2,
+                tail_budget_fraction=0.20,
+            )
+        )
         msgs = _make_messages(10)
         previous = "## Goal\nOld summary"
 
-        with patch("agentos.harness.compaction.generate_summary", new_callable=AsyncMock) as mock, \
-             patch("agentos.harness.compaction.get_model_max_tokens", return_value=500):
+        with (
+            patch("agentos.harness.compaction.generate_summary", new_callable=AsyncMock) as mock,
+            patch("agentos.harness.compaction.get_model_max_tokens", return_value=500),
+        ):
             mock.return_value = "## Goal\nUpdated summary"
             result = await compact_context(
                 msgs, config, "test-model", previous_summary=previous, force=True
@@ -289,24 +317,32 @@ class TestCompactContext:
 
     async def test_compaction_prunes_large_tool_results(self):
         """Phase 1 — large tool results in the middle are pruned."""
-        config = _make_agent_config(CompactionConfig(
-            auto_compaction=True,
-            protect_first_n=1,
-            protect_last_n=2,
-            tail_budget_fraction=0.20,
-            prune_tool_results_over=100,
-        ))
+        config = _make_agent_config(
+            CompactionConfig(
+                auto_compaction=True,
+                protect_first_n=1,
+                protect_last_n=2,
+                tail_budget_fraction=0.20,
+                prune_tool_results_over=100,
+            )
+        )
         msgs = [
             {"role": "user", "content": "Read a big file"},
-            {"role": "assistant", "content": "", "tool_calls": [{"id": "tc1", "function": {"name": "file.read"}}]},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "tc1", "function": {"name": "file.read"}}],
+            },
             {"role": "tool", "tool_call_id": "tc1", "content": "x" * 5000},
             {"role": "assistant", "content": "Done reading"},
             {"role": "user", "content": "Now do something else"},
             {"role": "assistant", "content": "ok"},
         ]
 
-        with patch("agentos.harness.compaction.generate_summary", new_callable=AsyncMock) as mock, \
-             patch("agentos.harness.compaction.get_model_max_tokens", return_value=500):
+        with (
+            patch("agentos.harness.compaction.generate_summary", new_callable=AsyncMock) as mock,
+            patch("agentos.harness.compaction.get_model_max_tokens", return_value=500),
+        ):
             mock.return_value = "## Goal\nTest"
             result = await compact_context(msgs, config, "test-model", force=True)
 

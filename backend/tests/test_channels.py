@@ -28,6 +28,7 @@ from agentos.secret_store import decrypt, encrypt
 
 # --- Channel base abstraction ---
 
+
 class TestChannelBase:
     def test_output_constraints_defaults(self):
         c = OutputConstraints()
@@ -81,6 +82,7 @@ class TestChannelBase:
 
 
 # --- Telegram channel ---
+
 
 class TestTelegramChannel:
     @pytest.mark.asyncio
@@ -265,6 +267,7 @@ class TestTelegramChannel:
 
 # --- ChannelConfig DB model ---
 
+
 class TestChannelConfigModel:
     @pytest.mark.asyncio
     async def test_create_and_encrypt_token(self, db):
@@ -312,6 +315,7 @@ class TestChannelConfigModel:
 
 # --- Channel registry ---
 
+
 class TestChannelRegistry:
     def test_get_channel_not_found(self):
         assert get_channel("nonexistent", "no-agent") is None
@@ -346,6 +350,7 @@ class TestChannelRegistry:
 
 
 # --- API routes ---
+
 
 class TestChannelAPI:
     @pytest.fixture
@@ -390,14 +395,16 @@ class TestChannelAPI:
     def test_create_and_list_channel(self, client, db_session):
         # First create an agent
 
-
         # We need to add an agent to the DB — use the overridden get_db
         # Actually, let's just test the API directly
-        resp = client.post("/api/channels", json={
-            "platform": "telegram",
-            "agent_id": "agent-1",
-            "bot_token": "test-bot-token-123",
-        })
+        resp = client.post(
+            "/api/channels",
+            json={
+                "platform": "telegram",
+                "agent_id": "agent-1",
+                "bot_token": "test-bot-token-123",
+            },
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert data["platform"] == "telegram"
@@ -414,24 +421,33 @@ class TestChannelAPI:
         assert channels[0]["platform"] == "telegram"
 
     def test_create_duplicate_fails(self, client, db_session):
-        client.post("/api/channels", json={
-            "platform": "telegram",
-            "agent_id": "agent-1",
-            "bot_token": "token1",
-        })
-        resp = client.post("/api/channels", json={
-            "platform": "telegram",
-            "agent_id": "agent-1",
-            "bot_token": "token2",
-        })
+        client.post(
+            "/api/channels",
+            json={
+                "platform": "telegram",
+                "agent_id": "agent-1",
+                "bot_token": "token1",
+            },
+        )
+        resp = client.post(
+            "/api/channels",
+            json={
+                "platform": "telegram",
+                "agent_id": "agent-1",
+                "bot_token": "token2",
+            },
+        )
         assert resp.status_code == 409
 
     def test_delete_channel(self, client, db_session):
-        resp = client.post("/api/channels", json={
-            "platform": "telegram",
-            "agent_id": "agent-1",
-            "bot_token": "token1",
-        })
+        resp = client.post(
+            "/api/channels",
+            json={
+                "platform": "telegram",
+                "agent_id": "agent-1",
+                "bot_token": "token1",
+            },
+        )
         channel_id = resp.json()["id"]
 
         resp = client.delete(f"/api/channels/{channel_id}")
@@ -442,11 +458,14 @@ class TestChannelAPI:
 
     def test_update_channel_mode(self, client, db_session):
         # Create with polling (default)
-        resp = client.post("/api/channels", json={
-            "platform": "telegram",
-            "agent_id": "agent-1",
-            "bot_token": "token1",
-        })
+        resp = client.post(
+            "/api/channels",
+            json={
+                "platform": "telegram",
+                "agent_id": "agent-1",
+                "bot_token": "token1",
+            },
+        )
         channel_id = resp.json()["id"]
         assert resp.json()["mode"] == "polling"
 
@@ -460,11 +479,14 @@ class TestChannelAPI:
         assert resp.json()[0]["mode"] == "webhook"
 
     def test_update_channel_token(self, client, db_session):
-        resp = client.post("/api/channels", json={
-            "platform": "telegram",
-            "agent_id": "agent-1",
-            "bot_token": "old-token",
-        })
+        resp = client.post(
+            "/api/channels",
+            json={
+                "platform": "telegram",
+                "agent_id": "agent-1",
+                "bot_token": "old-token",
+            },
+        )
         channel_id = resp.json()["id"]
 
         # Update token

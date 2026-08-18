@@ -14,14 +14,18 @@ class ChannelConfig(Base, IdMixin, TimestampMixin):
     """
 
     __tablename__ = "channel_configs"
-    __table_args__ = (
-        UniqueConstraint("platform", "agent_id", name="uq_channel_platform_agent"),
-    )
+    __table_args__ = (UniqueConstraint("platform", "agent_id", name="uq_channel_platform_agent"),)
 
-    platform: Mapped[str] = mapped_column(String(50), nullable=False)  # telegram, discord, zalo, ...
-    agent_id: Mapped[str] = mapped_column(String(36), nullable=False)  # which agent handles this channel
+    platform: Mapped[str] = mapped_column(
+        String(50), nullable=False
+    )  # telegram, discord, zalo, ...
+    agent_id: Mapped[str] = mapped_column(
+        String(36), nullable=False
+    )  # which agent handles this channel
     encrypted_bot_token: Mapped[str] = mapped_column(Text, nullable=False)  # Fernet-encrypted
-    webhook_secret: Mapped[str] = mapped_column(String(255), default="")  # optional secret for webhook validation
+    webhook_secret: Mapped[str] = mapped_column(
+        String(255), default=""
+    )  # optional secret for webhook validation
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     # "polling" (bot polls platform — works from localhost) or "webhook" (platform pushes to public URL)
     mode: Mapped[str] = mapped_column(String(20), default="polling")

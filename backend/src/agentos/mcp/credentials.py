@@ -138,9 +138,7 @@ def inject_credential(
                 template = template.replace(f"{{{{credential.{key}}}}}", str(val))
             # Also support {{credential_value}} with the whole dict as JSON
             if "{{credential_value}}" in template:
-                template = template.replace(
-                    "{{credential_value}}", json.dumps(credential_value)
-                )
+                template = template.replace("{{credential_value}}", json.dumps(credential_value))
         else:
             template = template.replace("{{credential_value}}", str(credential_value))
         return template

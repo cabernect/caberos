@@ -83,9 +83,11 @@ async def lifespan(app: FastAPI):
     # Set a global exception handler so unhandled exceptions in background
     # tasks (e.g. MCP client internals) don't crash the process
     loop = asyncio.get_event_loop()
-    loop.set_exception_handler(lambda _loop, ctx: logging.getLogger("agentos.main").exception(
-        f"Unhandled async exception: {ctx.get('exception', ctx.get('message', 'unknown'))}"
-    ))
+    loop.set_exception_handler(
+        lambda _loop, ctx: logging.getLogger("agentos.main").exception(
+            f"Unhandled async exception: {ctx.get('exception', ctx.get('message', 'unknown'))}"
+        )
+    )
 
     register_builtin_capabilities()
     await init_db()
@@ -132,7 +134,9 @@ async def lifespan(app: FastAPI):
         try:
             await mcp_registry.connect_all()
         except Exception:
-            logging.getLogger("agentos.main").exception("MCP connect_all failed — some servers may be unavailable")
+            logging.getLogger("agentos.main").exception(
+                "MCP connect_all failed — some servers may be unavailable"
+            )
 
     mcp_task = asyncio.create_task(_connect_mcp())
     mcp_task.add_done_callback(

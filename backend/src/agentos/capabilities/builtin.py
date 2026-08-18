@@ -485,7 +485,10 @@ def register_builtin_capabilities() -> None:
             parameters_schema={
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "What to search for in past messages"},
+                    "query": {
+                        "type": "string",
+                        "description": "What to search for in past messages",
+                    },
                     "limit": {
                         "type": "integer",
                         "description": "Max results (default 5)",

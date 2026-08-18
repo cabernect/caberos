@@ -35,10 +35,7 @@ def get_channel(platform: str, agent_id: str) -> Channel | None:
 
 def list_active_channels() -> list[dict[str, Any]]:
     """List all active channels (for status reporting)."""
-    return [
-        {"platform": p, "agent_id": a, "connected": True}
-        for (p, a) in _active_channels
-    ]
+    return [{"platform": p, "agent_id": a, "connected": True} for (p, a) in _active_channels]
 
 
 async def load_all_channels() -> None:
@@ -47,9 +44,7 @@ async def load_all_channels() -> None:
     Called on startup (after init_db).
     """
     async with async_session_factory() as db:
-        result = await db.execute(
-            select(ChannelConfig).where(ChannelConfig.enabled)
-        )
+        result = await db.execute(select(ChannelConfig).where(ChannelConfig.enabled))
         configs = result.scalars().all()
 
     for config in configs:
@@ -71,7 +66,9 @@ async def _instantiate_channel(config: ChannelConfig) -> Channel | None:
             webhook_secret=config.webhook_secret,
         )
         _active_channels[(config.platform, config.agent_id)] = channel
-        log.info("Loaded channel: %s → agent %s (mode=%s)", config.platform, config.agent_id, config.mode)
+        log.info(
+            "Loaded channel: %s → agent %s (mode=%s)", config.platform, config.agent_id, config.mode
+        )
 
         # Start polling if the channel supports it and mode is "polling"
         if config.mode == "polling" and hasattr(channel, "start_polling"):
@@ -79,7 +76,12 @@ async def _instantiate_channel(config: ChannelConfig) -> Channel | None:
 
         return channel
     except Exception:
-        log.error("Failed to load channel %s for agent %s", config.platform, config.agent_id, exc_info=True)
+        log.error(
+            "Failed to load channel %s for agent %s",
+            config.platform,
+            config.agent_id,
+            exc_info=True,
+        )
         return None
 
 

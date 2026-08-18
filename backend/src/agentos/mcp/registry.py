@@ -132,9 +132,7 @@ async def connect_server(server: McpServer) -> bool:
                         "Re-authenticate via the dashboard.",
                         server.name,
                     )
-                    raise RuntimeError(
-                        "OAuth re-authentication required — use the dashboard"
-                    )
+                    raise RuntimeError("OAuth re-authentication required — use the dashboard")
 
                 auth = OAuthClientProvider(
                     server_url=server.url,
@@ -277,7 +275,9 @@ async def _auto_enable_mcp_tools(server: McpServer, tool_names: list[str]) -> No
                 await save_agent(db, config)
                 log.info(
                     "Auto-enabled %d MCP tools from '%s' for agent '%s'",
-                    len(new_caps), server.name, agent.id,
+                    len(new_caps),
+                    server.name,
+                    agent.id,
                 )
 
 
@@ -296,9 +296,7 @@ async def disconnect_server(server_id: str) -> None:
 
     # Unregister capabilities
     async with async_session_factory() as db:
-        result = await db.execute(
-            select(McpTool).where(McpTool.mcp_server_id == server_id)
-        )
+        result = await db.execute(select(McpTool).where(McpTool.mcp_server_id == server_id))
         tools = result.scalars().all()
         for tool in tools:
             cap_registry._caps.pop(tool.capability_name, None)
@@ -404,9 +402,7 @@ def is_server_connected(server_id: str) -> bool:
 
 async def get_server_tools(db: AsyncSession, server_id: str) -> list[McpTool]:
     """List tools registered for a server."""
-    result = await db.execute(
-        select(McpTool).where(McpTool.mcp_server_id == server_id)
-    )
+    result = await db.execute(select(McpTool).where(McpTool.mcp_server_id == server_id))
     return list(result.scalars().all())
 
 
@@ -419,9 +415,7 @@ async def get_server_blast_radius(db: AsyncSession, server_id: str) -> list[dict
     from ..models.agent import Agent
 
     # Get all capability names from this server
-    result = await db.execute(
-        select(McpTool).where(McpTool.mcp_server_id == server_id)
-    )
+    result = await db.execute(select(McpTool).where(McpTool.mcp_server_id == server_id))
     tools = result.scalars().all()
     cap_names = {t.capability_name for t in tools}
 

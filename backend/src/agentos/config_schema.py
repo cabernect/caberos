@@ -70,6 +70,7 @@ class CompactionConfig(BaseModel):
     prune_tool_results_over: char length — tool results longer than this
       outside the protected tail are replaced with a stub (Phase 1)
     """
+
     auto_compaction: bool = True
     threshold: float = 0.7
     protect_first_n: int = 3

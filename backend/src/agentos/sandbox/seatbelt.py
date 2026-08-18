@@ -32,7 +32,7 @@ def _build_profile(workspace: str, allow_network: bool) -> str:
         # is a stub that spawns xcodebuild from /Applications/Xcode.app/...,
         # and other tools may live in /Library, /opt, etc.  The real sandbox
         # boundary is file-write restrictions + network denial, not exec paths.
-        '(allow process-exec*)',
+        "(allow process-exec*)",
         "(allow process-fork)",
     ]
     if not allow_network:
