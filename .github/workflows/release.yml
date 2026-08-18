@@ -72,84 +72,35 @@ jobs:
           path: frontend/src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: error
 
-      - name: Build release notes
-        id: notes
-        run: |
-          # If CHANGELOG.md exists and has a section for this version, use it.
-          # Otherwise fall back to the default template.
-          VERSION="${GITHUB_REF_NAME#v}"
-          if [ -f CHANGELOG.md ] && grep -q "## \[${VERSION}\]" CHANGELOG.md; then
-            # Extract the section for this version
-            awk "/## \[${VERSION}\]/{flag=1; next} /^## \[/{flag=0} flag" CHANGELOG.md > /tmp/changelog_section.md
-            cat > /tmp/release_notes.md << 'HEADER'
-          HEADER
-            cat /tmp/changelog_section.md >> /tmp/release_notes.md
-            cat >> /tmp/release_notes.md << 'FOOTER'
-
-          ---
-
-          ### Download
-
-          **macOS Apple Silicon (ARM64)** — download the `.dmg` file below.
-
-          > macOS Intel and Windows builds are not yet available.
-
-          ### Install
-
-          1. Download the `.dmg` file
-          2. Open it and drag **CaberOS** to your Applications folder
-          3. Launch CaberOS — the gateway starts automatically
-          4. Default login: `admin` / `admin` (change it immediately)
-
-          ### System requirements
-
-          - macOS 13+ (Apple Silicon)
-          - 200 MB free disk space
-          - Internet connection for cloud model providers (optional for local models via Ollama)
-
-          ---
-          **License:** MIT — Copyright (c) 2025 HoangPH25
-          FOOTER
-          else
-            cat > /tmp/release_notes.md << 'EOF'
-          ## CaberOS ${GITHUB_REF_NAME}
-
-          Local-first AI Agent Operating System.
-
-          ### Download
-
-          **macOS Apple Silicon (ARM64)** — download the `.dmg` file below.
-
-          > macOS Intel and Windows builds are not yet available.
-
-          ### Install
-
-          1. Download the `.dmg` file
-          2. Open it and drag **CaberOS** to your Applications folder
-          3. Launch CaberOS — the gateway starts automatically
-          4. Default login: `admin` / `admin` (change it immediately)
-
-          ### What's new
-
-          See the [commit history](https://github.com/cabernect/caberos/commits/${GITHUB_REF_NAME}) for changes in this release.
-
-          ### System requirements
-
-          - macOS 13+ (Apple Silicon)
-          - 200 MB free disk space
-          - Internet connection for cloud model providers (optional for local models via Ollama)
-
-          ---
-          **License:** MIT — Copyright (c) 2025 HoangPH25
-          EOF
-          fi
-          echo "path=/tmp/release_notes.md" >> "$GITHUB_OUTPUT"
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: CaberOS ${{ github.ref_name }}
-          body_path: ${{ steps.notes.outputs.path }}
+          body: |
+            **Local-first AI Agent Operating System.**
+
+            ### Download
+
+            **macOS Apple Silicon (ARM64)** — download the `.dmg` file below.
+
+            > macOS Intel and Windows builds are not yet available.
+
+            ### Install
+
+            1. Download the `.dmg` file
+            2. Open it and drag **CaberOS** to your Applications folder
+            3. Launch CaberOS — the gateway starts automatically
+            4. Default login: `admin` / `admin` (change it immediately)
+
+            ### System requirements
+
+            - macOS 13+ (Apple Silicon)
+            - 200 MB free disk space
+            - Internet connection for cloud model providers (optional for local models via Ollama)
+
+            ---
+            **License:** MIT — Copyright (c) 2025 HoangPH25
+          generate_release_notes: true
           files: frontend/src-tauri/target/release/bundle/dmg/*.dmg
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
