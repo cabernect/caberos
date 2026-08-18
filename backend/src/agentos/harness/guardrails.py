@@ -1,6 +1,5 @@
 """Output guardrails — validate/redact the model's final answer before it
-reaches the user (D2: "Pydantic AI provides guardrails"; since we use a custom
-Harness, we implement them here).
+reaches the user (custom harness implementation).
 
 Three guardrails, run in order:
 1. Secret redaction — scan for API keys, tokens, passwords; replace with [REDACTED]

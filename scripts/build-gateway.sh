@@ -22,7 +22,6 @@ uv run pyinstaller \
   --collect-submodules agentos \
   --collect-all aiosqlite \
   --collect-all litellm \
-  --collect-all pydantic_ai \
   --collect-all tiktoken \
   --collect-submodules tiktoken_ext \
   --add-data "${BACKEND_DIR}/src/agentos/defaults:agentos/defaults" \

@@ -1,4 +1,4 @@
-"""Harness package — the agent execution loop (D2 — Pydantic AI)."""
+"""Harness package — the agent execution loop (custom harness + LiteLLM transport)."""
 
 from .loop import Harness, RunResult
 from .scripted_model import ScriptedModel

@@ -21,7 +21,7 @@ CaberOS is an open-source, local-first AI Agent Operating System. It hosts perso
 ## Key decisions (quick reference)
 
 - **D1:** Agents are configuration, not code. AgentConfig is a DB row, versioned.
-- **D2:** Pydantic AI is the harness. LiteLLM is the model transport.
+- **D2:** Custom async harness. LiteLLM is the model transport.
 - **D3:** Python 3.12 + FastAPI, one daemon.
 - **D5:** SQLAlchemy 2.0 async + aiosqlite. SQLite with WAL mode. Schema via `create_all` + incremental patches in `init_db()` (Alembic deferred to Postgres migration).
 - **D25:** Agent config lives in the DB as versioned rows (AgentVersion). YAML for import/export only.
