@@ -144,7 +144,11 @@ _NON_CHAT_PATTERNS: tuple[str, ...] = (
     "whisper",
     "tts",
     "speech",
+    "transcribe",
     "dall-e",
+    "gpt-image",
+    "chatgpt-image",
+    "search-api",
     "davinci",  # legacy completion-only (no chat)
     "babbage",  # legacy completion-only
     "ada-002",  # embedding
