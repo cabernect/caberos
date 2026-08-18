@@ -76,7 +76,36 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: CaberOS ${{ github.ref_name }}
-          generate_release_notes: true
+          body: |
+            ## CaberOS ${{ github.ref_name }}
+
+            Local-first AI Agent Operating System.
+
+            ### Download
+
+            **macOS Apple Silicon (ARM64)** — download `CaberOS_${{ github.ref_name }}_arm64.dmg` below.
+
+            > macOS Intel and Windows builds are not yet available.
+
+            ### Install
+
+            1. Download the `.dmg` file
+            2. Open it and drag **CaberOS** to your Applications folder
+            3. Launch CaberOS — the gateway starts automatically
+            4. Default login: `admin` / `admin` (change it immediately)
+
+            ### What's new
+
+            See the [commit history](https://github.com/cabernect/caberos/commits/${{ github.ref_name }}) for changes in this release.
+
+            ### System requirements
+
+            - macOS 13+ (Apple Silicon)
+            - 200 MB free disk space
+            - Internet connection for cloud model providers (optional for local models via Ollama)
+
+            ---
+            **License:** MIT — Copyright (c) 2025 HoangPH25
           files: frontend/src-tauri/target/release/bundle/dmg/*.dmg
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
