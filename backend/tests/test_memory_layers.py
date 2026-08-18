@@ -165,7 +165,7 @@ class TestWorkingMemory:
 
         await _create_contact(db, "contact-1")
 
-        entry_id = await store_snippet(
+        await store_snippet(
             db,
             contact_id="contact-1",
             agent_id="test-agent",
@@ -208,10 +208,10 @@ class TestWorkingMemory:
 
     async def test_store_without_run_id_persists(self, db):
         """Entries without run_id are NOT run-scoped — they persist."""
-        from agentos.memory.recall import clear_run_entries, store_snippet
-
-        from agentos.models.memory import MemoryEntry
         from sqlalchemy import select
+
+        from agentos.memory.recall import clear_run_entries, store_snippet
+        from agentos.models.memory import MemoryEntry
 
         await _create_contact(db, "contact-1")
 

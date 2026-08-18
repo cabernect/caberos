@@ -10,9 +10,8 @@ The compacted context preserves the narrative thread while fitting within
 the model's context window budget.
 """
 
-import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from ..config_schema import AgentConfig, CompactionConfig

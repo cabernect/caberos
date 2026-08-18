@@ -10,24 +10,21 @@ Covers:
 """
 
 import asyncio
-
-import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 from agentos.channels.base import Channel, OutboundMessage, OutputConstraints
-from agentos.channels.telegram import TelegramChannel
 from agentos.channels.registry import (
+    _active_channels,
     get_channel,
     register_channel_class,
     remove_channel,
-    _active_channels,
 )
+from agentos.channels.telegram import TelegramChannel
 from agentos.models.channel_config import ChannelConfig
 from agentos.secret_store import decrypt, encrypt
-
 
 # --- Channel base abstraction ---
 
@@ -373,7 +370,6 @@ class TestChannelAPI:
         from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
         factory = async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
-        import asyncio
 
         async def get_test_db():
             async with factory() as session:
@@ -393,11 +389,7 @@ class TestChannelAPI:
 
     def test_create_and_list_channel(self, client, db_session):
         # First create an agent
-        from agentos.models.agent import Agent
 
-        import asyncio
-        from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-        from agentos.db import get_db
 
         # We need to add an agent to the DB — use the overridden get_db
         # Actually, let's just test the API directly
@@ -481,14 +473,8 @@ class TestChannelAPI:
         assert resp.json()["has_token"] is True
 
         # Verify the token was actually changed (decrypt and compare)
-        from sqlalchemy import select
-        from agentos.models.channel_config import ChannelConfig
-        from agentos.secret_store import decrypt
-        from agentos.db import get_db
-        from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
         # Use the test DB directly
-        from tests.conftest import TEST_DB_URL
         # Just check via the API that it still works
         resp = client.get("/api/channels")
         assert resp.json()[0]["has_token"] is True

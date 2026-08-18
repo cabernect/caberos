@@ -8,8 +8,8 @@ from .capability import AgentCapability, Capability
 from .channel_config import ChannelConfig
 from .contact import Contact
 from .elicitation import ElicitationRequest
-from .memory import MemoryEntry, MemoryTriple
 from .mcp import ContactMcpBinding, McpServer, McpServerCredential, McpTool
+from .memory import MemoryEntry, MemoryTriple
 from .operator import Operator, OperatorAuditLog
 from .provider import Provider
 from .run import Message, Run

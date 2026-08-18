@@ -25,11 +25,11 @@ import fnmatch
 import hashlib
 import json
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 
-class RememberScope(str, Enum):
+class RememberScope(StrEnum):
     EXACT = "exact"
     SAME_VERB = "same_verb"
     PATTERN = "pattern"

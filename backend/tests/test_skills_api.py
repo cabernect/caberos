@@ -2,13 +2,12 @@
 
 import io
 import zipfile
-from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from agentos.db import get_db
 from agentos.main import app
-from agentos.db import get_db, async_session_factory
 
 
 @pytest.fixture

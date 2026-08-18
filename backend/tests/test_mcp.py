@@ -12,17 +12,15 @@ from sqlalchemy import select
 from agentos.capabilities.registry import registry as cap_registry
 from agentos.mcp import binding as mcp_binding
 from agentos.mcp import credentials as mcp_creds
-from agentos.mcp.client import MockMcpClient
 from agentos.mcp import registry as mcp_registry
+from agentos.mcp.client import MockMcpClient
 from agentos.models.contact import Contact
 from agentos.models.mcp import (
-    ContactMcpBinding,
     McpServer,
     McpServerCredential,
     McpTool,
 )
 from agentos.secret_store import decrypt, encrypt
-
 
 # --- MockMcpClient tests ---
 
@@ -507,8 +505,9 @@ async def test_oauth_token_storage_roundtrip(db, monkeypatch):
     """OAuth tokens can be stored and retrieved via EncryptedTokenStorage."""
     import json
 
-    from agentos.mcp.oauth import EncryptedTokenStorage
     from mcp.shared.auth import OAuthToken
+
+    from agentos.mcp.oauth import EncryptedTokenStorage
 
     server = McpServer(
         name="oauth-test",
@@ -558,9 +557,8 @@ async def test_oauth_token_storage_roundtrip(db, monkeypatch):
 @pytest.mark.asyncio
 async def test_oauth_callback_resolves_pending_flow():
     """handle_oauth_callback resolves a pending OAuth flow."""
-    import asyncio
 
-    from agentos.mcp.oauth import OAuthFlowState, handle_oauth_callback, _pending_flows
+    from agentos.mcp.oauth import OAuthFlowState, _pending_flows, handle_oauth_callback
 
     flow = OAuthFlowState("test-server-id")
     _pending_flows["test-server-id"] = flow
@@ -579,7 +577,7 @@ async def test_oauth_callback_resolves_pending_flow():
 @pytest.mark.asyncio
 async def test_oauth_callback_handles_error():
     """handle_oauth_callback handles error responses."""
-    from agentos.mcp.oauth import OAuthFlowState, handle_oauth_callback, _pending_flows
+    from agentos.mcp.oauth import OAuthFlowState, _pending_flows, handle_oauth_callback
 
     flow = OAuthFlowState("test-server-error")
     _pending_flows["test-server-error"] = flow

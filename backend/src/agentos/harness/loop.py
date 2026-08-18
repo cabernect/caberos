@@ -150,8 +150,8 @@ class Harness:
         # The system prompt (history[0]) is always protected.
         from .compaction import (
             compact_context,
-            count_tokens,
             count_text_tokens,
+            count_tokens,
             count_tool_tokens,
             get_model_max_tokens,
         )
@@ -204,6 +204,7 @@ class Harness:
             if compaction_result.compacted and compaction_result.summary != compaction_summary:
                 if hasattr(syscall_handler, "db") and hasattr(session, "id"):
                     from sqlalchemy import update as sa_update
+
                     from ..models.session import Session as SessionModel
 
                     await syscall_handler.db.execute(

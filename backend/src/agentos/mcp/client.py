@@ -111,7 +111,7 @@ class McpClient:
         """
         try:
             from mcp import ClientSession
-            from mcp.client.stdio import stdio_client, StdioServerParameters
+            from mcp.client.stdio import StdioServerParameters, stdio_client
             from mcp.client.streamable_http import streamablehttp_client
         except ImportError:
             self._connect_error = RuntimeError(

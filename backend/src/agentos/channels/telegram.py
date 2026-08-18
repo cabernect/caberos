@@ -25,7 +25,7 @@ import httpx
 
 from ..pipeline import InboundMessage
 from ..ssl_utils import SSL_CERT_PATH
-from .base import Channel, OutputConstraints, OutboundMessage
+from .base import Channel, OutboundMessage, OutputConstraints
 from .registry import register_channel_class
 
 log = logging.getLogger(__name__)
@@ -59,7 +59,7 @@ class TelegramChannel(Channel):
             return None
 
         chat = msg.get("chat", {})
-        from_user = msg.get("from", {})
+        msg.get("from", {})
         text = msg.get("text", "")
         if not text:
             return None  # Non-text message (sticker, photo, etc.) — skip for now
@@ -214,9 +214,10 @@ class TelegramChannel(Channel):
 
             # Fetch and deliver the final answer
             if result.get("status") == "completed":
+                from sqlalchemy import select
+
                 from ..db import async_session_factory
                 from ..models.run import Message, Run
-                from sqlalchemy import select
 
                 async with async_session_factory() as db:
                     stmt = (

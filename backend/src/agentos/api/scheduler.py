@@ -8,20 +8,18 @@ Endpoints:
   POST /api/scheduler/alerts/{id}/clear — clear an alert
 """
 
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .. import scheduler as scheduler_service
 from ..agent_service import get_active_config, save_agent
 from ..auth import require_operator
-from ..config_schema import HeartbeatConfig
 from ..db import get_db
 from ..models.agent import Agent
 from ..models.operator import Operator
-from .. import scheduler as scheduler_service
 
 router = APIRouter(prefix="/api/scheduler", tags=["scheduler"])
 

@@ -14,9 +14,9 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
-from ..config_schema import AgentConfig
-from ..models.run import Message
-from .base_prompt import get_base_system_prompt
+from ..config_schema import AgentConfig  # noqa: E402
+from ..models.run import Message  # noqa: E402
+from .base_prompt import get_base_system_prompt  # noqa: E402
 
 
 def _load_memory_md(agent_config: AgentConfig) -> str:

@@ -13,9 +13,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 
@@ -48,7 +47,7 @@ class SchedulerAlert:
     consecutive_failures: int
     threshold: int
     last_error: str | None
-    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 # Process-global state
@@ -58,7 +57,7 @@ _main_task: asyncio.Task | None = None
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def get_all_states() -> dict[str, HeartbeatState]:
@@ -168,7 +167,7 @@ async def _agent_heartbeat_loop(agent_id: str, state: HeartbeatState) -> None:
 
         # Wait for the interval
         state.next_fire = datetime.fromtimestamp(
-            _now().timestamp() + interval_sec, tz=timezone.utc
+            _now().timestamp() + interval_sec, tz=UTC
         )
         await asyncio.sleep(interval_sec)
 

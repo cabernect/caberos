@@ -17,7 +17,7 @@ for _cert_path in [
         os.environ["REQUESTS_CA_BUNDLE"] = _cert_path
         break
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, SettingsConfigDict  # noqa: E402
 
 
 class Settings(BaseSettings):

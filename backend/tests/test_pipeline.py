@@ -9,9 +9,9 @@ from agentos.agent_service import create_agent
 from agentos.config_schema import AgentConfig, CapabilityGrant, ModelConfig
 from agentos.harness.loop import Harness
 from agentos.harness.scripted_model import ScriptedModel, ScriptedResponse
+from agentos.memory.auto_extract import merge_auto_extracted_memory
 from agentos.models.audit import AuditRecord
 from agentos.models.run import Message, Run
-from agentos.memory.auto_extract import merge_auto_extracted_memory
 from agentos.pipeline import Attachment, InboundMessage, Pipeline
 
 

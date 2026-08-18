@@ -28,11 +28,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import require_operator
+from ..capabilities.registry import registry as cap_registry
 from ..db import get_db
 from ..mcp import binding as mcp_binding
 from ..mcp import catalog as mcp_catalog
 from ..mcp import credentials as mcp_creds
-from ..capabilities.registry import registry as cap_registry
 from ..mcp import registry as mcp_registry
 from ..models.contact import Contact
 from ..models.mcp import McpServer

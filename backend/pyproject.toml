@@ -50,6 +50,31 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
 
+[tool.ruff.lint.per-file-ignores]
+# Test fixtures contain long HTML/JSON strings that are clearer unsplit
+"tests/*" = ["E501"]
+# Source files with long string literals (prompts, SQL, URLs, docstrings)
+"src/agentos/runner.py" = ["E501"]
+"src/agentos/harness/compaction.py" = ["E501"]
+"src/agentos/harness/loop.py" = ["E501"]
+"src/agentos/harness/context.py" = ["E501"]
+"src/agentos/capabilities/builtin.py" = ["E501"]
+"src/agentos/capabilities/tools/file.py" = ["E501"]
+"src/agentos/capabilities/tools/subagent.py" = ["E501"]
+"src/agentos/channels/telegram.py" = ["E501"]
+"src/agentos/channels/registry.py" = ["E501"]
+"src/agentos/db_backends/sqlite_backend.py" = ["E501"]
+"src/agentos/db_backends/postgres_backend.py" = ["E501"]
+"src/agentos/memory/episodic.py" = ["E501"]
+"src/agentos/api/skills.py" = ["E501"]
+"src/agentos/api/mcp.py" = ["E501"]
+"src/agentos/auth.py" = ["E501"]
+"src/agentos/main.py" = ["E501"]
+"src/agentos/mcp/client.py" = ["E501"]
+"src/agentos/models/channel_config.py" = ["E501"]
+"src/agentos/models/mcp.py" = ["E501"]
+"src/agentos/skills/loader.py" = ["E501"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

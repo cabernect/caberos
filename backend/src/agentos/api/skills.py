@@ -11,15 +11,13 @@ itself via write_file (in the workspace sandbox).
 import io
 import shutil
 import zipfile
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from pydantic import BaseModel
 
 from ..auth import require_operator
 from ..config import settings
 from ..models.operator import Operator
-from ..skills.loader import _load_skill_from_dir, list_skills
+from ..skills.loader import _load_skill_from_dir
 
 router = APIRouter(prefix="/api/skills", tags=["skills"])
 

@@ -9,7 +9,6 @@ across all httpx clients (channels, discovery, etc.).
 """
 
 import os
-from pathlib import Path
 
 # Find the best SSL cert bundle — prefer Homebrew's ca-certificates (includes
 # corporate/proxy CAs on macOS), then system stores, then certifi.

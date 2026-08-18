@@ -9,8 +9,6 @@ Tests the 4-phase pipeline:
 
 from unittest.mock import AsyncMock, patch
 
-import pytest
-
 from agentos.config_schema import AgentConfig, CompactionConfig, ModelConfig
 from agentos.harness.compaction import (
     _align_boundary_backward,

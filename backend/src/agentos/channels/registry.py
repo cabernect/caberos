@@ -8,7 +8,6 @@ import logging
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import async_session_factory
 from ..models.channel_config import ChannelConfig

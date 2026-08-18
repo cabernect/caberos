@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..auth import require_operator
 from ..config import settings
 from ..db import get_db
-from ..memory import triples
+from ..memory import recall, triples
 from ..models.operator import Operator
 
 router = APIRouter(prefix="/api/agents", tags=["agent-files"])

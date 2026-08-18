@@ -20,7 +20,20 @@ if "SSL_CERT_FILE" not in os.environ:
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api import agent_files, agents, approvals, channels, chat, elicitation, mcp, observability, providers, scheduler, settings, skills
+from .api import (
+    agent_files,
+    agents,
+    approvals,
+    channels,
+    chat,
+    elicitation,
+    mcp,
+    observability,
+    providers,
+    scheduler,
+    settings,
+    skills,
+)
 from .auth import router as auth_router
 from .capabilities.builtin import register_builtin_capabilities
 from .db import init_db
@@ -70,7 +83,7 @@ async def lifespan(app: FastAPI):
     # Set a global exception handler so unhandled exceptions in background
     # tasks (e.g. MCP client internals) don't crash the process
     loop = asyncio.get_event_loop()
-    loop.set_exception_handler(lambda l, ctx: logging.getLogger("agentos.main").exception(
+    loop.set_exception_handler(lambda _loop, ctx: logging.getLogger("agentos.main").exception(
         f"Unhandled async exception: {ctx.get('exception', ctx.get('message', 'unknown'))}"
     ))
 

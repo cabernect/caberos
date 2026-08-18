@@ -12,7 +12,6 @@ These are called by the syscall mediator with extra_kwargs:
 - agent_id: str
 """
 
-from pathlib import Path
 from typing import Any
 
 from ...skills.loader import list_skills, load_skill

@@ -50,10 +50,10 @@ from sqlalchemy import select
 from .agent_service import get_active_config
 from .db import async_session_factory
 from .harness.loop import Harness
-from .providers import ProviderRegistry
 from .harness.scripted_model import ScriptedModel, ScriptedResponse
 from .models.agent import Agent
 from .pipeline import Attachment, InboundMessage, Pipeline
+from .providers import ProviderRegistry
 
 # Type alias for the event callback
 EventCallback = Callable[[str, dict], Awaitable[None] | None]

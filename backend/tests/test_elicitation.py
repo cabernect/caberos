@@ -43,9 +43,8 @@ class FakeSession:
 async def test_elicitation_basic_flow(db, workspace, agent_config):
     """Agent calls agent.ask_user → mediator pauses → user responds → agent gets answer."""
     # Create minimal FK rows so the elicitation's run_id FK is valid
-    import uuid as _uuid
 
-    from agentos.models.agent import Agent, AgentVersion
+    from agentos.models.agent import Agent
     from agentos.models.contact import Contact
     from agentos.models.run import Run
     from agentos.models.session import Session
@@ -140,7 +139,6 @@ async def test_elicitation_basic_flow(db, workspace, agent_config):
 async def test_elicitation_free_text(db, workspace, agent_config):
     """Elicitation without options → user provides free-text response."""
     # Create minimal FK rows
-    from agentos.models.agent import Agent
     from agentos.models.contact import Contact
     from agentos.models.run import Run
     from agentos.models.session import Session

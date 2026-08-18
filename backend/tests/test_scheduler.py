@@ -2,11 +2,10 @@
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import select
 
+from agentos.agent_service import save_agent
 from agentos.config_schema import AgentConfig, HeartbeatConfig
 from agentos.models.agent import Agent
-from agentos.agent_service import save_agent
 
 
 @pytest_asyncio.fixture

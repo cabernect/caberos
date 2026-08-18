@@ -13,9 +13,8 @@ import pytest
 
 from agentos.channels.base import OutboundMessage, OutputConstraints
 from agentos.channels.discord import DiscordChannel
-from agentos.channels.zalo_oa import ZaloOAChannel
 from agentos.channels.zalo_bot import ZaloBotChannel
-
+from agentos.channels.zalo_oa import ZaloOAChannel
 
 # --- Discord channel ---
 

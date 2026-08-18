@@ -576,6 +576,7 @@ class Pipeline:
                     session_age = (datetime.now(UTC) - started).total_seconds()
                     if session_age >= 180:  # 3 minutes
                         import asyncio as _asyncio
+
                         from .db import async_session_factory
 
                         async def _bg_title():
@@ -605,6 +606,7 @@ class Pipeline:
                                 if llm_title:
                                     # Phase 3: write title (short transaction)
                                     from sqlalchemy import update as sa_update
+
                                     from ..models.session import Session as SessionModel
 
                                     async with async_session_factory() as bg_db:
@@ -623,6 +625,7 @@ class Pipeline:
                 # Run in background — don't block message_complete on this.
                 if result.final_answer:
                     import asyncio as _asyncio
+
                     from .db import async_session_factory
 
                     async def _bg_memory():
