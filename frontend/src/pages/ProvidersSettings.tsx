@@ -711,7 +711,7 @@ function AboutTab() {
         >
           <div className="space-y-2">
             <a
-              href="https://github.com/caberos/caberos"
+              href="https://github.com/cabernect/caberos"
               target="_blank"
               rel="noopener noreferrer"
               className="block text-[13px] text-[var(--accent)] hover:underline"
@@ -719,20 +719,20 @@ function AboutTab() {
               GitHub Repository →
             </a>
             <a
-              href="https://caberos.ai/docs"
+              href="https://github.com/cabernect/caberos/issues"
               target="_blank"
               rel="noopener noreferrer"
               className="block text-[13px] text-[var(--accent)] hover:underline"
             >
-              Documentation →
+              Report an Issue →
             </a>
             <a
-              href="https://caberos.ai/support"
+              href="https://github.com/cabernect/caberos/security"
               target="_blank"
               rel="noopener noreferrer"
               className="block text-[13px] text-[var(--accent)] hover:underline"
             >
-              Support →
+              Security →
             </a>
           </div>
         </div>
@@ -745,9 +745,14 @@ function AboutTab() {
           className="rounded-lg border p-5"
           style={{ borderColor: "var(--border)", background: "var(--white)" }}
         >
-          <p className="text-[13px] text-[var(--ink-2)]">
-            CaberOS is open-source software. Fonts: Inter (OFL) &amp; JetBrains Mono (Apache 2.0).
-          </p>
+          <div className="space-y-2">
+            <p className="text-[13px] text-[var(--ink-2)]">
+              CaberOS is open-source software.
+            </p>
+            <p className="text-[13px] text-[var(--ink-2)]">
+              Fonts: Inter (OFL) &amp; JetBrains Mono (Apache 2.0).
+            </p>
+          </div>
         </div>
       </div>
     </div>
