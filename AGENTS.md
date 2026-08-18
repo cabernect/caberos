@@ -133,7 +133,7 @@ Tickets **01–09 implemented**: smoke slice, real-model chat + SSE streaming, f
 
 **Current: Ticket 10 (Tauri desktop app) in progress. Next: Ticket 11 (Testing hardening). CaberCore extraction is deferred.**
 
-**Ticket 10 (Tauri Desktop App):** IN PROGRESS.
+**Ticket 10 (Tauri Desktop App):** IN PROGRESS. macOS ARM64 (Apple Silicon) only — macOS Intel and Windows builds require cross-compilation/CI and are not yet set up.
 - Tauri 2 shell wraps the React frontend + packaged PyInstaller gateway.
 - Gateway supervisor (`frontend/src-tauri/src/gateway.rs`): starts the PyInstaller gateway in its own process group, routes stdout/stderr to `<app_data_dir>/logs/gateway.log`, kills the full process group on app exit.
 - Desktop auth uses **bearer token** (not cookies): login returns `session_token` in the JSON response, frontend stores it in `localStorage`, sends it as `Authorization: Bearer <token>` on every request. The backend accepts the token from either the cookie or the bearer header. This avoids cross-site cookie issues between the Tauri webview origin (`tauri.localhost`) and the gateway (`127.0.0.1:8081`).

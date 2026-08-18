@@ -126,7 +126,9 @@ git clone <repo-url> && cd foundation-agentos
 
 Open `http://localhost:5173` — the Vite dev server proxies `/api` to the backend.
 
-### Option 3: Desktop app (macOS)
+### Option 3: Desktop app (macOS Apple Silicon only)
+
+> **Platform support:** The desktop app currently supports **macOS ARM64 (Apple Silicon)** only — M1/M2/M3/M4 chips. macOS Intel and Windows builds require cross-compilation or CI runners and are not yet set up. Use Docker or local dev on other platforms.
 
 ```bash
 # Build the Tauri app (bundles the PyInstaller gateway + React frontend)
@@ -306,6 +308,8 @@ CaberOS tracks every run, every capability call, and every dollar spent.
 - **Operator audit** — logins, password changes, YOLO mode toggles.
 
 ## Desktop app
+
+> **Platform support:** macOS ARM64 (Apple Silicon) only. macOS Intel and Windows are not yet supported — use Docker or local dev on those platforms.
 
 The Tauri 2 desktop app packages the entire stack into a native macOS application:
 
