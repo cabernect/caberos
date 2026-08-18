@@ -11,8 +11,36 @@ from .base import SandboxBackend, ShellResult
 class BwrapBackend(SandboxBackend):
     """Linux bubblewrap (bwrap) backend."""
 
+    _probe_cache: bool | None = None
+
     def is_available(self) -> bool:
-        return shutil.which("bwrap") is not None
+        if self._probe_cache is not None:
+            return self._probe_cache
+        if shutil.which("bwrap") is None:
+            self._probe_cache = False
+            return False
+        # Probe: bwrap may be installed but fail in containers (e.g. GitHub
+        # Actions) because loopback can't be created. Run a trivial command.
+        import subprocess
+
+        try:
+            result = subprocess.run(
+                [
+                    "bwrap",
+                    "--unshare-all",
+                    "--die-with-parent",
+                    "--new-session",
+                    "/bin/sh",
+                    "-c",
+                    "true",
+                ],
+                capture_output=True,
+                timeout=5,
+            )
+            self._probe_cache = result.returncode == 0
+        except Exception:
+            self._probe_cache = False
+        return self._probe_cache
 
     async def run_command(
         self, workspace_path: str, command: str, timeout: int = 30, allow_network: bool = False

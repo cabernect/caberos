@@ -103,6 +103,12 @@ class TestSyscallHandler:
         assert result.denied_reason == "capability not found"
 
     async def test_terminal_success(self, db, workspace):
+        from agentos.sandbox import get_backend
+
+        backend = get_backend()
+        if not backend.is_available():
+            pytest.skip("Sandbox backend not available")
+
         handler = SyscallHandler(db=db, workspace_path=workspace)
         agent_config = _make_agent_config(["terminal"])
         session = _make_session("contact-1")

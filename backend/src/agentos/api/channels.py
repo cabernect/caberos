@@ -206,6 +206,7 @@ async def webhook_receiver(
     platform: str,
     request: Request,
     agent_id: str = Query(..., description="Agent ID to route the message to"),
+    db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     """Receive a webhook from an external platform.
 
@@ -215,18 +216,13 @@ async def webhook_receiver(
     Requests without a valid secret are rejected with 401.
     """
     # Get the channel config to check webhook secret
-    db_session_gen = get_db()
-    db = await anext(db_session_gen)
-    try:
-        result = await db.execute(
-            select(ChannelConfig).where(
-                ChannelConfig.platform == platform,
-                ChannelConfig.agent_id == agent_id,
-            )
+    result = await db.execute(
+        select(ChannelConfig).where(
+            ChannelConfig.platform == platform,
+            ChannelConfig.agent_id == agent_id,
         )
-        config = result.scalar_one_or_none()
-    finally:
-        await db.close()
+    )
+    config = result.scalar_one_or_none()
 
     if config is None:
         raise HTTPException(404, f"No {platform} channel for agent {agent_id}")

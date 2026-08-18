@@ -239,6 +239,11 @@ def test_multiple_attachments_produce_one_reference_message():
 @pytest.mark.asyncio
 async def test_harness_tool_call_then_answer(db, workspace):
     """Scripted model returns a tool call, then a final answer."""
+    from agentos.sandbox import get_backend
+
+    backend = get_backend()
+    if not backend.is_available():
+        pytest.skip("Sandbox backend not available")
     config = AgentConfig(
         id="harness-test-1",
         name="Harness Test",
