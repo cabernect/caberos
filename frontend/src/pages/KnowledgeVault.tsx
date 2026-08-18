@@ -49,7 +49,7 @@ export function KnowledgeVault() {
           </p>
         </div>
 
-        {/* Body — placeholder */}
+        {/* Body — coming soon */}
         <div className="flex flex-1 flex-col items-center justify-center px-8 py-12">
           <div
             className="flex h-14 w-14 items-center justify-center rounded-full"
@@ -58,11 +58,21 @@ export function KnowledgeVault() {
             <Database className="h-6 w-6" style={{ color: "var(--ink-3)" }} />
           </div>
           <p className="mt-4 text-[14px] font-medium text-[var(--ink-2)]">
-            No documents in the vault yet
+            Coming Soon
           </p>
-          <p className="mt-1 text-[12px] text-[var(--ink-3)]">
-            Upload PDFs, markdown, or text files to surface them as RAG context to your agents.
+          <p className="mt-1 max-w-sm text-center text-[12px] text-[var(--ink-3)]">
+            The Knowledge Vault will let you upload PDFs, markdown, and text files
+            to surface them as retrieval-augmented context to your agents.
           </p>
+          <span
+            className="mt-4 rounded-full px-3 py-1 text-[11px] font-medium"
+            style={{
+              background: "var(--accent-bg)",
+              color: "var(--accent)",
+            }}
+          >
+            Planned for v0.2
+          </span>
         </div>
       </div>
     </div>

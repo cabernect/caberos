@@ -260,7 +260,7 @@ export interface ChannelInfo {
   agent_id: string;
   enabled: boolean;
   mode: string; // "polling" or "webhook"
-  webhook_secret: string;
+  has_webhook_secret: boolean;
   webhook_url: string;
   has_token: boolean;
   extra_config: Record<string, unknown> | null;

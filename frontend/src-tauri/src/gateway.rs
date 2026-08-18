@@ -58,6 +58,16 @@ impl GatewayProcess {
             .stdout(Stdio::from(stdout))
             .stderr(Stdio::from(stderr));
 
+        // Point the gateway at the bundled skills directory (Tauri resource).
+        let resource_dir = app
+            .path()
+            .resource_dir()
+            .map_err(|error| format!("could not resolve CaberOS resource directory: {error}"))?;
+        let skills_dir = resource_dir.join("resources").join("skills");
+        if skills_dir.is_dir() {
+            command.env("AGENTOS_SKILLS_DIR", &skills_dir);
+        }
+
         #[cfg(unix)]
         command.process_group(0);
 

@@ -14,9 +14,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..agent_service import get_active_config, save_agent
+from ..auth import require_operator
 from ..db import get_db
 from ..harness.litellm_adapter import LiteLLMAdapter
 from ..models.agent import Agent
+from ..models.operator import Operator
 from ..models.provider import Provider
 from ..secret_store import encrypt
 
@@ -75,13 +77,20 @@ class ModelInfo(BaseModel):
 
 
 @router.get("")
-async def list_providers(db: AsyncSession = Depends(get_db)) -> list[ProviderOut]:
+async def list_providers(
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> list[ProviderOut]:
     result = await db.execute(select(Provider).order_by(Provider.name))
     return [ProviderOut.from_model(p) for p in result.scalars().all()]
 
 
 @router.post("")
-async def create_provider(data: ProviderCreate, db: AsyncSession = Depends(get_db)) -> ProviderOut:
+async def create_provider(
+    data: ProviderCreate,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> ProviderOut:
     provider = Provider(
         id=str(uuid.uuid4()),
         name=data.name,
@@ -98,7 +107,11 @@ async def create_provider(data: ProviderCreate, db: AsyncSession = Depends(get_d
 
 
 @router.get("/{provider_id}")
-async def get_provider(provider_id: str, db: AsyncSession = Depends(get_db)) -> ProviderOut:
+async def get_provider(
+    provider_id: str,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> ProviderOut:
     result = await db.execute(select(Provider).where(Provider.id == provider_id))
     provider = result.scalar_one_or_none()
     if provider is None:
@@ -108,7 +121,10 @@ async def get_provider(provider_id: str, db: AsyncSession = Depends(get_db)) -> 
 
 @router.put("/{provider_id}")
 async def update_provider(
-    provider_id: str, data: ProviderUpdate, db: AsyncSession = Depends(get_db)
+    provider_id: str,
+    data: ProviderUpdate,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
 ) -> ProviderOut:
     result = await db.execute(select(Provider).where(Provider.id == provider_id))
     provider = result.scalar_one_or_none()
@@ -132,7 +148,11 @@ async def update_provider(
 
 
 @router.delete("/{provider_id}")
-async def delete_provider(provider_id: str, db: AsyncSession = Depends(get_db)) -> dict:
+async def delete_provider(
+    provider_id: str,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     result = await db.execute(select(Provider).where(Provider.id == provider_id))
     provider = result.scalar_one_or_none()
     if provider is None:
@@ -156,7 +176,11 @@ async def delete_provider(provider_id: str, db: AsyncSession = Depends(get_db)) 
 
 
 @router.get("/{provider_id}/models")
-async def list_models(provider_id: str, db: AsyncSession = Depends(get_db)) -> dict:
+async def list_models(
+    provider_id: str,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Dynamic model discovery (D40). Returns models if the provider supports it."""
     result = await db.execute(select(Provider).where(Provider.id == provider_id))
     provider = result.scalar_one_or_none()
@@ -175,6 +199,7 @@ async def list_models(provider_id: str, db: AsyncSession = Depends(get_db)) -> d
 async def validate_model(
     provider_id: str,
     body: dict,
+    operator: Operator = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Validate a model config with a cheap 1-token completion (D40)."""
@@ -203,6 +228,7 @@ class CustomModelIn(BaseModel):
 async def add_custom_model(
     provider_id: str,
     body: CustomModelIn,
+    operator: Operator = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Add a custom model name to a provider (for providers without discovery)."""
@@ -224,6 +250,7 @@ async def add_custom_model(
 async def remove_custom_model(
     provider_id: str,
     model_name: str,
+    operator: Operator = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Remove a custom model from a provider."""

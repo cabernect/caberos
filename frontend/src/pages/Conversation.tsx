@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ArrowDown, PanelLeft, AlertCircle, FileIcon, Paperclip, Loader2 } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { api } from "@/lib/api";
 import type { Agent, Message, Provider, SessionInfo } from "@/lib/types";
 import { ToolCallBlock, type ToolCallData, type SubAgentStreamData } from "@/components/ToolCallBlock";
+import { Markdown } from "@/components/Markdown";
 import { ThinkingBlock } from "@/components/ThinkingBlock";
 import { ProcessSteps } from "@/components/ProcessSteps";
 import { ChatSidebar } from "@/components/ChatSidebar";
@@ -1336,7 +1335,7 @@ function StreamingMessage({ streaming }: { streaming: StreamingResponse }) {
         if (item.type === "text") {
           return (
             <div key={item.id} className="markdown-body text-[14px] leading-[1.65] text-[var(--ink)]">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.data.content}</ReactMarkdown>
+              <Markdown>{item.data.content}</Markdown>
             </div>
           );
         }
@@ -1367,7 +1366,7 @@ function StreamingMessage({ streaming }: { streaming: StreamingResponse }) {
 
       {streaming.text && (
         <div className="markdown-body text-[14px] leading-[1.65] text-[var(--ink)]">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{streaming.text}</ReactMarkdown>
+          <Markdown>{streaming.text}</Markdown>
           {!streaming.completed && <span className="streaming-cursor" />}
         </div>
       )}
@@ -1506,7 +1505,7 @@ function MessageRow({ message, isLastInRun, subagentMessages }: { message: ChatM
           className="border-l-[3px] pl-4 text-[14px] leading-[1.65]"
           style={{ borderColor: "#7C3AED" }}
         >
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+          <Markdown>{message.content}</Markdown>
         </div>
       </div>
     );
@@ -1526,7 +1525,7 @@ function MessageRow({ message, isLastInRun, subagentMessages }: { message: ChatM
   return (
     <div className="mb-6">
       <div className="markdown-body text-[14px] leading-[1.65] text-[var(--ink)]">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+        <Markdown>{message.content}</Markdown>
       </div>
       {hasCost && (
         <div className="mt-1.5 font-mono text-[11px]" style={{ color: "var(--ink-3)" }}>

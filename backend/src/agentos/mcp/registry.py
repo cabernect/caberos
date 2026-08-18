@@ -23,7 +23,8 @@ from typing import Any
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..capabilities.registry import CapabilityDef, registry as cap_registry
+from ..capabilities.registry import CapabilityDef
+from ..capabilities.registry import registry as cap_registry
 from ..db import async_session_factory
 from ..models.mcp import McpServer, McpTool
 from . import credentials as mcp_creds
@@ -102,7 +103,7 @@ async def connect_server(server: McpServer) -> bool:
 
                 redirect_uri = oauth_config.get(
                     "redirect_uri",
-                    f"http://localhost:8081/api/mcp/oauth/callback",
+                    "http://localhost:8081/api/mcp/oauth/callback",
                 )
                 client_metadata = OAuthClientMetadata(
                     redirect_uris=[redirect_uri],
@@ -113,10 +114,34 @@ async def connect_server(server: McpServer) -> bool:
                     scope=oauth_config.get("scope", ""),
                 )
 
+                # Provide no-op redirect/callback handlers so that if the
+                # refresh token is expired, the provider logs a warning
+                # instead of crashing with "No redirect handler provided".
+                # The user will need to re-authenticate via the dashboard.
+                async def _noop_redirect_handler(url: str):
+                    log.warning(
+                        "MCP server '%s' OAuth token expired and refresh failed. "
+                        "Re-authenticate via the dashboard.",
+                        server.name,
+                    )
+                    return asyncio.sleep(0)
+
+                async def _noop_callback_handler():
+                    log.warning(
+                        "MCP server '%s' OAuth callback requested during reconnect. "
+                        "Re-authenticate via the dashboard.",
+                        server.name,
+                    )
+                    raise RuntimeError(
+                        "OAuth re-authentication required — use the dashboard"
+                    )
+
                 auth = OAuthClientProvider(
                     server_url=server.url,
                     client_metadata=client_metadata,
                     storage=storage,
+                    redirect_handler=_noop_redirect_handler,
+                    callback_handler=_noop_callback_handler,
                     timeout=300.0,
                 )
             else:

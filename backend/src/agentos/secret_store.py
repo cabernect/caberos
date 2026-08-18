@@ -10,6 +10,11 @@ def _get_or_create_key() -> bytes:
     key_path = settings.secret_key_path
     key_path.parent.mkdir(parents=True, exist_ok=True)
     if key_path.exists():
+        # Ensure secure permissions on existing key files
+        try:
+            key_path.chmod(0o600)
+        except (OSError, PermissionError):
+            pass  # best-effort — may not have permission on some systems
         return key_path.read_bytes()
     key = Fernet.generate_key()
     key_path.write_bytes(key)

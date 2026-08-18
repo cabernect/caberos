@@ -5,6 +5,7 @@
 </p>
 
 <p align="center">
+  <a href="../../releases/latest">Download (macOS ARM64)</a> ·
   <a href="#features">Features</a> ·
   <a href="#quick-start">Quick Start</a> ·
   <a href="#architecture">Architecture</a> ·
@@ -130,6 +131,10 @@ Open `http://localhost:5173` — the Vite dev server proxies `/api` to the backe
 
 > **Platform support:** The desktop app currently supports **macOS ARM64 (Apple Silicon)** only — M1/M2/M3/M4 chips. macOS Intel and Windows builds require cross-compilation or CI runners and are not yet set up. Use Docker or local dev on other platforms.
 
+**Download the latest release:** [GitHub Releases](../../releases/latest)
+
+Or build from source:
+
 ```bash
 # Build the Tauri app (bundles the PyInstaller gateway + React frontend)
 cd frontend && npm run desktop:build
@@ -143,6 +148,18 @@ The desktop app packages the entire backend as a PyInstaller executable and supe
 ```bash
 tail -f "$HOME/Library/Application Support/com.caberos.desktop/logs/gateway.log"
 ```
+
+**Creating a release** (maintainers):
+
+```bash
+# 1. Merge your PR to main (feat/*, fix/*, test/*, etc. branches)
+# 2. Tag manually after merge:
+git checkout main && git pull
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Pushing a `v*.*.*` tag triggers the [release workflow](.github/workflows/release.yml) which builds the .dmg and creates a GitHub Release automatically. Tags with a `-` suffix (e.g., `v0.1.0-beta`) are marked as prerelease.
 
 ## Architecture
 
@@ -310,6 +327,8 @@ CaberOS tracks every run, every capability call, and every dollar spent.
 ## Desktop app
 
 > **Platform support:** macOS ARM64 (Apple Silicon) only. macOS Intel and Windows are not yet supported — use Docker or local dev on those platforms.
+>
+> **Download:** [Latest release](../../releases/latest)
 
 The Tauri 2 desktop app packages the entire stack into a native macOS application:
 
@@ -454,7 +473,6 @@ Use the Playwright MCP server for real-browser testing. See `AGENTS.md` for deta
 - [x] Observability + spend
 - [x] Tauri desktop app
 - [x] Docker support
-- [ ] Testing hardening (Ticket 11)
 
 ### v0.2 (planned)
 
@@ -462,6 +480,8 @@ Use the Playwright MCP server for real-browser testing. See `AGENTS.md` for deta
 - [ ] CaberCore extraction (headless runtime, separate from FastAPI)
 - [ ] Cron/event triggers for scheduler
 - [ ] More MCP catalog entries
+- [ ] More tools intergartion and variation
+- [ ] Knowledge Vault integration
 
 ### v0.5+
 

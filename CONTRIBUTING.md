@@ -60,9 +60,13 @@ cd frontend && npm run dev
 
 ## Development workflow
 
-1. **Create a branch** from `main`:
+1. **Create a branch** from `main` using a prefix:
    ```bash
-   git checkout -b feature/your-feature
+   git checkout -b feat/your-feature    # new feature
+   git checkout -b fix/your-bug         # bug fix
+   git checkout -b test/your-tests      # test additions
+   git checkout -b docs/your-docs       # documentation
+   git checkout -b chore/your-chore     # refactoring, deps, config
    ```
 
 2. **Read the relevant docs:**
@@ -81,7 +85,11 @@ cd frontend && npm run dev
    git commit -m "Add X capability with approval flow and audit"
    ```
 
-6. **Open a pull request** with a description of what changed and why
+6. **Open a pull request** — do not push directly to `main`:
+   ```bash
+   git push origin feat/your-feature
+   # Then open a PR on GitHub
+   ```
 
 ## Running the app
 
@@ -510,6 +518,27 @@ cd frontend && npm run dev
    - Secrets (`.env`, `.key`, credentials)
    - Build artifacts (`__pycache__/`, `node_modules/`, `dist/`, `target/`)
    - Generated files (`.db`, `.db-wal`, `.db-shm`)
+
+## Releasing
+
+Releases are created manually by maintainers. The workflow:
+
+1. **Merge PRs to `main`** — all changes go through PRs (`feat/*`, `fix/*`, `test/*`, `docs/*`, `chore/*` branches). No direct pushes to `main`.
+
+2. **Tag a release** after the PR(s) are merged:
+   ```bash
+   git checkout main && git pull
+   git tag v0.1.0
+   git push origin v0.1.0
+   ```
+
+3. **The release workflow runs automatically.** Pushing a `v*.*.*` tag triggers [.github/workflows/release.yml](../.github/workflows/release.yml) which:
+   - Builds the PyInstaller gateway (macOS ARM64)
+   - Builds the Tauri app
+   - Creates a DMG
+   - Creates a GitHub Release with the DMG attached and auto-generated release notes
+
+4. **Pre-release tags** — tags with a `-` suffix (e.g., `v0.1.0-beta`, `v0.1.0-rc1`) are marked as prerelease on GitHub.
 
 ## Reporting bugs
 

@@ -8,6 +8,7 @@ POST   /api/channels/{id}/test            — send a test message
 """
 
 import asyncio
+import hmac
 import json
 import logging
 import uuid
@@ -19,12 +20,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import require_operator
+from ..channels import get_channel, reload_channel, remove_channel
+from ..channels.base import OutboundMessage
 from ..db import get_db
 from ..models.channel_config import ChannelConfig
-from ..secret_store import encrypt, decrypt
-from ..channels import get_channel, load_all_channels, reload_channel, remove_channel
-from ..channels.base import OutboundMessage
 from ..runner import run_agent
+from ..secret_store import encrypt
 
 log = logging.getLogger(__name__)
 
@@ -57,7 +58,7 @@ class ChannelOut(BaseModel):
     agent_id: str
     enabled: bool
     mode: str
-    webhook_secret: str
+    has_webhook_secret: bool
     webhook_url: str
     has_token: bool
     extra_config: dict[str, Any] | None = None
@@ -206,9 +207,37 @@ async def webhook_receiver(
     """Receive a webhook from an external platform.
 
     This endpoint is public (no auth) — platforms can't authenticate.
-    Security: the agent_id is passed as a query param, and the platform's
-    webhook secret (if configured) should be validated by the channel impl.
+    Security: if the channel has a webhook_secret configured, the request
+    must include it (via header or query param, depending on platform).
+    Requests without a valid secret are rejected with 401.
     """
+    # Get the channel config to check webhook secret
+    db_session_gen = get_db()
+    db = await anext(db_session_gen)
+    try:
+        result = await db.execute(
+            select(ChannelConfig).where(
+                ChannelConfig.platform == platform,
+                ChannelConfig.agent_id == agent_id,
+            )
+        )
+        config = result.scalar_one_or_none()
+    finally:
+        await db.close()
+
+    if config is None:
+        raise HTTPException(404, f"No {platform} channel for agent {agent_id}")
+
+    # Verify webhook secret if configured
+    if config.webhook_secret:
+        provided = (
+            request.headers.get("X-Webhook-Secret")
+            or request.headers.get("X-Bot-Api-Secret-Token")
+            or request.query_params.get("webhook_secret")
+        )
+        if not provided or not hmac.compare_digest(provided, config.webhook_secret):
+            raise HTTPException(401, "Invalid or missing webhook secret")
+
     # Get the channel instance
     channel = get_channel(platform, agent_id)
     if channel is None:
@@ -240,9 +269,10 @@ async def webhook_receiver(
             )
             # Fetch the final answer from the DB (stored as the last assistant message)
             if result.get("status") == "completed":
+                from sqlalchemy import select
+
                 from ..db import async_session_factory
                 from ..models.run import Message, Run
-                from sqlalchemy import select
 
                 async with async_session_factory() as db:
                     stmt = (
@@ -282,7 +312,7 @@ def _config_to_out(config: ChannelConfig) -> ChannelOut:
         agent_id=config.agent_id,
         enabled=config.enabled,
         mode=config.mode,
-        webhook_secret=config.webhook_secret,
+        has_webhook_secret=bool(config.webhook_secret),
         webhook_url=webhook_url,
         has_token=bool(config.encrypted_bot_token),
         extra_config=extra,

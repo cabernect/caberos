@@ -39,8 +39,12 @@ class WorkspaceManager:
             return str((Path(workspace_root) / rel_path).resolve())
 
         # Strict mode — enforce workspace boundary
+        # Use relative_to() instead of startswith() to properly handle
+        # symlinks and path components that look like prefixes.
         root = Path(workspace_root).resolve()
         target = (root / rel_path).resolve()
-        if not str(target).startswith(str(root)):
-            raise ValueError(f"Path escapes workspace: {rel_path}")
+        try:
+            target.relative_to(root)
+        except ValueError:
+            raise ValueError(f"Path escapes workspace: {rel_path}") from None
         return str(target)

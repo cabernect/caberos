@@ -24,19 +24,16 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any
-
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import async_session_factory
-from ..models.mcp import McpServer, McpServerCredential
+from ..models.mcp import McpServer
 from . import credentials as mcp_creds
 
 log = logging.getLogger("agentos.mcp.oauth")
 
 # --- Pending OAuth flows ---
 # Maps server_id → OAuthFlowState (in-memory, not persisted)
-_pending_flows: dict[str, "OAuthFlowState"] = {}
+_pending_flows: dict[str, OAuthFlowState] = {}
 
 
 class OAuthFlowState:
@@ -45,12 +42,19 @@ class OAuthFlowState:
     def __init__(self, server_id: str) -> None:
         self.server_id = server_id
         self.authorize_url: str | None = None
+        self.expected_state: str | None = None  # set when authorize URL is captured
         self.callback_future: asyncio.Future[tuple[str, str | None]] = asyncio.Future()
         self.error: str | None = None
         self.completed: bool = False
 
     def set_authorize_url(self, url: str) -> None:
         self.authorize_url = url
+        # Extract state from the authorize URL query params
+        from urllib.parse import parse_qs, urlparse
+        parsed = urlparse(url)
+        params = parse_qs(parsed.query)
+        if "state" in params:
+            self.expected_state = params["state"][0]
 
     def resolve_callback(self, code: str, state: str | None = None) -> None:
         """Resolve the callback — called when the OAuth redirect comes back."""
@@ -286,10 +290,7 @@ async def _run_oauth_flow(
 
 def _frontend_base() -> str:
     """Get the frontend base URL for redirects after OAuth callback."""
-    from ..config import settings
-
-    host = getattr(settings, "control_plane_host", "127.0.0.1")
-    return f"http://localhost:5173"
+    return "http://localhost:5173"
 
 
 def handle_oauth_callback(code: str, state: str | None = None, error: str | None = None) -> str:
@@ -312,8 +313,13 @@ def handle_oauth_callback(code: str, state: str | None = None, error: str | None
     # Find the pending flow — we don't know which server this is for from the
     # callback alone, so we resolve the first pending flow.
     # In practice, there should only be one pending flow at a time.
+    # Validate the state parameter if the flow has one (CSRF protection).
+
     for server_id, flow in list(_pending_flows.items()):
         if not flow.completed:
+            if flow.expected_state and state != flow.expected_state:
+                flow.reject("OAuth state mismatch — possible CSRF attack")
+                return f"{base}/mcps?oauth_error=state_mismatch"
             flow.resolve_callback(code, state)
             return f"{base}/mcps?oauth_connected={server_id}"
 
@@ -325,7 +331,6 @@ def _get_redirect_uri() -> str:
     """Get the OAuth callback URL (on the backend)."""
     from ..config import settings
 
-    host = getattr(settings, "control_plane_host", "127.0.0.1")
     port = getattr(settings, "control_plane_port", 8081)
     # OAuth providers typically can't reach 127.0.0.1 during local dev,
     # so use localhost which is universally recognized
