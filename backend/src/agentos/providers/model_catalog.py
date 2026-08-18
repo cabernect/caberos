@@ -128,7 +128,52 @@ def _litellm_catalog(ptype: str) -> list[dict[str, Any]]:
             **_check_capabilities(model_id),
         }
         for model_id in sorted(models)
+        if _is_chat_model(model_id)
     ]
+
+
+# --- Chat model filtering ---
+#
+# Providers return ALL models (embeddings, TTS, STT, image gen, moderation).
+# We only want text-in → text-out chat models. Filter by known non-chat
+# name patterns and by LiteLLM metadata when available.
+
+_NON_CHAT_PATTERNS: tuple[str, ...] = (
+    "embedding",
+    "embed",
+    "whisper",
+    "tts",
+    "speech",
+    "dall-e",
+    "davinci",  # legacy completion-only (no chat)
+    "babbage",  # legacy completion-only
+    "ada-002",  # embedding
+    "moderation",
+    "text-moderation",
+    "audio",
+    "realtime",
+    "sora",
+)
+
+
+def _is_chat_model(model_id: str) -> bool:
+    """Return True if the model supports text-in → text-out chat."""
+    name = model_id.lower()
+
+    # Fast path: known non-chat patterns
+    for pattern in _NON_CHAT_PATTERNS:
+        if pattern in name:
+            return False
+
+    # Check LiteLLM metadata — if it explicitly says the model is not a chat
+    # model (e.g. mode is "embedding" or "completion"), filter it out.
+    info = _get_model_info_variants(model_id)
+    if info:
+        mode = info.get("mode", "")
+        if mode in ("embedding", "completion"):
+            return False
+
+    return True
 
 
 class LiteLLMModelCatalog:
@@ -198,6 +243,8 @@ class LiteLLMModelCatalog:
             result = []
             for model in data.get("data", []):
                 model_id = model["id"]
+                if not _is_chat_model(model_id):
+                    continue
                 thinking = _check_thinking(model_id)
                 info = _get_model_info_variants(model_id)
                 result.append(
@@ -284,9 +331,12 @@ class LiteLLMModelCatalog:
                 data = resp.json()
             models = []
             for model in data.get("data", []):
+                model_id = model["id"]
+                if not _is_chat_model(model_id):
+                    continue
                 architecture = model.get("architecture", {})
                 output_modalities = architecture.get("output_modalities", []) or []
-                if "image" in output_modalities and not model["id"].startswith("openrouter/"):
+                if "image" in output_modalities and not model_id.startswith("openrouter/"):
                     continue
                 input_modalities = architecture.get("input_modalities", [])
                 if "image" in input_modalities or "video" in input_modalities:
@@ -336,6 +386,8 @@ class LiteLLMModelCatalog:
             result = []
             for model in data.get("data", []):
                 model_id = model["id"]
+                if not _is_chat_model(model_id):
+                    continue
                 thinking = _check_thinking(model_id)
                 info = _get_model_info_variants(model_id)
                 result.append(
@@ -367,6 +419,8 @@ class LiteLLMModelCatalog:
             result = []
             for model in data.get("models", []):
                 model_id = model["name"].replace("models/", "")
+                if not _is_chat_model(model_id):
+                    continue
                 thinking = _check_thinking(model_id)
                 info = _get_model_info_variants(model_id)
                 result.append(
@@ -397,6 +451,8 @@ class LiteLLMModelCatalog:
             result = []
             for model in data.get("models", []):
                 model_id = model["name"]
+                if not _is_chat_model(model_id):
+                    continue
                 thinking = _check_thinking(model_id)
                 info = _get_model_info_variants(model_id)
                 result.append(
