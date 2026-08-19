@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Radio, Plus, Trash2, Send, MessageCircle, Settings2 } from "lucide-react";
 import { DashboardSidebar, type NavKey } from "@/components/DashboardSidebar";
 import { api } from "@/lib/api";
+import { useConfirm } from "@/lib/confirm";
 import type { ChannelInfo, Agent } from "@/lib/types";
 
 const PLATFORMS = [
@@ -19,6 +20,7 @@ export function Channels() {
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const navigate = useNavigate();
+  const { confirm } = useConfirm();
 
   // Add form state
   const [platform, setPlatform] = useState("telegram");
@@ -110,7 +112,13 @@ export function Channels() {
   };
 
   const handleDelete = async (id: string, platform: string) => {
-    if (!confirm(`Remove this ${platform} channel?`)) return;
+    const ok = await confirm({
+      title: "Remove channel?",
+      message: `Remove this ${platform} channel?`,
+      confirmLabel: "Remove",
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await api.deleteChannel(id);
       fetchData();

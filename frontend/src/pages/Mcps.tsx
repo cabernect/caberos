@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Plug, Plus, Trash2, RefreshCw, ChevronDown, ChevronRight, Key, Search, Store } from "lucide-react";
 import { DashboardSidebar, type NavKey } from "@/components/DashboardSidebar";
 import { api } from "@/lib/api";
+import { useConfirm } from "@/lib/confirm";
 import type { McpServerInfo, McpToolInfo, McpCatalogEntry } from "@/lib/types";
 
 type Tab = "mine" | "browse";
@@ -20,6 +21,7 @@ export function Mcps() {
   const [showAdd, setShowAdd] = useState(false);
   const [tab, setTab] = useState<Tab>("mine");
   const navigate = useNavigate();
+  const { confirm } = useConfirm();
 
   const fetchServers = useCallback(async () => {
     try {
@@ -74,7 +76,13 @@ export function Mcps() {
   };
 
   const handleDelete = async (serverId: string, serverName: string) => {
-    if (!confirm(`Remove "${serverName}"? This disconnects the server, unregisters its tools, and deletes all credentials.`)) return;
+    const ok = await confirm({
+      title: "Remove server?",
+      message: `Remove "${serverName}"? This disconnects the server, unregisters its tools, and deletes all credentials.`,
+      confirmLabel: "Remove",
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await api.deleteMcpServer(serverId);
       fetchServers();
@@ -566,6 +574,7 @@ function ServerCard({
   const needsOAuth = server.auth_type === "oauth" && !server.connected && server.enabled;
   const [showCredForm, setShowCredForm] = useState(false);
   const [oauthLoading, setOauthLoading] = useState(false);
+  const { toast } = useConfirm();
 
   return (
     <div
@@ -664,7 +673,7 @@ function ServerCard({
                     } else if (status.status === "error") {
                       clearInterval(poll);
                       setOauthLoading(false);
-                      alert(`OAuth failed: ${status.error}`);
+                      toast(`OAuth failed: ${status.error}`);
                     } else if (status.status === "none") {
                       // Flow ended — check if we're connected now
                       clearInterval(poll);
@@ -679,7 +688,7 @@ function ServerCard({
                 const timeout = setTimeout(() => {
                   clearInterval(poll);
                   setOauthLoading(false);
-                  alert("OAuth timed out — you didn't complete the authorization in 5 minutes. Click 'Connect OAuth' to try again.");
+                  toast("OAuth timed out — you didn't complete the authorization in 5 minutes. Click 'Connect OAuth' to try again.");
                 }, 300000);
                 // Store cleanup function so the cancel button can stop polling
                 (window as any)._oauthCleanup = () => {
@@ -689,7 +698,7 @@ function ServerCard({
                 };
               } catch (e) {
                 setOauthLoading(false);
-                alert(e instanceof Error ? e.message : "Failed to start OAuth flow");
+                toast(e instanceof Error ? e.message : "Failed to start OAuth flow");
               }
             }}
             disabled={oauthLoading}
@@ -1028,6 +1037,7 @@ function CredentialManager({
 }) {
   const [creds, setCreds] = useState<{ id: string; credential_type: string; label: string | null; created_at: string }[]>([]);
   const [showForm, setShowForm] = useState(false);
+  const { confirm } = useConfirm();
   const envVarName = envTemplate
     ? Object.keys(envTemplate).find((k) => envTemplate[k].includes("{{credential_value}}"))
     : null;
@@ -1048,7 +1058,13 @@ function CredentialManager({
   }, [hasCredentials, showForm, fetchCreds]);
 
   const handleDelete = async (credId: string) => {
-    if (!confirm("Delete this credential? The server will need to be reconfigured to reconnect.")) return;
+    const ok = await confirm({
+      title: "Delete credential?",
+      message: "The server will need to be reconfigured to reconnect.",
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await api.deleteMcpCredential(serverId, credId);
       fetchCreds();

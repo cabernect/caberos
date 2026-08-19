@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { Plus, Trash2, Save, X, RefreshCw, Check, Info, Settings, Server, Cpu } from "lucide-react";
 import { api } from "@/lib/api";
+import { useConfirm } from "@/lib/confirm";
 import type { Provider, ModelInfo, Operator } from "@/lib/types";
 import { DashboardSidebar, type NavKey } from "@/components/DashboardSidebar";
 import { LogoMark } from "@/components/LogoMark";
@@ -76,6 +77,7 @@ export function ProvidersSettings() {
   const [addingPreset, setAddingPreset] = useState<number | null>(null);  // preset index being configured
   const [showCustom, setShowCustom] = useState(false);  // custom provider form
   const navigate = useNavigate();
+  const { confirm, toast } = useConfirm();
 
   const load = useCallback(async () => {
     try {
@@ -109,12 +111,18 @@ export function ProvidersSettings() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Delete this provider? Agents using it will need to be reconfigured.")) return;
+    const ok = await confirm({
+      title: "Delete provider?",
+      message: "Agents using it will need to be reconfigured.",
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await api.deleteProvider(id);
       load();
     } catch (e) {
-      alert(String(e));
+      toast(String(e));
     }
   };
 
@@ -436,6 +444,7 @@ function PresetProviderForm({
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState(preset?.defaultBaseUrl || "");
   const [saving, setSaving] = useState(false);
+  const { toast } = useConfirm();
 
   const handleCreate = async () => {
     if (!name.trim()) return;
@@ -449,7 +458,7 @@ function PresetProviderForm({
       });
       onSaved();
     } catch (e) {
-      alert(String(e));
+      toast(String(e));
     } finally {
       setSaving(false);
     }
@@ -519,6 +528,7 @@ function ModelsTab({
   const [discovered, setDiscovered] = useState<Record<string, ModelInfo[]>>({});
   const [discovering, setDiscovering] = useState<Record<string, boolean>>({});
   const [newModel, setNewModel] = useState<Record<string, string>>({});
+  const { toast } = useConfirm();
 
   const handleDiscover = async (provider: Provider) => {
     setDiscovering((prev) => ({ ...prev, [provider.id]: true }));
@@ -526,7 +536,7 @@ function ModelsTab({
       const result = await api.listModels(provider.id);
       setDiscovered((prev) => ({ ...prev, [provider.id]: result.models }));
     } catch (e) {
-      alert(String(e));
+      toast(String(e));
     } finally {
       setDiscovering((prev) => ({ ...prev, [provider.id]: false }));
     }
@@ -540,7 +550,7 @@ function ModelsTab({
       setNewModel((prev) => ({ ...prev, [provider.id]: "" }));
       onChanged();
     } catch (e) {
-      alert(String(e));
+      toast(String(e));
     }
   };
 
@@ -549,7 +559,7 @@ function ModelsTab({
       await api.removeCustomModel(provider.id, modelName);
       onChanged();
     } catch (e) {
-      alert(String(e));
+      toast(String(e));
     }
   };
 
@@ -797,6 +807,7 @@ function ProviderCard({
   const [baseUrl, setBaseUrl] = useState(provider.base_url || "");
   const [orgId, setOrgId] = useState(provider.org_id || "");
   const [saving, setSaving] = useState(false);
+  const { toast } = useConfirm();
   const [models, setModels] = useState<ModelInfo[] | null>(null);
   const [loadingModels, setLoadingModels] = useState(false);
 
@@ -818,7 +829,7 @@ function ProviderCard({
       });
       onSaved();
     } catch (e) {
-      alert(String(e));
+      toast(String(e));
     } finally {
       setSaving(false);
     }
@@ -830,7 +841,7 @@ function ProviderCard({
       const result = await api.listModels(provider.id);
       setModels(result.models);
     } catch (e) {
-      alert(String(e));
+      toast(String(e));
     } finally {
       setLoadingModels(false);
     }
@@ -947,6 +958,7 @@ function ProviderForm({ onCancel, onSaved }: { onCancel: () => void; onSaved: ()
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [saving, setSaving] = useState(false);
+  const { toast } = useConfirm();
 
   const handleCreate = async () => {
     if (!name.trim()) return;
@@ -960,7 +972,7 @@ function ProviderForm({ onCancel, onSaved }: { onCancel: () => void; onSaved: ()
       });
       onSaved();
     } catch (e) {
-      alert(String(e));
+      toast(String(e));
     } finally {
       setSaving(false);
     }
