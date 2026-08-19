@@ -287,8 +287,13 @@ async def _run_oauth_flow(server_id: str, server_url: str, auth, flow: OAuthFlow
 
 
 def _frontend_base() -> str:
-    """Get the frontend base URL for redirects after OAuth callback."""
-    return "http://localhost:5173"
+    """Get the frontend base URL for redirects after OAuth callback.
+
+    Returns empty string — we serve a simple HTML page from the callback
+    endpoint for all clients (web and desktop). The dashboard polls for
+    OAuth status and updates automatically.
+    """
+    return ""
 
 
 def handle_oauth_callback(code: str, state: str | None = None, error: str | None = None) -> str:
