@@ -26,6 +26,27 @@ CaberOS is an open-source, local-first AI Agent Operating System. It hosts perso
 
 **Your data never leaves your machine.** Providers (OpenAI, Anthropic, Google, Ollama, OpenRouter) are just transports — CaberOS owns the agent, the memory, the workspace, and the audit trail.
 
+## Screenshots
+
+<table>
+  <tr>
+    <td width="50%" align="center"><b>Agent Chat</b></td>
+    <td width="50%" align="center"><b>Agent Management</b></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/chat.png" alt="Agent chat conversation" /></td>
+    <td><img src="docs/screenshots/agents.png" alt="Agent list" /></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><b>Providers &amp; Models</b></td>
+    <td width="50%" align="center"><b>Observability</b></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/providers.png" alt="Provider settings" /></td>
+    <td><img src="docs/screenshots/observability.png" alt="Observability dashboard" /></td>
+  </tr>
+</table>
+
 ## Why "OS"?
 
 An operating system's job is identity, permissions, resource accounting, mediated access to resources, and audit — for processes. CaberOS does the same job for agents. Every capability call crosses a single boundary (the **syscall layer**) which resolves who the caller is, checks permission, injects credentials, executes, and writes an audit record.
