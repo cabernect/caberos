@@ -154,7 +154,9 @@ class ZaloBotChannel(Channel):
     async def _call_api(self, method: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
         """Call a Zalo Bot API method."""
         url = ZALO_BOT_API_BASE.format(token=self.bot_token, method=method)
-        async with httpx.AsyncClient(timeout=60, verify=SSL_CERT_PATH) as client:
+        # Use a long timeout for getUpdates (long-poll), shorter for other methods
+        timeout = 90 if method == "getUpdates" else 60
+        async with httpx.AsyncClient(timeout=timeout, verify=SSL_CERT_PATH) as client:
             if body:
                 resp = await client.post(url, json=body)
             else:
@@ -203,7 +205,19 @@ class ZaloBotChannel(Channel):
                     },
                 )
 
-                updates = resp if isinstance(resp, list) else resp.get("result", [])
+                # Zalo Bot API returns {"ok": true, "result": [...]} (like Telegram)
+                # 408 "Request timeout" means no updates during the long-poll window — normal
+                if isinstance(resp, dict):
+                    if not resp.get("ok", False):
+                        if resp.get("error_code") == 408:
+                            continue  # No updates — just poll again
+                        desc = resp.get("description", "unknown error")
+                        log.error("Zalo Bot getUpdates failed: %s", desc)
+                        await asyncio.sleep(5)
+                        continue
+                    updates = resp.get("result", [])
+                else:
+                    updates = resp if isinstance(resp, list) else []
                 for update in updates:
                     update_id = update.get("update_id", 0)
                     if update_id > self._last_update_id:
