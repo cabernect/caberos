@@ -214,7 +214,9 @@ class McpClient:
                 {
                     "name": tool.name,
                     "description": tool.description or "",
-                    "inputSchema": getattr(tool, "inputSchema", None) or tool.input_schema or {"type": "object", "properties": {}},
+                    "inputSchema": getattr(tool, "inputSchema", None)
+                    or tool.input_schema
+                    or {"type": "object", "properties": {}},
                 }
             )
         return tools
