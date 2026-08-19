@@ -12,7 +12,7 @@ Key differences from Zalo OA:
   - 2000 char message limit
   - Supports typing indicator
 
-API base: https://bot-api.zapps.me/bot{TOKEN}/{method}
+API base: https://bot-api.zaloplatforms.com/bot{TOKEN}/{method}
 
 Webhook payload format (Zalo Bot Platform):
   {
@@ -35,7 +35,7 @@ Setup:
   6. Webhook mode: set webhook via API or let CaberOS set it on startup
      url=https://your-domain/api/channels/zalo_bot/webhook?agent_id={agent_id}
 
-API reference: https://bot.zapps.me/docs/
+API reference: https://bot.zaloplatforms.com/docs
 """
 
 import asyncio
@@ -53,7 +53,7 @@ from .registry import register_channel_class
 
 log = logging.getLogger(__name__)
 
-ZALO_BOT_API_BASE = "https://bot-api.zapps.me/bot{token}/{method}"
+ZALO_BOT_API_BASE = "https://bot-api.zaloplatforms.com/bot{token}/{method}"
 POLL_TIMEOUT = 30  # long-poll timeout in seconds
 
 
@@ -131,7 +131,7 @@ class ZaloBotChannel(Channel):
                         "text": chunk,
                     },
                 )
-                last_message_id = resp.get("message_id")
+                last_message_id = resp.get("result", {}).get("message_id") or resp.get("message_id")
             except Exception as e:
                 log.error("Zalo Bot deliver failed: %s", e)
                 return {"success": False, "error": str(e)}
@@ -203,7 +203,7 @@ class ZaloBotChannel(Channel):
                     },
                 )
 
-                updates = resp if isinstance(resp, list) else resp.get("updates", [])
+                updates = resp if isinstance(resp, list) else resp.get("result", [])
                 for update in updates:
                     update_id = update.get("update_id", 0)
                     if update_id > self._last_update_id:
