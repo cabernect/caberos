@@ -44,6 +44,16 @@ jobs:
         working-directory: backend
         run: uv sync --frozen
 
+      - name: Cache PyInstaller build
+        uses: actions/cache@v4
+        with:
+          path: |
+            backend/build/pyinstaller
+            frontend/src-tauri/resources/gateway
+          key: pyinstaller-${{ runner.os }}-${{ hashFiles('backend/uv.lock', 'scripts/build-gateway.sh') }}
+          restore-keys: |
+            pyinstaller-${{ runner.os }}-
+
       - name: Build PyInstaller gateway
         run: bash scripts/build-gateway.sh
 
@@ -57,6 +67,17 @@ jobs:
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
+
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            frontend/src-tauri/target
+          key: rust-${{ runner.os }}-${{ hashFiles('frontend/src-tauri/Cargo.lock', 'frontend/src-tauri/src/**/*.rs', 'frontend/src-tauri/Cargo.toml') }}
+          restore-keys: |
+            rust-${{ runner.os }}-
 
       - name: Build Tauri app
         working-directory: frontend
