@@ -116,7 +116,7 @@ class McpClient:
         try:
             from mcp import ClientSession
             from mcp.client.stdio import StdioServerParameters, stdio_client
-            from mcp.client.streamable_http import streamablehttp_client
+            from mcp.client.streamable_http import streamable_http_client
         except ImportError:
             self._connect_error = RuntimeError(
                 "mcp package not installed. Install with: pip install mcp"
@@ -141,17 +141,35 @@ class McpClient:
                 if not self.url:
                     raise ValueError("http transport requires a url")
 
-                read, write, _ = await self._exit_stack.enter_async_context(
-                    streamablehttp_client(self.url, headers=self.headers, auth=self.auth)
+                # mcp v2: streamable_http_client takes an httpx2.AsyncClient
+                # with auth/headers attached, not auth=/headers= kwargs.
+                import httpx2
+
+                http_kwargs: dict = {}
+                if self.auth:
+                    http_kwargs["auth"] = self.auth
+                if self.headers:
+                    http_kwargs["headers"] = self.headers
+
+                http_client = httpx2.AsyncClient(
+                    base_url=self.url,
+                    timeout=30.0,
+                    **http_kwargs,
                 )
+                result = await self._exit_stack.enter_async_context(
+                    streamable_http_client(self.url, http_client=http_client)
+                )
+                # mcp v2 returns (read, write), v1 returned (read, write, _)
+                if len(result) == 3:
+                    read, write, _ = result
+                else:
+                    read, write = result
 
             else:
                 raise ValueError(f"Unknown transport: {self.transport}")
 
-            from datetime import timedelta
-
             self._session = await self._exit_stack.enter_async_context(
-                ClientSession(read, write, read_timeout_seconds=timedelta(seconds=self.timeout))
+                ClientSession(read, write, read_timeout_seconds=float(self.timeout))
             )
             await self._session.initialize()
             self._connected = True
@@ -196,7 +214,9 @@ class McpClient:
                 {
                     "name": tool.name,
                     "description": tool.description or "",
-                    "inputSchema": tool.inputSchema or {"type": "object", "properties": {}},
+                    "inputSchema": getattr(tool, "inputSchema", None)
+                    or tool.input_schema
+                    or {"type": "object", "properties": {}},
                 }
             )
         return tools

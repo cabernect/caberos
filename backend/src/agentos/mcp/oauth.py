@@ -182,24 +182,27 @@ async def start_oauth_flow(server: McpServer) -> str:
 
     storage = EncryptedTokenStorage(server.id)
 
-    def redirect_handler(url: str):
+    async def redirect_handler(url: str):
         """Called by the OAuth provider with the authorize URL."""
         log.info("OAuth redirect_handler called with URL: %s", url[:100])
         flow.set_authorize_url(url)
-        return asyncio.sleep(0)  # no-op async
 
-    async def callback_handler() -> tuple[str, str | None]:
+    async def callback_handler():
         """Called by the OAuth provider to wait for the callback.
 
         Times out after 5 minutes so the flow doesn't hang forever if the
         user closes the OAuth tab without completing it.
+        Returns an AuthorizationCodeResult (mcp v2 API).
         """
+        from mcp.shared.auth import AuthorizationCodeResult
+
         log.info("OAuth callback_handler waiting for redirect...")
         try:
-            return await asyncio.wait_for(flow.callback_future, timeout=300.0)
+            code, state = await asyncio.wait_for(flow.callback_future, timeout=300.0)
+            return AuthorizationCodeResult(code=code, state=state)
         except TimeoutError:
             flow.reject("OAuth timed out — user did not complete authorization in 5 minutes")
-            raise TimeoutError("OAuth authorization timed out (5 minutes)")
+            raise TimeoutError("OAuth authorization timed out (5 minutes)") from None
 
     from mcp.client.auth import OAuthClientProvider
 
@@ -249,11 +252,11 @@ async def _run_oauth_flow(server_id: str, server_url: str, auth, flow: OAuthFlow
     6. Token stored via EncryptedTokenStorage
     7. Original request retried with token
     """
-    import httpx
+    import httpx2
 
     try:
         log.info("OAuth flow: making initial request to %s", server_url)
-        async with httpx.AsyncClient(auth=auth, timeout=30.0) as client:
+        async with httpx2.AsyncClient(auth=auth, timeout=30.0) as client:
             # Make a request to the actual server URL to trigger the 401
             # The MCP protocol uses POST with JSON-RPC, but any request
             # will trigger the auth flow
@@ -264,10 +267,11 @@ async def _run_oauth_flow(server_id: str, server_url: str, auth, flow: OAuthFlow
                     headers={"Content-Type": "application/json"},
                 )
                 log.info("OAuth flow: initial request returned status %s", resp.status_code)
-            except httpx.HTTPStatusError as e:
+            except httpx2.HTTPStatusError as e:
                 log.info("OAuth flow: HTTPStatusError (expected): %s", e)
             except Exception as e:
-                log.info("OAuth flow: exception (may be expected): %s", e)
+                log.info("OAuth flow: exception (may be expected): %s", type(e).__name__, e)
+                log.exception("OAuth flow: full exception")
 
         # If we get here without the flow being completed, the token
         # was stored successfully
@@ -287,8 +291,13 @@ async def _run_oauth_flow(server_id: str, server_url: str, auth, flow: OAuthFlow
 
 
 def _frontend_base() -> str:
-    """Get the frontend base URL for redirects after OAuth callback."""
-    return "http://localhost:5173"
+    """Get the frontend base URL for redirects after OAuth callback.
+
+    Returns empty string — we serve a simple HTML page from the callback
+    endpoint for all clients (web and desktop). The dashboard polls for
+    OAuth status and updates automatically.
+    """
+    return ""
 
 
 def handle_oauth_callback(code: str, state: str | None = None, error: str | None = None) -> str:

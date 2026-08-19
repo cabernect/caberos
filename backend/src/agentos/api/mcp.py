@@ -405,14 +405,36 @@ async def oauth_callback(
     """Handle the OAuth callback redirect.
 
     This endpoint is called by the OAuth provider after the user authorizes.
-    It resolves the pending OAuth flow and redirects back to the MCPs page.
+    It resolves the pending OAuth flow and returns a simple HTML page telling
+    the user they can close this tab. The dashboard polls for OAuth status
+    and updates automatically — no redirect needed.
     """
-    from fastapi.responses import RedirectResponse
+    from fastapi.responses import HTMLResponse
 
     from ..mcp.oauth import handle_oauth_callback
 
-    redirect_path = handle_oauth_callback(code=code or "", state=state, error=error)
-    return RedirectResponse(url=redirect_path, status_code=302)
+    result_path = handle_oauth_callback(code=code or "", state=state, error=error)
+    is_error = "oauth_error=" in result_path
+    message = (
+        "Authorization failed. Close this tab and try again."
+        if is_error
+        else "Authorization complete! You can close this tab and return to CaberOS."
+    )
+    return HTMLResponse(
+        content=f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>CaberOS OAuth</title>
+<style>
+  body {{ font-family: -apple-system, system-ui, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; background: #fafaf9; color: #1c1c1c; }}
+  .card {{ text-align: center; padding: 2rem; }}
+  h1 {{ font-size: 1.25rem; margin-bottom: 0.5rem; }}
+  p {{ color: #666; font-size: 0.9rem; }}
+</style></head>
+<body><div class="card">
+  <h1>{message}</h1>
+  <p>You can close this tab.</p>
+</div></body></html>""",
+        status_code=200,
+    )
 
 
 @router.get("/servers/{server_id}/oauth/status")
