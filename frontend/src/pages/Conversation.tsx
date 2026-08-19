@@ -1219,33 +1219,43 @@ export function Conversation() {
           )}
         </div>
 
-        {/* No model configured banner — only show if no default AND no model selected */}
-        {agent && (!agent.provider_id || !agent.model) && !hasModelSelected && (
-          <div
-            className="flex items-center justify-between gap-3 px-4 py-3"
-            style={{
-              background: "var(--sidebar)",
-              borderTop: "1px solid var(--border)",
-            }}
-          >
-            <div className="flex items-center gap-2 text-[13px] text-[var(--ink-2)]">
-              <AlertCircle className="h-4 w-4 shrink-0 text-[var(--accent)]" />
-              <span>
-                No model configured. Add a provider in Settings and assign a
-                model to start chatting.
-              </span>
-            </div>
-            <button
-              onClick={() => setSettingsOpen(true)}
-              className="shrink-0 rounded-md px-3 py-1.5 text-[12px] font-medium"
-              style={{
-                background: "var(--accent)",
-                color: "var(--white)",
-              }}
-            >
-              Configure
-            </button>
-          </div>
+        {/* No provider / no model configured banner */}
+        {agent && !hasModelSelected && (
+          (() => {
+            const noProviders = providers.length === 0;
+            const noModel = !agent.provider_id || !agent.model;
+            if (!noProviders && !noModel) return null;
+            return (
+              <div
+                className="flex items-center justify-between gap-3 px-4 py-3"
+                style={{
+                  background: "var(--sidebar)",
+                  borderTop: "1px solid var(--border)",
+                }}
+              >
+                <div className="flex items-center gap-2 text-[13px] text-[var(--ink-2)]">
+                  <AlertCircle className="h-4 w-4 shrink-0 text-[var(--accent)]" />
+                  <span>
+                    {noProviders
+                      ? "No provider configured. Add a provider in Settings to start chatting."
+                      : "No model configured. Assign a model to this agent to start chatting."}
+                  </span>
+                </div>
+                <button
+                  onClick={() =>
+                    noProviders ? navigate("/settings") : setSettingsOpen(true)
+                  }
+                  className="shrink-0 rounded-md px-3 py-1.5 text-[12px] font-medium"
+                  style={{
+                    background: "var(--accent)",
+                    color: "var(--white)",
+                  }}
+                >
+                  {noProviders ? "Add Provider" : "Configure"}
+                </button>
+              </div>
+            );
+          })()
         )}
 
         {/* Input bar */}
