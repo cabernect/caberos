@@ -140,7 +140,6 @@ async def connect_server(server: McpServer) -> bool:
                     storage=storage,
                     redirect_handler=_noop_redirect_handler,
                     callback_handler=_noop_callback_handler,
-                    timeout=300.0,
                 )
             else:
                 # No OAuth token — the user needs to go through the OAuth flow
