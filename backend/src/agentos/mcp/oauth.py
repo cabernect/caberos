@@ -209,7 +209,6 @@ async def start_oauth_flow(server: McpServer) -> str:
         storage=storage,
         redirect_handler=redirect_handler,
         callback_handler=callback_handler,
-        timeout=300.0,
     )
 
     # Drive the OAuth flow in the background by making a request to the
