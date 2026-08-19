@@ -131,7 +131,14 @@ class ZaloBotChannel(Channel):
                         "text": chunk,
                     },
                 )
-                last_message_id = resp.get("result", {}).get("message_id") or resp.get("message_id")
+                if isinstance(resp, dict):
+                    if not resp.get("ok", True):
+                        err = resp.get("description", "unknown error")
+                        log.error("Zalo Bot sendMessage failed: %s", err)
+                        return {"success": False, "error": err}
+                    last_message_id = resp.get("result", {}).get("message_id") or resp.get(
+                        "message_id"
+                    )
             except Exception as e:
                 log.error("Zalo Bot deliver failed: %s", e)
                 return {"success": False, "error": str(e)}
@@ -193,37 +200,42 @@ class ZaloBotChannel(Channel):
         log.info("Zalo Bot: polling stopped for agent %s", self.agent_id)
 
     async def _poll_loop(self) -> None:
-        """Long-polling loop: call getUpdates repeatedly, process each update."""
+        """Long-polling loop: call getUpdates repeatedly, process each update.
+
+        Zalo Bot getUpdates returns a single event object (not a list like Telegram):
+          {"ok": true, "result": {"event_name": "...", "message": {...}}}
+        When no update arrives during the long-poll window, it returns:
+          {"ok": false, "error_code": 408, "description": "Request timeout"}
+        """
         log.info("Zalo Bot poll loop started for agent %s", self.agent_id)
         while True:
             try:
                 resp = await self._call_api(
                     "getUpdates",
-                    {
-                        "offset": self._last_update_id + 1,
-                        "timeout": POLL_TIMEOUT,
-                    },
+                    {"timeout": str(POLL_TIMEOUT)},
                 )
 
-                # Zalo Bot API returns {"ok": true, "result": [...]} (like Telegram)
-                # 408 "Request timeout" means no updates during the long-poll window — normal
                 if isinstance(resp, dict):
                     if not resp.get("ok", False):
                         if resp.get("error_code") == 408:
-                            continue  # No updates — just poll again
+                            continue  # No updates during long-poll — normal, poll again
                         desc = resp.get("description", "unknown error")
                         log.error("Zalo Bot getUpdates failed: %s", desc)
                         await asyncio.sleep(5)
                         continue
-                    updates = resp.get("result", [])
-                else:
-                    updates = resp if isinstance(resp, list) else []
-                for update in updates:
-                    update_id = update.get("update_id", 0)
-                    if update_id > self._last_update_id:
-                        self._last_update_id = update_id
-
-                    asyncio.create_task(self._process_update(update))
+                    print(f"[Zalo Bot] RECEIVED update: {str(resp)[:300]}", flush=True)
+                    result = resp.get("result")
+                    # Real API: result is a single event object
+                    # Legacy/test compat: result may be a list of updates
+                    if isinstance(result, list):
+                        for update in result:
+                            asyncio.create_task(self._process_update(update))
+                    elif isinstance(result, dict):
+                        asyncio.create_task(self._process_update(result))
+                elif isinstance(resp, list):
+                    # Legacy/test compat: raw list of updates
+                    for update in resp:
+                        asyncio.create_task(self._process_update(update))
 
             except asyncio.CancelledError:
                 log.info("Zalo Bot poll loop cancelled for agent %s", self.agent_id)
