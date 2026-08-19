@@ -4,6 +4,7 @@ import { Plug, Plus, Trash2, RefreshCw, ChevronDown, ChevronRight, Key, Search, 
 import { DashboardSidebar, type NavKey } from "@/components/DashboardSidebar";
 import { api } from "@/lib/api";
 import { useConfirm } from "@/lib/confirm";
+import { openUrl } from "@/lib/openUrl";
 import type { McpServerInfo, McpToolInfo, McpCatalogEntry } from "@/lib/types";
 
 type Tab = "mine" | "browse";
@@ -661,7 +662,7 @@ function ServerCard({
               try {
                 const { authorize_url } = await api.startMcpOAuth(server.id);
                 // Open the authorize URL in a new tab
-                window.open(authorize_url, "_blank");
+                openUrl(authorize_url);
                 // Start polling for OAuth completion
                 const poll = setInterval(async () => {
                   try {

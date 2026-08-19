@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Plus, Trash2, Save, X, RefreshCw, Check, Info, Settings, Server, Cpu } from "lucide-react";
 import { api } from "@/lib/api";
 import { useConfirm } from "@/lib/confirm";
+import { openUrl } from "@/lib/openUrl";
 import type { Provider, ModelInfo, Operator } from "@/lib/types";
 import { DashboardSidebar, type NavKey } from "@/components/DashboardSidebar";
 import { LogoMark } from "@/components/LogoMark";
@@ -13,12 +14,7 @@ async function openExternal(e: React.MouseEvent<HTMLAnchorElement>) {
   const href = e.currentTarget.href;
   if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
     e.preventDefault();
-    try {
-      const { openUrl } = await import("@tauri-apps/plugin-opener");
-      await openUrl(href);
-    } catch {
-      window.open(href, "_blank", "noopener,noreferrer");
-    }
+    await openUrl(href);
   }
 }
 
