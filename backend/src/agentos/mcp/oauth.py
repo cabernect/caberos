@@ -188,18 +188,22 @@ async def start_oauth_flow(server: McpServer) -> str:
         flow.set_authorize_url(url)
         return asyncio.sleep(0)  # no-op async
 
-    async def callback_handler() -> tuple[str, str | None]:
+    async def callback_handler():
         """Called by the OAuth provider to wait for the callback.
 
         Times out after 5 minutes so the flow doesn't hang forever if the
         user closes the OAuth tab without completing it.
+        Returns an AuthorizationCodeResult (mcp v2 API).
         """
+        from mcp.shared.auth import AuthorizationCodeResult
+
         log.info("OAuth callback_handler waiting for redirect...")
         try:
-            return await asyncio.wait_for(flow.callback_future, timeout=300.0)
+            code, state = await asyncio.wait_for(flow.callback_future, timeout=300.0)
+            return AuthorizationCodeResult(code=code, state=state)
         except TimeoutError:
             flow.reject("OAuth timed out — user did not complete authorization in 5 minutes")
-            raise TimeoutError("OAuth authorization timed out (5 minutes)")
+            raise TimeoutError("OAuth authorization timed out (5 minutes)") from None
 
     from mcp.client.auth import OAuthClientProvider
 
