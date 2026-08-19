@@ -4,6 +4,7 @@ import {
   FileText, Folder, ChevronRight, ChevronDown, FolderOpen,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { useConfirm } from "@/lib/confirm";
 import type { Agent, ChannelInfo, ModelInfo, Provider, Skill, SkillInfo, WorkspaceEntry } from "@/lib/types";
 import { ModelSelect } from "@/components/ModelSelect";
 import { ThinkingToggle } from "@/components/ThinkingToggle";
@@ -804,6 +805,7 @@ function SkillsTab({ agentId, showSaved }: { agentId: string; showSaved: (msg: s
   const [systemSkills, setSystemSkills] = useState<SkillInfo[]>([]);
   const [agentSkills, setAgentSkills] = useState<Skill[]>([]);
   const [loading, setLoading] = useState(true);
+  const { confirm } = useConfirm();
 
   const load = useCallback(async () => {
     try {
@@ -821,7 +823,13 @@ function SkillsTab({ agentId, showSaved }: { agentId: string; showSaved: (msg: s
   useEffect(() => { load(); }, [load]);
 
   const handleDeleteAgentSkill = async (name: string) => {
-    if (!confirm(`Delete agent skill "${name}"?`)) return;
+    const ok = await confirm({
+      title: "Delete skill?",
+      message: `Delete agent skill "${name}"?`,
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!ok) return;
     await api.deleteAgentSkill(agentId, name);
     load();
     showSaved("Skill deleted");

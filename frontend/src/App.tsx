@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { api } from "./lib/api";
+import { ConfirmProvider } from "./lib/confirm";
 import { Login } from "./pages/Login";
 import { AgentList } from "./pages/AgentList";
 import { Conversation } from "./pages/Conversation";
@@ -71,6 +72,7 @@ export default function App() {
   }
 
   return (
+    <ConfirmProvider>
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={authed ? <Navigate to="/agents" /> : <Login />} />
@@ -122,6 +124,7 @@ export default function App() {
         />
       </Routes>
     </BrowserRouter>
+    </ConfirmProvider>
   );
 }
 

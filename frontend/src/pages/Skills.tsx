@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Sparkles, Upload, Trash2, FileText, Search, Package } from "lucide-react";
 import { DashboardSidebar, type NavKey } from "@/components/DashboardSidebar";
 import { api } from "@/lib/api";
+import { useConfirm } from "@/lib/confirm";
 import type { SkillInfo } from "@/lib/types";
 
 export function Skills() {
@@ -15,6 +16,7 @@ export function Skills() {
   const [importMsg, setImportMsg] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
+  const { confirm } = useConfirm();
 
   const loadSkills = async () => {
     try {
@@ -70,7 +72,13 @@ export function Skills() {
   };
 
   const handleDelete = async (name: string) => {
-    if (!confirm(`Delete skill "${name}"? This cannot be undone.`)) return;
+    const ok = await confirm({
+      title: "Delete skill?",
+      message: `Delete skill "${name}"? This cannot be undone.`,
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await api.deleteSkill(name);
       setSkills(skills.filter((s) => s.name !== name));
