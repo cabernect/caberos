@@ -415,7 +415,11 @@ async def oauth_callback(
 
     result_path = handle_oauth_callback(code=code or "", state=state, error=error)
     is_error = "oauth_error=" in result_path
-    message = "Authorization failed. Close this tab and try again." if is_error else "Authorization complete! You can close this tab and return to CaberOS."
+    message = (
+        "Authorization failed. Close this tab and try again."
+        if is_error
+        else "Authorization complete! You can close this tab and return to CaberOS."
+    )
     return HTMLResponse(
         content=f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>CaberOS OAuth</title>
