@@ -168,10 +168,8 @@ class McpClient:
             else:
                 raise ValueError(f"Unknown transport: {self.transport}")
 
-            from datetime import timedelta
-
             self._session = await self._exit_stack.enter_async_context(
-                ClientSession(read, write, read_timeout_seconds=timedelta(seconds=self.timeout))
+                ClientSession(read, write, read_timeout_seconds=float(self.timeout))
             )
             await self._session.initialize()
             self._connected = True

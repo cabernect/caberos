@@ -182,11 +182,10 @@ async def start_oauth_flow(server: McpServer) -> str:
 
     storage = EncryptedTokenStorage(server.id)
 
-    def redirect_handler(url: str):
+    async def redirect_handler(url: str):
         """Called by the OAuth provider with the authorize URL."""
         log.info("OAuth redirect_handler called with URL: %s", url[:100])
         flow.set_authorize_url(url)
-        return asyncio.sleep(0)  # no-op async
 
     async def callback_handler():
         """Called by the OAuth provider to wait for the callback.
@@ -271,7 +270,8 @@ async def _run_oauth_flow(server_id: str, server_url: str, auth, flow: OAuthFlow
             except httpx2.HTTPStatusError as e:
                 log.info("OAuth flow: HTTPStatusError (expected): %s", e)
             except Exception as e:
-                log.info("OAuth flow: exception (may be expected): %s", e)
+                log.info("OAuth flow: exception (may be expected): %s", type(e).__name__, e)
+                log.exception("OAuth flow: full exception")
 
         # If we get here without the flow being completed, the token
         # was stored successfully
