@@ -300,6 +300,8 @@ A meta-agent that helps you design and create new agents.
 
 Skills are opt-in knowledge packs that agents can load on demand. They are **not** auto-injected into the system prompt — the agent sees a menu of names + descriptions and calls `skills_load(name)` when it decides to use one.
 
+> **Attribution:** Built-in skills are adapted from [Anthropic's skills repository](https://github.com/anthropics/skills).
+
 **16 built-in skills:**
 
 | Skill | Description |
