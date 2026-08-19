@@ -116,7 +116,7 @@ class McpClient:
         try:
             from mcp import ClientSession
             from mcp.client.stdio import StdioServerParameters, stdio_client
-            from mcp.client.streamable_http import streamablehttp_client
+            from mcp.client.streamable_http import streamable_http_client
         except ImportError:
             self._connect_error = RuntimeError(
                 "mcp package not installed. Install with: pip install mcp"
@@ -141,8 +141,23 @@ class McpClient:
                 if not self.url:
                     raise ValueError("http transport requires a url")
 
+                # mcp v2: streamable_http_client takes an httpx2.AsyncClient
+                # with auth/headers attached, not auth=/headers= kwargs.
+                import httpx2
+
+                http_kwargs: dict = {}
+                if self.auth:
+                    http_kwargs["auth"] = self.auth
+                if self.headers:
+                    http_kwargs["headers"] = self.headers
+
+                http_client = httpx2.AsyncClient(
+                    base_url=self.url,
+                    timeout=30.0,
+                    **http_kwargs,
+                )
                 read, write, _ = await self._exit_stack.enter_async_context(
-                    streamablehttp_client(self.url, headers=self.headers, auth=self.auth)
+                    streamable_http_client(self.url, http_client=http_client)
                 )
 
             else:

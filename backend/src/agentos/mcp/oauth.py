@@ -249,11 +249,11 @@ async def _run_oauth_flow(server_id: str, server_url: str, auth, flow: OAuthFlow
     6. Token stored via EncryptedTokenStorage
     7. Original request retried with token
     """
-    import httpx
+    import httpx2
 
     try:
         log.info("OAuth flow: making initial request to %s", server_url)
-        async with httpx.AsyncClient(auth=auth, timeout=30.0) as client:
+        async with httpx2.AsyncClient(auth=auth, timeout=30.0) as client:
             # Make a request to the actual server URL to trigger the 401
             # The MCP protocol uses POST with JSON-RPC, but any request
             # will trigger the auth flow
@@ -264,7 +264,7 @@ async def _run_oauth_flow(server_id: str, server_url: str, auth, flow: OAuthFlow
                     headers={"Content-Type": "application/json"},
                 )
                 log.info("OAuth flow: initial request returned status %s", resp.status_code)
-            except httpx.HTTPStatusError as e:
+            except httpx2.HTTPStatusError as e:
                 log.info("OAuth flow: HTTPStatusError (expected): %s", e)
             except Exception as e:
                 log.info("OAuth flow: exception (may be expected): %s", e)
