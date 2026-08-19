@@ -1,6 +1,6 @@
 [project]
 name = "agentos"
-version = "0.1.0"
+version = "0.1.1"
 description = "CaberOS — local-first AI Agent Operating System"
 readme = "README.md"
 authors = [
