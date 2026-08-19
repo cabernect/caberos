@@ -156,9 +156,14 @@ class McpClient:
                     timeout=30.0,
                     **http_kwargs,
                 )
-                read, write, _ = await self._exit_stack.enter_async_context(
+                result = await self._exit_stack.enter_async_context(
                     streamable_http_client(self.url, http_client=http_client)
                 )
+                # mcp v2 returns (read, write), v1 returned (read, write, _)
+                if len(result) == 3:
+                    read, write, _ = result
+                else:
+                    read, write = result
 
             else:
                 raise ValueError(f"Unknown transport: {self.transport}")
