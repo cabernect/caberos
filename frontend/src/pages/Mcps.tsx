@@ -95,7 +95,7 @@ export function Mcps() {
   const handleConnect = async (serverId: string) => {
     try {
       await api.connectMcpServer(serverId);
-      fetchServers();
+      await fetchServers();
     } catch {
       // ignore
     }
@@ -564,7 +564,7 @@ function ServerCard({
   tools?: McpToolInfo[];
   onToggle: () => void;
   onDelete: () => void;
-  onConnect: () => void;
+  onConnect: () => Promise<void>;
   onApprovalChange: (requireApproval: boolean) => void;
   onEnabledChange: (enabled: boolean) => void;
   onCredentialChanged: () => void;
@@ -575,6 +575,7 @@ function ServerCard({
   const needsOAuth = server.auth_type === "oauth" && !server.connected && server.enabled;
   const [showCredForm, setShowCredForm] = useState(false);
   const [oauthLoading, setOauthLoading] = useState(false);
+  const [connecting, setConnecting] = useState(false);
   const { toast } = useConfirm();
 
   return (
@@ -734,12 +735,23 @@ function ServerCard({
         )}
         {server.enabled && (
           <button
-            onClick={onConnect}
+            onClick={async () => {
+              setConnecting(true);
+              try {
+                await onConnect();
+              } finally {
+                setConnecting(false);
+              }
+            }}
+            disabled={connecting}
             className="rounded-[4px] p-1 transition"
-            style={{ background: "none", border: "1px solid #E0DFDC", cursor: "pointer" }}
+            style={{ background: "none", border: "1px solid #E0DFDC", cursor: connecting ? "not-allowed" : "pointer" }}
             title="Reconnect"
           >
-            <RefreshCw className="h-3.5 w-3.5" style={{ color: "var(--ink-2)" }} />
+            <RefreshCw
+              className={`h-3.5 w-3.5 ${connecting ? "animate-spin" : ""}`}
+              style={{ color: "var(--ink-2)" }}
+            />
           </button>
         )}
         <button
