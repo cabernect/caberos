@@ -28,3 +28,7 @@ class Session(Base, IdMixin):
     # the context window overflows. Stores the structured summary of older
     # messages that have been compacted out of the verbatim context.
     conversation_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Channel that created this session (null = dashboard).
+    # Used to keep channel sessions persistent — one session per channel+chat.
+    channel: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    external_user_id: Mapped[str | None] = mapped_column(String(255), nullable=True)

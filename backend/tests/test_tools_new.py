@@ -344,7 +344,7 @@ async def test_web_search_returns_results(monkeypatch):
         async def __aexit__(self, *args):
             pass
 
-        async def get(self, *args, **kwargs):
+        async def post(self, *args, **kwargs):
             return FakeResponse()
 
     monkeypatch.setattr(web_module.httpx, "AsyncClient", FakeClient)

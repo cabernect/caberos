@@ -129,9 +129,17 @@ class ZaloBotChannel(Channel):
                     {
                         "chat_id": outbound.chat_id,
                         "text": chunk,
+                        "parse_mode": "markdown",
                     },
                 )
-                last_message_id = resp.get("result", {}).get("message_id") or resp.get("message_id")
+                if isinstance(resp, dict):
+                    if not resp.get("ok", True):
+                        err = resp.get("description", "unknown error")
+                        log.error("Zalo Bot sendMessage failed: %s", err)
+                        return {"success": False, "error": err}
+                    last_message_id = resp.get("result", {}).get("message_id") or resp.get(
+                        "message_id"
+                    )
             except Exception as e:
                 log.error("Zalo Bot deliver failed: %s", e)
                 return {"success": False, "error": str(e)}
@@ -193,37 +201,41 @@ class ZaloBotChannel(Channel):
         log.info("Zalo Bot: polling stopped for agent %s", self.agent_id)
 
     async def _poll_loop(self) -> None:
-        """Long-polling loop: call getUpdates repeatedly, process each update."""
+        """Long-polling loop: call getUpdates repeatedly, process each update.
+
+        Zalo Bot getUpdates returns a single event object (not a list like Telegram):
+          {"ok": true, "result": {"event_name": "...", "message": {...}}}
+        When no update arrives during the long-poll window, it returns:
+          {"ok": false, "error_code": 408, "description": "Request timeout"}
+        """
         log.info("Zalo Bot poll loop started for agent %s", self.agent_id)
         while True:
             try:
                 resp = await self._call_api(
                     "getUpdates",
-                    {
-                        "offset": self._last_update_id + 1,
-                        "timeout": POLL_TIMEOUT,
-                    },
+                    {"timeout": str(POLL_TIMEOUT)},
                 )
 
-                # Zalo Bot API returns {"ok": true, "result": [...]} (like Telegram)
-                # 408 "Request timeout" means no updates during the long-poll window — normal
                 if isinstance(resp, dict):
                     if not resp.get("ok", False):
                         if resp.get("error_code") == 408:
-                            continue  # No updates — just poll again
+                            continue  # No updates during long-poll — normal, poll again
                         desc = resp.get("description", "unknown error")
                         log.error("Zalo Bot getUpdates failed: %s", desc)
                         await asyncio.sleep(5)
                         continue
-                    updates = resp.get("result", [])
-                else:
-                    updates = resp if isinstance(resp, list) else []
-                for update in updates:
-                    update_id = update.get("update_id", 0)
-                    if update_id > self._last_update_id:
-                        self._last_update_id = update_id
-
-                    asyncio.create_task(self._process_update(update))
+                    result = resp.get("result")
+                    # Real API: result is a single event object
+                    # Legacy/test compat: result may be a list of updates
+                    if isinstance(result, list):
+                        for update in result:
+                            asyncio.create_task(self._process_update(update))
+                    elif isinstance(result, dict):
+                        asyncio.create_task(self._process_update(result))
+                elif isinstance(resp, list):
+                    # Legacy/test compat: raw list of updates
+                    for update in resp:
+                        asyncio.create_task(self._process_update(update))
 
             except asyncio.CancelledError:
                 log.info("Zalo Bot poll loop cancelled for agent %s", self.agent_id)
@@ -239,11 +251,16 @@ class ZaloBotChannel(Channel):
             if inbound is None:
                 return
 
+            log.info(
+                "Zalo Bot: processing update from %s: %s",
+                inbound.external_user_id,
+                inbound.text[:50],
+            )
             await self.send_typing(inbound.external_user_id)
 
-            from ..runner import run_agent
+            from ..run_manager import start_run
 
-            result = await run_agent(
+            result = await start_run(
                 agent_id=self.agent_id,
                 text=inbound.text,
                 user_id=inbound.external_user_id,
@@ -251,7 +268,22 @@ class ZaloBotChannel(Channel):
                 trigger="user_message",
             )
 
-            if result.get("status") == "completed":
+            # Wait for the run to complete so we can deliver the reply
+            from ..run_manager import get_run
+
+            run_id = result.get("run_id")
+            if run_id:
+                ctx = get_run(run_id)
+                if ctx:
+                    await ctx.task
+                    log.info("Zalo Bot: agent run status=%s", ctx.status)
+                else:
+                    log.warning("Zalo Bot: run context not found for %s", run_id)
+
+            # Deliver the reply for both completed and failed runs.
+            # Failed runs still store an assistant message (e.g. rate-limit
+            # error) that the user should see.
+            if run_id:
                 from sqlalchemy import select
 
                 from ..db import async_session_factory
@@ -261,7 +293,7 @@ class ZaloBotChannel(Channel):
                     stmt = (
                         select(Message.content)
                         .join(Run, Message.run_id == Run.id)
-                        .where(Run.id == result["run_id"], Message.role == "assistant")
+                        .where(Run.id == run_id, Message.role == "assistant")
                         .order_by(Message.seq.desc())
                         .limit(1)
                     )
@@ -269,13 +301,23 @@ class ZaloBotChannel(Channel):
                     final_answer = msg_result.scalar_one_or_none()
 
                 if final_answer:
+                    log.info(
+                        "Zalo Bot: delivering reply (%d chars) to %s",
+                        len(final_answer),
+                        inbound.external_user_id,
+                    )
                     outbound = OutboundMessage(
                         session_id=result["session_id"],
                         text=final_answer,
                         chat_id=inbound.external_user_id,
                         reply_to_message_id=inbound.message_id,
                     )
-                    await self.deliver(outbound)
+                    deliver_result = await self.deliver(outbound)
+                    log.info("Zalo Bot: deliver result: %s", deliver_result)
+                else:
+                    log.warning(
+                        "Zalo Bot: no assistant message found for run %s", result.get("run_id")
+                    )
 
         except Exception:
             log.error("Zalo Bot: failed to process update", exc_info=True)

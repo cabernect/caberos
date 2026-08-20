@@ -376,10 +376,15 @@ class TestZaloBotChannel:
             chat_id="chat-abc-123",
         )
         mock_response = {"message_id": "zalo-bot-msg-1", "date": 1775362520302}
-        with patch.object(ch, "_call_api", new_callable=AsyncMock, return_value=mock_response):
+        with patch.object(
+            ch, "_call_api", new_callable=AsyncMock, return_value=mock_response
+        ) as mock_api:
             result = await ch.deliver(outbound)
         assert result["success"] is True
         assert result["message_id"] == "zalo-bot-msg-1"
+        # Verify parse_mode is set to markdown
+        call_args = mock_api.call_args
+        assert call_args[0][1].get("parse_mode") == "markdown"
 
     @pytest.mark.asyncio
     async def test_deliver_splits_long_message(self):
@@ -453,7 +458,6 @@ class TestZaloBotChannel:
     @pytest.mark.asyncio
     async def test_poll_loop_processes_updates(self):
         ch = ZaloBotChannel(bot_token="bot_id:secret_key", agent_id="agent-1")
-        ch._last_update_id = 0
 
         call_count = 0
 
@@ -464,9 +468,10 @@ class TestZaloBotChannel:
                 return {}
             if method == "getUpdates":
                 if call_count == 1:
-                    return [
-                        {
-                            "update_id": 50,
+                    # Real Zalo Bot API returns a single event object in result
+                    return {
+                        "ok": True,
+                        "result": {
                             "event_name": "message.text.received",
                             "message": {
                                 "chat": {"id": "chat-1", "chat_type": "PRIVATE"},
@@ -475,10 +480,10 @@ class TestZaloBotChannel:
                                 "text": "hello",
                                 "date": 1775362520302,
                             },
-                        }
-                    ]
+                        },
+                    }
                 await asyncio.sleep(10)
-                return []
+                return {"ok": False, "error_code": 408, "description": "Request timeout"}
             return {}
 
         with patch.object(ch, "_call_api", new_callable=AsyncMock, side_effect=mock_call_api):
@@ -492,7 +497,6 @@ class TestZaloBotChannel:
                     pass
 
                 assert mock_process.call_count >= 1
-                assert ch._last_update_id == 50
 
     def test_webhook_secret_derived_from_token(self):
         import hashlib

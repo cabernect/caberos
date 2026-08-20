@@ -126,6 +126,8 @@ export interface SessionInfo {
   started_at: string;
   last_activity_at: string;
   message_count: number;
+  channel?: string | null;
+  external_user_id?: string | null;
 }
 
 // SSE event payloads

@@ -30,6 +30,10 @@ from .scripted_model import ScriptedResponse
 # See: https://docs.litellm.ai/docs/reasoning_content#openai-responses-api---auto-summary-control
 litellm.reasoning_auto_summary = True
 
+# Drop unsupported params instead of erroring (e.g. reasoning_effort on
+# models/providers that don't support it).
+litellm.drop_params = True
+
 log = __import__("logging").getLogger("agentos.harness.litellm")
 
 
@@ -186,9 +190,16 @@ class LiteLLMAdapter:
     ) -> None:
         enabled = agent_model.thinking_enabled
         if enabled or enabled is False or (enabled is None and kwargs.get("tools")):
-            kwargs["reasoning_effort"] = (
-                agent_model.thinking_effort or "medium" if enabled else "none"
-            )
+            effort = agent_model.thinking_effort or "medium" if enabled else "none"
+
+            provider_type = provider.get("type", "")
+            if provider_type == "openrouter":
+                # OpenRouter uses `reasoning` in extra_body, not reasoning_effort
+                extra = kwargs.get("extra_body", {})
+                extra["reasoning"] = {"effort": effort}
+                kwargs["extra_body"] = extra
+            else:
+                kwargs["reasoning_effort"] = effort
 
     async def complete(
         self,

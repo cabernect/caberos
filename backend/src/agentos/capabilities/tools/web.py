@@ -13,6 +13,8 @@ from typing import Any
 import httpx
 from bs4 import BeautifulSoup
 
+from ...ssl_utils import SSL_CERT_PATH
+
 
 async def web_search(args: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
     """Search the web using DuckDuckGo (free, no API key).
@@ -25,12 +27,21 @@ async def web_search(args: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
     max_results = args.get("max_results", 5)
 
     try:
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-            # Use DuckDuckGo's HTML endpoint — no API key needed
-            resp = await client.get(
+        async with httpx.AsyncClient(
+            timeout=15, follow_redirects=True, verify=SSL_CERT_PATH
+        ) as client:
+            # Use DuckDuckGo's HTML endpoint — POST avoids the 202 captcha
+            # page that GET triggers for longer/complex queries
+            resp = await client.post(
                 "https://html.duckduckgo.com/html/",
-                params={"q": query},
-                headers={"User-Agent": "CaberOS/0.1 (local-first agent OS)"},
+                data={"q": query},
+                headers={
+                    "User-Agent": (
+                        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/120.0.0.0 Safari/537.36"
+                    )
+                },
             )
             resp.raise_for_status()
     except httpx.HTTPError as e:
@@ -77,7 +88,9 @@ async def web_fetch(args: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
     max_chars = args.get("max_chars", 8000)
 
     try:
-        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+        async with httpx.AsyncClient(
+            timeout=20, follow_redirects=True, verify=SSL_CERT_PATH
+        ) as client:
             resp = await client.get(
                 url,
                 headers={"User-Agent": "CaberOS/0.1 (local-first agent OS)"},

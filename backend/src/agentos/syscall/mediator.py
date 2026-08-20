@@ -120,10 +120,15 @@ class SyscallHandler:
         )
         needs_approval = grant.require_approval if grant else cap.require_approval
         if needs_approval and not settings.yolo_mode:
+            # Auto-approve for external channel sessions (Zalo, Telegram, etc.)
+            # — there's no operator at the dashboard to approve, and the channel
+            # bot needs to respond autonomously.
+            if session.channel:
+                pass  # Auto-approved for channel sessions
             # Check session-scoped allowlist first — if the operator previously
             # approved this exact capability+args with "remember for this session",
             # skip the approval gate.
-            if approval_registry.is_session_approved(session.id, call.name, call.args):
+            elif approval_registry.is_session_approved(session.id, call.name, call.args):
                 pass  # Auto-approved for this session
             else:
                 approval_result = await self._await_approval(

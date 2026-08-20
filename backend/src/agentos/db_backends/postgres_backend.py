@@ -64,6 +64,8 @@ class PostgresBackend(DatabaseBackend):
             ("messages", "subagent_id", "VARCHAR(36)"),
             ("mcp_servers", "require_approval", "BOOLEAN DEFAULT TRUE"),
             ("mcp_servers", "oauth_config", "TEXT"),
+            ("sessions", "channel", "VARCHAR(50)"),
+            ("sessions", "external_user_id", "VARCHAR(255)"),
         ]
         for table, column, col_type in patches:
             if not await self.column_exists(conn, table, column):

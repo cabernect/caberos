@@ -5,6 +5,10 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
+# Enable INFO-level logging for agentos modules so channel loading, polling,
+# and other startup activity is visible in the console.
+logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
+
 # Fix SSL certificate verification for LiteLLM's remote model catalog fetch
 # and httpx requests. On macOS behind a corporate firewall/proxy, the system
 # cert store (/etc/ssl/cert.pem) includes the proxy's CA, but Python's
@@ -17,15 +21,16 @@ if "SSL_CERT_FILE" not in os.environ:
 
         os.environ["SSL_CERT_FILE"] = certifi.where()
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
-from .api import (
+from .api import (  # noqa: E402
     agent_files,
     agents,
     approvals,
     channels,
     chat,
+    data,
     elicitation,
     mcp,
     observability,
@@ -34,9 +39,9 @@ from .api import (
     settings,
     skills,
 )
-from .auth import router as auth_router
-from .capabilities.builtin import register_builtin_capabilities
-from .db import init_db
+from .auth import router as auth_router  # noqa: E402
+from .capabilities.builtin import register_builtin_capabilities  # noqa: E402
+from .db import init_db  # noqa: E402
 
 # In-memory session store (token -> operator_id).
 # TODO: persist in DB for restart survival (D4).
@@ -201,6 +206,7 @@ app.include_router(mcp.router)
 app.include_router(channels.router)
 app.include_router(observability.router)
 app.include_router(settings.router)
+app.include_router(data.router)
 
 
 @app.get("/health")

@@ -25,6 +25,8 @@ import asyncio
 import json
 import logging
 
+from mcp.client.auth import OAuthClientProvider
+
 from ..db import async_session_factory
 from ..models.mcp import McpServer
 from . import credentials as mcp_creds
@@ -76,14 +78,23 @@ class OAuthFlowState:
 class EncryptedTokenStorage:
     """TokenStorage protocol implementation backed by encrypted credentials.
 
-    Stores OAuth tokens in the mcp_server_credentials table using Fernet encryption.
+    Stores OAuth tokens and client info in the mcp_server_credentials table
+    using Fernet encryption. Both are persisted so that token refresh works
+    across app restarts — without persisted client_info, the MCP SDK's
+    can_refresh_token() returns False and falls back to full re-authorization.
     """
 
     def __init__(self, server_id: str) -> None:
         self.server_id = server_id
 
     async def get_tokens(self):
-        """Retrieve stored OAuth tokens."""
+        """Retrieve stored OAuth tokens.
+
+        If expires_at is stored, computes remaining expires_in so the SDK can
+        correctly determine token validity after app restart.
+        """
+        import time
+
         from mcp.shared.auth import OAuthToken
 
         async with async_session_factory() as db:
@@ -92,21 +103,41 @@ class EncryptedTokenStorage:
                 if cred.credential_type == "oauth_token":
                     value = mcp_creds.decrypt_credential(cred)
                     if isinstance(value, dict):
+                        # Compute remaining lifetime from stored expires_at
+                        expires_at = value.get("expires_at")
+                        stored_expires_in = value.get("expires_in")
+                        if expires_at is not None:
+                            remaining = int(expires_at - time.time())
+                            expires_in = remaining if remaining > 0 else 0
+                        else:
+                            expires_in = stored_expires_in
                         return OAuthToken(
                             access_token=value.get("access_token", ""),
                             token_type=value.get("token_type", "Bearer"),
-                            expires_in=value.get("expires_in"),
+                            expires_in=expires_in,
                             scope=value.get("scope"),
                             refresh_token=value.get("refresh_token"),
                         )
         return None
 
     async def set_tokens(self, tokens) -> None:
-        """Store OAuth tokens (replaces any existing oauth_token credential)."""
+        """Store OAuth tokens (replaces any existing oauth_token credential).
+
+        Also stores expires_at (absolute Unix timestamp) so that token_expiry_time
+        can be restored across app restarts. Without this, the MCP SDK thinks the
+        token is still valid (token_expiry_time=None → is_token_valid()=True),
+        sends an expired access token, gets 401, and falls back to full
+        re-authorization instead of using the refresh token.
+        """
+        import time
+
+        expires_in = tokens.expires_in
+        expires_at = (time.time() + int(expires_in)) if expires_in is not None else None
         token_dict = {
             "access_token": tokens.access_token,
             "token_type": tokens.token_type or "Bearer",
             "expires_in": tokens.expires_in,
+            "expires_at": expires_at,
             "scope": tokens.scope,
             "refresh_token": tokens.refresh_token,
         }
@@ -123,14 +154,64 @@ class EncryptedTokenStorage:
             await db.commit()
 
     async def get_client_info(self):
-        """Get stored OAuth client info (for dynamic client registration)."""
-        # We don't persist client info — the MCP SDK re-registers if needed
+        """Retrieve stored OAuth client info (for token refresh across restarts)."""
+        from mcp.shared.auth import OAuthClientInformationFull
+
+        async with async_session_factory() as db:
+            creds = await mcp_creds.list_credentials(db, self.server_id)
+            for cred in creds:
+                if cred.credential_type == "oauth_client_info":
+                    value = mcp_creds.decrypt_credential(cred)
+                    if isinstance(value, dict):
+                        try:
+                            return OAuthClientInformationFull.model_validate(value)
+                        except Exception:
+                            log.warning(
+                                "Failed to parse stored OAuth client info for %s", self.server_id
+                            )
+                            return None
         return None
 
     async def set_client_info(self, client_info) -> None:
-        """Store OAuth client info."""
-        # No-op — we don't persist client info in v0.1
-        pass
+        """Store OAuth client info so refresh works after app restart."""
+        if client_info is None:
+            return
+        try:
+            info_dict = client_info.model_dump(mode="json", exclude_none=True)
+        except Exception:
+            log.warning("Failed to serialize OAuth client info for %s", self.server_id)
+            return
+        async with async_session_factory() as db:
+            # Remove existing client_info credentials for this server
+            creds = await mcp_creds.list_credentials(db, self.server_id)
+            for cred in creds:
+                if cred.credential_type == "oauth_client_info":
+                    await mcp_creds.delete_credential(db, cred.id)
+            await mcp_creds.store_credential(
+                db, self.server_id, "oauth_client_info", info_dict, label="OAuth client info"
+            )
+            await db.commit()
+
+
+class CaberOSOAuthProvider(OAuthClientProvider):
+    """OAuthClientProvider that restores token_expiry_time on init.
+
+    The MCP SDK's _initialize() loads tokens and client_info from storage but
+    does NOT call update_token_expiry(), so token_expiry_time stays None and
+    is_token_valid() returns True even for expired tokens. This causes the SDK
+    to send an expired access token, get 401, and fall back to full
+    re-authorization (which fails with noop redirect/callback handlers).
+
+    This subclass calls update_token_expiry() after _initialize() so that
+    expired tokens are detected immediately and the refresh flow is used
+    instead of full re-authorization.
+    """
+
+    async def _initialize(self) -> None:
+        await super()._initialize()
+        # Restore token expiry time from the loaded token's expires_in
+        if self.context.current_tokens and self.context.current_tokens.expires_in is not None:
+            self.context.update_token_expiry(self.context.current_tokens)
 
 
 # --- OAuth flow management ---
@@ -204,9 +285,7 @@ async def start_oauth_flow(server: McpServer) -> str:
             flow.reject("OAuth timed out — user did not complete authorization in 5 minutes")
             raise TimeoutError("OAuth authorization timed out (5 minutes)") from None
 
-    from mcp.client.auth import OAuthClientProvider
-
-    auth = OAuthClientProvider(
+    auth = CaberOSOAuthProvider(
         server_url=server.url,
         client_metadata=client_metadata,
         storage=storage,
