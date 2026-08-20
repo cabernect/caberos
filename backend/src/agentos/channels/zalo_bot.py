@@ -258,9 +258,9 @@ class ZaloBotChannel(Channel):
             )
             await self.send_typing(inbound.external_user_id)
 
-            from ..runner import run_agent
+            from ..run_manager import start_run
 
-            result = await run_agent(
+            result = await start_run(
                 agent_id=self.agent_id,
                 text=inbound.text,
                 user_id=inbound.external_user_id,
@@ -268,9 +268,22 @@ class ZaloBotChannel(Channel):
                 trigger="user_message",
             )
 
-            log.info("Zalo Bot: agent run status=%s", result.get("status"))
+            # Wait for the run to complete so we can deliver the reply
+            from ..run_manager import get_run
 
-            if result.get("status") == "completed":
+            run_id = result.get("run_id")
+            if run_id:
+                ctx = get_run(run_id)
+                if ctx:
+                    await ctx.task
+                    log.info("Zalo Bot: agent run status=%s", ctx.status)
+                else:
+                    log.warning("Zalo Bot: run context not found for %s", run_id)
+
+            # Deliver the reply for both completed and failed runs.
+            # Failed runs still store an assistant message (e.g. rate-limit
+            # error) that the user should see.
+            if run_id:
                 from sqlalchemy import select
 
                 from ..db import async_session_factory
@@ -280,7 +293,7 @@ class ZaloBotChannel(Channel):
                     stmt = (
                         select(Message.content)
                         .join(Run, Message.run_id == Run.id)
-                        .where(Run.id == result["run_id"], Message.role == "assistant")
+                        .where(Run.id == run_id, Message.role == "assistant")
                         .order_by(Message.seq.desc())
                         .limit(1)
                     )

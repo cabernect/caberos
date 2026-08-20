@@ -170,6 +170,12 @@ function SessionItem({
 }) {
   const [hovering, setHovering] = useState(false);
 
+  const channelLabel = session.channel
+    ? { telegram: "TG", zalo_bot: "Zalo", discord: "DC", zalo_oa: "Zalo OA" }[
+        session.channel
+      ] || session.channel
+    : null;
+
   return (
     <div
       onMouseEnter={() => setHovering(true)}
@@ -182,7 +188,21 @@ function SessionItem({
           : "text-[var(--ink-2)] hover:bg-[var(--border)] hover:text-[var(--ink)]",
       )}
     >
-      <span className="flex-1 truncate">· {session.title}</span>
+      {channelLabel && (
+        <span
+          className={cn(
+            "shrink-0 rounded px-1 py-0.5 text-[9px] font-semibold uppercase",
+            active
+              ? "bg-[var(--white)]/20 text-[var(--white)]"
+              : "bg-[var(--accent)]/15 text-[var(--accent)]",
+          )}
+        >
+          {channelLabel}
+        </span>
+      )}
+      <span className="flex-1 truncate">
+        {channelLabel ? session.title : `· ${session.title}`}
+      </span>
       {running && !hovering && (
         <Loader2
           className="h-3.5 w-3.5 shrink-0 animate-spin"

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowDown, PanelLeft, AlertCircle, FileIcon, Paperclip, Loader2 } from "lucide-react";
+import { ArrowDown, PanelLeft, AlertCircle, FileIcon, Paperclip, Loader2, MessageSquare } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Agent, Message, Provider, SessionInfo } from "@/lib/types";
 import { ToolCallBlock, type ToolCallData, type SubAgentStreamData } from "@/components/ToolCallBlock";
@@ -118,6 +118,7 @@ export function Conversation() {
     streaming: StreamingResponse | null;
     elicitation: ActiveElicitation | null;
     abortController: AbortController | null;  // active SSE connection (null = not streaming)
+    task?: { done: boolean };  // marker for channel-run polling (not a real task)
   }
   const runEntriesRef = useRef<Map<string, RunEntry>>(new Map()); // keyed by sessionId
 
@@ -561,6 +562,106 @@ export function Conversation() {
     }
   };
 
+  // Poll for new runs on channel sessions (Zalo, Telegram, etc.) and
+  // stream them live in the dashboard. Dashboard sessions don't need this
+  // because the user initiates the run and subscribes directly.
+  useEffect(() => {
+    if (!agentId || !activeSessionId) return;
+    const activeSession = sessions.find((s) => s.id === activeSessionId);
+    if (!activeSession?.channel) return;
+
+    // Don't poll if we're already streaming a run for this session
+    const existingEntry = runEntriesRef.current.get(activeSessionId);
+    if (existingEntry && !existingEntry.task?.done) return;
+
+    let cancelled = false;
+    let lastRunId: string | null = null;
+
+    const poll = async () => {
+      if (cancelled) return;
+      try {
+        const msgs = await api.getSessionMessages(agentId, activeSessionId);
+        const latestRun = msgs[msgs.length - 1]?.run_id;
+        if (!latestRun || latestRun === lastRunId) return;
+
+        const status = await api.getRunStatus(agentId, latestRun);
+        if (!status || cancelled) return;
+
+        if (status.status === "running" || status.status === "awaiting_approval") {
+          lastRunId = latestRun;
+          const runSessionId = activeSessionId;
+          const newStreaming: StreamingResponse = {
+            thinking: "",
+            items: [],
+            text: "",
+            toolCalls: new Map(),
+            thinkingStartTime: Date.now(),
+            thinkingEndTime: null,
+            turnCosts: [],
+            guardrailWarnings: [],
+            completed: false,
+            subagents: new Map(),
+          };
+          runEntriesRef.current.set(runSessionId, {
+            runId: latestRun,
+            sessionId: runSessionId,
+            lastEventId: 0,
+            streaming: newStreaming,
+            elicitation: null,
+            abortController: null,
+            task: { done: false },
+          });
+          if (activeSessionRef.current === runSessionId) {
+            setStreaming(newStreaming);
+            streamingRef.current = newStreaming;
+            setIsStreaming(true);
+          }
+          setRunningSessionIds((prev) => new Set([...prev, runSessionId]));
+
+          const abortController = new AbortController();
+          const entry = runEntriesRef.current.get(runSessionId);
+          if (entry) entry.abortController = abortController;
+
+          (async () => {
+            try {
+              for await (const { event, data, id } of api.streamRunEvents(
+                agentId, latestRun, 0, abortController.signal,
+              )) {
+                if (cancelled) break;
+                const e = runEntriesRef.current.get(runSessionId);
+                if (e) e.lastEventId = id;
+                handleEvent(event, data, runSessionId);
+              }
+            } catch {
+              // SSE disconnected — ok
+            }
+            if (!cancelled) {
+              loadSessions();
+              if (activeSessionRef.current === runSessionId) {
+                setIsStreaming(false);
+              }
+              setRunningSessionIds((prev) => {
+                const next = new Set(prev);
+                next.delete(runSessionId);
+                return next;
+              });
+              runEntriesRef.current.delete(runSessionId);
+            }
+          })();
+        }
+      } catch {
+        // ignore polling errors
+      }
+    };
+
+    poll();
+    const interval = setInterval(poll, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [agentId, activeSessionId, sessions, loadSessions]);
+
   // Stream events from a run, with reconnect + abort support.
   // Only ONE session is actively streamed at a time (the one the user is
   // viewing). When switching away, the abort controller closes the SSE
@@ -843,6 +944,14 @@ export function Conversation() {
     skill?: string,
   ) => {
     if (!agentId) return;
+
+    // Don't allow sending messages from the dashboard into channel sessions
+    // (Zalo, Telegram, etc.) — those are external conversations. The dashboard
+    // view of a channel session is read-only.
+    const activeSession = sessions.find((s) => s.id === activeSessionId);
+    if (activeSession?.channel) {
+      return;
+    }
 
     // Handle /compact slash command — trigger manual compaction
     if (text.trim() === "/compact") {
@@ -1259,29 +1368,48 @@ export function Conversation() {
           })()
         )}
 
-        {/* Input bar */}
-        <ChatInputBar
-          ref={inputBarRef}
-          defaultProviderId={agent?.provider_id || null}
-          defaultModelName={agent?.model || null}
-          defaultThinkingEnabled={agent?.thinking_enabled ?? null}
-          defaultThinkingEffort={agent?.thinking_effort ?? null}
-          disabled={
-            (isStreaming && !activeElicitation) ||
-            compacting
+        {/* Input bar — hidden for channel sessions (read-only view) */}
+        {(() => {
+          const activeSession = sessions.find((s) => s.id === activeSessionId);
+          if (activeSession?.channel) {
+            const channelName = { telegram: "Telegram", zalo_bot: "Zalo", discord: "Discord", zalo_oa: "Zalo OA" }[activeSession.channel] || activeSession.channel;
+            return (
+              <div
+                className="flex items-center justify-center gap-2 px-4 py-3 text-[13px] text-[var(--ink-3)]"
+                style={{ borderTop: "1px solid var(--border)" }}
+              >
+                <MessageSquare className="h-4 w-4" />
+                <span>
+                  This is a {channelName} conversation — messages are received and replied to from {channelName}.
+                </span>
+              </div>
+            );
           }
-          onModelChange={setHasModelSelected}
-          onSend={handleSend}
-          onStop={handleStop}
-          activeElicitation={activeElicitation}
-          onElicitationRespond={handleElicitationRespond}
-          contextTokens={contextTokens}
-          cachedTokens={cachedTokens}
-          maxContextTokens={maxContextTokens}
-          compacted={compacted}
-          contextBreakdown={contextBreakdown}
-          onCompact={handleCompact}
-        />
+          return (
+            <ChatInputBar
+              ref={inputBarRef}
+              defaultProviderId={agent?.provider_id || null}
+              defaultModelName={agent?.model || null}
+              defaultThinkingEnabled={agent?.thinking_enabled ?? null}
+              defaultThinkingEffort={agent?.thinking_effort ?? null}
+              disabled={
+                (isStreaming && !activeElicitation) ||
+                compacting
+              }
+              onModelChange={setHasModelSelected}
+              onSend={handleSend}
+              onStop={handleStop}
+              activeElicitation={activeElicitation}
+              onElicitationRespond={handleElicitationRespond}
+              contextTokens={contextTokens}
+              cachedTokens={cachedTokens}
+              maxContextTokens={maxContextTokens}
+              compacted={compacted}
+              contextBreakdown={contextBreakdown}
+              onCompact={handleCompact}
+            />
+          );
+        })()}
       </div>
 
       {/* Full-view drag-and-drop overlay */}

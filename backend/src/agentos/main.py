@@ -5,6 +5,10 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
+# Enable INFO-level logging for agentos modules so channel loading, polling,
+# and other startup activity is visible in the console.
+logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
+
 # Fix SSL certificate verification for LiteLLM's remote model catalog fetch
 # and httpx requests. On macOS behind a corporate firewall/proxy, the system
 # cert store (/etc/ssl/cert.pem) includes the proxy's CA, but Python's

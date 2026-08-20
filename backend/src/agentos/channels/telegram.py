@@ -217,10 +217,11 @@ class TelegramChannel(Channel):
             # Send typing indicator
             await self.send_typing(inbound.external_user_id)
 
-            # Run the agent
-            from ..runner import run_agent
+            # Run the agent via the run manager so events are buffered
+            # and the dashboard can stream channel runs via SSE.
+            from ..run_manager import get_run, start_run
 
-            result = await run_agent(
+            result = await start_run(
                 agent_id=self.agent_id,
                 text=inbound.text,
                 user_id=inbound.external_user_id,
@@ -228,8 +229,16 @@ class TelegramChannel(Channel):
                 trigger="user_message",
             )
 
-            # Fetch and deliver the final answer
-            if result.get("status") == "completed":
+            # Wait for the run to complete so we can deliver the reply
+            run_id = result.get("run_id")
+            if run_id:
+                ctx = get_run(run_id)
+                if ctx:
+                    await ctx.task
+
+            # Fetch and deliver the final answer (also for failed runs —
+            # the error message is stored as an assistant message).
+            if run_id:
                 from sqlalchemy import select
 
                 from ..db import async_session_factory
@@ -239,7 +248,7 @@ class TelegramChannel(Channel):
                     stmt = (
                         select(Message.content)
                         .join(Run, Message.run_id == Run.id)
-                        .where(Run.id == result["run_id"], Message.role == "assistant")
+                        .where(Run.id == run_id, Message.role == "assistant")
                         .order_by(Message.seq.desc())
                         .limit(1)
                     )

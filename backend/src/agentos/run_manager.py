@@ -93,6 +93,8 @@ async def start_run(
     new_session: bool = False,
     attachments: list[Attachment] | None = None,
     skill: str | None = None,
+    trigger: str = "user_message",
+    channel: str = "dashboard_chat",
 ) -> dict[str, str]:
     """Start a run in a managed task. Returns {run_id, session_id}.
 
@@ -136,6 +138,8 @@ async def start_run(
                 attachments=attachments,
                 event_callback=event_callback,
                 skill=skill,
+                trigger=trigger,
+                channel=channel,
             )
         except asyncio.CancelledError:
             rid = run_id_future.result() if run_id_future.done() else None

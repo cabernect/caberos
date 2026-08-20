@@ -410,6 +410,8 @@ async def list_sessions(
             "started_at": _iso_utc(sess.started_at),
             "last_activity_at": _iso_utc(sess.last_activity_at),
             "message_count": msg_count,
+            "channel": sess.channel,
+            "external_user_id": sess.external_user_id,
         }
         for sess, msg_count in rows
     ]

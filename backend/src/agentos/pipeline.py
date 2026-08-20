@@ -229,14 +229,25 @@ class Pipeline:
         contact = await self._resolve_contact(message)
 
         # Step 5: Resolve Session (use explicit session_id if provided, else auto-resume)
+        # For external channels, always reuse the persistent session for that
+        # channel+chat (don't create new ones on idle timeout).
+        is_channel = message.channel not in ("dashboard_chat", "heartbeat")
         session = await self._resolve_session(
-            contact.id, message.bot_id, message.session_id, message.new_session
+            contact.id,
+            message.bot_id,
+            message.session_id,
+            message.new_session,
+            channel=message.channel if is_channel else None,
+            external_user_id=message.external_user_id if is_channel else None,
         )
 
-        # Lazy session close: check for other sessions for this agent+contact
-        # that are idle beyond their timeout and not yet closed. Close them
-        # before starting this run (Trigger 1 — lazy at run start).
-        await self._close_idle_sessions(message.bot_id, contact.id, exclude_session_id=session.id)
+        # Lazy session close: only for dashboard sessions (channel sessions are
+        # persistent — they stay open so the conversation continues across
+        # messages even after long idle periods).
+        if not is_channel:
+            await self._close_idle_sessions(
+                message.bot_id, contact.id, exclude_session_id=session.id
+            )
 
         # Step 3: Persist and acknowledge — create Run row with valid FKs
         run = Run(
@@ -693,6 +704,8 @@ class Pipeline:
         agent_id: str,
         explicit_session_id: str | None = None,
         new_session: bool = False,
+        channel: str | None = None,
+        external_user_id: str | None = None,
     ) -> Session:
         """Step 5: Resume the live session or open one.
 
@@ -700,6 +713,10 @@ class Pipeline:
         this contact+agent). If new_session is True, skip auto-resume and create
         a fresh session. Otherwise, resume the most recent active session or
         create a new one.
+
+        For external channels (channel is not None): always reuse the session
+        for that channel+external_user_id, regardless of idle timeout. This
+        keeps channel conversations persistent — one session per chat.
         """
         if explicit_session_id:
             result = await self.db.execute(
@@ -713,6 +730,28 @@ class Pipeline:
             if session is not None:
                 return session
             # Fall through to auto-resume if session not found
+
+        # For external channels: find the session for this channel+chat
+        # (regardless of status — even closed sessions are reused so the
+        # conversation history stays in one place).
+        if channel and external_user_id:
+            result = await self.db.execute(
+                select(Session)
+                .where(
+                    Session.agent_id == agent_id,
+                    Session.channel == channel,
+                    Session.external_user_id == external_user_id,
+                )
+                .order_by(Session.last_activity_at.desc())
+            )
+            session = result.scalars().first()
+            if session is not None:
+                # Reopen if it was closed
+                if session.status != "active":
+                    session.status = "active"
+                    session.closed = False
+                    await self.db.flush()
+                return session
 
         # Skip auto-resume if new_session is requested
         if not new_session:
@@ -734,6 +773,8 @@ class Pipeline:
             contact_id=contact_id,
             agent_id=agent_id,
             status="active",
+            channel=channel,
+            external_user_id=external_user_id,
         )
         self.db.add(session)
         await self.db.flush()
