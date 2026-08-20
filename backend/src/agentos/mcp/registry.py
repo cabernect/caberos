@@ -98,8 +98,9 @@ async def connect_server(server: McpServer) -> bool:
             tokens = await storage.get_tokens()
             if tokens:
                 # We have a token — create the OAuth provider for auto-refresh
-                from mcp.client.auth import OAuthClientProvider
                 from mcp.shared.auth import OAuthClientMetadata
+
+                from .oauth import CaberOSOAuthProvider
 
                 redirect_uri = oauth_config.get(
                     "redirect_uri",
@@ -134,7 +135,7 @@ async def connect_server(server: McpServer) -> bool:
                     )
                     raise RuntimeError("OAuth re-authentication required — use the dashboard")
 
-                auth = OAuthClientProvider(
+                auth = CaberOSOAuthProvider(
                     server_url=server.url,
                     client_metadata=client_metadata,
                     storage=storage,
