@@ -129,6 +129,7 @@ class ZaloBotChannel(Channel):
                     {
                         "chat_id": outbound.chat_id,
                         "text": chunk,
+                        "parse_mode": "markdown",
                     },
                 )
                 if isinstance(resp, dict):

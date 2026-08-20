@@ -376,10 +376,13 @@ class TestZaloBotChannel:
             chat_id="chat-abc-123",
         )
         mock_response = {"message_id": "zalo-bot-msg-1", "date": 1775362520302}
-        with patch.object(ch, "_call_api", new_callable=AsyncMock, return_value=mock_response):
+        with patch.object(ch, "_call_api", new_callable=AsyncMock, return_value=mock_response) as mock_api:
             result = await ch.deliver(outbound)
         assert result["success"] is True
         assert result["message_id"] == "zalo-bot-msg-1"
+        # Verify parse_mode is set to markdown
+        call_args = mock_api.call_args
+        assert call_args[0][1].get("parse_mode") == "markdown"
 
     @pytest.mark.asyncio
     async def test_deliver_splits_long_message(self):
