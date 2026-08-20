@@ -30,10 +30,11 @@ async def web_search(args: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
         async with httpx.AsyncClient(
             timeout=15, follow_redirects=True, verify=SSL_CERT_PATH
         ) as client:
-            # Use DuckDuckGo's HTML endpoint — no API key needed
-            resp = await client.get(
+            # Use DuckDuckGo's HTML endpoint — POST avoids the 202 captcha
+            # page that GET triggers for longer/complex queries
+            resp = await client.post(
                 "https://html.duckduckgo.com/html/",
-                params={"q": query},
+                data={"q": query},
                 headers={
                     "User-Agent": (
                         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
