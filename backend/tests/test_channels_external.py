@@ -376,7 +376,9 @@ class TestZaloBotChannel:
             chat_id="chat-abc-123",
         )
         mock_response = {"message_id": "zalo-bot-msg-1", "date": 1775362520302}
-        with patch.object(ch, "_call_api", new_callable=AsyncMock, return_value=mock_response) as mock_api:
+        with patch.object(
+            ch, "_call_api", new_callable=AsyncMock, return_value=mock_response
+        ) as mock_api:
             result = await ch.deliver(outbound)
         assert result["success"] is True
         assert result["message_id"] == "zalo-bot-msg-1"

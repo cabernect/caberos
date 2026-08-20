@@ -21,10 +21,10 @@ if "SSL_CERT_FILE" not in os.environ:
 
         os.environ["SSL_CERT_FILE"] = certifi.where()
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
-from .api import (
+from .api import (  # noqa: E402
     agent_files,
     agents,
     approvals,
@@ -39,9 +39,9 @@ from .api import (
     settings,
     skills,
 )
-from .auth import router as auth_router
-from .capabilities.builtin import register_builtin_capabilities
-from .db import init_db
+from .auth import router as auth_router  # noqa: E402
+from .capabilities.builtin import register_builtin_capabilities  # noqa: E402
+from .db import init_db  # noqa: E402
 
 # In-memory session store (token -> operator_id).
 # TODO: persist in DB for restart survival (D4).
