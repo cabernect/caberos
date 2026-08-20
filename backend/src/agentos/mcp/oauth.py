@@ -25,6 +25,8 @@ import asyncio
 import json
 import logging
 
+from mcp.client.auth import OAuthClientProvider
+
 from ..db import async_session_factory
 from ..models.mcp import McpServer
 from . import credentials as mcp_creds
@@ -191,7 +193,7 @@ class EncryptedTokenStorage:
             await db.commit()
 
 
-class CaberOSOAuthProvider:
+class CaberOSOAuthProvider(OAuthClientProvider):
     """OAuthClientProvider that restores token_expiry_time on init.
 
     The MCP SDK's _initialize() loads tokens and client_info from storage but
@@ -200,36 +202,16 @@ class CaberOSOAuthProvider:
     to send an expired access token, get 401, and fall back to full
     re-authorization (which fails with noop redirect/callback handlers).
 
-    This wrapper calls update_token_expiry() after _initialize() so that
+    This subclass calls update_token_expiry() after _initialize() so that
     expired tokens are detected immediately and the refresh flow is used
     instead of full re-authorization.
-
-    We use composition + async_auth_flow delegation because the SDK's
-    async_auth_flow calls self._initialize() (bound method), so a proper
-    subclass override would work — but some SDK versions type-check the
-    provider class. Composition is safer across versions.
     """
 
-    def __init__(self, **kwargs):
-        from mcp.client.auth import OAuthClientProvider
-
-        self._provider = OAuthClientProvider(**kwargs)
-
     async def _initialize(self) -> None:
-        await self._provider._initialize()
-        ctx = self._provider.context
-        if ctx.current_tokens and ctx.current_tokens.expires_in is not None:
-            ctx.update_token_expiry(ctx.current_tokens)
-
-    async def async_auth_flow(self, request):
-        # Temporarily replace _initialize so the SDK calls our version
-        original = self._provider._initialize
-        self._provider._initialize = self._initialize
-        try:
-            async for r in self._provider.async_auth_flow(request):
-                yield r
-        finally:
-            self._provider._initialize = original
+        await super()._initialize()
+        # Restore token expiry time from the loaded token's expires_in
+        if self.context.current_tokens and self.context.current_tokens.expires_in is not None:
+            self.context.update_token_expiry(self.context.current_tokens)
 
 
 # --- OAuth flow management ---
