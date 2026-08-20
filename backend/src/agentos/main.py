@@ -30,6 +30,7 @@ from .api import (
     approvals,
     channels,
     chat,
+    data,
     elicitation,
     mcp,
     observability,
@@ -205,6 +206,7 @@ app.include_router(mcp.router)
 app.include_router(channels.router)
 app.include_router(observability.router)
 app.include_router(settings.router)
+app.include_router(data.router)
 
 
 @app.get("/health")

@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, Trash2, Save, X, RefreshCw, Check, Info, Settings, Server, Cpu } from "lucide-react";
+import { Plus, Trash2, Save, X, RefreshCw, Check, Info, Settings, Server, Cpu, Download, Upload, HardDrive } from "lucide-react";
 import { api } from "@/lib/api";
 import { useConfirm } from "@/lib/confirm";
 import { openUrl } from "@/lib/openUrl";
@@ -61,7 +61,7 @@ const PRESET_PROVIDERS: ProviderPreset[] = [
   { type: "openai", name: "Ollama Cloud", description: "Hosted Ollama — gpt-oss, kimi-k2, llama4, and more", defaultBaseUrl: "https://ollama.com/v1", needsKey: true, compatOnly: true },
 ];
 
-type SettingsTab = "general" | "providers" | "models" | "about";
+type SettingsTab = "general" | "providers" | "models" | "migration" | "about";
 
 export function ProvidersSettings() {
   const [providers, setProviders] = useState<Provider[]>([]);
@@ -126,6 +126,7 @@ export function ProvidersSettings() {
     { key: "general", label: "General", icon: Settings },
     { key: "providers", label: "Providers", icon: Server },
     { key: "models", label: "Models", icon: Cpu },
+    { key: "migration", label: "Migration", icon: HardDrive },
     { key: "about", label: "About", icon: Info },
   ];
 
@@ -208,6 +209,8 @@ export function ProvidersSettings() {
             <ModelsTab providers={providers} loading={loading} onChanged={load} />
           )}
 
+          {activeTab === "migration" && <MigrationTab />}
+
           {activeTab === "about" && <AboutTab />}
         </div>
       </div>
@@ -289,6 +292,484 @@ function GeneralTab({ operator, loading }: { operator: Operator | null; loading:
               DuckDuckGo
             </span>
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface ImportResult {
+  status: string;
+  mode: string;
+  imported_files?: number;
+  rows_added?: number;
+  rows_skipped?: number;
+  files_added?: number;
+  tables_merged?: string[];
+  secret_keys_match?: boolean;
+  warnings?: string[];
+  message: string;
+}
+
+interface PreviewTable {
+  table: string;
+  imported_count: number;
+  target_count: number;
+  new_in_merge: number;
+}
+
+interface PreviewResult {
+  status: string;
+  tables: PreviewTable[];
+  agent_files: number;
+  workspace_files: number;
+  has_secret_key: boolean;
+  secret_keys_match: boolean | null;
+}
+
+function MigrationTab() {
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [result, setResult] = useState<ImportResult | null>(null);
+  const [preview, setPreview] = useState<PreviewResult | null>(null);
+  const [previewFile, setPreviewFile] = useState<File | null>(null);
+  const { confirm, toast } = useConfirm();
+
+  const handleExport = async () => {
+    setBusy(true);
+    setMessage("");
+    try {
+      const resp = await fetch(`${api.baseURL}/api/data/export`, {
+        credentials: "include",
+        headers: api.authHeaders(),
+      });
+      if (!resp.ok) throw new Error("Export failed");
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `caberos-backup-${Date.now()}.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast("Export downloaded");
+    } catch {
+      toast("Export failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handlePreview = () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".zip";
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+      setPreviewFile(file);
+      setPreview(null);
+      setResult(null);
+      setMessage("");
+      setBusy(true);
+      const formData = new FormData();
+      formData.append("file", file);
+      try {
+        const resp = await fetch(`${api.baseURL}/api/data/preview`, {
+          method: "POST",
+          credentials: "include",
+          headers: api.authHeaders(),
+          body: formData,
+        });
+        if (!resp.ok) {
+          const err = await resp.json();
+          toast(`Preview failed: ${err.detail || "unknown error"}`);
+        } else {
+          setPreview(await resp.json());
+        }
+      } catch (err) {
+        toast(`Preview failed: ${err}`);
+      } finally {
+        setBusy(false);
+      }
+    };
+    input.click();
+  };
+
+  const handleImport = (importMode: "replace" | "merge") => {
+    if (!previewFile) {
+      toast("Preview an archive first");
+      return;
+    }
+    const doImport = async () => {
+      const confirmed = await confirm({
+        title: importMode === "replace" ? "Replace All Data?" : "Merge Data?",
+        message:
+          importMode === "replace"
+            ? "This will WIPE all current data (agents, providers, MCP, channels, sessions, memory) and restore everything from the archive. This cannot be undone."
+            : "This will add new data from the archive into the current instance. Existing data is kept. Encrypted credentials only work if both instances share the same secret key.",
+        confirmLabel: importMode === "replace" ? "Wipe & Restore" : "Merge",
+        cancelLabel: "Cancel",
+        danger: importMode === "replace",
+      });
+      if (!confirmed) return;
+
+      setBusy(true);
+      setMessage("");
+      setResult(null);
+      const formData = new FormData();
+      formData.append("file", previewFile);
+      formData.append("mode", importMode);
+      try {
+        const resp = await fetch(`${api.baseURL}/api/data/import`, {
+          method: "POST",
+          credentials: "include",
+          headers: api.authHeaders(),
+          body: formData,
+        });
+        if (!resp.ok) {
+          const err = await resp.json();
+          toast(`Import failed: ${err.detail || "unknown error"}`);
+        } else {
+          const res = await resp.json() as ImportResult;
+          setResult(res);
+          setMessage(res.message || "Data imported. Restart the server.");
+          toast(importMode === "replace" ? "Data replaced — restart the server" : "Data merged — restart the server");
+        }
+      } catch (err) {
+        toast(`Import failed: ${err}`);
+      } finally {
+        setBusy(false);
+      }
+    };
+    doImport();
+  };
+
+  return (
+    <div className="max-w-2xl space-y-6">
+      <div>
+        <h2 className="mb-3 text-[14px] font-semibold text-[var(--ink)]">Data Migration</h2>
+        <div
+          className="rounded-lg border p-5"
+          style={{ borderColor: "var(--border)", background: "var(--white)" }}
+        >
+          <p className="text-[13px] text-[var(--ink-2)]">
+            Export all CaberOS data to a ZIP archive — including agents, providers, MCP servers,
+            channels, sessions, messages, memory, encrypted credentials, and workspace files.
+            Import the archive on another instance (e.g. web → desktop) to sync everything.
+          </p>
+
+          <div className="mt-4 flex gap-2">
+            <button
+              onClick={handleExport}
+              disabled={busy}
+              className="flex items-center gap-1.5 rounded-[5px] px-3 py-1.5 text-[12px] font-medium transition"
+              style={{
+                border: "1px solid var(--border)",
+                background: "var(--ink)",
+                color: "var(--white)",
+                cursor: busy ? "default" : "pointer",
+                opacity: busy ? 0.5 : 1,
+              }}
+            >
+              <Download className="h-3.5 w-3.5" />
+              Export Data
+            </button>
+            <button
+              onClick={handlePreview}
+              disabled={busy}
+              className="flex items-center gap-1.5 rounded-[5px] px-3 py-1.5 text-[12px] font-medium transition"
+              style={{
+                border: "1px solid var(--border)",
+                background: "none",
+                color: "var(--ink-2)",
+                cursor: busy ? "default" : "pointer",
+                opacity: busy ? 0.5 : 1,
+              }}
+            >
+              <HardDrive className="h-3.5 w-3.5" />
+              Preview Archive
+            </button>
+          </div>
+
+          {/* Preview results */}
+          {preview && (
+            <div
+              className="mt-4 rounded-[6px] border p-4"
+              style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+            >
+              <div className="flex items-center gap-2">
+                <HardDrive className="h-4 w-4 text-[var(--accent)]" />
+                <span className="text-[13px] font-semibold text-[var(--ink)]">Archive Preview</span>
+                {previewFile && (
+                  <span className="text-[11px] text-[var(--ink-3)]">{previewFile.name}</span>
+                )}
+              </div>
+
+              {/* Secret key indicator */}
+              <div className="mt-2 flex items-center gap-1.5">
+                {preview.secret_keys_match === true ? (
+                  <>
+                    <Check className="h-3.5 w-3.5 text-[var(--accent)]" />
+                    <span className="text-[12px] text-[var(--ink-3)]">Secret keys match — credentials will decrypt</span>
+                  </>
+                ) : preview.secret_keys_match === false ? (
+                  <>
+                    <Info className="h-3.5 w-3.5 text-[var(--danger)]" />
+                    <span className="text-[12px] text-[var(--danger)]">Secret keys differ — credentials won't decrypt after merge</span>
+                  </>
+                ) : (
+                  <span className="text-[12px] text-[var(--ink-3)]">No secret key in archive</span>
+                )}
+              </div>
+
+              {/* Table breakdown */}
+              <div className="mt-3 overflow-x-auto">
+                <table className="w-full text-[12px]">
+                  <thead>
+                    <tr style={{ borderBottom: "1px solid var(--border)" }}>
+                      <th className="py-1.5 pr-4 text-left font-medium text-[var(--ink-3)]">Table</th>
+                      <th className="py-1.5 px-4 text-right font-medium text-[var(--ink-3)]">In Archive</th>
+                      <th className="py-1.5 px-4 text-right font-medium text-[var(--ink-3)]">Current</th>
+                      <th className="py-1.5 pl-4 text-right font-medium text-[var(--ink-3)]">New (merge)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {preview.tables.map((t) => (
+                      <tr key={t.table} style={{ borderBottom: "1px solid var(--border)" }}>
+                        <td className="py-1.5 pr-4 font-mono text-[var(--ink)]">{t.table}</td>
+                        <td className="py-1.5 px-4 text-right text-[var(--ink-2)]">{t.imported_count}</td>
+                        <td className="py-1.5 px-4 text-right text-[var(--ink-2)]">{t.target_count}</td>
+                        <td className="py-1.5 pl-4 text-right">
+                          <span style={{ color: t.new_in_merge > 0 ? "var(--accent)" : "var(--ink-3)" }}>
+                            {t.new_in_merge > 0 ? `+${t.new_in_merge}` : "0"}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* File counts */}
+              <div className="mt-3 flex gap-4 text-[12px] text-[var(--ink-3)]">
+                <span>{preview.agent_files} agent files</span>
+                <span>{preview.workspace_files} workspace files</span>
+                {preview.has_secret_key && <span>includes secret.key</span>}
+              </div>
+            </div>
+          )}
+
+          {message && (
+            <p className="mt-3 text-[12px] text-[var(--ink-3)]">{message}</p>
+          )}
+
+          {/* Import result detail */}
+          {result && (
+            <div
+              className="mt-3 rounded-[6px] border p-4"
+              style={{
+                borderColor: result.warnings?.length ? "var(--danger)" : "var(--border)",
+                background: result.warnings?.length ? "rgba(239,68,68,0.03)" : "var(--surface)",
+              }}
+            >
+              <div className="flex items-center gap-2">
+                <Check className="h-4 w-4 text-[var(--accent)]" />
+                <span className="text-[13px] font-semibold text-[var(--ink)]">
+                  Import {result.mode === "replace" ? "Replace" : "Merge"} Complete
+                </span>
+              </div>
+
+              {/* Replace mode stats */}
+              {result.mode === "replace" && result.imported_files != null && (
+                <div className="mt-2 text-[12px] text-[var(--ink-2)]">
+                  {result.imported_files} files restored from archive
+                </div>
+              )}
+
+              {/* Merge mode stats */}
+              {result.mode === "merge" && (
+                <div className="mt-2 space-y-1.5 text-[12px] text-[var(--ink-2)]">
+                  <div className="flex gap-4">
+                    <span><strong className="text-[var(--ink)]">{result.rows_added ?? 0}</strong> rows added</span>
+                    <span><strong className="text-[var(--ink)]">{result.rows_skipped ?? 0}</strong> rows skipped (already exist)</span>
+                    <span><strong className="text-[var(--ink)]">{result.files_added ?? 0}</strong> files added</span>
+                  </div>
+
+                  {result.tables_merged && result.tables_merged.length > 0 && (
+                    <div className="mt-2">
+                      <span className="text-[var(--ink-3)]">Tables updated:</span>
+                      <div className="mt-1 flex flex-wrap gap-1.5">
+                        {result.tables_merged.map((t) => (
+                          <span
+                            key={t}
+                            className="rounded-full px-2 py-0.5 text-[10px] font-mono"
+                            style={{ background: "var(--accent-bg)", color: "var(--accent)" }}
+                          >
+                            {t}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Secret key match indicator */}
+                  {result.secret_keys_match != null && (
+                    <div className="mt-2 flex items-center gap-1.5">
+                      {result.secret_keys_match ? (
+                        <>
+                          <Check className="h-3.5 w-3.5 text-[var(--accent)]" />
+                          <span className="text-[var(--ink-3)]">Secret keys match — credentials will decrypt correctly</span>
+                        </>
+                      ) : (
+                        <>
+                          <Info className="h-3.5 w-3.5 text-[var(--danger)]" />
+                          <span className="text-[var(--danger)]">Secret keys differ — re-enter credentials in the target instance</span>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Warnings */}
+              {result.warnings && result.warnings.length > 0 && (
+                <div className="mt-2 space-y-1">
+                  {result.warnings.map((w, i) => (
+                    <p key={i} className="text-[12px] text-[var(--danger)]">⚠ {w}</p>
+                  ))}
+                </div>
+              )}
+
+              <p className="mt-3 text-[11px] font-medium text-[var(--ink)]">
+                Restart the server for changes to take effect.
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Import modes */}
+      <div>
+        <h2 className="mb-3 text-[14px] font-semibold text-[var(--ink)]">Import</h2>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {/* Merge */}
+          <div
+            className="rounded-lg border p-4"
+            style={{ borderColor: "var(--border)", background: "var(--white)" }}
+          >
+            <div className="flex items-center gap-2">
+              <Upload className="h-4 w-4 text-[var(--accent)]" />
+              <span className="text-[13px] font-semibold text-[var(--ink)]">Merge</span>
+              <span
+                className="rounded-full px-2 py-0.5 text-[9px] font-mono uppercase"
+                style={{ background: "var(--accent-bg)", color: "var(--accent)" }}
+              >
+                Recommended
+              </span>
+            </div>
+            <p className="mt-2 text-[12px] text-[var(--ink-3)]">
+              Keep existing data, add new agents/providers/sessions from the archive.
+              Encrypted credentials only work if both instances share the same secret key.
+            </p>
+            <button
+              onClick={() => handleImport("merge")}
+              disabled={busy || !preview}
+              className="mt-3 flex items-center gap-1.5 rounded-[5px] px-3 py-1.5 text-[12px] font-medium transition"
+              style={{
+                border: "1px solid var(--border)",
+                background: "none",
+                color: "var(--ink-2)",
+                cursor: busy || !preview ? "default" : "pointer",
+                opacity: busy || !preview ? 0.4 : 1,
+              }}
+            >
+              <Upload className="h-3.5 w-3.5" />
+              Merge Import
+            </button>
+            {!preview && (
+              <p className="mt-2 text-[11px] text-[var(--ink-3)]">Preview an archive first to enable import.</p>
+            )}
+          </div>
+
+          {/* Replace */}
+          <div
+            className="rounded-lg border p-4"
+            style={{ borderColor: "var(--danger)", background: "rgba(239,68,68,0.03)" }}
+          >
+            <div className="flex items-center gap-2">
+              <Upload className="h-4 w-4 text-[var(--danger)]" />
+              <span className="text-[13px] font-semibold text-[var(--ink)]">Replace</span>
+              <span
+                className="rounded-full px-2 py-0.5 text-[9px] font-mono uppercase"
+                style={{ background: "var(--danger)", color: "#fff" }}
+              >
+                Destructive
+              </span>
+            </div>
+            <p className="mt-2 text-[12px] text-[var(--ink-3)]">
+              Wipe all current data and restore everything from the archive.
+              Includes the secret key, so credentials will decrypt correctly.
+            </p>
+            <button
+              onClick={() => handleImport("replace")}
+              disabled={busy || !preview}
+              className="mt-3 flex items-center gap-1.5 rounded-[5px] px-3 py-1.5 text-[12px] font-medium transition"
+              style={{
+                border: "1px solid var(--danger)",
+                background: "var(--danger)",
+                color: "#fff",
+                cursor: busy || !preview ? "default" : "pointer",
+                opacity: busy || !preview ? 0.4 : 1,
+              }}
+            >
+              <Upload className="h-3.5 w-3.5" />
+              Replace Import
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* What's included */}
+      <div>
+        <h2 className="mb-3 text-[14px] font-semibold text-[var(--ink)]">What's Included</h2>
+        <div
+          className="rounded-lg border p-5"
+          style={{ borderColor: "var(--border)", background: "var(--white)" }}
+        >
+          <ul className="space-y-2 text-[13px] text-[var(--ink-2)]">
+            <li className="flex items-center gap-2">
+              <Check className="h-3.5 w-3.5 text-[var(--accent)]" />
+              Agents + versioned configs
+            </li>
+            <li className="flex items-center gap-2">
+              <Check className="h-3.5 w-3.5 text-[var(--accent)]" />
+              Providers + encrypted API keys
+            </li>
+            <li className="flex items-center gap-2">
+              <Check className="h-3.5 w-3.5 text-[var(--accent)]" />
+              MCP servers + OAuth credentials
+            </li>
+            <li className="flex items-center gap-2">
+              <Check className="h-3.5 w-3.5 text-[var(--accent)]" />
+              Channel configs (Telegram, Zalo, Discord) + bot tokens
+            </li>
+            <li className="flex items-center gap-2">
+              <Check className="h-3.5 w-3.5 text-[var(--accent)]" />
+              Sessions + messages + run history
+            </li>
+            <li className="flex items-center gap-2">
+              <Check className="h-3.5 w-3.5 text-[var(--accent)]" />
+              Memory (MEMORY.md, knowledge graph, recall snippets)
+            </li>
+            <li className="flex items-center gap-2">
+              <Check className="h-3.5 w-3.5 text-[var(--accent)]" />
+              Workspace files + attachments
+            </li>
+            <li className="flex items-center gap-2">
+              <Check className="h-3.5 w-3.5 text-[var(--accent)]" />
+              Secret key (for decrypting credentials on the target instance)
+            </li>
+          </ul>
         </div>
       </div>
     </div>

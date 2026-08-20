@@ -78,6 +78,9 @@ async function request<T>(
 }
 
 export const api = {
+  baseURL: BASE,
+  authHeaders,
+
   gatewayHealth: () => request<{ status: string }>("/health"),
 
   // Auth
