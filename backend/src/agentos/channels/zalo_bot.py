@@ -223,7 +223,6 @@ class ZaloBotChannel(Channel):
                         log.error("Zalo Bot getUpdates failed: %s", desc)
                         await asyncio.sleep(5)
                         continue
-                    print(f"[Zalo Bot] RECEIVED update: {str(resp)[:300]}", flush=True)
                     result = resp.get("result")
                     # Real API: result is a single event object
                     # Legacy/test compat: result may be a list of updates
@@ -251,6 +250,11 @@ class ZaloBotChannel(Channel):
             if inbound is None:
                 return
 
+            log.info(
+                "Zalo Bot: processing update from %s: %s",
+                inbound.external_user_id,
+                inbound.text[:50],
+            )
             await self.send_typing(inbound.external_user_id)
 
             from ..runner import run_agent
@@ -262,6 +266,8 @@ class ZaloBotChannel(Channel):
                 channel="zalo_bot",
                 trigger="user_message",
             )
+
+            log.info("Zalo Bot: agent run status=%s", result.get("status"))
 
             if result.get("status") == "completed":
                 from sqlalchemy import select
@@ -281,13 +287,23 @@ class ZaloBotChannel(Channel):
                     final_answer = msg_result.scalar_one_or_none()
 
                 if final_answer:
+                    log.info(
+                        "Zalo Bot: delivering reply (%d chars) to %s",
+                        len(final_answer),
+                        inbound.external_user_id,
+                    )
                     outbound = OutboundMessage(
                         session_id=result["session_id"],
                         text=final_answer,
                         chat_id=inbound.external_user_id,
                         reply_to_message_id=inbound.message_id,
                     )
-                    await self.deliver(outbound)
+                    deliver_result = await self.deliver(outbound)
+                    log.info("Zalo Bot: deliver result: %s", deliver_result)
+                else:
+                    log.warning(
+                        "Zalo Bot: no assistant message found for run %s", result.get("run_id")
+                    )
 
         except Exception:
             log.error("Zalo Bot: failed to process update", exc_info=True)

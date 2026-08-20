@@ -943,7 +943,8 @@ export function Conversation() {
       // Step 2: Start streaming events for this session.
       // Only the currently-viewed session is actively streamed.
       startStreaming(runSessionId);
-    } catch {
+    } catch (err) {
+      console.error("Failed to send message:", err);
       setStreaming(null);
       streamingRef.current = null;
       setIsStreaming(false);
