@@ -808,10 +808,9 @@ class Pipeline:
     async def _get_agent_config(self, agent_id: str) -> Any:
         """Load agent config for memory extraction LLM calls."""
         try:
-            from .agent_service import AgentService
+            from .agent_service import get_active_config
 
-            service = AgentService(self.db)
-            return await service.get_agent(agent_id)
+            return await get_active_config(self.db, agent_id)
         except Exception:
             return None
 

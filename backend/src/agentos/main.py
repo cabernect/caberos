@@ -59,14 +59,13 @@ async def _session_sweeper() -> None:
     while True:
         await asyncio.sleep(300)  # 5 minutes
         try:
-            from .agent_service import AgentService
+            from .agent_service import get_active_config
             from .memory.episodic import close_session, find_idle_sessions
 
             async with async_session_factory() as db:
                 idle = await find_idle_sessions(db, idle_minutes=30)
                 for session in idle:
-                    service = AgentService(db)
-                    agent_config = await service.get_agent(session.agent_id)
+                    agent_config = await get_active_config(db, session.agent_id)
                     if agent_config:
                         await close_session(db, agent_config, session, session.contact_id)
                 await db.commit()
