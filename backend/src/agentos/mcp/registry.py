@@ -19,11 +19,13 @@ appropriate client.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
 
 from sqlalchemy import delete, select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..capabilities.registry import CapabilityDef
@@ -218,45 +220,61 @@ async def _discover_tools(server: McpServer, client: McpClient) -> None:
     if tool_filter:
         tools = [t for t in tools if t["name"] in tool_filter]
 
-    async with async_session_factory() as db:
-        # Clear old tool registrations for this server
-        await db.execute(delete(McpTool).where(McpTool.mcp_server_id == server.id))
+    # Retry the DB write a few times in case SQLite is locked by another
+    # request handler. The write itself is fast (delete + insert), but
+    # SQLite only allows one writer at a time.
+    for attempt in range(3):
+        try:
+            async with async_session_factory() as db:
+                # Clear old tool registrations for this server
+                await db.execute(delete(McpTool).where(McpTool.mcp_server_id == server.id))
 
-        for tool in tools:
-            cap_name = _namespace(server.name, tool["name"])
-            schema_json = json.dumps(tool["inputSchema"])
+                for tool in tools:
+                    cap_name = _namespace(server.name, tool["name"])
+                    schema_json = json.dumps(tool["inputSchema"])
 
-            # Store in DB
-            mcp_tool = McpTool(
-                mcp_server_id=server.id,
-                tool_name=tool["name"],
-                capability_name=cap_name,
-                parameters_schema=schema_json,
-                description=tool["description"],
-                egress=True,  # MCP tools are external by default
-                require_approval=server.require_approval,  # per-server setting
-                subject_scoped=True,
-            )
-            db.add(mcp_tool)
+                    # Store in DB
+                    mcp_tool = McpTool(
+                        mcp_server_id=server.id,
+                        tool_name=tool["name"],
+                        capability_name=cap_name,
+                        parameters_schema=schema_json,
+                        description=tool["description"],
+                        egress=True,  # MCP tools are external by default
+                        require_approval=server.require_approval,
+                        subject_scoped=True,
+                    )
+                    db.add(mcp_tool)
 
-            # Register in the capability registry
-            cap_registry.register(
-                CapabilityDef(
-                    name=cap_name,
-                    kind="mcp_tool",
-                    description=tool["description"],
-                    parameters_schema=tool["inputSchema"],
-                    egress=True,
-                    require_approval=server.require_approval,  # per-server setting
-                    subject_scoped=True,
-                    execute=None,  # Handled by the syscall mediator via execute_mcp_tool
+                    # Register in the capability registry
+                    cap_registry.register(
+                        CapabilityDef(
+                            name=cap_name,
+                            kind="mcp_tool",
+                            description=tool["description"],
+                            parameters_schema=tool["inputSchema"],
+                            egress=True,
+                            require_approval=server.require_approval,
+                            subject_scoped=True,
+                            execute=None,
+                        )
+                    )
+
+                    # Track in the tool map
+                    _tool_map[cap_name] = (server.id, tool["name"])
+
+                await db.commit()
+            break  # success
+        except OperationalError as e:
+            if "locked" in str(e) and attempt < 2:
+                log.debug(
+                    "MCP _discover_tools retry %d for '%s' (db locked)",
+                    attempt + 1,
+                    server.name,
                 )
-            )
-
-            # Track in the tool map
-            _tool_map[cap_name] = (server.id, tool["name"])
-
-        await db.commit()
+                await asyncio.sleep(0.5 * (attempt + 1))
+            else:
+                raise
 
     # Auto-enable new MCP tools for all agents that have an explicit
     # capability list. Agents with capabilities=None already get all
