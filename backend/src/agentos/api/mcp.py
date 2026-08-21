@@ -108,6 +108,7 @@ async def list_servers(
                 "url": s.url,
                 "enabled": s.enabled,
                 "connected": mcp_registry.is_server_connected(s.id),
+                "connect_error": mcp_registry.get_connect_error(s.id),
                 "tool_count": len(tools),
                 "tool_filter": json.loads(s.tool_filter) if s.tool_filter else None,
                 "require_approval": s.require_approval,

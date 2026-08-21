@@ -1,6 +1,10 @@
 """MCP server registry — manages connections, tool discovery, and capability registration.
 
-On startup (or when a server is added), the registry:
+On startup, the registry loads tool definitions from the DB into memory
+(lazy mode). Servers are NOT auto-connected — they connect on first tool
+call or when the user explicitly clicks "Connect" in the dashboard.
+
+When a server connects (lazily or manually):
   1. Connects to the MCP server (stdio or HTTP)
   2. Discovers tools via list_tools()
   3. Registers each tool as a capability of kind "mcp_tool"
@@ -37,6 +41,9 @@ _clients: dict[str, McpClient] = {}
 # Process-global map: {capability_name: (server_id, tool_name)}
 _tool_map: dict[str, tuple[str, str]] = {}
 
+# Process-global map: {server_id: error_message} for last connection error
+_connect_errors: dict[str, str] = {}
+
 
 def _namespace(server_name: str, tool_name: str) -> str:
     """Generate the capability name: mcp.{server_name}.{tool_name}"""
@@ -56,6 +63,9 @@ async def connect_server(server: McpServer) -> bool:
     NEVER raises — all errors are caught and logged so one server's failure
     doesn't affect others or crash the process.
     """
+    # Clear previous error
+    _connect_errors.pop(server.id, None)
+
     if server.id in _clients and _clients[server.id].connected:
         return True
 
@@ -176,6 +186,7 @@ async def connect_server(server: McpServer) -> bool:
         return True
 
     except ConnectionError as e:
+        _connect_errors[server.id] = str(e)
         log.warning("Failed to connect to MCP server '%s': %s", server.name, e)
         # Clean up partial connection
         if server.id in _clients:
@@ -185,7 +196,8 @@ async def connect_server(server: McpServer) -> bool:
                 log.debug("Error cleaning up failed MCP connection for '%s'", server.name)
             del _clients[server.id]
         return False
-    except Exception:
+    except Exception as e:
+        _connect_errors[server.id] = str(e)
         log.exception("Failed to connect to MCP server '%s'", server.name)
         # Clean up partial connection
         if server.id in _clients:
@@ -329,12 +341,42 @@ async def disconnect_server(server_id: str) -> None:
     log.info("Disconnected from MCP server %s", server_id)
 
 
-async def connect_all() -> None:
-    """Connect to all enabled MCP servers on startup.
+async def load_tools_from_db() -> None:
+    """Load tool definitions from the DB into the in-memory capability registry.
 
-    Skips servers that need credentials but don't have any stored.
-    Each connection is isolated — a failure on one server does not
-    prevent other servers from connecting.
+    This is the lazy-load startup path: instead of connecting to every MCP
+    server on startup (which causes OAuth errors, network timeouts, and
+    slow startup), we just load the tool metadata that was previously
+    discovered. Servers connect on demand when a tool is called, or when
+    the user clicks "Connect" in the dashboard.
+    """
+    async with async_session_factory() as db:
+        result = await db.execute(select(McpTool))
+        tools = result.scalars().all()
+
+    for tool in tools:
+        _tool_map[tool.capability_name] = (tool.mcp_server_id, tool.tool_name)
+        cap_registry.register(
+            CapabilityDef(
+                name=tool.capability_name,
+                kind="mcp_tool",
+                description=tool.description,
+                parameters_schema=json.loads(tool.parameters_schema),
+                egress=tool.egress,
+                require_approval=tool.require_approval,
+                subject_scoped=tool.subject_scoped,
+            )
+        )
+
+    log.info("Loaded %d MCP tool definitions from DB (lazy mode)", len(tools))
+
+
+async def connect_all() -> None:
+    """Connect to all enabled MCP servers.
+
+    Kept for backwards compatibility but no longer called at startup.
+    Use load_tools_from_db() for the lazy startup path, and
+    connect_server() for on-demand connections.
     """
     async with async_session_factory() as db:
         result = await db.execute(select(McpServer).where(McpServer.enabled))
@@ -394,6 +436,8 @@ async def execute_mcp_tool(
     injecting credentials. The env/headers here are the rendered credential
     values (already decrypted and templated).
 
+    If the server is not connected, attempts a lazy connect first.
+
     Returns the MCP call result: {"content": [...], "isError": bool}
     """
     mapping = _tool_map.get(capability_name)
@@ -404,7 +448,23 @@ async def execute_mcp_tool(
 
     client = _clients.get(server_id)
     if client is None or not client.connected:
-        raise RuntimeError(f"MCP server not connected: {server_id}")
+        # Lazy connect: load the server config and connect on demand
+        async with async_session_factory() as db:
+            result = await db.execute(select(McpServer).where(McpServer.id == server_id))
+            server = result.scalar_one_or_none()
+        if server is None:
+            raise RuntimeError(f"MCP server not found: {server_id}")
+        if not server.enabled:
+            raise RuntimeError(f"MCP server '{server.name}' is disabled")
+        success = await connect_server(server)
+        if not success:
+            err = _connect_errors.get(server_id, "unknown error")
+            raise RuntimeError(
+                f"MCP server '{server.name}' is not connected: {err}. Reconnect from the dashboard."
+            )
+        client = _clients.get(server_id)
+        if client is None or not client.connected:
+            raise RuntimeError(f"MCP server '{server.name}' failed to connect")
 
     # Note: env/headers injection for stdio requires restarting the process.
     # For v0.1, credentials are injected at server startup (env_template on
@@ -422,6 +482,11 @@ def is_server_connected(server_id: str) -> bool:
     """Check if a server is currently connected."""
     client = _clients.get(server_id)
     return client is not None and client.connected
+
+
+def get_connect_error(server_id: str) -> str | None:
+    """Return the last connection error for a server, if any."""
+    return _connect_errors.get(server_id)
 
 
 async def get_server_tools(db: AsyncSession, server_id: str) -> list[McpTool]:

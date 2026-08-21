@@ -201,9 +201,7 @@ class McpClient:
                     # The MCP SDK wraps OAuth ConnectionError in an
                     # ExceptionGroup during aclose(). If all sub-exceptions
                     # are ConnectionErrors, suppress the traceback.
-                    if all(
-                        isinstance(e, ConnectionError) for e in eg.exceptions
-                    ):
+                    if all(isinstance(e, ConnectionError) for e in eg.exceptions):
                         log.debug("MCP exit stack closed after OAuth error")
                     else:
                         log.exception("Error closing MCP client exit stack")

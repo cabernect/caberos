@@ -137,6 +137,13 @@ async def lifespan(app: FastAPI):
     # never crash the process.
     from .mcp import registry as mcp_registry
 
+    # Load tool definitions from DB first (so tools are available even
+    # if a server fails to connect), then auto-connect all enabled servers.
+    try:
+        await mcp_registry.load_tools_from_db()
+    except Exception:
+        logging.getLogger("agentos.main").exception("MCP load_tools_from_db failed")
+
     async def _connect_mcp():
         try:
             await mcp_registry.connect_all()
