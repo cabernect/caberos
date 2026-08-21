@@ -76,6 +76,7 @@ async def connect_server(server: McpServer) -> bool:
         env_template = json.loads(server.env_template) if server.env_template else {}
         headers = json.loads(server.headers) if server.headers else {}
         oauth_config = json.loads(server.oauth_config) if server.oauth_config else None
+        _connect_timeout = 30.0  # default; shortened for OAuth auto-reconnect
 
         # Fetch stored credential and render templates
         env: dict[str, str] = {}
@@ -161,6 +162,10 @@ async def connect_server(server: McpServer) -> bool:
                     redirect_handler=_noop_redirect_handler,
                     callback_handler=_noop_callback_handler,
                 )
+                # Short timeout for auto-reconnect — if refresh fails and
+                # full re-auth is needed, fail fast instead of hanging 35s.
+                # The user can re-auth via the dashboard.
+                _connect_timeout = 10.0
             else:
                 # No OAuth token — the user needs to go through the OAuth flow
                 log.info(
@@ -178,6 +183,7 @@ async def connect_server(server: McpServer) -> bool:
             headers=rendered_headers,
             env=env,
             auth=auth,
+            timeout=_connect_timeout,
         )
         await client.connect()
         _clients[server.id] = client
