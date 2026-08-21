@@ -285,24 +285,237 @@ def do_merge(zf: zipfile.ZipFile, names: list[str]) -> dict:
             ).fetchall()
         }
 
+        # --- Entity-aware merge for MCP servers ---
+        # MCP servers are matched by URL (HTTP) or name+command (stdio),
+        # not by UUID. If a server already exists, we skip it and remap
+        # its ID so that dependent rows (tools, credentials) point to the
+        # existing server instead of creating duplicates.
+        server_id_map: dict[str, str] = {}  # imported_id -> target_id
+
+        if "mcp_servers" in imported_tables:
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(mcp_servers)").fetchall()]
+            col_list = ", ".join(cols)
+            placeholders = ", ".join(["?"] * len(cols))
+            before = conn.execute("SELECT COUNT(*) FROM mcp_servers").fetchone()[0]
+
+            imported_servers = conn.execute(
+                f"SELECT {col_list} FROM imported.mcp_servers"
+            ).fetchall()
+            col_idx = {c: i for i, c in enumerate(cols)}
+
+            for row in imported_servers:
+                imp_id = row[col_idx["id"]]
+                url = row[col_idx["url"]] if "url" in col_idx else None
+                name = row[col_idx["name"]] if "name" in col_idx else None
+                command = row[col_idx["command"]] if "command" in col_idx else None
+
+                # Match by URL for HTTP servers, by name+command for stdio
+                if url:
+                    existing = conn.execute(
+                        "SELECT id FROM mcp_servers WHERE url = ?", (url,)
+                    ).fetchone()
+                else:
+                    existing = conn.execute(  # noqa: S608
+                        "SELECT id FROM mcp_servers WHERE name = ? AND "
+                        "(command = ? OR (command IS NULL AND ? IS NULL))",
+                        (name, command, command),
+                    ).fetchone()
+
+                if existing:
+                    server_id_map[imp_id] = existing[0]
+                    skipped_rows += 1
+                else:
+                    conn.execute(
+                        f"INSERT OR IGNORE INTO mcp_servers ({col_list}) VALUES ({placeholders})",
+                        row,
+                    )
+                    server_id_map[imp_id] = imp_id  # keeps same ID
+                    imported_rows += 1
+
+            after = conn.execute("SELECT COUNT(*) FROM mcp_servers").fetchone()[0]
+            added = after - before
+            if added > 0:
+                tables_merged.append(f"mcp_servers (+{added})")
+
+        # --- Entity-aware merge for MCP tools ---
+        # Match by (target_server_id, tool_name). Remap server ID from above.
+        if "mcp_tools" in imported_tables:
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(mcp_tools)").fetchall()]
+            col_list = ", ".join(cols)
+            placeholders = ", ".join(["?"] * len(cols))
+            before = conn.execute("SELECT COUNT(*) FROM mcp_tools").fetchone()[0]
+
+            imported_tools = conn.execute(f"SELECT {col_list} FROM imported.mcp_tools").fetchall()
+            col_idx = {c: i for i, c in enumerate(cols)}
+
+            for row in imported_tools:
+                imp_server_id = row[col_idx["mcp_server_id"]]
+                tool_name = row[col_idx["tool_name"]]
+                target_server_id = server_id_map.get(imp_server_id, imp_server_id)
+
+                # Check if this tool already exists on the target server
+                existing = conn.execute(
+                    "SELECT 1 FROM mcp_tools WHERE mcp_server_id = ? AND tool_name = ?",
+                    (target_server_id, tool_name),
+                ).fetchone()
+                if existing:
+                    skipped_rows += 1
+                    continue
+
+                # Remap server ID and insert
+                row_list = list(row)
+                row_list[col_idx["mcp_server_id"]] = target_server_id
+                conn.execute(
+                    f"INSERT OR IGNORE INTO mcp_tools ({col_list}) VALUES ({placeholders})",
+                    row_list,
+                )
+                imported_rows += 1
+
+            after = conn.execute("SELECT COUNT(*) FROM mcp_tools").fetchone()[0]
+            added = after - before
+            if added > 0:
+                tables_merged.append(f"mcp_tools (+{added})")
+
+        # --- Entity-aware merge for MCP credentials ---
+        # Match by (target_server_id, credential_type). Remap server ID.
+        if "mcp_server_credentials" in imported_tables:
+            cols = [
+                r[1] for r in conn.execute("PRAGMA table_info(mcp_server_credentials)").fetchall()
+            ]
+            col_list = ", ".join(cols)
+            placeholders = ", ".join(["?"] * len(cols))
+            before = conn.execute("SELECT COUNT(*) FROM mcp_server_credentials").fetchone()[0]
+
+            imported_creds = conn.execute(
+                f"SELECT {col_list} FROM imported.mcp_server_credentials"
+            ).fetchall()
+            col_idx = {c: i for i, c in enumerate(cols)}
+
+            for row in imported_creds:
+                imp_server_id = row[col_idx["mcp_server_id"]]
+                cred_type = row[col_idx["credential_type"]]
+                target_server_id = server_id_map.get(imp_server_id, imp_server_id)
+
+                existing = conn.execute(  # noqa: S608
+                    "SELECT 1 FROM mcp_server_credentials "
+                    "WHERE mcp_server_id = ? AND credential_type = ?",
+                    (target_server_id, cred_type),
+                ).fetchone()
+                if existing:
+                    skipped_rows += 1
+                    continue
+
+                row_list = list(row)
+                row_list[col_idx["mcp_server_id"]] = target_server_id
+                conn.execute(  # noqa: S608
+                    f"INSERT OR IGNORE INTO mcp_server_credentials "
+                    f"({col_list}) VALUES ({placeholders})",
+                    row_list,
+                )
+                imported_rows += 1
+
+            after = conn.execute("SELECT COUNT(*) FROM mcp_server_credentials").fetchone()[0]
+            added = after - before
+            if added > 0:
+                tables_merged.append(f"mcp_server_credentials (+{added})")
+
+        # --- Entity-aware merge for channel configs ---
+        # Match by (platform, agent_id) — the unique constraint.
+        if "channel_configs" in imported_tables:
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(channel_configs)").fetchall()]
+            col_list = ", ".join(cols)
+            placeholders = ", ".join(["?"] * len(cols))
+            before = conn.execute("SELECT COUNT(*) FROM channel_configs").fetchone()[0]
+
+            imported_channels = conn.execute(
+                f"SELECT {col_list} FROM imported.channel_configs"
+            ).fetchall()
+            col_idx = {c: i for i, c in enumerate(cols)}
+
+            for row in imported_channels:
+                platform = row[col_idx["platform"]]
+                agent_id = row[col_idx["agent_id"]]
+
+                existing = conn.execute(
+                    "SELECT 1 FROM channel_configs WHERE platform = ? AND agent_id = ?",
+                    (platform, agent_id),
+                ).fetchone()
+                if existing:
+                    skipped_rows += 1
+                    continue
+
+                conn.execute(
+                    f"INSERT OR IGNORE INTO channel_configs ({col_list}) VALUES ({placeholders})",
+                    row,
+                )
+                imported_rows += 1
+
+            after = conn.execute("SELECT COUNT(*) FROM channel_configs").fetchone()[0]
+            added = after - before
+            if added > 0:
+                tables_merged.append(f"channel_configs (+{added})")
+
+        # --- Entity-aware merge for providers ---
+        # Match by name (case-insensitive).
+        if "providers" in imported_tables:
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(providers)").fetchall()]
+            col_list = ", ".join(cols)
+            placeholders = ", ".join(["?"] * len(cols))
+            before = conn.execute("SELECT COUNT(*) FROM providers").fetchone()[0]
+
+            imported_providers = conn.execute(
+                f"SELECT {col_list} FROM imported.providers"
+            ).fetchall()
+            col_idx = {c: i for i, c in enumerate(cols)}
+
+            for row in imported_providers:
+                name = row[col_idx["name"]]
+
+                existing = conn.execute(
+                    "SELECT 1 FROM providers WHERE LOWER(name) = LOWER(?)",
+                    (name,),
+                ).fetchone()
+                if existing:
+                    skipped_rows += 1
+                    continue
+
+                conn.execute(
+                    f"INSERT OR IGNORE INTO providers ({col_list}) VALUES ({placeholders})",
+                    row,
+                )
+                imported_rows += 1
+
+            after = conn.execute("SELECT COUNT(*) FROM providers").fetchone()[0]
+            added = after - before
+            if added > 0:
+                tables_merged.append(f"providers (+{added})")
+
+        # --- Simple INSERT OR IGNORE for the remaining tables ---
+        # These tables use UUIDs that are stable across export/import
+        # (agents, sessions, runs, messages, etc.) or have unique constraints
+        # that INSERT OR IGNORE already respects (operators.username).
+        entity_aware_tables = {
+            "mcp_servers",
+            "mcp_tools",
+            "mcp_server_credentials",
+            "channel_configs",
+            "providers",
+        }
         for table in MERGE_TABLES:
-            if table not in imported_tables:
+            if table not in imported_tables or table in entity_aware_tables:
                 continue
             # Skip FTS virtual tables — they're auto-populated
             if "fts" in table:
                 continue
 
-            # Get column list
             cols = [row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()]
             if not cols:
                 continue
             col_list = ", ".join(cols)
             placeholders = ", ".join(["?"] * len(cols))
 
-            # Count before
             before = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
 
-            # INSERT OR IGNORE — keeps existing rows, adds new ones
             try:
                 rows = conn.execute(f"SELECT {col_list} FROM imported.{table}").fetchall()
                 conn.executemany(

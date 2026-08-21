@@ -334,6 +334,110 @@ class TestMigrationIntegrity:
         assert result1["rows_added"] >= 1
         assert result2["rows_added"] == 0
 
+    async def test_merge_mcp_server_by_url_not_uuid(self, tmp_path, monkeypatch):
+        """Merging an MCP server that already exists (by URL) doesn't duplicate it or its tools."""
+        from agentos.config import settings
+        from agentos.services import migration as migration_svc
+
+        tgt_dir = tmp_path / "tgt"
+        tgt_dir.mkdir()
+        tgt_db = tgt_dir / "agentos.db"
+
+        # Create target DB with an MCP server + 28 tools
+        conn = sqlite3.connect(str(tgt_db))
+        conn.execute("CREATE TABLE operators (id TEXT PRIMARY KEY, username TEXT)")
+        conn.execute("INSERT INTO operators VALUES ('op-1', 'admin')")
+        conn.execute("""CREATE TABLE mcp_servers (
+            id TEXT PRIMARY KEY, name TEXT, transport TEXT, command TEXT,
+            args TEXT, url TEXT, headers TEXT, env_template TEXT,
+            oauth_config TEXT, tool_filter TEXT, enabled INTEGER,
+            require_approval INTEGER, created_at TEXT, updated_at TEXT
+        )""")
+        conn.execute("""CREATE TABLE mcp_tools (
+            id TEXT PRIMARY KEY, mcp_server_id TEXT, tool_name TEXT,
+            capability_name TEXT, parameters_schema TEXT, description TEXT,
+            egress INTEGER, require_approval INTEGER, subject_scoped INTEGER,
+            created_at TEXT, updated_at TEXT
+        )""")
+        conn.execute("""CREATE TABLE mcp_server_credentials (
+            id TEXT PRIMARY KEY, mcp_server_id TEXT, credential_type TEXT,
+            encrypted_value TEXT, label TEXT, created_at TEXT, updated_at TEXT
+        )""")
+        # Target has Notion server with 28 tools
+        conn.execute(
+            "INSERT INTO mcp_servers VALUES ('tgt-notion-id', 'Notion', 'http', NULL, NULL, 'https://mcp.notion.com/mcp', NULL, NULL, NULL, NULL, 1, 1, '', '')"
+        )
+        for i in range(28):
+            conn.execute(
+                f"INSERT INTO mcp_tools VALUES ('tgt-tool-{i}', 'tgt-notion-id', 'tool_{i}', 'mcp.Notion.tool_{i}', '{{}}', '', 0, 0, 1, '', '')"
+            )
+        conn.execute(
+            "INSERT INTO mcp_server_credentials VALUES ('tgt-cred-1', 'tgt-notion-id', 'oauth_token', 'encrypted', 'OAuth', '', '')"
+        )
+        conn.commit()
+        conn.close()
+
+        # Create source DB with the SAME server (different UUID) + same 28 tools
+        src_db = tmp_path / "src.db"
+        conn = sqlite3.connect(str(src_db))
+        conn.execute("CREATE TABLE operators (id TEXT PRIMARY KEY, username TEXT)")
+        conn.execute("""CREATE TABLE mcp_servers (
+            id TEXT PRIMARY KEY, name TEXT, transport TEXT, command TEXT,
+            args TEXT, url TEXT, headers TEXT, env_template TEXT,
+            oauth_config TEXT, tool_filter TEXT, enabled INTEGER,
+            require_approval INTEGER, created_at TEXT, updated_at TEXT
+        )""")
+        conn.execute("""CREATE TABLE mcp_tools (
+            id TEXT PRIMARY KEY, mcp_server_id TEXT, tool_name TEXT,
+            capability_name TEXT, parameters_schema TEXT, description TEXT,
+            egress INTEGER, require_approval INTEGER, subject_scoped INTEGER,
+            created_at TEXT, updated_at TEXT
+        )""")
+        conn.execute("""CREATE TABLE mcp_server_credentials (
+            id TEXT PRIMARY KEY, mcp_server_id TEXT, credential_type TEXT,
+            encrypted_value TEXT, label TEXT, created_at TEXT, updated_at TEXT
+        )""")
+        # Source has same Notion server with DIFFERENT UUID + same 28 tools
+        conn.execute(
+            "INSERT INTO mcp_servers VALUES ('src-notion-id', 'Notion', 'http', NULL, NULL, 'https://mcp.notion.com/mcp', NULL, NULL, NULL, NULL, 1, 1, '', '')"
+        )
+        for i in range(28):
+            conn.execute(
+                f"INSERT INTO mcp_tools VALUES ('src-tool-{i}', 'src-notion-id', 'tool_{i}', 'mcp.Notion.tool_{i}', '{{}}', '', 0, 0, 1, '', '')"
+            )
+        conn.execute(
+            "INSERT INTO mcp_server_credentials VALUES ('src-cred-1', 'src-notion-id', 'oauth_token', 'encrypted2', 'OAuth', '', '')"
+        )
+        conn.commit()
+        conn.close()
+
+        archive = _make_zip(db_bytes=src_db.read_bytes())
+
+        monkeypatch.setattr(settings, "db_path", tgt_db)
+        monkeypatch.setattr(settings, "secret_key_path", tgt_dir / "secret.key")
+        monkeypatch.setattr(settings, "agent_home_root", tgt_dir / "agents")
+        monkeypatch.setattr(settings, "workspace_root", tgt_dir / "workspaces")
+
+        zf = zipfile.ZipFile(io.BytesIO(archive))
+        result = migration_svc.do_merge(zf, zf.namelist())
+
+        # Should add 0 rows — everything already exists by natural key
+        assert result["rows_added"] == 0
+        assert result["rows_skipped"] == 30  # 1 server + 28 tools + 1 credential
+
+        # Verify no duplicates in the target DB
+        conn = sqlite3.connect(str(tgt_db))
+        server_count = conn.execute(
+            "SELECT COUNT(*) FROM mcp_servers WHERE url = 'https://mcp.notion.com/mcp'"
+        ).fetchone()[0]
+        tool_count = conn.execute("SELECT COUNT(*) FROM mcp_tools").fetchone()[0]
+        cred_count = conn.execute("SELECT COUNT(*) FROM mcp_server_credentials").fetchone()[0]
+        conn.close()
+
+        assert server_count == 1  # no duplicate server
+        assert tool_count == 28  # no duplicate tools
+        assert cred_count == 1  # no duplicate credentials
+
     async def test_preview_reports_integrity(self, tmp_path, monkeypatch):
         """Archive preview reports database integrity and schema compatibility."""
         from agentos.config import settings
