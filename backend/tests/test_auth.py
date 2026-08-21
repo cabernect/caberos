@@ -4,7 +4,7 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
 from agentos.db import get_db
-from agentos.main import _sessions, app
+from agentos.main import app
 
 pytest_asyncio_fixture = pytest_asyncio.fixture
 
@@ -21,13 +21,10 @@ async def client(db_engine):
             yield session
 
     app.dependency_overrides[get_db] = override_get_db
-    # Clear sessions between tests
-    _sessions.clear()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
     app.dependency_overrides.clear()
-    _sessions.clear()
 
 
 @pytest_asyncio.fixture

@@ -66,10 +66,19 @@ class PostgresBackend(DatabaseBackend):
             ("mcp_servers", "oauth_config", "TEXT"),
             ("sessions", "channel", "VARCHAR(50)"),
             ("sessions", "external_user_id", "VARCHAR(255)"),
+            ("channel_configs", "approval_policy", "VARCHAR(20) DEFAULT 'deny'"),
         ]
         for table, column, col_type in patches:
             if not await self.column_exists(conn, table, column):
                 await self.add_column(conn, table, column, col_type)
+
+        # Migrate existing channels to auto_approve to preserve current behavior.
+        await conn.execute(
+            text(
+                "UPDATE channel_configs SET approval_policy = 'auto_approve' "
+                "WHERE approval_policy = 'deny' OR approval_policy IS NULL"
+            )
+        )
 
     async def init_fulltext_search(self, conn: Any) -> None:
         """Create tsvector + GIN index for semantic recall (D34).

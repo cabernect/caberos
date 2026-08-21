@@ -1,11 +1,14 @@
-"""Operator authentication — session + cookie, bcrypt (D4).
+"""Operator authentication — persistent sessions, bcrypt (D4).
 
-Sessions are stored in SQLite (survive restarts). Passwords hashed with bcrypt.
+Sessions are stored in SQLite (survive restarts). Only the token hash is
+stored — never the raw session token. Passwords hashed with bcrypt.
 First-run: default admin operator with must_change_password=True.
 """
 
+import hashlib
 import secrets
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -15,6 +18,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .db import get_db
 from .models.operator import Operator, OperatorAuditLog
+from .models.operator_session import OperatorSession  # noqa: F401
+from .models.operator_session import (
+    cleanup_expired_sessions as cleanup_expired_sessions,  # noqa: F401
+)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -52,6 +59,11 @@ def create_session_token() -> str:
     return secrets.token_urlsafe(32)
 
 
+def _hash_token(token: str) -> str:
+    """Hash a session token for storage. Only the hash is persisted."""
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
 def extract_session_token(request: Request) -> str | None:
     """Extract the session token from the cookie or Authorization: Bearer header."""
     token = request.cookies.get(SESSION_COOKIE)
@@ -66,21 +78,32 @@ def extract_session_token(request: Request) -> str | None:
 async def get_operator_from_session(
     request: Request, db: AsyncSession = Depends(get_db)
 ) -> Operator | None:
-    """Extract the operator from the session cookie or bearer token. Returns None if not authenticated."""
+    """Extract the operator from a persisted session. Returns None if not authenticated."""
     token = extract_session_token(request)
     if not token:
         return None
 
-    # Session token is stored in OperatorAuditLog as a "session" action
-    # For simplicity, we store sessions in-memory (lost on restart)
-    # TODO: persist sessions in DB for restart survival (D4)
-    from .main import _sessions
+    token_hash = _hash_token(token)
+    result = await db.execute(
+        select(OperatorSession).where(OperatorSession.token_hash == token_hash)
+    )
+    session = result.scalar_one_or_none()
 
-    operator_id = _sessions.get(token)
-    if not operator_id:
+    if session is None:
         return None
 
-    result = await db.execute(select(Operator).where(Operator.id == operator_id))
+    # Check expiry (SQLite may return naive datetimes — treat as UTC)
+    expires = session.expires_at
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=UTC)
+    if expires < datetime.now(UTC):
+        return None
+
+    # Update last_seen_at
+    session.last_seen_at = datetime.now(UTC)
+    await db.flush()
+
+    result = await db.execute(select(Operator).where(Operator.id == session.operator_id))
     return result.scalar_one_or_none()
 
 
@@ -90,6 +113,31 @@ async def require_operator(request: Request, db: AsyncSession = Depends(get_db))
     if operator is None:
         raise HTTPException(status_code=401, detail="Not authenticated")
     return operator
+
+
+async def _create_session(db: AsyncSession, operator_id: str, token: str) -> None:
+    """Persist a new session token hash."""
+    session = OperatorSession(
+        id=str(uuid.uuid4()),
+        token_hash=_hash_token(token),
+        operator_id=operator_id,
+        expires_at=datetime.now(UTC) + timedelta(seconds=SESSION_MAX_AGE),
+        last_seen_at=datetime.now(UTC),
+    )
+    db.add(session)
+    await db.commit()
+
+
+async def _delete_session(db: AsyncSession, token: str) -> None:
+    """Delete a session by token."""
+    token_hash = _hash_token(token)
+    result = await db.execute(
+        select(OperatorSession).where(OperatorSession.token_hash == token_hash)
+    )
+    session = result.scalar_one_or_none()
+    if session:
+        await db.delete(session)
+        await db.commit()
 
 
 @router.post("/login")
@@ -105,9 +153,7 @@ async def login(
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     token = create_session_token()
-    from .main import _sessions
-
-    _sessions[token] = operator.id
+    await _create_session(db, operator.id, token)
 
     response.set_cookie(
         key=SESSION_COOKIE,
@@ -129,12 +175,10 @@ async def login(
 
 
 @router.post("/logout")
-async def logout(request: Request, response: Response) -> dict:
+async def logout(request: Request, response: Response, db: AsyncSession = Depends(get_db)) -> dict:
     token = extract_session_token(request)
     if token:
-        from .main import _sessions
-
-        _sessions.pop(token, None)
+        await _delete_session(db, token)
     response.delete_cookie(SESSION_COOKIE)
     return {"status": "logged_out"}
 
