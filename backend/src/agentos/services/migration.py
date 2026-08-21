@@ -91,10 +91,16 @@ def collect_paths() -> list[tuple[Path, str]]:
 def export_archive_bytes() -> bytes:
     """Build a ZIP archive of all CaberOS data in memory.
 
+    Checkpoints the WAL file first so the main DB file has all recent
+    changes. Without this, SQLite WAL mode keeps recent writes in
+    agentos.db-wal and the exported agentos.db would be stale.
+
     Raises if the source database fails integrity_check.
     """
     db_path = Path(settings.db_path)
     if db_path.exists():
+        # Checkpoint WAL so all changes are in the main DB file
+        _checkpoint_wal(db_path)
         integrity = check_db_integrity(db_path)
         if integrity != "ok":
             raise ValueError(f"Source database is corrupt (integrity_check: {integrity})")
@@ -108,6 +114,25 @@ def export_archive_bytes() -> bytes:
         for abs_path, arcname in pairs:
             zf.write(abs_path, arcname)
     return buf.getvalue()
+
+
+def _checkpoint_wal(db_path: Path) -> None:
+    """Checkpoint the WAL file so all changes are in the main DB file.
+
+    Silently ignores errors on corrupt/non-SQLite files — the integrity
+    check that runs after will catch and report those.
+    """
+    import sqlite3
+
+    try:
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            conn.commit()
+        finally:
+            conn.close()
+    except sqlite3.DatabaseError:
+        pass  # integrity check will report the real issue
 
 
 def validate_archive(
