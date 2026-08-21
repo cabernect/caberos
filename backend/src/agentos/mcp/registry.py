@@ -15,7 +15,6 @@ appropriate client.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from typing import Any
@@ -125,7 +124,9 @@ async def connect_server(server: McpServer) -> bool:
                         "Re-authenticate via the dashboard.",
                         server.name,
                     )
-                    return asyncio.sleep(0)
+                    # Don't open a browser during auto-reconnect — just return.
+                    # The MCP SDK expects this to be awaitable and return None.
+                    return None
 
                 async def _noop_callback_handler():
                     log.warning(
@@ -133,7 +134,13 @@ async def connect_server(server: McpServer) -> bool:
                         "Re-authenticate via the dashboard.",
                         server.name,
                     )
-                    raise RuntimeError("OAuth re-authentication required — use the dashboard")
+                    # Raise a clean, identifiable error so the connection loop
+                    # can catch it and log a single warning instead of a
+                    # full traceback cascade through the exit stack.
+                    raise ConnectionError(
+                        f"MCP server '{server.name}' OAuth re-authentication required "
+                        "— use the dashboard"
+                    )
 
                 auth = CaberOSOAuthProvider(
                     server_url=server.url,
@@ -168,6 +175,16 @@ async def connect_server(server: McpServer) -> bool:
         log.info("Connected to MCP server '%s' (%s)", server.name, server.id)
         return True
 
+    except ConnectionError as e:
+        log.warning("Failed to connect to MCP server '%s': %s", server.name, e)
+        # Clean up partial connection
+        if server.id in _clients:
+            try:
+                await _clients[server.id].disconnect()
+            except Exception:
+                log.debug("Error cleaning up failed MCP connection for '%s'", server.name)
+            del _clients[server.id]
+        return False
     except Exception:
         log.exception("Failed to connect to MCP server '%s'", server.name)
         # Clean up partial connection
@@ -341,6 +358,9 @@ async def connect_all() -> None:
             continue
         try:
             await connect_server(server)
+        except ConnectionError as e:
+            log.warning("MCP server '%s' skipped during startup: %s", server.name, e)
+            continue
         except Exception:
             log.exception("Failed to connect to MCP server '%s' during startup", server.name)
             continue
