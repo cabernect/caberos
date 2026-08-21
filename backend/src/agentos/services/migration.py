@@ -667,25 +667,79 @@ def preview_archive(content_buf: io.BytesIO) -> dict:
                 conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] if target_exists else 0
             )
 
-            # For merge mode, count how many would be new (INSERT OR IGNORE)
-            # Use the primary key column to detect duplicates
+            # For merge mode, count how many would be new.
+            # Entity-aware tables use natural keys (URL, tool_name, etc.),
+            # not UUID primary keys. Match the actual merge logic.
             new_count = imported_count
             if target_exists and imported_count > 0:
-                pk_cols = [
-                    row[1]
-                    for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
-                    if row[5]  # pk flag
-                ]
-                if pk_cols:
-                    pk_list = ", ".join(pk_cols)
-                    try:
+                try:
+                    if table == "mcp_servers":
+                        # Match by URL (HTTP) or name+command (stdio)
                         new_count = conn.execute(
-                            f"SELECT COUNT(*) FROM imported.{table} "
-                            f"WHERE ({pk_list}) NOT IN "
-                            f"(SELECT {pk_list} FROM {table})"
+                            "SELECT COUNT(*) FROM imported.mcp_servers s "
+                            "WHERE NOT EXISTS ("
+                            "  SELECT 1 FROM mcp_servers t "
+                            "  WHERE (t.url IS NOT NULL AND t.url = s.url) "
+                            "     OR (t.url IS NULL AND t.name = s.name "
+                            "         AND (t.command = s.command "
+                            "              OR (t.command IS NULL AND s.command IS NULL)))"
+                            ")"
                         ).fetchone()[0]
-                    except sqlite3.Error:
-                        new_count = imported_count  # can't determine, assume all new
+                    elif table == "mcp_tools":
+                        # Match by (mcp_server_id, tool_name)
+                        new_count = conn.execute(
+                            "SELECT COUNT(*) FROM imported.mcp_tools i "
+                            "WHERE NOT EXISTS ("
+                            "  SELECT 1 FROM mcp_tools t "
+                            "  WHERE t.mcp_server_id = i.mcp_server_id "
+                            "    AND t.tool_name = i.tool_name"
+                            ")"
+                        ).fetchone()[0]
+                    elif table == "mcp_server_credentials":
+                        # Match by (mcp_server_id, credential_type)
+                        new_count = conn.execute(
+                            "SELECT COUNT(*) FROM imported.mcp_server_credentials i "
+                            "WHERE NOT EXISTS ("
+                            "  SELECT 1 FROM mcp_server_credentials t "
+                            "  WHERE t.mcp_server_id = i.mcp_server_id "
+                            "    AND t.credential_type = i.credential_type"
+                            ")"
+                        ).fetchone()[0]
+                    elif table == "channel_configs":
+                        # Match by (platform, agent_id)
+                        new_count = conn.execute(
+                            "SELECT COUNT(*) FROM imported.channel_configs i "
+                            "WHERE NOT EXISTS ("
+                            "  SELECT 1 FROM channel_configs t "
+                            "  WHERE t.platform = i.platform "
+                            "    AND t.agent_id = i.agent_id"
+                            ")"
+                        ).fetchone()[0]
+                    elif table == "providers":
+                        # Match by name (case-insensitive)
+                        new_count = conn.execute(
+                            "SELECT COUNT(*) FROM imported.providers i "
+                            "WHERE NOT EXISTS ("
+                            "  SELECT 1 FROM providers t "
+                            "  WHERE LOWER(t.name) = LOWER(i.name)"
+                            ")"
+                        ).fetchone()[0]
+                    else:
+                        # Default: UUID primary key matching
+                        pk_cols = [
+                            row[1]
+                            for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+                            if row[5]  # pk flag
+                        ]
+                        if pk_cols:
+                            pk_list = ", ".join(pk_cols)
+                            new_count = conn.execute(
+                                f"SELECT COUNT(*) FROM imported.{table} "
+                                f"WHERE ({pk_list}) NOT IN "
+                                f"(SELECT {pk_list} FROM {table})"
+                            ).fetchone()[0]
+                except sqlite3.Error:
+                    new_count = imported_count  # can't determine, assume all new
 
             table_stats.append(
                 {
