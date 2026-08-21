@@ -68,6 +68,7 @@ class SyscallHandler:
         is_sub_agent: bool = False,
         sub_agent_id: str | None = None,
         event_emitter: Any = None,
+        parent_config: AgentConfig | None = None,
     ) -> SyscallResult:
         start = time.monotonic()
         self._event_emitter = event_emitter
@@ -81,7 +82,37 @@ class SyscallHandler:
 
         # 2. Check grant
         # capabilities is None = all tools enabled (default), [] = none
-        if agent_config.capabilities is not None:
+        # For sub-agents, intersect with parent's effective capability set.
+        if is_sub_agent and parent_config is not None:
+            # Compute the parent's effective granted set
+            if parent_config.capabilities is not None:
+                parent_granted = {g.name for g in parent_config.capabilities}
+            else:
+                # Parent has all tools — sub-agent is bounded by its own set
+                parent_granted = None
+
+            if parent_granted is not None:
+                # Sub-agent's requested set must be within parent's set
+                if agent_config.capabilities is not None:
+                    sub_granted = {g.name for g in agent_config.capabilities}
+                else:
+                    # Sub-agent says "all tools" — but it can only get what
+                    # the parent has
+                    sub_granted = parent_granted
+
+                effective_granted = sub_granted & parent_granted
+                if call.name not in effective_granted:
+                    return await self._deny(
+                        run_id,
+                        call,
+                        agent_config,
+                        "not granted by parent agent",
+                        start,
+                        sub_agent_id,
+                    )
+            # If parent has all tools (parent_granted is None), fall through
+            # to the normal grant check below
+        elif agent_config.capabilities is not None:
             granted_names = {g.name for g in agent_config.capabilities}
             if call.name not in granted_names:
                 return await self._deny(
@@ -120,11 +151,53 @@ class SyscallHandler:
         )
         needs_approval = grant.require_approval if grant else cap.require_approval
         if needs_approval and not settings.yolo_mode:
-            # Auto-approve for external channel sessions (Zalo, Telegram, etc.)
-            # — there's no operator at the dashboard to approve, and the channel
-            # bot needs to respond autonomously.
+            # External channel sessions use a configurable approval policy
+            # (v0.1.3: replaces the hardcoded channel bypass).
             if session.channel:
-                pass  # Auto-approved for channel sessions
+                policy = getattr(self, "_channel_approval_policy", None)
+                if policy is None:
+                    # Look up the policy from the channel config in the DB
+                    policy = await self._resolve_channel_policy(session, agent_config)
+
+                if policy == "auto_approve":
+                    pass  # Execute without waiting
+                elif policy == "deny":
+                    return await self._deny(
+                        run_id,
+                        call,
+                        agent_config,
+                        "denied by channel approval policy (deny)",
+                        start,
+                        sub_agent_id,
+                    )
+                elif policy == "operator":
+                    # Create a pending approval for the dashboard operator
+                    approval_result = await self._await_approval(
+                        call=call,
+                        run_id=run_id,
+                        agent_config=agent_config,
+                        session_id=session.id,
+                        event_emitter=event_emitter,
+                    )
+                    if not approval_result:
+                        return await self._deny(
+                            run_id,
+                            call,
+                            agent_config,
+                            "approval denied by operator",
+                            start,
+                            sub_agent_id,
+                        )
+                else:
+                    # Unknown or missing policy — default to deny for safety
+                    return await self._deny(
+                        run_id,
+                        call,
+                        agent_config,
+                        "denied by channel approval policy (default: deny)",
+                        start,
+                        sub_agent_id,
+                    )
             # Check session-scoped allowlist first — if the operator previously
             # approved this exact capability+args with "remember for this session",
             # skip the approval gate.
@@ -412,6 +485,34 @@ class SyscallHandler:
             cost=0.0,
             latency_ms=elapsed,
         )
+
+    async def _resolve_channel_policy(self, session: Any, agent_config: AgentConfig) -> str:
+        """Look up the approval policy for the session's channel.
+
+        Returns one of: auto_approve, operator, deny.
+        Defaults to deny if no channel config is found.
+        """
+        if not session.channel:
+            return "operator"  # Dashboard sessions use normal approval
+
+        from ..models.channel_config import ChannelConfig
+
+        try:
+            async with self._db_lock:
+                result = await self.db.execute(
+                    select(ChannelConfig).where(
+                        ChannelConfig.platform == session.channel,
+                        ChannelConfig.agent_id == agent_config.id,
+                    )
+                )
+                config = result.scalar_one_or_none()
+                if config and config.approval_policy:
+                    return config.approval_policy
+        except Exception:
+            pass
+
+        # Default to deny for safety if no config is found
+        return "deny"
 
     async def _await_approval(
         self,

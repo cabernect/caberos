@@ -43,6 +43,7 @@ class ChannelCreate(BaseModel):
     enabled: bool = True
     mode: str = "polling"  # "polling" or "webhook"
     extra_config: dict[str, Any] | None = None
+    approval_policy: str = "deny"  # auto_approve, operator, deny
 
 
 class ChannelUpdate(BaseModel):
@@ -52,6 +53,7 @@ class ChannelUpdate(BaseModel):
     webhook_secret: str | None = None
     enabled: bool | None = None
     mode: str | None = None
+    approval_policy: str | None = None
 
 
 class ChannelOut(BaseModel):
@@ -64,6 +66,7 @@ class ChannelOut(BaseModel):
     webhook_url: str
     has_token: bool
     extra_config: dict[str, Any] | None = None
+    approval_policy: str = "deny"
 
 
 class ChannelTest(BaseModel):
@@ -110,6 +113,7 @@ async def create_channel(
         enabled=req.enabled,
         mode=req.mode,
         extra_config=json.dumps(req.extra_config) if req.extra_config else None,
+        approval_policy=req.approval_policy,
     )
     db.add(config)
     await db.commit()
@@ -142,6 +146,8 @@ async def update_channel(
         config.enabled = req.enabled
     if req.mode is not None:
         config.mode = req.mode
+    if req.approval_policy is not None:
+        config.approval_policy = req.approval_policy
 
     await db.commit()
     await db.refresh(config)
@@ -315,4 +321,5 @@ def _config_to_out(config: ChannelConfig) -> ChannelOut:
         webhook_url=webhook_url,
         has_token=bool(config.encrypted_bot_token),
         extra_config=extra,
+        approval_policy=config.approval_policy or "deny",
     )

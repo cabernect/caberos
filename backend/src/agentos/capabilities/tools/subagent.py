@@ -178,6 +178,7 @@ async def _execute_subagent(
         parent_handler=parent_syscall_handler,
         sub_agent_id=subagent_id,
         parent_run_id=parent_run_id,
+        parent_config=parent_config,
     )
 
     # Wrap the event emitter so sub-agent events are tagged with subagent_id.
@@ -231,10 +232,17 @@ def _make_tagged_emitter(parent_emitter: Any, subagent_id: str) -> Any:
 class _SubAgentSyscallHandler:
     """Wrapper around the parent's syscall handler that injects sub_agent_id."""
 
-    def __init__(self, parent_handler: Any, sub_agent_id: str, parent_run_id: str) -> None:
+    def __init__(
+        self,
+        parent_handler: Any,
+        sub_agent_id: str,
+        parent_run_id: str,
+        parent_config: Any = None,
+    ) -> None:
         self._parent = parent_handler
         self._sub_agent_id = sub_agent_id
         self._parent_run_id = parent_run_id
+        self._parent_config = parent_config
 
     @property
     def workspace_path(self) -> str:
@@ -257,7 +265,11 @@ class _SubAgentSyscallHandler:
         is_sub_agent: bool = True,
         sub_agent_id: str | None = None,
         event_emitter: Any = None,
+        parent_config: Any = None,
     ) -> Any:
+        # Use the parent config passed at construction time, or the one
+        # passed to this call (for nested sub-agents)
+        effective_parent = parent_config or self._parent_config
         return await self._parent.mediate(
             call=call,
             session=session,
@@ -266,6 +278,7 @@ class _SubAgentSyscallHandler:
             is_sub_agent=True,
             sub_agent_id=self._sub_agent_id,
             event_emitter=event_emitter,
+            parent_config=effective_parent,
         )
 
 

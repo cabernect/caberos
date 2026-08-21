@@ -1161,6 +1161,66 @@ function ModelsTab({
 }
 
 function AboutTab() {
+  const [version, setVersion] = useState<string>("...");
+  const [updateStatus, setUpdateStatus] = useState<"idle" | "checking" | "up-to-date" | "available" | "downloading" | "error">("idle");
+  const [updateInfo, setUpdateInfo] = useState<{ latestVersion?: string; notes?: string }>({});
+  const [updateError, setUpdateError] = useState<string>("");
+  const [downloadProgress, setDownloadProgress] = useState<{ downloaded?: number; total?: number }>({});
+
+  useEffect(() => {
+    // In desktop mode, read from Tauri. In web mode, fetch from the backend.
+    const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+    if (isTauri) {
+      // Tauri v2 — read the app version from the package info
+      import("@tauri-apps/api/app")
+        .then((mod) => mod.getVersion())
+        .then(setVersion)
+        .catch(() => {
+          // Fallback to backend endpoint
+          fetch(`${import.meta.env.VITE_API_BASE || ""}/api/version`)
+            .then((r) => r.json())
+            .then((data) => setVersion(data.version))
+            .catch(() => setVersion("unknown"));
+        });
+    } else {
+      fetch(`${import.meta.env.VITE_API_BASE || ""}/api/version`)
+        .then((r) => r.json())
+        .then((data) => setVersion(data.version))
+        .catch(() => setVersion("unknown"));
+    }
+  }, []);
+
+  const handleCheckUpdates = useCallback(async () => {
+    setUpdateStatus("checking");
+    setUpdateError("");
+    try {
+      const { checkForUpdates } = await import("@/lib/updater");
+      const info = await checkForUpdates();
+      if (info.available) {
+        setUpdateStatus("available");
+        setUpdateInfo({ latestVersion: info.latestVersion, notes: info.notes });
+      } else {
+        setUpdateStatus("up-to-date");
+      }
+    } catch (e) {
+      setUpdateStatus("error");
+      setUpdateError(String(e));
+    }
+  }, []);
+
+  const handleDownloadAndRestart = useCallback(async () => {
+    setUpdateStatus("downloading");
+    setUpdateError("");
+    try {
+      const { downloadAndInstallUpdate } = await import("@/lib/updater");
+      await downloadAndInstallUpdate((progress) => setDownloadProgress(progress));
+      // The app will restart automatically after installation
+    } catch (e) {
+      setUpdateStatus("error");
+      setUpdateError(String(e));
+    }
+  }, []);
+
   return (
     <div className="max-w-2xl space-y-6">
       {/* Logo + version */}
@@ -1169,10 +1229,65 @@ function AboutTab() {
         style={{ borderColor: "var(--border)", background: "var(--white)" }}
       >
         <LogoMark className="h-12 w-12" color="var(--ink)" />
-        <div>
+        <div className="flex-1">
           <h2 className="text-[18px] font-semibold text-[var(--ink)]">CaberOS</h2>
           <p className="text-[13px] text-[var(--ink-2)]">Local-first AI Agent Operating System</p>
-          <p className="mt-1 font-mono text-[11px] text-[var(--ink-3)]">v0.1.0</p>
+          <p className="mt-1 font-mono text-[11px] text-[var(--ink-3)]">v{version}</p>
+        </div>
+        {/* Update check */}
+        <div className="flex flex-col items-end gap-2">
+          {updateStatus === "idle" && (
+            <button
+              onClick={handleCheckUpdates}
+              className="rounded-md border px-3 py-1.5 text-[12px] font-medium text-[var(--ink-2)] hover:bg-[var(--hover)]"
+              style={{ borderColor: "var(--border)" }}
+            >
+              Check for Updates
+            </button>
+          )}
+          {updateStatus === "checking" && (
+            <p className="text-[12px] text-[var(--ink-3)]">Checking...</p>
+          )}
+          {updateStatus === "up-to-date" && (
+            <p className="text-[12px] text-[var(--accent)]">You're up to date</p>
+          )}
+          {updateStatus === "available" && (
+            <div className="flex flex-col items-end gap-2">
+              <p className="text-[12px] font-medium text-[var(--ink)]">
+                v{updateInfo.latestVersion} is available
+              </p>
+              {updateInfo.notes && (
+                <p className="max-w-xs text-[11px] text-[var(--ink-3)]">{updateInfo.notes}</p>
+              )}
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setUpdateStatus("idle")}
+                  className="rounded-md border px-3 py-1.5 text-[12px] text-[var(--ink-2)] hover:bg-[var(--hover)]"
+                  style={{ borderColor: "var(--border)" }}
+                >
+                  Later
+                </button>
+                <button
+                  onClick={handleDownloadAndRestart}
+                  className="rounded-md bg-[var(--accent)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90"
+                >
+                  Download and Restart
+                </button>
+              </div>
+            </div>
+          )}
+          {updateStatus === "downloading" && (
+            <div className="flex flex-col items-end gap-1">
+              <p className="text-[12px] text-[var(--ink-2)]">
+                Downloading... {downloadProgress.downloaded && downloadProgress.total
+                  ? `${Math.round((downloadProgress.downloaded / downloadProgress.total) * 100)}%`
+                  : ""}
+              </p>
+            </div>
+          )}
+          {updateStatus === "error" && (
+            <p className="text-[12px] text-red-500">{updateError || "Update check failed"}</p>
+          )}
         </div>
       </div>
 

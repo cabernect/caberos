@@ -43,10 +43,6 @@ from .auth import router as auth_router  # noqa: E402
 from .capabilities.builtin import register_builtin_capabilities  # noqa: E402
 from .db import init_db  # noqa: E402
 
-# In-memory session store (token -> operator_id).
-# TODO: persist in DB for restart survival (D4).
-_sessions: dict[str, str] = {}
-
 # Background sweeper task handle
 _sweeper_task: asyncio.Task | None = None
 
@@ -63,14 +59,13 @@ async def _session_sweeper() -> None:
     while True:
         await asyncio.sleep(300)  # 5 minutes
         try:
-            from .agent_service import AgentService
+            from .agent_service import get_active_config
             from .memory.episodic import close_session, find_idle_sessions
 
             async with async_session_factory() as db:
                 idle = await find_idle_sessions(db, idle_minutes=30)
                 for session in idle:
-                    service = AgentService(db)
-                    agent_config = await service.get_agent(session.agent_id)
+                    agent_config = await get_active_config(db, session.agent_id)
                     if agent_config:
                         await close_session(db, agent_config, session, session.contact_id)
                 await db.commit()
@@ -106,7 +101,7 @@ async def lifespan(app: FastAPI):
     # Without this, the contact lock would block future runs for that contact.
     from sqlalchemy import update
 
-    from .db import async_session_factory
+    from .db import async_session_factory, engine
     from .models.run import Run
 
     async with async_session_factory() as db:
@@ -118,6 +113,13 @@ async def lifespan(app: FastAPI):
         if result.rowcount > 0:
             print(f"[startup] Cleaned up {result.rowcount} stuck run(s)")
         await db.commit()
+
+    # Clean up expired auth sessions from previous runs
+    from .auth import cleanup_expired_sessions
+
+    deleted = await cleanup_expired_sessions(engine)
+    if deleted > 0:
+        print(f"[startup] Cleaned up {deleted} expired session(s)")
 
     # Start the periodic session sweeper (Trigger 2 — backstop for abandoned sessions)
     _sweeper_task = asyncio.create_task(_session_sweeper())
@@ -174,7 +176,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="CaberOS",
     description="Local-first AI Agent Operating System",
-    version="0.1.0",
+    version="0.1.3",
     lifespan=lifespan,
 )
 
@@ -212,3 +214,23 @@ app.include_router(data.router)
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+def _get_app_version() -> str:
+    """Get the application version from package metadata."""
+    try:
+        from importlib.metadata import version
+
+        return version("agentos")
+    except Exception:
+        return "0.1.3"
+
+
+@app.get("/api/version")
+async def get_version() -> dict[str, str]:
+    """Return the application version.
+
+    Used by the About page in web mode to display the runtime version
+    without importing Tauri APIs.
+    """
+    return {"version": _get_app_version()}

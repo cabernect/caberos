@@ -21,6 +21,7 @@ async def db_engine():
         mcp,
         memory,
         operator,
+        operator_session,
         provider,
         run,
         session,
