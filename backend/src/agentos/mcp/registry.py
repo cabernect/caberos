@@ -299,7 +299,13 @@ async def _auto_enable_mcp_tools(server: McpServer, tool_names: list[str]) -> No
 
 
 async def disconnect_server(server_id: str) -> None:
-    """Disconnect from an MCP server and unregister its tools.
+    """Disconnect from an MCP server and unregister its tools from memory.
+
+    Does NOT delete tool rows from the DB — they are persistent data that
+    should survive restarts. On next startup, _discover_tools will refresh
+    them for servers that connect successfully. Servers that fail to connect
+    (e.g. expired OAuth) keep their stale tool definitions so they're not
+    lost forever.
 
     NEVER raises — all errors are caught so a failed disconnect doesn't
     crash the process (e.g. during shutdown).
@@ -311,16 +317,14 @@ async def disconnect_server(server_id: str) -> None:
         except Exception:
             log.exception("Error disconnecting from MCP server %s", server_id)
 
-    # Unregister capabilities
+    # Unregister capabilities from the in-memory registry only.
+    # Do NOT delete tool rows from the DB — they persist across restarts.
     async with async_session_factory() as db:
         result = await db.execute(select(McpTool).where(McpTool.mcp_server_id == server_id))
         tools = result.scalars().all()
         for tool in tools:
             cap_registry._caps.pop(tool.capability_name, None)
             _tool_map.pop(tool.capability_name, None)
-
-        await db.execute(delete(McpTool).where(McpTool.mcp_server_id == server_id))
-        await db.commit()
 
     log.info("Disconnected from MCP server %s", server_id)
 
