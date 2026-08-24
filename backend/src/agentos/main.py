@@ -5,6 +5,11 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
+# Must be set BEFORE litellm is imported anywhere — litellm fetches a
+# model cost map from GitHub on import, which can take 30+ seconds
+# through a corporate proxy. Use the local backup instead.
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
 # Enable INFO-level logging for agentos modules so channel loading, polling,
 # and other startup activity is visible in the console.
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
@@ -158,10 +163,23 @@ async def lifespan(app: FastAPI):
         lambda t: t.exception() if not t.cancelled() and t.exception() else None
     )
 
-    # Load all enabled external channels (Telegram, Discord, etc.)
+    # Load all enabled external channels (Telegram, Discord, etc.) in the
+    # background — channel startup involves network calls (webhook deletion,
+    # API polls) that should not block the API from becoming available.
     from .channels import load_all_channels
 
-    await load_all_channels()
+    async def _load_channels():
+        try:
+            await load_all_channels()
+        except Exception:
+            logging.getLogger("agentos.main").exception(
+                "Channel loading failed — some channels may be unavailable"
+            )
+
+    channel_task = asyncio.create_task(_load_channels())
+    channel_task.add_done_callback(
+        lambda t: t.exception() if not t.cancelled() and t.exception() else None
+    )
 
     yield
 
