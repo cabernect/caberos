@@ -43,7 +43,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDM2NUVENDlDNjk1NDI3RjEKUldUeEoxUnBuTlJlTmtxMDJEckN0SGRQNG9xYWxSbjE4TlYzbkJMMktWdGZFeDBKMU1lOTI1VG8K",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDdGQ0ExQTZEMDQwMEI3MDQKUldRRXR3QUViUnJLZjVXU3M2dVF5VVhlVVVZNW9mYlJ3NEV1MHJxbVBpZ2hmdjI4WVkxRGl5UTkK",
       "endpoints": [
         "https://github.com/cabernect/caberos/releases/latest/download/latest.json"
       ]
