@@ -109,10 +109,11 @@ def decrypt_credential(cred: McpServerCredential) -> dict[str, Any] | str:
     """Decrypt a credential and return its value.
 
     For oauth_token: returns the dict {access_token, refresh_token, ...}
+    For oauth_client_info: returns the dict {client_id, client_secret, ...}
     For api_key/bearer: returns the string value
     """
     plaintext = decrypt(cred.encrypted_value)
-    if cred.credential_type == "oauth_token":
+    if cred.credential_type in ("oauth_token", "oauth_client_info"):
         return json.loads(plaintext)
     return plaintext
 

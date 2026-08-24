@@ -57,7 +57,7 @@ To test: start both servers (backend on :8081, frontend on :5173), then use Play
 2. **Consult the relevant plans** (`docs/plans/NN-*.md`) for detailed specs — Pydantic models, file lists, schemas, verification steps.
 3. **Implement end-to-end** (vertical slice: DB + API + harness + sandbox + frontend).
 4. **Verify** against the ticket's acceptance criteria.
-5. **Commit** per ticket. No Co-Authored-By lines.
+5. **Commit** per ticket. No Co-Authored-By lines. **Always ask the user for permission before committing or pushing.**
 6. **Update this file** if you learn something that a fresh session needs to know.
 
 ## System prompt + memory flow

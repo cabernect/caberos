@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plug, Plus, Trash2, RefreshCw, ChevronDown, ChevronRight, Key, Search, Store } from "lucide-react";
+import { Plug, Plus, Trash2, RefreshCw, ChevronDown, ChevronRight, Key, Search, Store, AlertTriangle } from "lucide-react";
 import { DashboardSidebar, type NavKey } from "@/components/DashboardSidebar";
 import { api } from "@/lib/api";
 import { useConfirm } from "@/lib/confirm";
@@ -763,6 +763,69 @@ function ServerCard({
           <Trash2 className="h-3.5 w-3.5" style={{ color: "var(--danger)" }} />
         </button>
       </div>
+
+      {/* Connection error alert */}
+      {server.connect_error && !server.connected && server.enabled && (
+        <div
+          className="flex items-center gap-2 px-4 py-2"
+          style={{
+            background: "rgba(239,68,68,0.05)",
+            borderTop: "1px solid rgba(239,68,68,0.15)",
+            borderBottom: "1px solid rgba(239,68,68,0.15)",
+          }}
+        >
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--danger)" }} />
+          <span className="flex-1 text-[12px]" style={{ color: "var(--danger)" }}>
+            {server.connect_error}
+          </span>
+          {needsOAuth && (
+            <button
+              onClick={async () => {
+                setOauthLoading(true);
+                try {
+                  const { authorize_url } = await api.startMcpOAuth(server.id);
+                  if (authorize_url) openUrl(authorize_url);
+                } catch (e) {
+                  setOauthLoading(false);
+                  toast(e instanceof Error ? e.message : "Failed to start OAuth flow");
+                }
+              }}
+              disabled={oauthLoading}
+              className="flex items-center gap-1 rounded-[4px] px-2 py-1 text-[11px] font-medium transition"
+              style={{
+                background: "var(--danger)",
+                color: "#fff",
+                border: "none",
+                cursor: oauthLoading ? "not-allowed" : "pointer",
+              }}
+            >
+              <Key className="h-3 w-3" />
+              {oauthLoading ? "Waiting…" : "Re-authenticate"}
+            </button>
+          )}
+          <button
+            onClick={async () => {
+              setConnecting(true);
+              try {
+                await onConnect();
+              } finally {
+                setConnecting(false);
+              }
+            }}
+            disabled={connecting}
+            className="flex items-center gap-1 rounded-[4px] px-2 py-1 text-[11px] font-medium transition"
+            style={{
+              background: "none",
+              color: "var(--ink-2)",
+              border: "1px solid var(--border)",
+              cursor: connecting ? "not-allowed" : "pointer",
+            }}
+          >
+            <RefreshCw className={`h-3 w-3 ${connecting ? "animate-spin" : ""}`} />
+            Retry
+          </button>
+        </div>
+      )}
 
       {/* Credential form (shown when user clicks "Set Key") */}
       {showCredForm && (

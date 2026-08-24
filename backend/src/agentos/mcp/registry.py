@@ -1,6 +1,10 @@
 """MCP server registry — manages connections, tool discovery, and capability registration.
 
-On startup (or when a server is added), the registry:
+On startup, the registry loads tool definitions from the DB into memory
+(lazy mode). Servers are NOT auto-connected — they connect on first tool
+call or when the user explicitly clicks "Connect" in the dashboard.
+
+When a server connects (lazily or manually):
   1. Connects to the MCP server (stdio or HTTP)
   2. Discovers tools via list_tools()
   3. Registers each tool as a capability of kind "mcp_tool"
@@ -21,6 +25,7 @@ import logging
 from typing import Any
 
 from sqlalchemy import delete, select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..capabilities.registry import CapabilityDef
@@ -37,6 +42,9 @@ _clients: dict[str, McpClient] = {}
 
 # Process-global map: {capability_name: (server_id, tool_name)}
 _tool_map: dict[str, tuple[str, str]] = {}
+
+# Process-global map: {server_id: error_message} for last connection error
+_connect_errors: dict[str, str] = {}
 
 
 def _namespace(server_name: str, tool_name: str) -> str:
@@ -57,6 +65,9 @@ async def connect_server(server: McpServer) -> bool:
     NEVER raises — all errors are caught and logged so one server's failure
     doesn't affect others or crash the process.
     """
+    # Clear previous error
+    _connect_errors.pop(server.id, None)
+
     if server.id in _clients and _clients[server.id].connected:
         return True
 
@@ -65,6 +76,7 @@ async def connect_server(server: McpServer) -> bool:
         env_template = json.loads(server.env_template) if server.env_template else {}
         headers = json.loads(server.headers) if server.headers else {}
         oauth_config = json.loads(server.oauth_config) if server.oauth_config else None
+        _connect_timeout = 30.0  # default; shortened for OAuth auto-reconnect
 
         # Fetch stored credential and render templates
         env: dict[str, str] = {}
@@ -125,7 +137,9 @@ async def connect_server(server: McpServer) -> bool:
                         "Re-authenticate via the dashboard.",
                         server.name,
                     )
-                    return asyncio.sleep(0)
+                    # Don't open a browser during auto-reconnect — just return.
+                    # The MCP SDK expects this to be awaitable and return None.
+                    return None
 
                 async def _noop_callback_handler():
                     log.warning(
@@ -133,7 +147,13 @@ async def connect_server(server: McpServer) -> bool:
                         "Re-authenticate via the dashboard.",
                         server.name,
                     )
-                    raise RuntimeError("OAuth re-authentication required — use the dashboard")
+                    # Raise a clean, identifiable error so the connection loop
+                    # can catch it and log a single warning instead of a
+                    # full traceback cascade through the exit stack.
+                    raise ConnectionError(
+                        f"MCP server '{server.name}' OAuth re-authentication required "
+                        "— use the dashboard"
+                    )
 
                 auth = CaberOSOAuthProvider(
                     server_url=server.url,
@@ -142,6 +162,10 @@ async def connect_server(server: McpServer) -> bool:
                     redirect_handler=_noop_redirect_handler,
                     callback_handler=_noop_callback_handler,
                 )
+                # Short timeout for auto-reconnect — if refresh fails and
+                # full re-auth is needed, fail fast instead of hanging 35s.
+                # The user can re-auth via the dashboard.
+                _connect_timeout = 10.0
             else:
                 # No OAuth token — the user needs to go through the OAuth flow
                 log.info(
@@ -159,6 +183,7 @@ async def connect_server(server: McpServer) -> bool:
             headers=rendered_headers,
             env=env,
             auth=auth,
+            timeout=_connect_timeout,
         )
         await client.connect()
         _clients[server.id] = client
@@ -168,7 +193,19 @@ async def connect_server(server: McpServer) -> bool:
         log.info("Connected to MCP server '%s' (%s)", server.name, server.id)
         return True
 
-    except Exception:
+    except ConnectionError as e:
+        _connect_errors[server.id] = str(e)
+        log.warning("Failed to connect to MCP server '%s': %s", server.name, e)
+        # Clean up partial connection
+        if server.id in _clients:
+            try:
+                await _clients[server.id].disconnect()
+            except Exception:
+                log.debug("Error cleaning up failed MCP connection for '%s'", server.name)
+            del _clients[server.id]
+        return False
+    except Exception as e:
+        _connect_errors[server.id] = str(e)
         log.exception("Failed to connect to MCP server '%s'", server.name)
         # Clean up partial connection
         if server.id in _clients:
@@ -189,45 +226,61 @@ async def _discover_tools(server: McpServer, client: McpClient) -> None:
     if tool_filter:
         tools = [t for t in tools if t["name"] in tool_filter]
 
-    async with async_session_factory() as db:
-        # Clear old tool registrations for this server
-        await db.execute(delete(McpTool).where(McpTool.mcp_server_id == server.id))
+    # Retry the DB write a few times in case SQLite is locked by another
+    # request handler. The write itself is fast (delete + insert), but
+    # SQLite only allows one writer at a time.
+    for attempt in range(3):
+        try:
+            async with async_session_factory() as db:
+                # Clear old tool registrations for this server
+                await db.execute(delete(McpTool).where(McpTool.mcp_server_id == server.id))
 
-        for tool in tools:
-            cap_name = _namespace(server.name, tool["name"])
-            schema_json = json.dumps(tool["inputSchema"])
+                for tool in tools:
+                    cap_name = _namespace(server.name, tool["name"])
+                    schema_json = json.dumps(tool["inputSchema"])
 
-            # Store in DB
-            mcp_tool = McpTool(
-                mcp_server_id=server.id,
-                tool_name=tool["name"],
-                capability_name=cap_name,
-                parameters_schema=schema_json,
-                description=tool["description"],
-                egress=True,  # MCP tools are external by default
-                require_approval=server.require_approval,  # per-server setting
-                subject_scoped=True,
-            )
-            db.add(mcp_tool)
+                    # Store in DB
+                    mcp_tool = McpTool(
+                        mcp_server_id=server.id,
+                        tool_name=tool["name"],
+                        capability_name=cap_name,
+                        parameters_schema=schema_json,
+                        description=tool["description"],
+                        egress=True,  # MCP tools are external by default
+                        require_approval=server.require_approval,
+                        subject_scoped=True,
+                    )
+                    db.add(mcp_tool)
 
-            # Register in the capability registry
-            cap_registry.register(
-                CapabilityDef(
-                    name=cap_name,
-                    kind="mcp_tool",
-                    description=tool["description"],
-                    parameters_schema=tool["inputSchema"],
-                    egress=True,
-                    require_approval=server.require_approval,  # per-server setting
-                    subject_scoped=True,
-                    execute=None,  # Handled by the syscall mediator via execute_mcp_tool
+                    # Register in the capability registry
+                    cap_registry.register(
+                        CapabilityDef(
+                            name=cap_name,
+                            kind="mcp_tool",
+                            description=tool["description"],
+                            parameters_schema=tool["inputSchema"],
+                            egress=True,
+                            require_approval=server.require_approval,
+                            subject_scoped=True,
+                            execute=None,
+                        )
+                    )
+
+                    # Track in the tool map
+                    _tool_map[cap_name] = (server.id, tool["name"])
+
+                await db.commit()
+            break  # success
+        except OperationalError as e:
+            if "locked" in str(e) and attempt < 2:
+                log.debug(
+                    "MCP _discover_tools retry %d for '%s' (db locked)",
+                    attempt + 1,
+                    server.name,
                 )
-            )
-
-            # Track in the tool map
-            _tool_map[cap_name] = (server.id, tool["name"])
-
-        await db.commit()
+                await asyncio.sleep(0.5 * (attempt + 1))
+            else:
+                raise
 
     # Auto-enable new MCP tools for all agents that have an explicit
     # capability list. Agents with capabilities=None already get all
@@ -282,7 +335,13 @@ async def _auto_enable_mcp_tools(server: McpServer, tool_names: list[str]) -> No
 
 
 async def disconnect_server(server_id: str) -> None:
-    """Disconnect from an MCP server and unregister its tools.
+    """Disconnect from an MCP server and unregister its tools from memory.
+
+    Does NOT delete tool rows from the DB — they are persistent data that
+    should survive restarts. On next startup, _discover_tools will refresh
+    them for servers that connect successfully. Servers that fail to connect
+    (e.g. expired OAuth) keep their stale tool definitions so they're not
+    lost forever.
 
     NEVER raises — all errors are caught so a failed disconnect doesn't
     crash the process (e.g. during shutdown).
@@ -294,7 +353,8 @@ async def disconnect_server(server_id: str) -> None:
         except Exception:
             log.exception("Error disconnecting from MCP server %s", server_id)
 
-    # Unregister capabilities
+    # Unregister capabilities from the in-memory registry only.
+    # Do NOT delete tool rows from the DB — they persist across restarts.
     async with async_session_factory() as db:
         result = await db.execute(select(McpTool).where(McpTool.mcp_server_id == server_id))
         tools = result.scalars().all()
@@ -302,18 +362,45 @@ async def disconnect_server(server_id: str) -> None:
             cap_registry._caps.pop(tool.capability_name, None)
             _tool_map.pop(tool.capability_name, None)
 
-        await db.execute(delete(McpTool).where(McpTool.mcp_server_id == server_id))
-        await db.commit()
-
     log.info("Disconnected from MCP server %s", server_id)
 
 
-async def connect_all() -> None:
-    """Connect to all enabled MCP servers on startup.
+async def load_tools_from_db() -> None:
+    """Load tool definitions from the DB into the in-memory capability registry.
 
-    Skips servers that need credentials but don't have any stored.
-    Each connection is isolated — a failure on one server does not
-    prevent other servers from connecting.
+    This is the lazy-load startup path: instead of connecting to every MCP
+    server on startup (which causes OAuth errors, network timeouts, and
+    slow startup), we just load the tool metadata that was previously
+    discovered. Servers connect on demand when a tool is called, or when
+    the user clicks "Connect" in the dashboard.
+    """
+    async with async_session_factory() as db:
+        result = await db.execute(select(McpTool))
+        tools = result.scalars().all()
+
+    for tool in tools:
+        _tool_map[tool.capability_name] = (tool.mcp_server_id, tool.tool_name)
+        cap_registry.register(
+            CapabilityDef(
+                name=tool.capability_name,
+                kind="mcp_tool",
+                description=tool.description,
+                parameters_schema=json.loads(tool.parameters_schema),
+                egress=tool.egress,
+                require_approval=tool.require_approval,
+                subject_scoped=tool.subject_scoped,
+            )
+        )
+
+    log.info("Loaded %d MCP tool definitions from DB (lazy mode)", len(tools))
+
+
+async def connect_all() -> None:
+    """Connect to all enabled MCP servers.
+
+    Kept for backwards compatibility but no longer called at startup.
+    Use load_tools_from_db() for the lazy startup path, and
+    connect_server() for on-demand connections.
     """
     async with async_session_factory() as db:
         result = await db.execute(select(McpServer).where(McpServer.enabled))
@@ -341,6 +428,9 @@ async def connect_all() -> None:
             continue
         try:
             await connect_server(server)
+        except ConnectionError as e:
+            log.warning("MCP server '%s' skipped during startup: %s", server.name, e)
+            continue
         except Exception:
             log.exception("Failed to connect to MCP server '%s' during startup", server.name)
             continue
@@ -370,6 +460,8 @@ async def execute_mcp_tool(
     injecting credentials. The env/headers here are the rendered credential
     values (already decrypted and templated).
 
+    If the server is not connected, attempts a lazy connect first.
+
     Returns the MCP call result: {"content": [...], "isError": bool}
     """
     mapping = _tool_map.get(capability_name)
@@ -380,7 +472,23 @@ async def execute_mcp_tool(
 
     client = _clients.get(server_id)
     if client is None or not client.connected:
-        raise RuntimeError(f"MCP server not connected: {server_id}")
+        # Lazy connect: load the server config and connect on demand
+        async with async_session_factory() as db:
+            result = await db.execute(select(McpServer).where(McpServer.id == server_id))
+            server = result.scalar_one_or_none()
+        if server is None:
+            raise RuntimeError(f"MCP server not found: {server_id}")
+        if not server.enabled:
+            raise RuntimeError(f"MCP server '{server.name}' is disabled")
+        success = await connect_server(server)
+        if not success:
+            err = _connect_errors.get(server_id, "unknown error")
+            raise RuntimeError(
+                f"MCP server '{server.name}' is not connected: {err}. Reconnect from the dashboard."
+            )
+        client = _clients.get(server_id)
+        if client is None or not client.connected:
+            raise RuntimeError(f"MCP server '{server.name}' failed to connect")
 
     # Note: env/headers injection for stdio requires restarting the process.
     # For v0.1, credentials are injected at server startup (env_template on
@@ -398,6 +506,11 @@ def is_server_connected(server_id: str) -> bool:
     """Check if a server is currently connected."""
     client = _clients.get(server_id)
     return client is not None and client.connected
+
+
+def get_connect_error(server_id: str) -> str | None:
+    """Return the last connection error for a server, if any."""
+    return _connect_errors.get(server_id)
 
 
 async def get_server_tools(db: AsyncSession, server_id: str) -> list[McpTool]:

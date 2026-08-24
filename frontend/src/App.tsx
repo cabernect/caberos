@@ -13,6 +13,7 @@ import { Mcps } from "./pages/Mcps";
 import { Channels } from "./pages/Channels";
 import { Observability } from "./pages/Observability";
 import { Traces } from "./pages/Traces";
+import { UpdateChecker } from "./components/UpdateChecker";
 
 export default function App() {
   const [gatewayReady, setGatewayReady] = useState<boolean | null>(null);
@@ -72,6 +73,7 @@ export default function App() {
   }
 
   return (
+    <>
     <ConfirmProvider>
     <BrowserRouter>
       <Routes>
@@ -125,6 +127,8 @@ export default function App() {
       </Routes>
     </BrowserRouter>
     </ConfirmProvider>
+    <UpdateChecker />
+    </>
   );
 }
 

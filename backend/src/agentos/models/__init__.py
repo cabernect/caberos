@@ -11,6 +11,7 @@ from .elicitation import ElicitationRequest
 from .mcp import ContactMcpBinding, McpServer, McpServerCredential, McpTool
 from .memory import MemoryEntry, MemoryTriple
 from .operator import Operator, OperatorAuditLog
+from .operator_session import OperatorSession
 from .provider import Provider
 from .run import Message, Run
 from .session import Session
@@ -41,5 +42,6 @@ __all__ = [
     "MemoryTriple",
     "Operator",
     "OperatorAuditLog",
+    "OperatorSession",
     "ChannelConfig",
 ]

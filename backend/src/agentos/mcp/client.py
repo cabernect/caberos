@@ -185,13 +185,28 @@ class McpClient:
         except Exception as e:
             self._connect_error = e
             self._connect_event.set()
-            log.exception("MCP connection failed (transport=%s)", self.transport)
+            # ConnectionError from the noop callback handler is expected
+            # when OAuth tokens expire — log a warning, not a full traceback.
+            if isinstance(e, ConnectionError):
+                log.warning("MCP connection failed: %s", e)
+            else:
+                log.exception("MCP connection failed (transport=%s)", self.transport)
         finally:
             # Clean up the exit stack in the SAME task that entered it
             self._connected = False
             if self._exit_stack:
                 try:
                     await self._exit_stack.aclose()
+                except BaseExceptionGroup as eg:
+                    # The MCP SDK wraps OAuth ConnectionError in an
+                    # ExceptionGroup during aclose(). If all sub-exceptions
+                    # are ConnectionErrors, suppress the traceback.
+                    if all(isinstance(e, ConnectionError) for e in eg.exceptions):
+                        log.debug("MCP exit stack closed after OAuth error")
+                    else:
+                        log.exception("Error closing MCP client exit stack")
+                except ConnectionError:
+                    log.debug("MCP exit stack closed after connection error")
                 except Exception:
                     log.exception("Error closing MCP client exit stack")
             self._exit_stack = None

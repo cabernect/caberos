@@ -221,6 +221,7 @@ export interface McpServerInfo {
   url: string | null;
   enabled: boolean;
   connected: boolean;
+  connect_error: string | null;
   tool_count: number;
   tool_filter: string[] | null;
   require_approval: boolean;
