@@ -343,7 +343,7 @@ async def test_web_search_returns_results(monkeypatch):
 
     import sys
 
-    monkeypatch.setitem(sys.modules, "duckduckgo_search", FakeDDGSModule)
+    monkeypatch.setitem(sys.modules, "ddgs", FakeDDGSModule)
 
     result = await web_module.web_search({"query": "test", "max_results": 5})
     assert result["query"] == "test"
