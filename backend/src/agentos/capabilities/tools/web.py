@@ -1,12 +1,13 @@
 """Web capabilities — web_search and web_fetch.
 
-web_search uses DuckDuckGo's HTML endpoint (free, no API key required).
+web_search uses the duckduckgo_search package (free, no API key required).
 web_fetch retrieves a URL and returns the text content.
 
 Both are egress capabilities — they access the network, so they require approval
 by default (the operator can disable this per-agent).
 """
 
+import asyncio
 import re
 from typing import Any
 
@@ -16,7 +17,7 @@ from bs4 import BeautifulSoup
 from ...ssl_utils import SSL_CERT_PATH
 
 
-async def web_search(args: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+async def web_search(args: dict[str, Any], **_kwargs: Any) -> dict[str, str]:
     """Search the web using DuckDuckGo (free, no API key).
 
     Args:
@@ -27,11 +28,46 @@ async def web_search(args: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
     max_results = args.get("max_results", 5)
 
     try:
+        from duckduckgo_search import DDGS
+
+        def _sync_search() -> list[dict[str, str]]:
+            with DDGS() as ddgs:
+                return list(ddgs.text(query, max_results=max_results))
+
+        results = await asyncio.to_thread(_sync_search)
+    except ImportError:
+        # Fallback: raw HTML scraping (may hit captcha pages)
+        return await _web_search_html(query, max_results)
+    except Exception as e:
+        # Fallback: try HTML scraping if the package fails
+        fallback = await _web_search_html(query, max_results)
+        if fallback.get("count", 0) > 0:
+            return fallback
+        return {"error": f"Search failed: {e}"}
+
+    formatted: list[dict[str, str]] = []
+    for r in results:
+        formatted.append(
+            {
+                "title": r.get("title", ""),
+                "url": r.get("href", r.get("url", "")),
+                "snippet": r.get("body", r.get("snippet", "")),
+            }
+        )
+
+    return {
+        "query": query,
+        "results": formatted,
+        "count": len(formatted),
+    }
+
+
+async def _web_search_html(query: str, max_results: int) -> dict[str, Any]:
+    """Fallback: search DuckDuckGo via HTML scraping (may hit captcha)."""
+    try:
         async with httpx.AsyncClient(
             timeout=15, follow_redirects=True, verify=SSL_CERT_PATH
         ) as client:
-            # Use DuckDuckGo's HTML endpoint — POST avoids the 202 captcha
-            # page that GET triggers for longer/complex queries
             resp = await client.post(
                 "https://html.duckduckgo.com/html/",
                 data={"q": query},
@@ -50,14 +86,12 @@ async def web_search(args: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
     soup = BeautifulSoup(resp.text, "html.parser")
     results: list[dict[str, str]] = []
 
-    # DuckDuckGo HTML results are in .result blocks
     for block in soup.select(".result"):
         title_el = block.select_one(".result__title a")
         snippet_el = block.select_one(".result__snippet")
         if not title_el:
             continue
         title = title_el.get_text(strip=True)
-        # DuckDuckGo wraps URLs in a redirect — extract the actual URL
         href = title_el.get("href", "")
         url_match = re.search(r"uddg=([^&]+)", href)
         url = (
