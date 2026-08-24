@@ -100,6 +100,11 @@ async def get_operator_from_session(
     if expires < datetime.now(UTC):
         return None
 
+    # Capture operator_id before any commit/rollback — after rollback,
+    # accessing session attributes triggers a lazy load that fails with
+    # MissingGreenlet in async context.
+    operator_id = session.operator_id
+
     # Update last_seen_at at most once per minute to avoid write contention on SQLite.
     # This write is non-critical — if the DB is locked, skip it rather than failing
     # the entire request (which would make the app unusable under write contention).
@@ -115,7 +120,7 @@ async def get_operator_from_session(
         except OperationalError:
             await db.rollback()
 
-    result = await db.execute(select(Operator).where(Operator.id == session.operator_id))
+    result = await db.execute(select(Operator).where(Operator.id == operator_id))
     return result.scalar_one_or_none()
 
 

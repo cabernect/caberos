@@ -32,7 +32,16 @@ async def web_search(args: dict[str, Any], **_kwargs: Any) -> dict[str, str]:
 
         def _sync_search() -> list[dict[str, str]]:
             with DDGS() as ddgs:
-                return list(ddgs.text(query, max_results=max_results))
+                # Try engines in order — DuckDuckGo first (most reliable
+                # through corporate proxies), then Bing, Startpage, Brave.
+                for engine in ("duckduckgo", "bing", "startpage", "brave"):
+                    try:
+                        return list(
+                            ddgs.text(query, max_results=max_results, engine=engine)
+                        )
+                    except Exception:
+                        continue
+                return []
 
         results = await asyncio.to_thread(_sync_search)
     except ImportError:

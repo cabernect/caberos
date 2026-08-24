@@ -324,7 +324,7 @@ async def test_web_search_returns_results(monkeypatch):
         def __exit__(self, *args):
             pass
 
-        def text(self, query, max_results=5):
+        def text(self, query, max_results=5, **kwargs):
             return [
                 {
                     "title": "Example Result",
