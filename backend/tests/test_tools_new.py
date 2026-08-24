@@ -316,38 +316,34 @@ async def test_datetime_now_invalid_timezone():
 async def test_web_search_returns_results(monkeypatch):
     from agentos.capabilities.tools import web as web_module
 
-    class FakeResponse:
-        text = """
-        <html><body>
-        <div class="result">
-            <h2 class="result__title"><a href="/l/?uddg=https%3A%2F%2Fexample.com%2F1">Example Result</a></h2>
-            <a class="result__snippet">This is a snippet about the result.</a>
-        </div>
-        <div class="result">
-            <h2 class="result__title"><a href="/l/?uddg=https%3A%2F%2Fexample.com%2F2">Second Result</a></h2>
-            <a class="result__snippet">Another snippet here.</a>
-        </div>
-        </body></html>
-        """
-        headers = {"content-type": "text/html"}
-
-        def raise_for_status(self):
-            pass
-
-    class FakeClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
+    # Mock the DDGS class used by the new implementation
+    class FakeDDGS:
+        def __enter__(self):
             return self
 
-        async def __aexit__(self, *args):
+        def __exit__(self, *args):
             pass
 
-        async def post(self, *args, **kwargs):
-            return FakeResponse()
+        def text(self, query, max_results=5):
+            return [
+                {
+                    "title": "Example Result",
+                    "href": "https://example.com/1",
+                    "body": "This is a snippet about the result.",
+                },
+                {
+                    "title": "Second Result",
+                    "href": "https://example.com/2",
+                    "body": "Another snippet here.",
+                },
+            ]
 
-    monkeypatch.setattr(web_module.httpx, "AsyncClient", FakeClient)
+    class FakeDDGSModule:
+        DDGS = FakeDDGS
+
+    import sys
+
+    monkeypatch.setitem(sys.modules, "duckduckgo_search", FakeDDGSModule)
 
     result = await web_module.web_search({"query": "test", "max_results": 5})
     assert result["query"] == "test"
