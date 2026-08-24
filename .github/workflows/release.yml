@@ -1,6 +1,6 @@
 name: Release
 
-# Builds the CaberOS desktop app (.dmg) with updater artifacts and
+# Builds the CaberOS desktop app (.dmg) with signed updater artifacts and
 # attaches them to a GitHub release.
 # Triggers when a tag matching v*.*.* is pushed.
 #
@@ -11,17 +11,14 @@ name: Release
 # The workflow will:
 #   1. Verify version manifests agree with the tag
 #   2. Build the PyInstaller gateway (macOS ARM64)
-#   3. Build the Tauri app with updater artifacts (unsigned)
+#   3. Build the Tauri app with updater artifacts (signed)
 #   4. Create a DMG
-#   5. Create a GitHub release with the DMG + updater archive attached
+#   5. Generate the updater manifest (latest.json)
+#   6. Create a GitHub release with the DMG + updater artifacts attached
 #
-# Signing: The updater archive is NOT signed in CI. After the release is
-# created, sign it locally and upload the .sig + latest.json manually:
-#
-#   # Download the .tar.gz from the release
-#   tauri signer sign -k ~/.tauri/caberos.key <archive>.tar.gz
-#   # Upload the .sig file to the release
-#   # Create latest.json with the signature and upload it as well
+# Required secrets (set once in GitHub repo settings → Secrets and variables → Actions):
+#   TAURI_SIGNING_PRIVATE_KEY — Ed25519 private key for signing updates
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD — password for the private key (empty string if none)
 #
 # Platform: macOS ARM64 (Apple Silicon) only for now.
 
@@ -102,10 +99,44 @@ jobs:
 
       - name: Build Tauri app with updater artifacts
         working-directory: frontend
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run desktop:build
 
       - name: Build DMG
         run: bash scripts/build-dmg.sh
+
+      - name: Generate updater manifest
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          UPDATER_TARGZ=$(find frontend/src-tauri/target/release/bundle -name "*.tar.gz" -path "*macos*" | head -1)
+          UPDATER_SIG=$(find frontend/src-tauri/target/release/bundle -name "*.tar.gz.sig" -path "*macos*" | head -1)
+
+          if [ -z "$UPDATER_TARGZ" ] || [ -z "$UPDATER_SIG" ]; then
+            echo "⚠️ No updater artifacts found — publishing without auto-update metadata"
+            exit 0
+          fi
+
+          SIGNATURE=$(cat "$UPDATER_SIG")
+          REPO="cabernect/caberos"
+          TARGZ_NAME=$(basename "$UPDATER_TARGZ")
+
+          cat > latest.json << EOF
+          {
+            "version": "$TAG_VERSION",
+            "notes": "CaberOS $TAG_VERSION",
+            "pub_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "platforms": {
+              "darwin-aarch64": {
+                "signature": "$SIGNATURE",
+                "url": "https://github.com/$REPO/releases/download/${GITHUB_REF_NAME}/$TARGZ_NAME"
+              }
+            }
+          }
+          EOF
+          echo "Generated latest.json:"
+          cat latest.json
 
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
@@ -114,12 +145,14 @@ jobs:
           path: frontend/src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: error
 
-      - name: Upload updater archive
+      - name: Upload updater artifacts
         uses: actions/upload-artifact@v4
         with:
           name: CaberOS-updater
           path: |
             frontend/src-tauri/target/release/bundle/**/*.tar.gz
+            frontend/src-tauri/target/release/bundle/**/*.tar.gz.sig
+            latest.json
           if-no-files-found: warn
 
       - name: Create GitHub Release
@@ -148,19 +181,6 @@ jobs:
             automatically detect this release and offer to update. You can
             also check manually from Settings → About → Check for Updates.
 
-            ### Manual signing (for the maintainer)
-
-            The updater archive is not signed in CI. To enable in-app
-            auto-update, sign it locally and upload the `.sig` file +
-            `latest.json` to this release:
-
-            ```bash
-            # Download the .tar.gz from the release assets
-            tauri signer sign -k ~/.tauri/caberos.key CaberOS.app.tar.gz
-            # Upload the .sig file to the release
-            # Create latest.json with the signature and upload it
-            ```
-
             ### System requirements
 
             - macOS 13+ (Apple Silicon)
@@ -173,5 +193,7 @@ jobs:
           files: |
             frontend/src-tauri/target/release/bundle/dmg/*.dmg
             frontend/src-tauri/target/release/bundle/**/*.tar.gz
+            frontend/src-tauri/target/release/bundle/**/*.tar.gz.sig
+            latest.json
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
