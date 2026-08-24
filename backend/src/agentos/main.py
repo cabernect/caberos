@@ -5,11 +5,6 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-# Must be set BEFORE litellm is imported anywhere — litellm fetches a
-# model cost map from GitHub on import, which can take 30+ seconds
-# through a corporate proxy. Use the local backup instead.
-os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-
 # Enable INFO-level logging for agentos modules so channel loading, polling,
 # and other startup activity is visible in the console.
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
