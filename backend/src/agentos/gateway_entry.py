@@ -2,11 +2,16 @@
 
 import os
 
-import uvicorn
+# Must be set BEFORE litellm is imported anywhere — litellm fetches a
+# model cost map from GitHub on import, which can take 30+ seconds
+# through a corporate proxy. Use the local backup instead.
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+os.environ.setdefault("PYDANTIC_DISABLE_PLUGINS", "1")
+
+import uvicorn  # noqa: E402
 
 
 def main() -> None:
-    os.environ.setdefault("PYDANTIC_DISABLE_PLUGINS", "1")
     uvicorn.run(
         "agentos.main:app",
         host=os.getenv("AGENTOS_CONTROL_PLANE_HOST", "127.0.0.1"),
