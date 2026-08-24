@@ -14,6 +14,7 @@ import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .db import get_db
@@ -99,13 +100,20 @@ async def get_operator_from_session(
     if expires < datetime.now(UTC):
         return None
 
-    # Update last_seen_at at most once per minute to avoid write contention on SQLite
+    # Update last_seen_at at most once per minute to avoid write contention on SQLite.
+    # This write is non-critical — if the DB is locked, skip it rather than failing
+    # the entire request (which would make the app unusable under write contention).
+    # IMPORTANT: commit immediately so the write lock is released before the
+    # request handler runs (which may take 30s for a chat message).
     last_seen = session.last_seen_at
     if last_seen is not None and last_seen.tzinfo is None:
         last_seen = last_seen.replace(tzinfo=UTC)
     if last_seen is None or (datetime.now(UTC) - last_seen).total_seconds() > 60:
-        session.last_seen_at = datetime.now(UTC)
-        await db.flush()
+        try:
+            session.last_seen_at = datetime.now(UTC)
+            await db.commit()
+        except OperationalError:
+            await db.rollback()
 
     result = await db.execute(select(Operator).where(Operator.id == session.operator_id))
     return result.scalar_one_or_none()
