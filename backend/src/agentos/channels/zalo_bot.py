@@ -209,6 +209,7 @@ class ZaloBotChannel(Channel):
           {"ok": false, "error_code": 408, "description": "Request timeout"}
         """
         log.info("Zalo Bot poll loop started for agent %s", self.agent_id)
+        error_backoff = 5  # seconds, grows on repeated errors
         while True:
             try:
                 resp = await self._call_api(
@@ -219,12 +220,15 @@ class ZaloBotChannel(Channel):
                 if isinstance(resp, dict):
                     if not resp.get("ok", False):
                         if resp.get("error_code") == 408:
+                            error_backoff = 5  # reset on success-ish
                             continue  # No updates during long-poll — normal, poll again
                         desc = resp.get("description", "unknown error")
                         log.error("Zalo Bot getUpdates failed: %s", desc)
-                        await asyncio.sleep(5)
+                        await asyncio.sleep(error_backoff)
+                        error_backoff = min(error_backoff * 2, 300)  # cap at 5 min
                         continue
                     result = resp.get("result")
+                    error_backoff = 5  # reset on success
                     # Real API: result is a single event object
                     # Legacy/test compat: result may be a list of updates
                     if isinstance(result, list):
@@ -234,6 +238,7 @@ class ZaloBotChannel(Channel):
                         asyncio.create_task(self._process_update(result))
                 elif isinstance(resp, list):
                     # Legacy/test compat: raw list of updates
+                    error_backoff = 5
                     for update in resp:
                         asyncio.create_task(self._process_update(update))
 
@@ -242,7 +247,8 @@ class ZaloBotChannel(Channel):
                 raise
             except Exception as e:
                 log.error("Zalo Bot poll loop error: %s", e)
-                await asyncio.sleep(5)
+                await asyncio.sleep(error_backoff)
+                error_backoff = min(error_backoff * 2, 300)  # cap at 5 min
 
     async def _process_update(self, update: dict[str, Any]) -> None:
         """Process a single Zalo Bot update: parse → run agent → deliver reply."""
