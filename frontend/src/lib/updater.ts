@@ -2,8 +2,11 @@
  * Auto-update utilities for CaberOS desktop (v0.1.3).
  *
  * Uses the Tauri v2 updater plugin to check for, download, and install
- * signed updates from GitHub releases. In web mode, these functions
- * are no-ops that report "not available".
+ * signed updates from GitHub releases. The signing key is NOT stored in
+ * GitHub — the user signs the update archive locally and uploads the
+ * .sig file with the release manually.
+ *
+ * In web mode, these functions are no-ops that report "not available".
  */
 
 export interface UpdateInfo {
