@@ -23,7 +23,7 @@ uv run pyinstaller \
   --collect-all aiosqlite \
   --collect-all litellm \
   --collect-all tiktoken \
-  --collect-all duckduckgo_search \
+  --collect-all ddgs \
   --collect-all primp \
   --collect-submodules tiktoken_ext \
   --add-data "${BACKEND_DIR}/src/agentos/defaults:agentos/defaults" \
