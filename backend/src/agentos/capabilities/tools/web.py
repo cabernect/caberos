@@ -36,9 +36,7 @@ async def web_search(args: dict[str, Any], **_kwargs: Any) -> dict[str, str]:
                 # through corporate proxies), then Bing, Startpage, Brave.
                 for engine in ("duckduckgo", "bing", "startpage", "brave"):
                     try:
-                        return list(
-                            ddgs.text(query, max_results=max_results, engine=engine)
-                        )
+                        return list(ddgs.text(query, max_results=max_results, engine=engine))
                     except Exception:
                         continue
                 return []
