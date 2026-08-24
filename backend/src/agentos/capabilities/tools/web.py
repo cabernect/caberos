@@ -1,6 +1,6 @@
 """Web capabilities — web_search and web_fetch.
 
-web_search uses the duckduckgo_search package (free, no API key required).
+web_search uses the ddgs package (free, no API key required).
 web_fetch retrieves a URL and returns the text content.
 
 Both are egress capabilities — they access the network, so they require approval
@@ -28,7 +28,7 @@ async def web_search(args: dict[str, Any], **_kwargs: Any) -> dict[str, str]:
     max_results = args.get("max_results", 5)
 
     try:
-        from duckduckgo_search import DDGS
+        from ddgs import DDGS
 
         def _sync_search() -> list[dict[str, str]]:
             with DDGS() as ddgs:
