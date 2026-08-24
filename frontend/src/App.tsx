@@ -73,6 +73,7 @@ export default function App() {
   }
 
   return (
+    <>
     <ConfirmProvider>
     <BrowserRouter>
       <Routes>
@@ -127,6 +128,7 @@ export default function App() {
     </BrowserRouter>
     </ConfirmProvider>
     <UpdateChecker />
+    </>
   );
 }
 
