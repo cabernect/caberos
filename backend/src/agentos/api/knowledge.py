@@ -158,6 +158,14 @@ async def upload_scope(
 ) -> dict:
     """Upload a document into Shared or one agent's private scope."""
     agent_id = await _resolve_scope(scope, db)
+    if agent_id is not None:
+        agent_path = Path(agent_id)
+        if (
+            agent_path.is_absolute()
+            or agent_path.name != agent_id
+            or agent_id in {".", ".."}
+        ):
+            raise HTTPException(status_code=400, detail="Invalid knowledge scope")
     filename = file.filename or ""
     file_path = Path(filename)
     if not filename or file_path.is_absolute() or file_path.name != filename:
@@ -177,10 +185,15 @@ async def upload_scope(
     except ValueError as error:
         raise HTTPException(status_code=400, detail="Invalid knowledge scope path") from error
     vault_root.mkdir(parents=True, exist_ok=True)
-    target = vault_root / filename
+    vault_root_resolved = vault_root.resolve()
+    target = (vault_root_resolved / filename).resolve()
+    try:
+        target.relative_to(vault_root_resolved)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="Invalid file path") from error
     target.write_bytes(content)
     try:
-        document = await ingest_document(db, target, vault_root, filename, agent_id)
+        document = await ingest_document(db, target, vault_root_resolved, filename, agent_id)
         await db.commit()
     except (ValueError, UnicodeError) as error:
         await db.rollback()
