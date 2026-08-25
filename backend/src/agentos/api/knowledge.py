@@ -167,9 +167,15 @@ async def upload_scope(
     content = await file.read(_MAX_UPLOAD_BYTES + 1)
     if len(content) > _MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="File exceeds the 25 MB upload limit")
-    vault_root = Path(settings.knowledge_root) / (
+    knowledge_root = Path(settings.knowledge_root).resolve()
+    vault_root = knowledge_root / (
         "shared" if agent_id is None else Path("agents") / agent_id
     )
+    vault_root = vault_root.resolve()
+    try:
+        vault_root.relative_to(knowledge_root)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="Invalid knowledge scope path") from error
     vault_root.mkdir(parents=True, exist_ok=True)
     target = vault_root / filename
     target.write_bytes(content)
