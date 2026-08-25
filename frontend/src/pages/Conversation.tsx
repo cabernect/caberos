@@ -1388,6 +1388,7 @@ export function Conversation() {
           return (
             <ChatInputBar
               ref={inputBarRef}
+              agentId={agentId || ""}
               defaultProviderId={agent?.provider_id || null}
               defaultModelName={agent?.model || null}
               defaultThinkingEnabled={agent?.thinking_enabled ?? null}

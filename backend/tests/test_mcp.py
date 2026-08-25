@@ -646,3 +646,45 @@ async def test_oauth_config_in_server_list(db):
     found = result.scalar_one()
     config = json.loads(found.oauth_config)
     assert config["scope"] == "read"
+
+
+@pytest.mark.asyncio
+async def test_disabled_server_tools_are_not_loaded(db, monkeypatch):
+    """Disabled MCP servers must not appear as usable agent capabilities."""
+    server = McpServer(
+        name="Notion", transport="http", url="https://example.com/mcp", enabled=False
+    )
+    db.add(server)
+    await db.flush()
+    tool = McpTool(
+        mcp_server_id=server.id,
+        tool_name="search",
+        capability_name="mcp.notion.search",
+        description="Search Notion",
+        parameters_schema='{"type":"object","properties":{}}',
+        egress=True,
+        require_approval=True,
+        subject_scoped=True,
+    )
+    db.add(tool)
+    await db.commit()
+
+    class TestSessionFactory:
+        def __call__(self):
+            class TestSession:
+                async def __aenter__(self):
+                    return db
+
+                async def __aexit__(self, *args):
+                    pass
+
+            return TestSession()
+
+    cap_registry._caps.pop(tool.capability_name, None)
+    mcp_registry._tool_map.pop(tool.capability_name, None)
+    monkeypatch.setattr(mcp_registry, "async_session_factory", TestSessionFactory())
+
+    await mcp_registry.load_tools_from_db()
+
+    assert cap_registry.get(tool.capability_name) is None
+    assert tool.capability_name not in mcp_registry._tool_map

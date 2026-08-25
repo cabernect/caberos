@@ -41,12 +41,15 @@ class SQLiteBackend(DatabaseBackend):
         return engine
 
     async def init_schema(self, conn: Any) -> None:
+        await self._migrate_legacy_documents(conn)
+
         from ..models import (  # noqa: F401
             agent,
             approval,
             audit,
             capability,
             contact,
+            document,
             elicitation,
             mcp,
             memory,
@@ -60,6 +63,58 @@ class SQLiteBackend(DatabaseBackend):
 
         await conn.run_sync(Base.metadata.create_all)
         await self._apply_schema_patches(conn)
+
+    async def _migrate_legacy_documents(self, conn: Any) -> None:
+        """Migrate the pre-global Vault schema without discarding indexed data."""
+        result = await conn.execute(text("PRAGMA table_info(documents)"))
+        columns = {row[1] for row in result.fetchall()}
+        if not columns:
+            return
+        if "source_path" in columns:
+            if "agent_id" not in columns:
+                await self.add_column(conn, "documents", "agent_id", "VARCHAR(36)")
+            await self._repair_document_chunk_foreign_key(conn)
+            return
+        if not {"agent_id", "workspace_path"} <= columns:
+            return
+
+        from ..models.document import Document
+
+        await conn.execute(text("ALTER TABLE documents RENAME TO documents_legacy"))
+        await conn.run_sync(Document.__table__.create)
+        await conn.execute(
+            text(
+                "INSERT INTO documents "
+                "(id, source_path, storage_path, display_name, mime_type, content_hash, "
+                "size_bytes, status, error, indexed_at, created_at, updated_at) "
+                "SELECT id, agent_id || '/' || workspace_path, workspace_path, display_name, "
+                "mime_type, content_hash, size_bytes, status, error, indexed_at, created_at, "
+                "updated_at FROM documents_legacy"
+            )
+        )
+        await conn.execute(text("DROP TABLE documents_legacy"))
+        await self._repair_document_chunk_foreign_key(conn)
+
+    async def _repair_document_chunk_foreign_key(self, conn: Any) -> None:
+        """Restore chunk foreign keys after SQLite rewrites them during table renames."""
+        result = await conn.execute(text("PRAGMA foreign_key_list(document_chunks)"))
+        foreign_keys = result.fetchall()
+        if not any(row[2] == "documents_legacy" for row in foreign_keys):
+            return
+
+        from ..models.document import DocumentChunk
+
+        await conn.execute(text("ALTER TABLE document_chunks RENAME TO document_chunks_legacy"))
+        await conn.run_sync(DocumentChunk.__table__.create)
+        await conn.execute(
+            text(
+                "INSERT INTO document_chunks "
+                "(id, document_id, seq, text, heading_path, page_number, token_count) "
+                "SELECT id, document_id, seq, text, heading_path, page_number, token_count "
+                "FROM document_chunks_legacy"
+            )
+        )
+        await conn.execute(text("DROP TABLE document_chunks_legacy"))
 
     async def _apply_schema_patches(self, conn: Any) -> None:
         """Add columns introduced after the initial schema (idempotent)."""
@@ -120,7 +175,82 @@ class SQLiteBackend(DatabaseBackend):
                 )
             )
 
-        # 3. Session summaries FTS (episodic — topical recall at run start)
+        # 3. Document chunks FTS (shared local Knowledge Vault)
+        result = await conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='document_chunks_fts'")
+        )
+        fts_exists = result.fetchone() is not None
+        if fts_exists:
+            result = await conn.execute(text("PRAGMA table_info(document_chunks_fts)"))
+            fts_columns = {row[1] for row in result.fetchall()}
+            if "workspace_path" in fts_columns or "agent_id" not in fts_columns:
+                if "workspace_path" in fts_columns:
+                    legacy_rows = (
+                        await conn.execute(
+                            text(
+                                "SELECT text, chunk_id, document_id, agent_id, workspace_path, "
+                                "heading_path, page_number, sheet_name, source_location "
+                                "FROM document_chunks_fts"
+                            )
+                        )
+                    ).fetchall()
+                else:
+                    current_rows = (
+                        await conn.execute(
+                            text(
+                                "SELECT text, chunk_id, document_id, source_path, storage_path, "
+                                "heading_path, page_number, sheet_name, source_location "
+                                "FROM document_chunks_fts"
+                            )
+                        )
+                    ).fetchall()
+                    legacy_rows = [
+                        (r[0], r[1], r[2], None, r[3], r[5], r[6], r[7], r[8]) for r in current_rows
+                    ]
+                await conn.execute(text("DROP TABLE document_chunks_fts"))
+                await conn.execute(
+                    text(
+                        "CREATE VIRTUAL TABLE document_chunks_fts USING fts5("
+                        "text, chunk_id UNINDEXED, document_id UNINDEXED, agent_id UNINDEXED, "
+                        "source_path UNINDEXED, storage_path UNINDEXED, heading_path UNINDEXED, page_number UNINDEXED, "
+                        "sheet_name UNINDEXED, source_location UNINDEXED, tokenize='porter unicode61')"
+                    )
+                )
+                fts_exists = True
+                for row in legacy_rows:
+                    await conn.execute(
+                        text(
+                            "INSERT INTO document_chunks_fts "
+                            "(text, chunk_id, document_id, agent_id, source_path, storage_path, heading_path, "
+                            "page_number, sheet_name, source_location) "
+                            "VALUES (:content, :chunk_id, :document_id, :agent_id, :source_path, "
+                            ":storage_path, :heading_path, :page_number, :sheet_name, "
+                            ":source_location)"
+                        ),
+                        {
+                            "content": row[0],
+                            "chunk_id": row[1],
+                            "document_id": row[2],
+                            "agent_id": row[3],
+                            "source_path": f"{row[3]}/{row[4]}",
+                            "storage_path": row[4],
+                            "heading_path": row[5],
+                            "page_number": row[6],
+                            "sheet_name": row[7],
+                            "source_location": row[8],
+                        },
+                    )
+        if not fts_exists:
+            await conn.execute(
+                text(
+                    "CREATE VIRTUAL TABLE document_chunks_fts USING fts5("
+                    "text, chunk_id UNINDEXED, document_id UNINDEXED, agent_id UNINDEXED, "
+                    "source_path UNINDEXED, storage_path UNINDEXED, heading_path UNINDEXED, page_number UNINDEXED, "
+                    "sheet_name UNINDEXED, source_location UNINDEXED, tokenize='porter unicode61')"
+                )
+            )
+
+        # 4. Session summaries FTS (episodic — topical recall at run start)
         result = await conn.execute(
             text(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='session_summaries_fts'"

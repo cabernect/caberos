@@ -6,6 +6,7 @@ import { useConfirm } from "@/lib/confirm";
 import { openUrl } from "@/lib/openUrl";
 import type { Provider, ModelInfo, Operator } from "@/lib/types";
 import { DashboardSidebar, type NavKey } from "@/components/DashboardSidebar";
+import { PageHeader } from "@/components/PageHeader";
 import { LogoMark } from "@/components/LogoMark";
 
 // Open URLs in the system browser when running inside Tauri,
@@ -142,14 +143,11 @@ export function ProvidersSettings() {
       />
 
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* Header */}
-        <div
-          className="px-8 py-5"
-          style={{ background: "var(--sidebar)", borderBottom: "1px solid var(--border)" }}
-        >
-          <h1 className="text-[18px] font-semibold text-[var(--ink)]">Settings</h1>
-          <p className="mt-0.5 text-[13px] text-[var(--ink-2)]">Manage your CaberOS configuration</p>
-        </div>
+        <PageHeader
+          icon={Settings}
+          title="Settings"
+          description="Manage your CaberOS configuration"
+        />
 
         {/* Tabs */}
         <div

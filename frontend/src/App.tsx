@@ -93,6 +93,10 @@ export default function App() {
           element={authed ? <KnowledgeVault /> : <Navigate to="/login" />}
         />
         <Route
+          path="/vault/:scope"
+          element={authed ? <KnowledgeVault /> : <Navigate to="/login" />}
+        />
+        <Route
           path="/skills"
           element={authed ? <Skills /> : <Navigate to="/login" />}
         />

@@ -7,6 +7,7 @@ run_subagent is just another tool.
 from .registry import CapabilityDef, registry
 from .tools.datetime_tool import datetime_now
 from .tools.file import read_file, search_files, write_file
+from .tools.knowledge import doc_search
 from .tools.memory import (
     memory_query_facts,
     memory_recall,
@@ -197,6 +198,36 @@ def register_builtin_capabilities() -> None:
             require_approval=False,
             subject_scoped=False,
             execute=None,  # handled by terminal registry
+        )
+    )
+
+    # --- Knowledge Vault ---
+
+    registry.register(
+        CapabilityDef(
+            name="doc_search",
+            kind="tool",
+            description=(
+                "Search the Knowledge Vault for relevant document excerpts. Results combine "
+                "shared knowledge with this agent's private knowledge and include source metadata. "
+                "Use this before answering questions that may be covered by the operator's documents."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "What to search for"},
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum excerpts to return (default 5, maximum 20)",
+                        "default": 5,
+                    },
+                },
+                "required": ["query"],
+            },
+            egress=False,
+            require_approval=False,
+            subject_scoped=False,
+            execute=doc_search,
         )
     )
 

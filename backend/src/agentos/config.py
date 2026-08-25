@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     # Sandbox
     workspace_root: Path = Path("data/workspaces")
 
+    # Shared Knowledge Vault storage
+    knowledge_root: Path = Path("data/knowledge")
+
     # Agent home dir (MEMORY.md, etc.)
     agent_home_root: Path = Path.home() / "agentos" / "agents"
 

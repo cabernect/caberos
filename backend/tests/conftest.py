@@ -18,6 +18,7 @@ async def db_engine():
         capability,
         channel_config,
         contact,
+        document,
         mcp,
         memory,
         operator,
@@ -76,6 +77,15 @@ async def db_engine():
                     "contact_id UNINDEXED, tokenize='porter unicode61')"
                 )
             )
+
+        await conn.execute(
+            text(
+                "CREATE VIRTUAL TABLE document_chunks_fts USING fts5("
+                "text, chunk_id UNINDEXED, document_id UNINDEXED, agent_id UNINDEXED, "
+                "source_path UNINDEXED, storage_path UNINDEXED, heading_path UNINDEXED, page_number UNINDEXED, "
+                "sheet_name UNINDEXED, source_location UNINDEXED, tokenize='porter unicode61')"
+            )
+        )
     yield engine
     await engine.dispose()
 

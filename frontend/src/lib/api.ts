@@ -27,6 +27,9 @@ import type {
   Skill,
   SkillInfo,
   SpendSummary,
+  KnowledgeDocument,
+  KnowledgeResult,
+  KnowledgeScope,
   WorkspaceEntry,
 } from "./types";
 
@@ -164,6 +167,8 @@ export const api = {
     }),
   listAgentSkills: (id: string) =>
     request<Skill[]>(`/api/agents/${id}/skills`),
+  listAvailableSkills: (id: string) =>
+    request<SkillInfo[]>(`/api/agents/${id}/available-skills`),
   createAgentSkill: (id: string, name: string, content?: string) =>
     request<{ name: string; path: string }>(`/api/agents/${id}/skills`, {
       method: "POST",
@@ -175,6 +180,52 @@ export const api = {
     request<{ type: "dir" | "file"; path: string; entries?: WorkspaceEntry[]; content?: string; size?: number }>(
       `/api/agents/${id}/workspace${path ? `?path=${encodeURIComponent(path)}` : ""}`,
     ),
+
+  // Knowledge Vault
+  listKnowledgeOverview: () =>
+    request<{ scopes: KnowledgeScope[] }>("/api/knowledge/overview"),
+  listKnowledgeDocuments: () =>
+    request<{ documents: KnowledgeDocument[] }>("/api/knowledge/documents"),
+  uploadKnowledgeDocument: async (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    const response = await fetch(`${BASE}/api/knowledge/documents/upload`, {
+      method: "POST",
+      credentials: "include",
+      headers: authHeaders(),
+      body: form,
+    });
+    if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`);
+    return response.json() as Promise<KnowledgeDocument>;
+  },
+  searchKnowledge: (query: string, limit = 5) =>
+    request<{ results: KnowledgeResult[] }>("/api/knowledge/search", {
+      method: "POST",
+      body: JSON.stringify({ query, limit }),
+    }),
+  deleteKnowledgeDocument: (documentId: string) =>
+    request<void>(`/api/knowledge/documents/${documentId}`, { method: "DELETE" }),
+  listKnowledgeScope: (scope: string) =>
+    request<{ documents: KnowledgeDocument[] }>(`/api/knowledge/scopes/${scope}/documents`),
+  uploadKnowledgeScope: async (scope: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    const response = await fetch(`${BASE}/api/knowledge/scopes/${scope}/documents/upload`, {
+      method: "POST",
+      credentials: "include",
+      headers: authHeaders(),
+      body: form,
+    });
+    if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`);
+    return response.json() as Promise<KnowledgeDocument>;
+  },
+  searchKnowledgeScope: (scope: string, query: string, limit = 5) =>
+    request<{ results: KnowledgeResult[] }>(`/api/knowledge/scopes/${scope}/search`, {
+      method: "POST",
+      body: JSON.stringify({ query, limit }),
+    }),
+  deleteKnowledgeScope: (scope: string, documentId: string) =>
+    request<void>(`/api/knowledge/scopes/${scope}/documents/${documentId}`, { method: "DELETE" }),
 
   // Chat — POST /message starts a run, returns {run_id, session_id}
   sendMessage: (

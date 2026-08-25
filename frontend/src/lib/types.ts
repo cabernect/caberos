@@ -24,6 +24,7 @@ export interface ModelInfo {
   supports_thinking?: boolean;
   thinking_efforts?: string[];
   max_context_tokens?: number | null;
+  context_window_tokens?: number | null;
   max_output_tokens?: number | null;
 }
 
@@ -103,6 +104,39 @@ export interface WorkspaceEntry {
   name: string;
   type: "dir" | "file";
   size: number;
+}
+
+export interface KnowledgeScope {
+  id: string;
+  name: string;
+  document_count: number;
+  chunk_count: number;
+}
+
+export interface KnowledgeDocument {
+  id: string;
+  agent_id: string | null;
+  source_path: string;
+  storage_path: string;
+  display_name: string;
+  mime_type: string;
+  content_hash: string;
+  size_bytes: number;
+  status: "pending" | "indexed" | "failed";
+  error: string | null;
+  indexed_at: string | null;
+}
+
+export interface KnowledgeResult {
+  chunk_id: string;
+  document_id: string;
+  text: string;
+  source_path: string;
+  storage_path: string;
+  heading_path: string[];
+  page_number: number | null;
+  sheet_name: string | null;
+  source_location: string | null;
 }
 
 export interface Message {

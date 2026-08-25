@@ -52,6 +52,17 @@ def _get_model_info_variants(model_id: str) -> dict[str, Any] | None:
     return None
 
 
+def _context_window(info: dict[str, Any] | None) -> int | None:
+    """Return the total context window when LiteLLM exposes input and output limits."""
+    if not info:
+        return None
+    input_tokens = info.get("max_input_tokens")
+    output_tokens = info.get("max_output_tokens") or info.get("max_tokens")
+    if input_tokens and output_tokens:
+        return input_tokens + output_tokens
+    return input_tokens
+
+
 def _check_vision(model_id: str) -> bool:
     info = _get_model_info_variants(model_id)
     return bool(info and info.get("supports_vision"))
@@ -90,6 +101,7 @@ def _check_capabilities(model_id: str) -> dict[str, Any]:
             "supports_thinking": thinking["supports_thinking"],
             "thinking_efforts": thinking["efforts"],
             "max_context_tokens": info.get("max_input_tokens") or 200000,
+            "context_window_tokens": _context_window(info),
             "max_output_tokens": info.get("max_output_tokens"),
         }
     name = model_id.lower()
@@ -115,6 +127,7 @@ def _check_capabilities(model_id: str) -> dict[str, Any]:
         "supports_thinking": thinking["supports_thinking"],
         "thinking_efforts": thinking["efforts"],
         "max_context_tokens": 200000,
+        "context_window_tokens": 200000,
         "max_output_tokens": None,
     }
 
@@ -260,6 +273,7 @@ class LiteLLMModelCatalog:
                         "thinking_efforts": thinking["efforts"],
                         "max_context_tokens": (info.get("max_input_tokens") if info else None)
                         or 200000,
+                        "context_window_tokens": _context_window(info),
                         "max_output_tokens": info.get("max_output_tokens") if info else None,
                     }
                 )
@@ -366,6 +380,7 @@ class LiteLLMModelCatalog:
                         "supports_thinking": supports_thinking,
                         "thinking_efforts": efforts,
                         "max_context_tokens": model.get("context_length") or 200000,
+                        "context_window_tokens": model.get("context_length") or 200000,
                         "max_output_tokens": model.get("top_provider", {}).get(
                             "max_completion_tokens"
                         ),
@@ -403,6 +418,7 @@ class LiteLLMModelCatalog:
                         "thinking_efforts": thinking["efforts"],
                         "max_context_tokens": (info.get("max_input_tokens") if info else None)
                         or 200000,
+                        "context_window_tokens": _context_window(info),
                         "max_output_tokens": info.get("max_output_tokens") if info else None,
                     }
                 )
@@ -436,6 +452,7 @@ class LiteLLMModelCatalog:
                         "thinking_efforts": thinking["efforts"],
                         "max_context_tokens": (info.get("max_input_tokens") if info else None)
                         or 200000,
+                        "context_window_tokens": _context_window(info),
                         "max_output_tokens": info.get("max_output_tokens") if info else None,
                     }
                 )
@@ -468,6 +485,7 @@ class LiteLLMModelCatalog:
                         "thinking_efforts": thinking["efforts"],
                         "max_context_tokens": (info.get("max_input_tokens") if info else None)
                         or 200000,
+                        "context_window_tokens": _context_window(info),
                         "max_output_tokens": info.get("max_output_tokens") if info else None,
                     }
                 )

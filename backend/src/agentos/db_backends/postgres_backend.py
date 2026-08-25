@@ -43,6 +43,7 @@ class PostgresBackend(DatabaseBackend):
             capability,
             connector,
             contact,
+            document,
             elicitation,
             memory,
             operator,
@@ -90,7 +91,7 @@ class PostgresBackend(DatabaseBackend):
         Note: we use 'english' as the default text search config. For
         multilingual support, this could be configurable.
         """
-        # Add a generated tsvector column if it doesn't exist
+        # Add generated tsvector columns if they don't exist
         if not await self.column_exists(conn, "memory_entries", "search_vector"):
             await conn.execute(
                 text(
@@ -104,6 +105,22 @@ class PostgresBackend(DatabaseBackend):
                 text(
                     "CREATE INDEX IF NOT EXISTS ix_memory_entries_search "
                     "ON memory_entries USING gin(search_vector)"
+                )
+            )
+
+        if not await self.column_exists(conn, "document_chunks", "search_vector"):
+            await conn.execute(
+                text(
+                    "ALTER TABLE document_chunks "
+                    "ADD COLUMN search_vector tsvector "
+                    "GENERATED ALWAYS AS "
+                    "(to_tsvector('simple', coalesce(text, '') || ' ' || coalesce(heading_path, ''))) STORED"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_document_chunks_search "
+                    "ON document_chunks USING gin(search_vector)"
                 )
             )
 

@@ -339,9 +339,9 @@ export function ModelSelector({
                         <span
                           className="ml-1 shrink-0 font-mono text-[10px]"
                           style={{ color: "var(--ink-4)" }}
-                          title={`Context: ${(model.max_context_tokens / 1024).toFixed(0)}K tokens${model.max_output_tokens ? ` · Output: ${(model.max_output_tokens / 1024).toFixed(0)}K` : ""}`}
+                          title={`Context: ${((model.context_window_tokens ?? model.max_context_tokens) / 1024).toFixed(0)}K tokens${model.max_context_tokens ? ` · Input: ${(model.max_context_tokens / 1024).toFixed(0)}K` : ""}${model.max_output_tokens ? ` · Output: ${(model.max_output_tokens / 1024).toFixed(0)}K` : ""}`}
                         >
-                          {(model.max_context_tokens / 1024).toFixed(0)}K
+                          {((model.context_window_tokens ?? model.max_context_tokens) / 1024).toFixed(0)}K
                         </span>
                       )}
                     </button>
