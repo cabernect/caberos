@@ -11,6 +11,8 @@ from ..config import settings
 from ..db import get_db
 from ..memory import recall, triples
 from ..models.operator import Operator
+from ..skills.loader import _load_skill_from_dir
+from ..skills.loader import list_skills as load_available_skills
 
 router = APIRouter(prefix="/api/agents", tags=["agent-files"])
 
@@ -28,8 +30,10 @@ def _memory_path(agent_id: str) -> Path:
 
 
 def _skills_dir(agent_id: str) -> Path:
-    """Get the agent's skills directory."""
-    skills = _agent_home(agent_id) / "skills"
+    """Get the agent's workspace skills directory."""
+    from ..sandbox.workspace import WorkspaceManager
+
+    skills = Path(WorkspaceManager().create_workspace(agent_id)) / "skills"
     skills.mkdir(parents=True, exist_ok=True)
     return skills
 
@@ -92,22 +96,14 @@ async def list_skills(
     if skills_dir.exists():
         for entry in sorted(skills_dir.iterdir()):
             if entry.is_dir():
-                # Skill is a directory with SKILL.md
-                skill_md = entry / "SKILL.md"
-                desc = ""
-                if skill_md.exists():
-                    content = skill_md.read_text(encoding="utf-8", errors="replace")
-                    # Extract first paragraph as description
-                    lines = content.split("\n")
-                    for line in lines[1:]:  # skip title
-                        if line.strip() and not line.startswith("#"):
-                            desc = line.strip()
-                            break
+                skill = _load_skill_from_dir(entry, "agent")
+                if skill is None:
+                    continue
                 skills.append(
                     {
-                        "name": entry.name,
+                        "name": skill.name,
                         "type": "directory",
-                        "description": desc,
+                        "description": skill.description,
                     }
                 )
             elif entry.is_file() and entry.suffix in (".md", ".yaml", ".yml"):
@@ -119,6 +115,16 @@ async def list_skills(
                     }
                 )
     return skills
+
+
+@router.get("/{agent_id}/available-skills")
+async def list_available_skills(
+    agent_id: str,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """List system and agent skills available to the active agent."""
+    return load_available_skills(agent_id)
 
 
 class CreateSkillRequest(BaseModel):

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { CalendarClock, Play, AlertCircle, X, Clock, Zap } from "lucide-react";
 import { DashboardSidebar, type NavKey } from "@/components/DashboardSidebar";
+import { PageHeader } from "@/components/PageHeader";
 import { api } from "@/lib/api";
 import type { HeartbeatStatus, SchedulerAlert } from "@/lib/types";
 
@@ -146,19 +147,11 @@ export function Scheduler() {
       />
 
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* Header */}
-        <div
-          className="px-8 py-5"
-          style={{ background: "var(--sidebar)", borderBottom: "1px solid var(--border)" }}
-        >
-          <div className="flex items-center gap-2">
-            <CalendarClock className="h-5 w-5" style={{ color: "var(--accent)" }} />
-            <h1 className="text-[18px] font-semibold text-[var(--ink)]">Scheduler</h1>
-          </div>
-          <p className="mt-0.5 text-[13px] text-[var(--ink-2)]">
-            Automate your agents with scheduled triggers
-          </p>
-        </div>
+        <PageHeader
+          icon={CalendarClock}
+          title="Scheduler"
+          description="Automate your agents with scheduled triggers"
+        />
 
         {/* Mode tabs */}
         <div className="flex gap-1 px-8 pt-4" style={{ borderBottom: "1px solid var(--border)" }}>

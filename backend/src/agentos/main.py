@@ -32,6 +32,7 @@ from .api import (  # noqa: E402
     chat,
     data,
     elicitation,
+    knowledge,
     mcp,
     observability,
     providers,
@@ -223,6 +224,7 @@ app.include_router(agent_files.router)
 app.include_router(chat.router)
 app.include_router(approvals.router)
 app.include_router(elicitation.router)
+app.include_router(knowledge.router)
 app.include_router(skills.router)
 app.include_router(scheduler.router)
 app.include_router(mcp.router)

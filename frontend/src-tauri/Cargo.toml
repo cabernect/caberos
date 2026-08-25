@@ -1,6 +1,6 @@
 [package]
 name = "caberos"
-version = "0.1.3"
+version = "0.1.4"
 description = "CaberOS desktop application"
 authors = ["HoangPH25"]
 license = ""

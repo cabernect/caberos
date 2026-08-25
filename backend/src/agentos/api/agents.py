@@ -25,6 +25,7 @@ from ..auth import require_operator
 from ..config_schema import AgentConfig
 from ..db import get_db
 from ..models.agent import Agent, AgentVersion
+from ..models.mcp import McpServer, McpTool
 from ..models.operator import Operator
 
 router = APIRouter(prefix="/api/agents", tags=["agents"])
@@ -36,9 +37,17 @@ router = APIRouter(prefix="/api/agents", tags=["agents"])
 @router.get("/capabilities")
 async def list_capabilities(
     operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
 ) -> list[dict[str, Any]]:
-    """List all registered capabilities with metadata."""
+    """List registered capabilities from enabled MCP servers and built-ins."""
     from ..capabilities.registry import registry
+
+    enabled_result = await db.execute(
+        select(McpTool.capability_name)
+        .join(McpServer, McpServer.id == McpTool.mcp_server_id)
+        .where(McpServer.enabled.is_(True))
+    )
+    enabled_mcp_names = {row[0] for row in enabled_result}
 
     return [
         {
@@ -49,6 +58,7 @@ async def list_capabilities(
             "require_approval": cap.require_approval,
         }
         for cap in registry.list_all()
+        if not cap.name.startswith("mcp.") or cap.name in enabled_mcp_names
     ]
 
 

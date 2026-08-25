@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { GitBranch, ChevronRight, ArrowLeft, Clock, AlertCircle, Layers, MessageSquare, Shield } from "lucide-react";
 import { DashboardSidebar, type NavKey } from "@/components/DashboardSidebar";
+import { PageHeader } from "@/components/PageHeader";
 import { api } from "@/lib/api";
 import type { Agent, RunSummary, RunDetail, AgentStat } from "@/lib/types";
 
@@ -118,38 +119,31 @@ export function Traces() {
       />
 
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* Header */}
-        <div className="px-8 py-5" style={{ background: "var(--sidebar)", borderBottom: "1px solid var(--border)" }}>
-          <div className="flex items-center gap-2">
-            <GitBranch className="h-5 w-5" style={{ color: "var(--accent)" }} />
-            <h1 className="text-[18px] font-semibold text-[var(--ink)]">Traces</h1>
-            {view === "agentRuns" && activeAgent && (
-              <>
-                <ChevronRight className="h-4 w-4 text-[var(--ink-3)]" />
-                <span className="text-[15px] text-[var(--ink-2)]">{activeAgent.name}</span>
-              </>
-            )}
-            {view === "runDetail" && runDetail && (
-              <>
-                <ChevronRight className="h-4 w-4 text-[var(--ink-3)]" />
-                <button
-                  onClick={() => navigate(`/traces/${agentId}`)}
-                  className="text-[15px] text-[var(--ink-2)]"
-                  style={{ background: "none", border: "none", cursor: "pointer" }}
-                >
-                  {runDetail.agent_name || agentName(runDetail.agent_id)}
-                </button>
-                <ChevronRight className="h-4 w-4 text-[var(--ink-3)]" />
-                <span className="text-[15px] font-mono text-[var(--ink-2)]">{runDetail.id.slice(0, 8)}</span>
-              </>
-            )}
-          </div>
-          <p className="mt-0.5 text-[13px] text-[var(--ink-2)]">
-            {view === "agentList" && "Select an agent to view its traces"}
-            {view === "agentRuns" && "Runs for this agent — click any run for full trace detail"}
-            {view === "runDetail" && "Run trace detail"}
-          </p>
-        </div>
+        <PageHeader
+          icon={GitBranch}
+          title="Traces"
+          titleOnClick={view === "agentList" ? undefined : () => navigate("/traces")}
+          description={
+            view === "agentList"
+              ? "Select an agent to view its traces"
+              : view === "agentRuns"
+                ? "Runs for this agent — click any run for full trace detail"
+                : "Run trace detail"
+          }
+          breadcrumbs={
+            view === "agentRuns" && activeAgent
+              ? [{ label: activeAgent.name }]
+              : view === "runDetail" && runDetail
+                ? [
+                    {
+                      label: runDetail.agent_name || agentName(runDetail.agent_id),
+                      onClick: () => navigate(`/traces/${agentId}`),
+                    },
+                    { label: runDetail.id.slice(0, 8) },
+                  ]
+                : undefined
+          }
+        />
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto px-8 py-6">

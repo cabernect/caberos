@@ -34,6 +34,7 @@ export interface ActiveElicitation {
 }
 
 interface ChatInputBarProps {
+  agentId: string;
   defaultProviderId: string | null;
   defaultModelName: string | null;
   defaultThinkingEnabled?: boolean | null;
@@ -59,6 +60,7 @@ interface ChatInputBarProps {
 }
 
 export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(function ChatInputBar({
+  agentId,
   defaultProviderId,
   defaultModelName,
   defaultThinkingEnabled,
@@ -125,8 +127,12 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
 
   // Load skills for slash command autocomplete
   useEffect(() => {
-    api.listSkills().then((data) => setSkills(data.skills)).catch(() => {});
-  }, []);
+    if (!agentId) {
+      setSkills([]);
+      return;
+    }
+    api.listAvailableSkills(agentId).then(setSkills).catch(() => setSkills([]));
+  }, [agentId]);
 
   // Detect slash command in text — only show autocomplete while typing the skill name
   // (not after a space, which means the user has moved on to their message)
@@ -361,7 +367,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
     if (showSkillMenu && !isElicitation) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
-        setSkillIndex((i) => Math.min(i + 1, filteredSkills.length - 1));
+        setSkillIndex((i) => Math.min(i + 1, allFiltered.length - 1));
         return;
       }
       if (e.key === "ArrowUp") {
@@ -371,11 +377,10 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
       }
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        const skill = filteredSkills[skillIndex];
-        if (skill) {
-          // Replace /query with /skillname + space
+        const command = allFiltered[skillIndex];
+        if (command) {
           const afterSlash = text.slice(slashMatch![0].length);
-          setText(`/${skill.name} ${afterSlash}`.trim() + " ");
+          setText(`/${command.name} ${afterSlash}`.trim() + " ");
           return;
         }
       }
@@ -386,10 +391,10 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
       }
       if (e.key === "Tab") {
         e.preventDefault();
-        const skill = filteredSkills[skillIndex];
-        if (skill) {
+        const command = allFiltered[skillIndex];
+        if (command) {
           const afterSlash = text.slice(slashMatch![0].length);
-          setText(`/${skill.name} ${afterSlash}`.trim() + " ");
+          setText(`/${command.name} ${afterSlash}`.trim() + " ");
         }
         return;
       }
@@ -769,7 +774,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
               overflowY: "auto",
             }}
           >
-            {allFiltered.slice(0, 6).map((cmd, i) => (
+            {allFiltered.map((cmd, i) => (
               <button
                 key={cmd.name}
                 onClick={() => {

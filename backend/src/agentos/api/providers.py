@@ -73,6 +73,7 @@ class ModelInfo(BaseModel):
     supports_thinking: bool = False
     thinking_efforts: list[str] = []
     max_context_tokens: int | None = None
+    context_window_tokens: int | None = None
     max_output_tokens: int | None = None
 
 

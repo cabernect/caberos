@@ -7,6 +7,7 @@ from .base import Base, IdMixin, TimestampMixin
 from .capability import AgentCapability, Capability
 from .channel_config import ChannelConfig
 from .contact import Contact
+from .document import Document, DocumentChunk
 from .elicitation import ElicitationRequest
 from .mcp import ContactMcpBinding, McpServer, McpServerCredential, McpTool
 from .memory import MemoryEntry, MemoryTriple
@@ -32,6 +33,8 @@ __all__ = [
     "McpTool",
     "Provider",
     "Contact",
+    "Document",
+    "DocumentChunk",
     "Session",
     "Run",
     "Message",

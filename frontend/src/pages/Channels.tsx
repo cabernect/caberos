@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { Radio, Plus, Trash2, Send, MessageCircle, Settings2 } from "lucide-react";
 import { DashboardSidebar, type NavKey } from "@/components/DashboardSidebar";
+import { PageHeader } from "@/components/PageHeader";
 import { api } from "@/lib/api";
 import { useConfirm } from "@/lib/confirm";
 import type { ChannelInfo, Agent } from "@/lib/types";
@@ -191,19 +192,11 @@ export function Channels() {
       />
 
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* Header */}
-        <div
-          className="px-8 py-5"
-          style={{ background: "var(--sidebar)", borderBottom: "1px solid var(--border)" }}
-        >
-          <div className="flex items-center gap-2">
-            <Radio className="h-5 w-5" style={{ color: "var(--accent)" }} />
-            <h1 className="text-[18px] font-semibold text-[var(--ink)]">Channels</h1>
-          </div>
-          <p className="mt-0.5 text-[13px] text-[var(--ink-2)]">
-            Connect external messaging platforms — chat with your agent from Telegram, Discord, and more
-          </p>
-        </div>
+        <PageHeader
+          icon={Radio}
+          title="Channels"
+          description="Connect external messaging platforms — chat with your agent from Telegram, Discord, and more"
+        />
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto px-8 py-6">

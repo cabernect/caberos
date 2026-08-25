@@ -259,7 +259,7 @@ class SyscallHandler:
         # Also inject the db_lock so memory tools serialize their flushes
         # with the mediator's audit record writes (prevents "Session is
         # already flushing" when asyncio.gather runs tools concurrently).
-        if cap.kind == "memory":
+        if cap.kind == "memory" or call.name == "doc_search":
             extra_kwargs["db"] = self.db
             extra_kwargs["agent_id"] = agent_config.id
             extra_kwargs["run_id"] = run_id

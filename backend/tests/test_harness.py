@@ -12,6 +12,7 @@ from agentos.harness.context import assemble_system_prompt
 from agentos.harness.litellm_adapter import LiteLLMAdapter
 from agentos.harness.loop import Harness
 from agentos.harness.scripted_model import ScriptedModel, ScriptedResponse
+from agentos.knowledge.ingest import ingest_document
 from agentos.models.provider import Provider
 from agentos.providers import ProviderRegistry
 from agentos.providers.registry import LiteLLMProviderAdapter, OpenCodeZenProviderAdapter
@@ -619,3 +620,44 @@ def test_responses_input_converts_tool_turns():
         "call_id": "call-1",
         "output": "result",
     }
+
+
+@pytest.mark.asyncio
+async def test_agent_answers_question_using_doc_search(db, workspace, tmp_path):
+    root = tmp_path / "knowledge"
+    root.mkdir()
+    path = root / "guide.md"
+    path.write_text("The deployment requires a signed release tag.", encoding="utf-8")
+    await ingest_document(db, path, root)
+    await db.commit()
+
+    config = AgentConfig(
+        id="knowledge-agent",
+        name="Knowledge Agent",
+        model=ModelConfig(provider_id="test", name="scripted"),
+        soul="Test soul.",
+        capabilities=[CapabilityGrant(name="doc_search", require_approval=False)],
+    )
+    model = ScriptedModel(
+        [
+            ScriptedResponse(
+                tool_calls=[
+                    {"id": "call-doc", "name": "doc_search", "args": {"query": "release tag"}}
+                ]
+            ),
+            ScriptedResponse(content="The deployment requires a signed release tag."),
+        ]
+    )
+
+    result = await Harness(model=model).run(
+        agent_config=config,
+        session=None,
+        message="What does deployment require?",
+        syscall_handler=StubSyscallHandler(db=db, workspace_path=workspace),
+        run_id=str(uuid.uuid4()),
+    )
+
+    assert result.final_answer == "The deployment requires a signed release tag."
+    assert result.tool_calls_made[0]["name"] == "doc_search"
+    assert result.tool_calls_made[0]["allowed"] is True
+    assert result.tool_calls_made[0]["result"]["count"] == 1

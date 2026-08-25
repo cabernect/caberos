@@ -375,7 +375,11 @@ async def load_tools_from_db() -> None:
     the user clicks "Connect" in the dashboard.
     """
     async with async_session_factory() as db:
-        result = await db.execute(select(McpTool))
+        result = await db.execute(
+            select(McpTool)
+            .join(McpServer, McpServer.id == McpTool.mcp_server_id)
+            .where(McpServer.enabled.is_(True))
+        )
         tools = result.scalars().all()
 
     for tool in tools:

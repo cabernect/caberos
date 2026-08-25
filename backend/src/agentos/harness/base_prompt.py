@@ -142,6 +142,14 @@ def _build_capabilities_section(enabled_caps: list[str]) -> str:
 
     # Add tool-specific guidance based on what's enabled
     extra_notes: list[str] = []
+    if "doc_search" in enabled_caps:
+        extra_notes.append(
+            "- **Knowledge Vault:** You have access to the operator's indexed documents through "
+            "`doc_search`. It searches both shared knowledge and your private agent knowledge. "
+            "Use it when a question may be answered by those documents, and cite the returned "
+            "source metadata in your answer when relevant."
+        )
+
     if has_approval:
         extra_notes.append(
             "- **Some tools require approval.** When you call one, the run pauses"

@@ -120,6 +120,7 @@ export function AgentList() {
           }}
         >
           <div className="flex items-center gap-3">
+            <Bot className="h-5 w-5" style={{ color: "var(--accent)" }} />
             <div>
               <h1 className="text-[18px] font-semibold text-[var(--ink)]">
                 Agents

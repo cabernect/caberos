@@ -110,11 +110,14 @@ export function Skills() {
           className="flex items-center justify-between px-8 py-5"
           style={{ background: "var(--sidebar)", borderBottom: "1px solid var(--border)" }}
         >
-          <div>
+          <div className="flex items-start gap-2">
+            <Sparkles className="mt-0.5 h-5 w-5" style={{ color: "var(--accent)" }} />
+            <div>
             <h1 className="text-[18px] font-semibold text-[var(--ink)]">Skills</h1>
             <p className="text-[13px] text-[var(--ink-2)] mt-0.5">
               {skills.length} skill{skills.length !== 1 ? "s" : ""} installed
             </p>
+            </div>
           </div>
           <div className="flex items-center gap-3">
             <input

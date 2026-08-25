@@ -53,6 +53,7 @@ impl GatewayProcess {
             .env("AGENTOS_DB_PATH", data_dir.join("agentos.db"))
             .env("AGENTOS_SECRET_KEY_PATH", data_dir.join("secret.key"))
             .env("AGENTOS_WORKSPACE_ROOT", data_dir.join("workspaces"))
+            .env("AGENTOS_KNOWLEDGE_ROOT", data_dir.join("knowledge"))
             .env("AGENTOS_AGENT_HOME_ROOT", data_dir.join("agents"))
             .stdin(Stdio::null())
             .stdout(Stdio::from(stdout))
