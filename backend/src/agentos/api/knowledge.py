@@ -1,5 +1,6 @@
 """Shared Knowledge Vault API — ingest, list, search, and delete documents."""
 
+import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -31,12 +32,13 @@ class SearchRequest(BaseModel):
 
 
 async def _resolve_scope(scope: str, db: AsyncSession) -> str | None:
-    """Resolve a public scope to a real agent, preventing arbitrary filesystem paths."""
+    """Resolve a public scope to a stored agent ID."""
     if scope == "shared":
         return None
-    if await db.scalar(select(Agent.id).where(Agent.id == scope)) is None:
+    agent = await db.scalar(select(Agent).where(Agent.id == scope))
+    if agent is None:
         raise HTTPException(status_code=404, detail="Knowledge scope not found")
-    return scope
+    return agent.id
 
 
 def _document_response(document) -> dict:
@@ -158,14 +160,6 @@ async def upload_scope(
 ) -> dict:
     """Upload a document into Shared or one agent's private scope."""
     agent_id = await _resolve_scope(scope, db)
-    if agent_id is not None:
-        agent_path = Path(agent_id)
-        if (
-            agent_path.is_absolute()
-            or agent_path.name != agent_id
-            or agent_id in {".", ".."}
-        ):
-            raise HTTPException(status_code=400, detail="Invalid knowledge scope")
     filename = file.filename or ""
     file_path = Path(filename)
     if not filename or file_path.is_absolute() or file_path.name != filename:
@@ -176,9 +170,7 @@ async def upload_scope(
     if len(content) > _MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="File exceeds the 25 MB upload limit")
     knowledge_root = Path(settings.knowledge_root).resolve()
-    vault_root = knowledge_root / (
-        "shared" if agent_id is None else Path("agents") / agent_id
-    )
+    vault_root = knowledge_root / ("shared" if agent_id is None else Path("agents") / agent_id)
     vault_root = vault_root.resolve()
     try:
         vault_root.relative_to(knowledge_root)
@@ -186,14 +178,15 @@ async def upload_scope(
         raise HTTPException(status_code=400, detail="Invalid knowledge scope path") from error
     vault_root.mkdir(parents=True, exist_ok=True)
     vault_root_resolved = vault_root.resolve()
-    target = (vault_root_resolved / filename).resolve()
-    try:
-        target.relative_to(vault_root_resolved)
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail="Invalid file path") from error
+    storage_name = f"{uuid.uuid4().hex}{file_path.suffix.lower()}"
+    target = vault_root_resolved / storage_name
     target.write_bytes(content)
     try:
         document = await ingest_document(db, target, vault_root_resolved, filename, agent_id)
+        if document.storage_path == storage_name:
+            document.display_name = filename
+        else:
+            target.unlink(missing_ok=True)
         await db.commit()
     except (ValueError, UnicodeError) as error:
         await db.rollback()
