@@ -5,6 +5,22 @@ All notable changes to CaberOS are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6] - Unreleased
+
+### Added
+
+- First-run onboarding for provider, model, and initial agent setup
+- Dynamic loopback gateway ports for the Tauri desktop app
+- Persistent operator notifications for run failures, approvals, MCP failures, and OAuth re-authentication
+- Live system health status in the observability dashboard
+- Expanded MCP catalog with setup-required entries for account-specific integrations
+
+### Fixed
+
+- OAuth access tokens refresh proactively using the provider-reported expiration
+- Rotated OAuth refresh tokens are persisted for providers such as Notion
+- OAuth callback URLs follow the configured gateway port
+
 ## [0.1.5] - Unreleased
 
 ### Added
