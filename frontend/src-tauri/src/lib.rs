@@ -70,8 +70,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![gateway_url, gateway_log_path, read_dropped_file])
         .on_window_event(|window, event| {
-            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
-                window.app_handle().state::<GatewayProcess>().stop();
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
             }
         })
         .build(tauri::generate_context!())
