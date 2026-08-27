@@ -99,6 +99,7 @@ export const api = {
   authHeaders,
 
   gatewayHealth: () => request<{ status: string }>("/health"),
+  gatewayLogPath: () => invoke<string>("gateway_log_path"),
 
   // Auth
   login: (username: string, password: string) =>

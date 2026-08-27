@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { Activity, DollarSign, Zap, AlertTriangle, Clock, TrendingUp, ChevronRight } from "lucide-react";
+import { Activity, DollarSign, Zap, AlertTriangle, Clock, TrendingUp, ChevronRight, FileText } from "lucide-react";
 import { DashboardSidebar, type NavKey } from "@/components/DashboardSidebar";
 import { api } from "@/lib/api";
 import type { DashboardStats, Agent } from "@/lib/types";
@@ -49,6 +49,16 @@ export function Observability() {
     const interval = setInterval(fetchHealth, 15000);
     return () => clearInterval(interval);
   }, [fetchHealth]);
+
+  const openGatewayLog = async () => {
+    try {
+      const path = await api.gatewayLogPath();
+      const { openPath } = await import("@tauri-apps/plugin-opener");
+      await openPath(path);
+    } catch {
+      // The log action is only available in the desktop shell.
+    }
+  };
 
   const handleLogout = async () => {
     try {
@@ -145,7 +155,14 @@ export function Observability() {
                   <h2 className="text-[14px] font-semibold text-[var(--ink)]">System health</h2>
                   <p className="mt-1 text-[12px] text-[var(--ink-2)]">Live gateway and workspace readiness.</p>
                 </div>
-                <button type="button" onClick={() => void fetchHealth()} className="rounded border px-2.5 py-1 text-[11px] text-[var(--ink-2)] hover:bg-[var(--hover)]" style={{ borderColor: "var(--border)", cursor: "pointer" }}>Refresh</button>
+                <div className="flex items-center gap-2">
+                  {typeof window !== "undefined" && "__TAURI_INTERNALS__" in window && (
+                    <button type="button" onClick={() => void openGatewayLog()} className="flex items-center gap-1 rounded border px-2.5 py-1 text-[11px] text-[var(--ink-2)] hover:bg-[var(--hover)]" style={{ borderColor: "var(--border)", cursor: "pointer" }}>
+                      <FileText className="h-3 w-3" /> Gateway log
+                    </button>
+                  )}
+                  <button type="button" onClick={() => void fetchHealth()} className="rounded border px-2.5 py-1 text-[11px] text-[var(--ink-2)] hover:bg-[var(--hover)]" style={{ borderColor: "var(--border)", cursor: "pointer" }}>Refresh</button>
+                </div>
               </div>
               {health ? (
                 <div className="mt-4 grid grid-cols-4 gap-3 text-[12px]">

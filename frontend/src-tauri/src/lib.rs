@@ -3,7 +3,7 @@ mod gateway;
 use gateway::GatewayProcess;
 use serde::Serialize;
 use std::path::Path;
-use tauri::{Manager, RunEvent};
+use tauri::{AppHandle, Manager, RunEvent};
 
 #[derive(Serialize)]
 struct DroppedFile {
@@ -14,6 +14,14 @@ struct DroppedFile {
 #[tauri::command]
 fn gateway_url(gateway: tauri::State<'_, GatewayProcess>) -> String {
     format!("http://127.0.0.1:{}", gateway.port().unwrap_or(8081))
+}
+
+#[tauri::command]
+fn gateway_log_path(app: AppHandle) -> Result<String, String> {
+    app.path()
+        .app_data_dir()
+        .map(|path| path.join("logs").join("gateway.log").display().to_string())
+        .map_err(|error| format!("could not resolve gateway log path: {error}"))
 }
 
 #[tauri::command]
@@ -60,7 +68,7 @@ pub fn run() {
                 .map_err(std::io::Error::other)?;
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![gateway_url, read_dropped_file])
+        .invoke_handler(tauri::generate_handler![gateway_url, gateway_log_path, read_dropped_file])
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
                 window.app_handle().state::<GatewayProcess>().stop();
