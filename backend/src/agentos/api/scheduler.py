@@ -119,7 +119,7 @@ async def fire_heartbeat(
         result = await scheduler_service.fire_now(agent_id)
         return result
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail="Invalid heartbeat configuration") from e
 
 
 @router.get("/alerts")

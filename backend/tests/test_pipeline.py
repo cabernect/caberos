@@ -111,10 +111,12 @@ async def test_pipeline_full_run(db, workspace, tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_pipeline_stores_attachments_for_existing_file_tools(db, tmp_path, monkeypatch):
     """Attachments are stored in the workspace instead of sent inline."""
+    from agentos.config import settings
     from agentos.sandbox.workspace import WorkspaceManager
 
     ws_dir = tmp_path / "ws"
     ws_dir.mkdir(exist_ok=True)
+    monkeypatch.setattr(settings, "knowledge_root", tmp_path / "knowledge")
     monkeypatch.setattr(WorkspaceManager, "create_workspace", lambda self, aid: ws_dir)
 
     config = AgentConfig(
@@ -148,6 +150,7 @@ async def test_pipeline_stores_attachments_for_existing_file_tools(db, tmp_path,
     assert run.status == "completed"
     stored = ws_dir / "attachments" / "attachment_1_notes.txt"
     assert stored.read_text() == "private attachment text"
+    assert not (tmp_path / "knowledge").exists()
 
 
 @pytest.mark.asyncio

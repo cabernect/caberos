@@ -6,6 +6,16 @@
  * In the web app, window.open() works fine.
  */
 export async function openUrl(url: string): Promise<void> {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return;
+  }
+
   // Check if we're running inside Tauri
   if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
     try {
@@ -13,9 +23,9 @@ export async function openUrl(url: string): Promise<void> {
       await tauriOpenUrl(url);
     } catch {
       // Fallback to window.open if the plugin isn't available
-      window.open(url, "_blank");
+      window.open(url, "_blank", "noopener,noreferrer");
     }
   } else {
-    window.open(url, "_blank");
+    window.open(url, "_blank", "noopener,noreferrer");
   }
 }

@@ -20,6 +20,8 @@ class MarkdownChunk:
     page_number: int | None = None
     sheet_name: str | None = None
     source_location: str | None = None
+    block_type: str = "paragraph"
+    ordinal: int = 0
 
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
@@ -98,7 +100,7 @@ def chunk_extracted_blocks(
 ) -> list[MarkdownChunk]:
     """Chunk normalized blocks while preserving format-specific source metadata."""
     chunks: list[MarkdownChunk] = []
-    for block in blocks:
+    for ordinal, block in enumerate(blocks):
         heading_path = block.heading_path
         available = max_tokens - len(heading_path)
         if available <= 0:
@@ -117,6 +119,8 @@ def chunk_extracted_blocks(
                     page_number=block.page_number,
                     sheet_name=block.sheet_name,
                     source_location=block.source_location,
+                    block_type=block.block_type,
+                    ordinal=ordinal,
                 )
             )
     return chunks

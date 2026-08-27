@@ -4,6 +4,7 @@ Uses aiosqlite as the async driver. Enables WAL mode + busy timeout for
 concurrent read/write support. FTS5 for semantic recall.
 """
 
+import re
 from typing import Any
 
 from sqlalchemy import event, text
@@ -86,9 +87,9 @@ class SQLiteBackend(DatabaseBackend):
             text(
                 "INSERT INTO documents "
                 "(id, source_path, storage_path, display_name, mime_type, content_hash, "
-                "size_bytes, status, error, indexed_at, created_at, updated_at) "
+                "size_bytes, status, error, indexed_at, structure_json, created_at, updated_at) "
                 "SELECT id, agent_id || '/' || workspace_path, workspace_path, display_name, "
-                "mime_type, content_hash, size_bytes, status, error, indexed_at, created_at, "
+                "mime_type, content_hash, size_bytes, status, error, indexed_at, '{}', created_at, "
                 "updated_at FROM documents_legacy"
             )
         )
@@ -122,6 +123,7 @@ class SQLiteBackend(DatabaseBackend):
             ("messages", "attachments", "TEXT"),
             ("providers", "custom_models", "TEXT NOT NULL DEFAULT '[]'"),
             ("messages", "subagent_id", "VARCHAR(36)"),
+            ("run_sources", "message_id", "VARCHAR(36)"),
             ("memory_entries", "run_id", "VARCHAR(36)"),
             ("sessions", "summary", "TEXT"),
             ("sessions", "closed", "BOOLEAN DEFAULT 0"),
@@ -132,6 +134,9 @@ class SQLiteBackend(DatabaseBackend):
             ("sessions", "channel", "VARCHAR(50)"),
             ("sessions", "external_user_id", "VARCHAR(255)"),
             ("channel_configs", "approval_policy", "VARCHAR(20) DEFAULT 'deny'"),
+            ("documents", "structure_json", "TEXT NOT NULL DEFAULT '{}'"),
+            ("document_chunks", "source_location", "TEXT"),
+            ("document_chunks", "block_type", "VARCHAR(30) NOT NULL DEFAULT 'paragraph'"),
         ]
         for table, column, col_type in patches:
             if not await self.column_exists(conn, table, column):
@@ -265,10 +270,34 @@ class SQLiteBackend(DatabaseBackend):
                 )
             )
 
+    @staticmethod
+    def _identifier(value: str) -> str:
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
+            raise ValueError("Invalid database identifier")
+        return value
+
     async def column_exists(self, conn: Any, table: str, column: str) -> bool:
+        table = self._identifier(table)
+        column = self._identifier(column)
         result = await conn.execute(text(f"PRAGMA table_info({table})"))
         existing_cols = {row[1] for row in result.fetchall()}
         return column in existing_cols
 
     async def add_column(self, conn: Any, table: str, column: str, col_type: str) -> None:
+        table = self._identifier(table)
+        column = self._identifier(column)
+        if col_type not in {
+            "TEXT",
+            "VARCHAR(36)",
+            "VARCHAR(30) NOT NULL DEFAULT 'paragraph'",
+            "VARCHAR(50)",
+            "VARCHAR(255)",
+            "VARCHAR(20) DEFAULT 'polling'",
+            "BOOLEAN DEFAULT 0",
+            "BOOLEAN DEFAULT 1",
+            "VARCHAR(20) DEFAULT 'deny'",
+            "TEXT NOT NULL DEFAULT '[]'",
+            "TEXT NOT NULL DEFAULT '{}'",
+        }:
+            raise ValueError("Invalid database column type")
         await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"))

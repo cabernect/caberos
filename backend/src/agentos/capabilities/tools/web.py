@@ -13,11 +13,13 @@ from typing import Any
 
 import httpx
 from bs4 import BeautifulSoup
+from sqlalchemy import select
 
+from ...models.web_source import WebSource
 from ...ssl_utils import SSL_CERT_PATH
 
 
-async def web_search(args: dict[str, Any], **_kwargs: Any) -> dict[str, str]:
+async def web_search(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     """Search the web using DuckDuckGo (free, no API key).
 
     Args:
@@ -44,11 +46,14 @@ async def web_search(args: dict[str, Any], **_kwargs: Any) -> dict[str, str]:
         results = await asyncio.to_thread(_sync_search)
     except ImportError:
         # Fallback: raw HTML scraping (may hit captcha pages)
-        return await _web_search_html(query, max_results)
+        result = await _web_search_html(query, max_results)
+        await _persist_web_sources(result, kwargs)
+        return result
     except Exception as e:
         # Fallback: try HTML scraping if the package fails
         fallback = await _web_search_html(query, max_results)
         if fallback.get("count", 0) > 0:
+            await _persist_web_sources(fallback, kwargs)
             return fallback
         return {"error": f"Search failed: {e}"}
 
@@ -62,11 +67,40 @@ async def web_search(args: dict[str, Any], **_kwargs: Any) -> dict[str, str]:
             }
         )
 
-    return {
+    result = {
         "query": query,
         "results": formatted,
         "count": len(formatted),
     }
+    await _persist_web_sources(result, kwargs)
+    return result
+
+
+async def _persist_web_sources(result: dict[str, Any], kwargs: dict[str, Any]) -> None:
+    """Persist web search results so the assistant response can cite them."""
+    db = kwargs.get("db")
+    run_id = kwargs.get("run_id")
+    if not db or not run_id:
+        return
+
+    for index, item in enumerate(result.get("results", []), start=1):
+        url = item.get("url", "")
+        if not url:
+            continue
+        exists = await db.scalar(
+            select(WebSource.id).where(WebSource.run_id == run_id, WebSource.url == url)
+        )
+        if exists is None:
+            db.add(
+                WebSource(
+                    run_id=run_id,
+                    url=url,
+                    title=item.get("title", ""),
+                    excerpt=item.get("snippet", ""),
+                    rank=index,
+                )
+            )
+    await db.flush()
 
 
 async def _web_search_html(query: str, max_results: int) -> dict[str, Any]:

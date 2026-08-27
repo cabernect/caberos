@@ -34,7 +34,10 @@ async def test_knowledge_api_uploads_lists_searches_and_deletes(client):
     assert response.status_code == 200
     document = response.json()
     assert document["status"] == "indexed"
-    assert document["storage_path"] == "guide.md"
+    assert document["storage_path"].endswith(".md")
+    assert document["storage_path"] != "guide.md"
+    stored_file = settings.knowledge_root / "shared" / document["storage_path"]
+    assert stored_file.is_file()
 
     listed = await client.get("/api/knowledge/documents")
     assert [item["id"] for item in listed.json()["documents"]] == [document["id"]]
@@ -45,6 +48,7 @@ async def test_knowledge_api_uploads_lists_searches_and_deletes(client):
 
     deleted = await client.delete(f"/api/knowledge/documents/{document['id']}")
     assert deleted.status_code == 204
+    assert not stored_file.exists()
     assert (await client.get("/api/knowledge/documents")).json()["documents"] == []
 
 

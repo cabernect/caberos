@@ -394,7 +394,7 @@ async def start_oauth(
         authorize_url = await start_oauth_flow(server)
         return {"authorize_url": authorize_url}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise HTTPException(status_code=400, detail="Unable to start OAuth flow") from e
 
 
 @router.get("/oauth/callback")
@@ -416,26 +416,28 @@ async def oauth_callback(
 
     result_path = handle_oauth_callback(code=code or "", state=state, error=error)
     is_error = "oauth_error=" in result_path
-    message = (
-        "Authorization failed. Close this tab and try again."
-        if is_error
-        else "Authorization complete! You can close this tab and return to CaberOS."
-    )
-    return HTMLResponse(
-        content=f"""<!DOCTYPE html>
+    content = (
+        """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>CaberOS OAuth</title>
 <style>
-  body {{ font-family: -apple-system, system-ui, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; background: #fafaf9; color: #1c1c1c; }}
-  .card {{ text-align: center; padding: 2rem; }}
-  h1 {{ font-size: 1.25rem; margin-bottom: 0.5rem; }}
-  p {{ color: #666; font-size: 0.9rem; }}
+  body { font-family: -apple-system, system-ui, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; background: #fafaf9; color: #1c1c1c; }
+  .card { text-align: center; padding: 2rem; }
+  h1 { font-size: 1.25rem; margin-bottom: 0.5rem; }
+  p { color: #666; font-size: 0.9rem; }
 </style></head>
-<body><div class="card">
-  <h1>{message}</h1>
-  <p>You can close this tab.</p>
-</div></body></html>""",
-        status_code=200,
+<body><div class="card"><h1>Authorization failed. Close this tab and try again.</h1><p>You can close this tab.</p></div></body></html>"""
+        if is_error
+        else """<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>CaberOS OAuth</title>
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; background: #fafaf9; color: #1c1c1c; }
+  .card { text-align: center; padding: 2rem; }
+  h1 { font-size: 1.25rem; margin-bottom: 0.5rem; }
+  p { color: #666; font-size: 0.9rem; }
+</style></head>
+<body><div class="card"><h1>Authorization complete! You can close this tab and return to CaberOS.</h1><p>You can close this tab.</p></div></body></html>"""
     )
+    return HTMLResponse(content=content, status_code=200)
 
 
 @router.get("/servers/{server_id}/oauth/status")

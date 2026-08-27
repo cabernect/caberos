@@ -54,7 +54,7 @@ async def export_data(
     try:
         archive_bytes = export_archive_bytes()
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail="Data export failed") from e
 
     buf = io.BytesIO(archive_bytes)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -137,12 +137,12 @@ async def import_data(
         try:
             return do_replace_validated(zf, names)
         except (ValueError, OSError) as e:
-            raise HTTPException(status_code=400, detail=str(e))
+            raise HTTPException(status_code=400, detail="Data import failed") from e
     else:
         try:
             return do_merge(zf, names)
         except (ValueError, OSError) as e:
-            raise HTTPException(status_code=400, detail=str(e))
+            raise HTTPException(status_code=400, detail="Data import failed") from e
 
 
 # --- Backup / restore point endpoints ---
@@ -180,7 +180,7 @@ async def restore_backup_endpoint(
     try:
         return restore_backup(backup_name)
     except FileNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail="Backup not found") from e
 
 
 @router.delete("/backups/{backup_name}")
@@ -192,4 +192,4 @@ async def delete_backup_endpoint(
     try:
         return delete_backup(backup_name)
     except FileNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail="Backup not found") from e

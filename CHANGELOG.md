@@ -5,6 +5,21 @@ All notable changes to CaberOS are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - Unreleased
+
+### Added
+
+- Knowledge Vault document re-indexing for explicitly imported documents
+- Persisted document sources and citation inspection in chat
+- Focused frontend component tests with Vitest and React Testing Library
+
+### Security
+
+- Hardened archive, skill, workspace, sandbox, and database identifier path boundaries
+- Sanitized OAuth redirect errors and user-facing internal failures
+- Restricted CI workflow permissions to the jobs that need write access
+- Validated browser URLs before opening them
+
 ## [0.1.0] - 2025-08-18
 
 ### Added

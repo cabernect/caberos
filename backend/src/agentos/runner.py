@@ -42,6 +42,7 @@ Usage from the API server:
     )
 """
 
+import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -57,6 +58,7 @@ from .providers import ProviderRegistry
 
 # Type alias for the event callback
 EventCallback = Callable[[str, dict], Awaitable[None] | None]
+log = logging.getLogger("agentos.runner")
 
 
 # Default demo script (used when is_test=True)
@@ -299,10 +301,9 @@ async def run_agent(
                 "cost": run.cost,
                 "error": run.error,
             }
-        except Exception as e:
-            import traceback
-
-            traceback.print_exc()
+        except Exception:
+            log.exception("Agent run failed")
+            safe_error = "The agent run failed due to an internal error."
 
             if event_callback:
                 result = event_callback(
@@ -310,7 +311,7 @@ async def run_agent(
                     {
                         "run_id": "",
                         "status": "failed",
-                        "error": str(e),
+                        "error": safe_error,
                     },
                 )
                 if hasattr(result, "__await__"):
@@ -321,5 +322,5 @@ async def run_agent(
                 "session_id": "",
                 "status": "failed",
                 "cost": 0.0,
-                "error": str(e),
+                "error": safe_error,
             }

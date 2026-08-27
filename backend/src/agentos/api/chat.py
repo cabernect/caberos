@@ -31,6 +31,8 @@ from ..models.elicitation import ElicitationRequest
 from ..models.operator import Operator
 from ..models.run import Message, Run
 from ..models.session import Session
+from ..models.source import RunSource
+from ..models.web_source import WebSource
 from ..pipeline import Attachment
 from ..run_manager import get_run, get_run_status, start_run, stop_run
 
@@ -466,6 +468,41 @@ async def create_session(
     }
 
 
+def _source_response(source: RunSource) -> dict:
+    return {
+        "id": source.id,
+        "source_type": "knowledge",
+        "chunk_id": source.chunk_id,
+        "document_id": source.document_id,
+        "source_path": source.source_path,
+        "storage_path": source.storage_path,
+        "heading_path": json.loads(source.heading_path) if source.heading_path else [],
+        "page_number": source.page_number,
+        "sheet_name": source.sheet_name,
+        "source_location": source.source_location,
+        "excerpt": source.excerpt,
+        "rank": source.rank,
+    }
+
+
+def _web_source_response(source: WebSource) -> dict:
+    return {
+        "id": source.id,
+        "source_type": "web",
+        "chunk_id": None,
+        "document_id": None,
+        "source_path": source.url,
+        "storage_path": source.url,
+        "title": source.title,
+        "heading_path": [],
+        "page_number": None,
+        "sheet_name": None,
+        "source_location": None,
+        "excerpt": source.excerpt,
+        "rank": source.rank,
+    }
+
+
 @router.get("/{agent_id}/sessions/{session_id}/messages")
 async def get_session_messages(
     agent_id: str,
@@ -483,6 +520,22 @@ async def get_session_messages(
         .limit(limit)
     )
     rows = result.all()
+    run_ids = {run.id for _, run in rows}
+    source_rows = (
+        await db.execute(select(RunSource).where(RunSource.run_id.in_(run_ids)))
+        if run_ids
+        else None
+    )
+    sources_by_run: dict[str, list[dict]] = {}
+    if source_rows is not None:
+        for source in source_rows.scalars().all():
+            sources_by_run.setdefault(source.run_id, []).append(_source_response(source))
+    if run_ids:
+        web_source_rows = await db.execute(
+            select(WebSource).where(WebSource.run_id.in_(run_ids))
+        )
+        for source in web_source_rows.scalars().all():
+            sources_by_run.setdefault(source.run_id, []).append(_web_source_response(source))
     return [
         {
             "id": msg.id,
@@ -496,6 +549,9 @@ async def get_session_messages(
             "cost": run.cost,
             "subagent_id": msg.subagent_id,
             "attachments": msg.attachments,
+            "citations": sources_by_run.get(msg.run_id, [])
+            if msg.role in ("assistant", "heartbeat")
+            else [],
         }
         for msg, run in rows
     ]

@@ -542,6 +542,23 @@ class Pipeline:
                 )
                 self.db.add(assistant_msg)
                 await self.db.flush()
+                from .models.source import RunSource
+                from .models.web_source import WebSource
+
+                source_rows = (
+                    (await self.db.execute(select(RunSource).where(RunSource.run_id == run.id)))
+                    .scalars()
+                    .all()
+                )
+                for source in source_rows:
+                    source.message_id = assistant_msg.id
+                web_source_rows = (
+                    (await self.db.execute(select(WebSource).where(WebSource.run_id == run.id)))
+                    .scalars()
+                    .all()
+                )
+                for source in web_source_rows:
+                    source.message_id = assistant_msg.id
 
                 # Index in messages FTS5 (episodic — exact recall via search_history)
                 await index_message(
@@ -661,10 +678,11 @@ class Pipeline:
 
                 await self.db.commit()
 
-            except Exception as e:
+            except Exception:
                 # Pipeline exception — mark run as failed
+                logger.exception("Pipeline run failed")
                 run.status = "failed"
-                run.error = str(e)
+                run.error = "The agent run failed due to an internal error."
                 run.completed_at = datetime.now(UTC)
                 run.latency_ms = (
                     int((run.completed_at - run.started_at).total_seconds() * 1000)

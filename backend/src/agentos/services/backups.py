@@ -10,6 +10,7 @@ v0.1.3 Trust Bundle: automatic backups and restore points.
 import hashlib
 import json
 import logging
+import re
 import shutil
 from pathlib import Path
 
@@ -154,15 +155,27 @@ def list_backups() -> list[dict]:
     return backups
 
 
+def _backup_path(backup_name: str) -> Path:
+    """Resolve a backup name to a direct child of the backups directory."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", backup_name):
+        raise FileNotFoundError("Backup not found")
+    root = backups_dir().resolve()
+    candidate = (root / backup_name).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError as error:
+        raise FileNotFoundError("Backup not found") from error
+    return candidate
+
+
 def restore_backup(backup_name: str) -> dict:
     """Restore from a named backup directory.
 
     The caller must dispose the DB engine before calling this.
     """
-    backup_root = backups_dir()
-    backup_dir = backup_root / backup_name
+    backup_dir = _backup_path(backup_name)
     if not backup_dir.exists() or not backup_dir.is_dir():
-        raise FileNotFoundError(f"Backup not found: {backup_name}")
+        raise FileNotFoundError("Backup not found")
 
     manifest_path = backup_dir / "manifest.json"
     if not manifest_path.exists():
@@ -213,9 +226,8 @@ def restore_backup(backup_name: str) -> dict:
 
 def delete_backup(backup_name: str) -> dict:
     """Delete a named backup directory."""
-    backup_root = backups_dir()
-    backup_dir = backup_root / backup_name
+    backup_dir = _backup_path(backup_name)
     if not backup_dir.exists() or not backup_dir.is_dir():
-        raise FileNotFoundError(f"Backup not found: {backup_name}")
+        raise FileNotFoundError("Backup not found")
     shutil.rmtree(backup_dir)
     return {"status": "ok", "deleted": backup_name}

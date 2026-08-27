@@ -16,6 +16,7 @@ def _build_profile(workspace: str, allow_network: bool) -> str:
     Python/shell need to function, deny network by default.
     """
     workspace = str(Path(workspace).resolve())
+    workspace = workspace.replace("\\", "\\\\").replace('"', '\\"')
     lines = [
         "(version 1)",
         '(deny file-write* (subpath "/"))',

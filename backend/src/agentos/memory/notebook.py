@@ -6,13 +6,16 @@ The agent updates it via the memory_update capability (audited syscall).
 Not versioned with AgentVersion — living document.
 """
 
+import re
+from pathlib import Path
+
 from ..config import settings
 
 
-def _memory_path(agent_id: str):
+def _memory_path(agent_id: str) -> Path:
     """Get the path to the agent's MEMORY.md file."""
-    from pathlib import Path
-
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", agent_id):
+        raise ValueError("Invalid agent id")
     return Path(settings.agent_home_root) / agent_id / "MEMORY.md"
 
 

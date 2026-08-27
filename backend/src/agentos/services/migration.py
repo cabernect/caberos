@@ -10,6 +10,7 @@ v0.1.3 Trust Bundle: atomic, integrity-checked migration with automatic backups.
 import io
 import logging
 import os
+import re
 import shutil
 import sqlite3
 import tempfile
@@ -21,6 +22,14 @@ from ._utils import check_db_integrity
 from .backups import create_backup
 
 log = logging.getLogger("agentos.services.migration")
+
+
+def _sql_identifier(value: str) -> str:
+    """Allow only identifiers read from the known application schema."""
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
+        raise ValueError("Invalid database identifier")
+    return value
+
 
 # Maximum total uncompressed size for an archive (500 MB).
 MAX_UNCOMPRESSED_SIZE = 500 * 1024 * 1024
@@ -173,8 +182,13 @@ def validate_archive(
             continue
         # Normalize and check for traversal
         normalized = os.path.normpath(name)
-        if normalized.startswith("..") or "/.." in normalized or normalized.startswith("/"):
-            return False, f"Archive path traversal detected: {name}"
+        if (
+            "\\" in name
+            or normalized.startswith("..")
+            or "/.." in normalized
+            or normalized.startswith("/")
+        ):
+            return False, "Archive path traversal detected"
 
     # Check uncompressed size
     total_uncompressed = sum(info.file_size for info in zf.infolist())
@@ -198,6 +212,27 @@ def validate_archive(
         Path(tmp_db_path).unlink(missing_ok=True)
 
     return True, ""
+
+
+def _archive_target(name: str) -> Path | None:
+    """Map an archive member to a contained application path."""
+    if name == "secret.key":
+        root, relative = (
+            Path(settings.secret_key_path).parent.resolve(),
+            Path(settings.secret_key_path).name,
+        )
+    elif name.startswith("agents/"):
+        root, relative = Path(settings.agent_home_root).parent.resolve(), name[len("agents/") :]
+    elif name.startswith("workspaces/"):
+        root, relative = Path(settings.workspace_root).parent.resolve(), name[len("workspaces/") :]
+    else:
+        return None
+    target = (root / relative).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError as error:
+        raise ValueError("Archive path escapes application data") from error
+    return target
 
 
 def do_replace_validated(zf: zipfile.ZipFile, names: list[str]) -> dict:
@@ -243,15 +278,8 @@ def do_replace_validated(zf: zipfile.ZipFile, names: list[str]) -> dict:
     for name in names:
         if name.endswith("/") or name == "agentos.db":
             continue
-        if name == "secret.key":
-            target = Path(settings.secret_key_path)
-        elif name.startswith("agents/"):
-            rel = name[len("agents/") :]
-            target = Path(settings.agent_home_root).parent / rel
-        elif name.startswith("workspaces/"):
-            rel = name[len("workspaces/") :]
-            target = Path(settings.workspace_root).parent / rel
-        else:
+        target = _archive_target(name)
+        if target is None:
             log.warning("Skipping unknown file in archive: %s", name)
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -300,7 +328,7 @@ def do_merge(zf: zipfile.ZipFile, names: list[str]) -> dict:
     try:
         # Attach the imported DB to the target DB and copy rows
         conn = sqlite3.connect(str(target_db_path))
-        conn.execute(f"ATTACH DATABASE '{imported_db_path}' AS imported")
+        conn.execute("ATTACH DATABASE ? AS imported", (str(imported_db_path),))
 
         # Get actual tables in the imported DB
         imported_tables = {
@@ -319,7 +347,7 @@ def do_merge(zf: zipfile.ZipFile, names: list[str]) -> dict:
 
         if "mcp_servers" in imported_tables:
             cols = [r[1] for r in conn.execute("PRAGMA table_info(mcp_servers)").fetchall()]
-            col_list = ", ".join(cols)
+            col_list = ", ".join(_sql_identifier(column) for column in cols)
             placeholders = ", ".join(["?"] * len(cols))
             before = conn.execute("SELECT COUNT(*) FROM mcp_servers").fetchone()[0]
 
@@ -366,7 +394,7 @@ def do_merge(zf: zipfile.ZipFile, names: list[str]) -> dict:
         # Match by (target_server_id, tool_name). Remap server ID from above.
         if "mcp_tools" in imported_tables:
             cols = [r[1] for r in conn.execute("PRAGMA table_info(mcp_tools)").fetchall()]
-            col_list = ", ".join(cols)
+            col_list = ", ".join(_sql_identifier(column) for column in cols)
             placeholders = ", ".join(["?"] * len(cols))
             before = conn.execute("SELECT COUNT(*) FROM mcp_tools").fetchone()[0]
 
@@ -407,7 +435,7 @@ def do_merge(zf: zipfile.ZipFile, names: list[str]) -> dict:
             cols = [
                 r[1] for r in conn.execute("PRAGMA table_info(mcp_server_credentials)").fetchall()
             ]
-            col_list = ", ".join(cols)
+            col_list = ", ".join(_sql_identifier(column) for column in cols)
             placeholders = ", ".join(["?"] * len(cols))
             before = conn.execute("SELECT COUNT(*) FROM mcp_server_credentials").fetchone()[0]
 
@@ -448,7 +476,7 @@ def do_merge(zf: zipfile.ZipFile, names: list[str]) -> dict:
         # Match by (platform, agent_id) — the unique constraint.
         if "channel_configs" in imported_tables:
             cols = [r[1] for r in conn.execute("PRAGMA table_info(channel_configs)").fetchall()]
-            col_list = ", ".join(cols)
+            col_list = ", ".join(_sql_identifier(column) for column in cols)
             placeholders = ", ".join(["?"] * len(cols))
             before = conn.execute("SELECT COUNT(*) FROM channel_configs").fetchone()[0]
 
@@ -484,7 +512,7 @@ def do_merge(zf: zipfile.ZipFile, names: list[str]) -> dict:
         # Match by name (case-insensitive).
         if "providers" in imported_tables:
             cols = [r[1] for r in conn.execute("PRAGMA table_info(providers)").fetchall()]
-            col_list = ", ".join(cols)
+            col_list = ", ".join(_sql_identifier(column) for column in cols)
             placeholders = ", ".join(["?"] * len(cols))
             before = conn.execute("SELECT COUNT(*) FROM providers").fetchone()[0]
 
@@ -527,6 +555,7 @@ def do_merge(zf: zipfile.ZipFile, names: list[str]) -> dict:
             "providers",
         }
         for table in MERGE_TABLES:
+            table = _sql_identifier(table)
             if table not in imported_tables or table in entity_aware_tables:
                 continue
             # Skip FTS virtual tables — they're auto-populated
@@ -536,7 +565,7 @@ def do_merge(zf: zipfile.ZipFile, names: list[str]) -> dict:
             cols = [row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()]
             if not cols:
                 continue
-            col_list = ", ".join(cols)
+            col_list = ", ".join(_sql_identifier(column) for column in cols)
             placeholders = ", ".join(["?"] * len(cols))
 
             before = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
@@ -669,10 +698,11 @@ def preview_archive(content_buf: io.BytesIO) -> dict:
     try:
         target_db_path = Path(settings.db_path)
         conn = sqlite3.connect(str(target_db_path))
-        conn.execute(f"ATTACH DATABASE '{imported_db_path}' AS imported")
+        conn.execute("ATTACH DATABASE ? AS imported", (str(imported_db_path),))
 
         table_stats: list[dict] = []
         for table in count_tables:
+            table = _sql_identifier(table)
             # Check if table exists in imported DB
             exists = conn.execute(
                 "SELECT name FROM imported.sqlite_master WHERE type='table' AND name=?",
@@ -757,7 +787,7 @@ def preview_archive(content_buf: io.BytesIO) -> dict:
                             if row[5]  # pk flag
                         ]
                         if pk_cols:
-                            pk_list = ", ".join(pk_cols)
+                            pk_list = ", ".join(_sql_identifier(column) for column in pk_cols)
                             new_count = conn.execute(
                                 f"SELECT COUNT(*) FROM imported.{table} "
                                 f"WHERE ({pk_list}) NOT IN "
