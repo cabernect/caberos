@@ -424,15 +424,25 @@ export function Channels() {
                               </label>
                             </div>
                           </div>
-                          <div>
-                            <label className="flex items-center gap-1.5 text-[12px]" style={{ color: "var(--ink)" }}>
-                              <input
-                                type="checkbox"
-                                checked={editEnabled}
-                                onChange={(e) => setEditEnabled(e.target.checked)}
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <p className="text-[12px] font-medium text-[var(--ink)]">Channel status</p>
+                              <p className="text-[11px] text-[var(--ink-3)]">
+                                {editEnabled ? "Messages are being received" : "Channel is paused"}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              role="switch"
+                              aria-checked={editEnabled}
+                              aria-label={`${editEnabled ? "Disable" : "Enable"} channel`}
+                              onClick={() => setEditEnabled((enabled) => !enabled)}
+                              className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2 ${editEnabled ? "border-[var(--accent)] bg-[var(--accent)]" : "border-[var(--border)] bg-[var(--sidebar)]"}`}
+                            >
+                              <span
+                                className={`inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ${editEnabled ? "translate-x-6" : "translate-x-1"}`}
                               />
-                              Enabled
-                            </label>
+                            </button>
                           </div>
                           {editError && (
                             <p className="text-[12px] text-red-500">{editError}</p>
