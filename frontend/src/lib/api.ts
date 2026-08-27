@@ -383,6 +383,22 @@ export const api = {
   markAllNotificationsRead: () =>
     request<{ updated: boolean }>("/api/notifications/read-all", { method: "POST" }),
 
+  // Data migration
+  importBackup: async (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("mode", "merge");
+    const base = await baseReady;
+    const response = await fetch(`${base}/api/data/import`, {
+      method: "POST",
+      credentials: "include",
+      headers: authHeaders(),
+      body: form,
+    });
+    if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`);
+    return response.json() as Promise<{ status: string }>;
+  },
+
   // Providers
   listProviders: () => request<Provider[]>("/api/providers"),
   createProvider: (data: Partial<Provider> & { api_key?: string }) =>

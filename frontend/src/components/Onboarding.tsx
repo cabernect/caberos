@@ -9,10 +9,21 @@ interface OnboardingProps {
   onComplete: () => void;
 }
 
+const ONBOARDING_STEP_KEY = "caberos_onboarding_step";
+const ONBOARDING_AGENT_KEY = "caberos_onboarding_agent_name";
+
+function savedNumber(key: string, fallback: number) {
+  try {
+    const value = Number(localStorage.getItem(key));
+    return Number.isFinite(value) ? value : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 export function Onboarding({ providers, agents, onComplete }: OnboardingProps) {
-  const [step, setStep] = useState(
-    providers.some((item) => item.has_key) && agents.length === 0 ? 2 : 0,
-  );
+  const defaultStep = providers.some((item) => item.has_key) && agents.length === 0 ? 2 : 0;
+  const [step, setStep] = useState(() => Math.min(3, Math.max(defaultStep, savedNumber(ONBOARDING_STEP_KEY, defaultStep))));
   const [providerName, setProviderName] = useState("OpenAI");
   const [apiKey, setApiKey] = useState("");
   const [provider, setProvider] = useState<Provider | null>(
@@ -20,9 +31,22 @@ export function Onboarding({ providers, agents, onComplete }: OnboardingProps) {
   );
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [model, setModel] = useState("");
-  const [agentName, setAgentName] = useState("Caber");
+  const [agentName, setAgentName] = useState(() => {
+    try { return localStorage.getItem(ONBOARDING_AGENT_KEY) || "Caber"; } catch { return "Caber"; }
+  });
+  const [document, setDocument] = useState<File | null>(null);
+  const [backup, setBackup] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(ONBOARDING_STEP_KEY, String(step));
+      localStorage.setItem(ONBOARDING_AGENT_KEY, agentName);
+    } catch {
+      // Resume state is best effort when storage is unavailable.
+    }
+  }, [agentName, step]);
 
   useEffect(() => {
     if (!provider) return;
@@ -67,9 +91,29 @@ export function Onboarding({ providers, agents, onComplete }: OnboardingProps) {
         provider_id: provider.id,
         model_name: model.trim(),
       });
-      onComplete();
+      setStep(3);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not create the first agent.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const finishSetup = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      if (backup) await api.importBackup(backup);
+      if (document) await api.uploadKnowledgeDocument(document);
+      try {
+        localStorage.removeItem(ONBOARDING_STEP_KEY);
+        localStorage.removeItem(ONBOARDING_AGENT_KEY);
+      } catch {
+        // Ignore unavailable browser storage.
+      }
+      onComplete();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Optional setup import failed.");
     } finally {
       setBusy(false);
     }
@@ -93,7 +137,7 @@ export function Onboarding({ providers, agents, onComplete }: OnboardingProps) {
         </div>
 
         <div className="mb-7 flex gap-2" aria-label="Onboarding progress">
-          {[0, 1, 2].map((item) => (
+          {[0, 1, 2, 3].map((item) => (
             <div key={item} className="h-1 flex-1 rounded-full" style={{ background: item <= step ? "var(--accent)" : "var(--border)" }} />
           ))}
         </div>
@@ -132,9 +176,23 @@ export function Onboarding({ providers, agents, onComplete }: OnboardingProps) {
             {models.length === 0 && <p className="mt-2 text-[12px] text-[var(--ink-3)]">No models were discovered. You can enter the model name manually.</p>}
             {error && <p role="alert" className="mt-3 text-[12px] text-[var(--danger)]">{error}</p>}
             <button type="submit" disabled={busy || !model.trim()} className="mt-6 flex items-center gap-2 rounded-md px-4 py-2 text-[13px] font-medium text-white" style={{ background: "var(--accent)", cursor: busy || !model.trim() ? "not-allowed" : "pointer", opacity: busy || !model.trim() ? 0.6 : 1 }}>
-              {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Finish setup
+              {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Continue
             </button>
           </form>
+        )}
+
+        {step === 3 && (
+          <div>
+            <h2 className="text-[16px] font-semibold text-[var(--ink)]">Bring in existing data</h2>
+            <p className="mt-2 text-[13px] text-[var(--ink-2)]">Both options are optional. You can do this later from Settings or Knowledge Vault.</p>
+            <label className="mt-5 block text-[12px] font-medium text-[var(--ink-2)]">CaberOS backup<input type="file" accept=".zip,application/zip" onChange={(event) => setBackup(event.target.files?.[0] || null)} className="mt-1 block w-full text-[12px]" /></label>
+            <label className="mt-4 block text-[12px] font-medium text-[var(--ink-2)]">Initial knowledge document<input type="file" accept=".md,.txt,.pdf,.docx,.xlsx" onChange={(event) => setDocument(event.target.files?.[0] || null)} className="mt-1 block w-full text-[12px]" /></label>
+            {error && <p role="alert" className="mt-3 text-[12px] text-[var(--danger)]">{error}</p>}
+            <div className="mt-6 flex gap-2">
+              <button type="button" onClick={() => void finishSetup()} disabled={busy} className="flex items-center gap-2 rounded-md px-4 py-2 text-[13px] font-medium text-white" style={{ background: "var(--accent)", cursor: busy ? "wait" : "pointer" }}>{busy && <LoaderCircle className="h-4 w-4 animate-spin" />} Finish setup</button>
+              <button type="button" onClick={onComplete} disabled={busy} className="rounded-md border px-4 py-2 text-[13px] text-[var(--ink-2)]" style={{ borderColor: "var(--border)", cursor: busy ? "not-allowed" : "pointer" }}>Skip</button>
+            </div>
+          </div>
         )}
       </section>
     </div>
