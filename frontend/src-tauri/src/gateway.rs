@@ -10,7 +10,10 @@ use std::os::unix::process::CommandExt;
 
 use tauri::{AppHandle, Manager};
 
-pub struct GatewayProcess(Mutex<Option<Child>>);
+pub struct GatewayProcess {
+    child: Mutex<Option<Child>>,
+    port: Mutex<Option<u16>>,
+}
 
 impl Drop for GatewayProcess {
     fn drop(&mut self) {
@@ -20,13 +23,22 @@ impl Drop for GatewayProcess {
 
 impl GatewayProcess {
     pub fn new() -> Self {
-        Self(Mutex::new(None))
+        Self {
+            child: Mutex::new(None),
+            port: Mutex::new(None),
+        }
+    }
+
+    pub fn port(&self) -> Option<u16> {
+        self.port.lock().ok().and_then(|port| *port)
     }
 
     pub fn start(&self, app: &AppHandle) -> Result<(), String> {
         let Some(executable) = gateway_executable(app)? else {
             return Ok(());
         };
+
+        let port = reserve_gateway_port()?;
 
         let data_dir = app
             .path()
@@ -50,6 +62,8 @@ impl GatewayProcess {
         let mut command = Command::new(&executable);
         command
             .current_dir(&data_dir)
+            .env("AGENTOS_CONTROL_PLANE_HOST", "127.0.0.1")
+            .env("AGENTOS_CONTROL_PLANE_PORT", port.to_string())
             .env("AGENTOS_DB_PATH", data_dir.join("agentos.db"))
             .env("AGENTOS_SECRET_KEY_PATH", data_dir.join("secret.key"))
             .env("AGENTOS_WORKSPACE_ROOT", data_dir.join("workspaces"))
@@ -89,15 +103,20 @@ impl GatewayProcess {
         }
 
         let mut process = self
-            .0
+            .child
             .lock()
             .map_err(|_| "CaberOS gateway process lock was poisoned".to_string())?;
         *process = Some(child);
+        let mut gateway_port = self
+            .port
+            .lock()
+            .map_err(|_| "CaberOS gateway port lock was poisoned".to_string())?;
+        *gateway_port = Some(port);
         Ok(())
     }
 
     pub fn stop(&self) {
-        let Ok(mut process) = self.0.lock() else {
+        let Ok(mut process) = self.child.lock() else {
             return;
         };
 
@@ -110,7 +129,19 @@ impl GatewayProcess {
             let _ = child.kill();
             let _ = child.wait();
         }
+        if let Ok(mut port) = self.port.lock() {
+            *port = None;
+        }
     }
+}
+
+fn reserve_gateway_port() -> Result<u16, String> {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0))
+        .map_err(|error| format!("could not reserve a gateway port: {error}"))?;
+    listener
+        .local_addr()
+        .map_err(|error| format!("could not inspect gateway port: {error}"))
+        .map(|address| address.port())
 }
 
 fn gateway_executable(app: &AppHandle) -> Result<Option<PathBuf>, String> {
@@ -142,4 +173,15 @@ fn gateway_executable(app: &AppHandle) -> Result<Option<PathBuf>, String> {
     ];
 
     Ok(candidates.into_iter().find(|candidate| candidate.is_file()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reserve_gateway_port;
+
+    #[test]
+    fn reserves_a_loopback_port() {
+        let port = reserve_gateway_port().expect("an available loopback port");
+        assert!(port > 0);
+    }
 }
