@@ -20,6 +20,7 @@ from ..harness.litellm_adapter import LiteLLMAdapter
 from ..models.agent import Agent
 from ..models.operator import Operator
 from ..models.provider import Provider
+from ..notifications import create_notification
 from ..secret_store import encrypt
 
 router = APIRouter(prefix="/api/providers", tags=["providers"])
@@ -218,7 +219,18 @@ async def validate_model(
         await adapter.validate_model(provider_id, model_name)
         return {"valid": True}
     except Exception as e:
-        return {"valid": False, "error": str(e)}
+        error = str(e)
+        await create_notification(
+            db,
+            notification_type="provider_validation_failed",
+            severity="error",
+            title=f"Provider validation failed: {provider.name}",
+            message=error,
+            action_path="/settings",
+            entity_id=provider.id,
+        )
+        await db.commit()
+        return {"valid": False, "error": error}
 
 
 class CustomModelIn(BaseModel):
