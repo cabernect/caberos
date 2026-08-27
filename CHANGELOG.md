@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Added a macOS Apple Silicon ZIP distribution with Gatekeeper workaround instructions for free, non-notarized releases.
+- Added Gatekeeper workaround instructions for the free, non-notarized macOS Apple Silicon DMG release.
 
 ## [0.1.5] - Released
 
