@@ -26,6 +26,20 @@ from ..secret_store import encrypt
 router = APIRouter(prefix="/api/providers", tags=["providers"])
 
 
+def classify_provider_error(error: str) -> tuple[str, str]:
+    message = error.lower()
+    if "429" in message or "rate limit" in message or "too many requests" in message:
+        return "rate_limit", "The provider rate limit was reached. Wait and try again."
+    if any(
+        term in message
+        for term in ("401", "403", "unauthorized", "invalid api key", "authentication")
+    ):
+        return "authentication", "Check the provider credentials in Settings."
+    if any(term in message for term in ("timeout", "timed out", "connection", "ssl", "dns")):
+        return "network", "Check your network connection and provider endpoint."
+    return "internal", "The provider returned an unexpected error. Check the gateway logs."
+
+
 class ProviderCreate(BaseModel):
     name: str
     type: str  # openai, anthropic, google, ollama, azure, ...
@@ -220,12 +234,13 @@ async def validate_model(
         return {"valid": True}
     except Exception as e:
         error = str(e)
+        error_type, guidance = classify_provider_error(error)
         await create_notification(
             db,
-            notification_type="provider_validation_failed",
+            notification_type=f"provider_{error_type}",
             severity="error",
-            title=f"Provider validation failed: {provider.name}",
-            message=error,
+            title=f"Provider {error_type.replace('_', ' ')}: {provider.name}",
+            message=f"{guidance} Details: {error}",
             action_path="/settings",
             entity_id=provider.id,
         )

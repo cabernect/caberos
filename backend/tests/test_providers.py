@@ -12,6 +12,15 @@ from agentos.main import app
 pytest_asyncio_fixture = pytest_asyncio.fixture
 
 
+def test_classify_provider_errors():
+    from agentos.api.providers import classify_provider_error
+
+    assert classify_provider_error("429 rate limit exceeded")[0] == "rate_limit"
+    assert classify_provider_error("401 invalid api key")[0] == "authentication"
+    assert classify_provider_error("request timeout")[0] == "network"
+    assert classify_provider_error("unexpected response")[0] == "internal"
+
+
 async def _seed_operator(db_engine, username="admin", password="admin"):
     """Seed a test operator directly into the DB."""
     from sqlalchemy import select
