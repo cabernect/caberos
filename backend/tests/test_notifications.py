@@ -43,3 +43,25 @@ async def test_notifications_are_listed_and_marked_read(client, db):
     marked = await client.post(f"/api/notifications/{notification['id']}/read")
     assert marked.status_code == 200
     assert (await client.get("/api/notifications", params={"unread_only": True})).json() == []
+
+
+@pytest.mark.asyncio
+async def test_unread_notifications_are_deduplicated(db):
+    first = await create_notification(
+        db,
+        notification_type="gateway_error",
+        severity="error",
+        title="Gateway unavailable",
+        message="Retry the gateway.",
+        entity_id="gateway",
+    )
+    await db.commit()
+    second = await create_notification(
+        db,
+        notification_type="gateway_error",
+        severity="error",
+        title="Gateway unavailable",
+        message="Retry the gateway.",
+        entity_id="gateway",
+    )
+    assert second.id == first.id
