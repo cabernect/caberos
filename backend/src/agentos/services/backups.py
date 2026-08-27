@@ -160,12 +160,14 @@ def _backup_path(backup_name: str) -> Path:
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", backup_name):
         raise FileNotFoundError("Backup not found")
     root = backups_dir().resolve()
-    candidate = (root / backup_name).resolve()
-    try:
-        candidate.relative_to(root)
-    except ValueError as error:
-        raise FileNotFoundError("Backup not found") from error
-    return candidate
+    if not root.exists() or not root.is_dir():
+        raise FileNotFoundError("Backup not found")
+
+    for child in root.iterdir():
+        if child.is_dir() and child.name == backup_name:
+            return child.resolve()
+
+    raise FileNotFoundError("Backup not found")
 
 
 def restore_backup(backup_name: str) -> dict:
