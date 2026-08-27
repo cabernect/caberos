@@ -531,9 +531,7 @@ async def get_session_messages(
         for source in source_rows.scalars().all():
             sources_by_run.setdefault(source.run_id, []).append(_source_response(source))
     if run_ids:
-        web_source_rows = await db.execute(
-            select(WebSource).where(WebSource.run_id.in_(run_ids))
-        )
+        web_source_rows = await db.execute(select(WebSource).where(WebSource.run_id.in_(run_ids)))
         for source in web_source_rows.scalars().all():
             sources_by_run.setdefault(source.run_id, []).append(_web_source_response(source))
     return [

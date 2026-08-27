@@ -41,8 +41,8 @@ export function Channels() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editToken, setEditToken] = useState("");
   const [editMode, setEditMode] = useState<"polling" | "webhook">("polling");
-  const [editEnabled, setEditEnabled] = useState(true);
   const [editSaving, setEditSaving] = useState(false);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
   const [editError, setEditError] = useState("");
 
   const fetchData = useCallback(async () => {
@@ -156,7 +156,6 @@ export function Channels() {
     setEditingId(ch.id);
     setEditToken("");
     setEditMode(ch.mode as "polling" | "webhook");
-    setEditEnabled(ch.enabled);
     setEditError("");
   };
 
@@ -167,7 +166,6 @@ export function Channels() {
       const updates: { bot_token?: string; mode?: string; enabled?: boolean } = {};
       if (editToken.trim()) updates.bot_token = editToken.trim();
       if (editMode) updates.mode = editMode;
-      if (editEnabled !== undefined) updates.enabled = editEnabled;
       await api.updateChannel(id, updates);
       setEditingId(null);
       fetchData();
@@ -175,6 +173,18 @@ export function Channels() {
       setEditError(e instanceof Error ? e.message : "Failed to update");
     } finally {
       setEditSaving(false);
+    }
+  };
+
+  const handleToggleEnabled = async (channel: ChannelInfo) => {
+    setTogglingId(channel.id);
+    try {
+      await api.updateChannel(channel.id, { enabled: !channel.enabled });
+      await fetchData();
+    } catch {
+      // ignore
+    } finally {
+      setTogglingId(null);
     }
   };
 
@@ -365,7 +375,21 @@ export function Channels() {
                             </p>
                           </div>
                         </div>
-                        <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={ch.enabled}
+                            aria-label={`${ch.enabled ? "Disable" : "Enable"} ${info?.label || ch.platform} channel`}
+                            title={ch.enabled ? "Disable channel" : "Enable channel"}
+                            disabled={togglingId === ch.id}
+                            onClick={() => handleToggleEnabled(ch)}
+                            className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-60 ${ch.enabled ? "border-[var(--accent)] bg-[var(--accent)]" : "border-[var(--border)] bg-[var(--sidebar)]"}`}
+                          >
+                            <span
+                              className={`inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ${ch.enabled ? "translate-x-6" : "translate-x-1"}`}
+                            />
+                          </button>
                           <button
                             onClick={() => startEdit(ch)}
                             className="rounded-[4px] p-1.5 text-[var(--ink-3)] hover:text-[var(--ink)]"
@@ -423,26 +447,6 @@ export function Channels() {
                                 Webhook
                               </label>
                             </div>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <div>
-                              <p className="text-[12px] font-medium text-[var(--ink)]">Channel status</p>
-                              <p className="text-[11px] text-[var(--ink-3)]">
-                                {editEnabled ? "Messages are being received" : "Channel is paused"}
-                              </p>
-                            </div>
-                            <button
-                              type="button"
-                              role="switch"
-                              aria-checked={editEnabled}
-                              aria-label={`${editEnabled ? "Disable" : "Enable"} channel`}
-                              onClick={() => setEditEnabled((enabled) => !enabled)}
-                              className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2 ${editEnabled ? "border-[var(--accent)] bg-[var(--accent)]" : "border-[var(--border)] bg-[var(--sidebar)]"}`}
-                            >
-                              <span
-                                className={`inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ${editEnabled ? "translate-x-6" : "translate-x-1"}`}
-                              />
-                            </button>
                           </div>
                           {editError && (
                             <p className="text-[12px] text-red-500">{editError}</p>

@@ -132,7 +132,13 @@ async def test_doc_search_persists_sources_for_run(db, tmp_path: Path):
 @pytest.mark.asyncio
 async def test_web_search_persists_sources_for_run(db, monkeypatch):
     async def fake_to_thread(_func):
-        return [{"title": "CaberOS", "href": "https://example.com/caberos", "body": "Agent OS documentation."}]
+        return [
+            {
+                "title": "CaberOS",
+                "href": "https://example.com/caberos",
+                "body": "Agent OS documentation.",
+            }
+        ]
 
     monkeypatch.setattr("agentos.capabilities.tools.web.asyncio.to_thread", fake_to_thread)
 
