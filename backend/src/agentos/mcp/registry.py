@@ -217,6 +217,7 @@ async def connect_server(server: McpServer) -> bool:
 
         # Discover and register tools
         await _discover_tools(server, client)
+        _notification_errors.pop(server.id, None)
         log.info("Connected to MCP server '%s' (%s)", server.name, server.id)
         return True
 
