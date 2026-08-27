@@ -500,6 +500,14 @@ async def test_credential_encrypted_at_rest(db):
 # --- OAuth tests (08b) ---
 
 
+def test_oauth_refresh_window_uses_provider_expiry():
+    from agentos.mcp.oauth import should_refresh_access_token
+
+    assert should_refresh_access_token(expires_at=1_000, now=701) is True
+    assert should_refresh_access_token(expires_at=1_000, now=699) is False
+    assert should_refresh_access_token(expires_at=None, now=1_000) is False
+
+
 @pytest.mark.asyncio
 async def test_oauth_token_storage_roundtrip(db, monkeypatch):
     """OAuth tokens can be stored and retrieved via EncryptedTokenStorage."""
