@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { api } from "./lib/api";
+import type { Agent, Provider } from "./lib/types";
 import { ConfirmProvider } from "./lib/confirm";
 import { Login } from "./pages/Login";
 import { AgentList } from "./pages/AgentList";
@@ -14,11 +15,14 @@ import { Channels } from "./pages/Channels";
 import { Observability } from "./pages/Observability";
 import { Traces } from "./pages/Traces";
 import { UpdateChecker } from "./components/UpdateChecker";
+import { Onboarding } from "./components/Onboarding";
+import { needsOnboarding } from "./components/onboardingEligibility";
 
 export default function App() {
   const [gatewayReady, setGatewayReady] = useState<boolean | null>(null);
   const [gatewayAttempt, setGatewayAttempt] = useState(0);
   const [authed, setAuthed] = useState<boolean | null>(null);
+  const [setupData, setSetupData] = useState<{ providers: Provider[]; agents: Agent[] } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -51,6 +55,20 @@ export default function App() {
       .then(() => setAuthed(true))
       .catch(() => setAuthed(false));
   }, [gatewayReady]);
+
+  useEffect(() => {
+    if (!authed) {
+      setSetupData(null);
+      return;
+    }
+    let cancelled = false;
+    Promise.all([api.listProviders(), api.listAgents()]).then(([providers, agents]) => {
+      if (!cancelled) setSetupData({ providers, agents });
+    }).catch(() => {
+      if (!cancelled) setSetupData({ providers: [], agents: [] });
+    });
+    return () => { cancelled = true; };
+  }, [authed]);
 
   if (gatewayReady !== true) {
     return (
@@ -130,6 +148,17 @@ export default function App() {
         />
       </Routes>
     </BrowserRouter>
+    {setupData && needsOnboarding(setupData.providers, setupData.agents) && (
+      <Onboarding
+        providers={setupData.providers}
+        agents={setupData.agents}
+        onComplete={() => {
+          Promise.all([api.listProviders(), api.listAgents()]).then(([providers, agents]) => {
+            setSetupData({ providers, agents });
+          });
+        }}
+      />
+    )}
     </ConfirmProvider>
     <UpdateChecker />
     </>
