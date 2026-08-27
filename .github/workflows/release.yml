@@ -109,6 +109,14 @@ jobs:
       - name: Build DMG
         run: bash scripts/build-dmg.sh
 
+      - name: Build ZIP workaround
+        run: |
+          APP_PATH="frontend/src-tauri/target/release/bundle/macos/CaberOS.app"
+          VERSION="${GITHUB_REF_NAME#v}"
+          OUTPUT_DIR="frontend/src-tauri/target/release/bundle/zip"
+          mkdir -p "$OUTPUT_DIR"
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$OUTPUT_DIR/CaberOS_${VERSION}_arm64.zip"
+
       - name: Generate updater manifest
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#v}"
@@ -170,6 +178,13 @@ jobs:
           path: frontend/src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: error
 
+      - name: Upload ZIP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CaberOS-zip
+          path: frontend/src-tauri/target/release/bundle/zip/*.zip
+          if-no-files-found: error
+
       - name: Upload updater artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -189,16 +204,21 @@ jobs:
 
             ### Download
 
-            **macOS Apple Silicon (ARM64)** — download the `.dmg` file below.
+            **macOS Apple Silicon (ARM64)** — download the `.zip` file below.
+            The DMG is also included for users who prefer it.
 
             > macOS Intel and Windows builds are not yet available.
+            > This free release is ad-hoc signed and is not notarized by Apple.
 
             ### Install
 
-            1. Download the `.dmg` file
-            2. Open it and drag **CaberOS** to your Applications folder
-            3. Launch CaberOS — the gateway starts automatically
-            4. Default login: `admin` / `admin` (change it immediately)
+            1. Download and extract the `.zip` file
+            2. Launch **CaberOS.app** from the extracted folder, or move it to Applications
+            3. If macOS reports that CaberOS is damaged, open Terminal and run this
+               command using the app's actual path, for example:
+               `xattr -dr com.apple.quarantine ~/Downloads/CaberOS.app`
+            4. Launch CaberOS — the gateway starts automatically
+            5. Default login: `admin` / `admin` (change it immediately)
 
             ### Auto-update
 
@@ -217,6 +237,7 @@ jobs:
           generate_release_notes: true
           files: |
             frontend/src-tauri/target/release/bundle/dmg/*.dmg
+            frontend/src-tauri/target/release/bundle/zip/*.zip
             frontend/src-tauri/target/release/bundle/**/*.tar.gz
             frontend/src-tauri/target/release/bundle/**/*.tar.gz.sig
             latest.json
