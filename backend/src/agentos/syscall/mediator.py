@@ -34,6 +34,7 @@ from ..models.audit import AuditRecord
 from ..models.contact import Contact
 from ..models.elicitation import ElicitationRequest
 from ..models.mcp import McpServer
+from ..notifications import create_notification
 from .approval_registry import approval_registry
 from .elicitation_registry import elicitation_registry
 from .protocol import SyscallResult, ToolCall
@@ -682,6 +683,15 @@ class SyscallHandler:
 
         async with async_session_factory() as el_session:
             el_session.add(elicitation)
+            await create_notification(
+                el_session,
+                notification_type="elicitation_required",
+                severity="warning",
+                title="Agent needs your input",
+                message=question,
+                action_path="/agents",
+                entity_id=run_id,
+            )
             await el_session.commit()
 
         # Register the asyncio.Event so the API can resolve it

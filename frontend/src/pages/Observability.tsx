@@ -171,7 +171,12 @@ export function Observability() {
                   <HealthMetric label="Agents" value={String(health.agents)} good={health.agents > 0} />
                   <HealthMetric label="Active runs" value={String(health.active_runs)} good />
                 </div>
-              ) : <p className="mt-4 text-[12px] text-[var(--danger)]">Health data is unavailable. Check the gateway and retry.</p>}
+              ) : (
+                <div className="mt-4 flex items-center justify-between gap-3 rounded-md border px-3 py-2" style={{ borderColor: "var(--danger)" }}>
+                  <p className="text-[12px] text-[var(--danger)]">Health data is unavailable. Check the gateway and retry.</p>
+                  <button type="button" onClick={() => void fetchHealth()} className="shrink-0 rounded border px-2.5 py-1 text-[11px] text-[var(--ink-2)]" style={{ borderColor: "var(--border)", cursor: "pointer" }}>Retry</button>
+                </div>
+              )}
             </div>
             {stats ? (
               <>
