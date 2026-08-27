@@ -399,6 +399,11 @@ export const api = {
     if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`);
     return response.json() as Promise<{ status: string }>;
   },
+  deleteAllData: () =>
+    request<{ status: string; requires_relogin: boolean }>("/api/data/delete-all", {
+      method: "POST",
+      body: JSON.stringify({ confirmation: "DELETE ALL DATA" }),
+    }),
 
   // Providers
   listProviders: () => request<Provider[]>("/api/providers"),

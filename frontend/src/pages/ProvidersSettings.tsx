@@ -443,6 +443,26 @@ function MigrationTab() {
     setResult(null);
   };
 
+  const handleDeleteAll = async () => {
+    const confirmed = await confirm({
+      title: "Delete all CaberOS data?",
+      message: "This permanently deletes agents, providers, MCP credentials, channels, sessions, memory, workspaces, attachments, and restore points. This cannot be undone.",
+      confirmLabel: "Delete everything",
+      cancelLabel: "Cancel",
+      danger: true,
+    });
+    if (!confirmed) return;
+    setBusy(true);
+    try {
+      await api.deleteAllData();
+      localStorage.removeItem("agentos_session_token");
+      window.location.assign("/login");
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Could not delete all data");
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="max-w-2xl space-y-6">
       {/* Export */}
@@ -475,6 +495,14 @@ function MigrationTab() {
               Export Data
             </button>
           </div>
+        </div>
+      </div>
+
+      <div>
+        <h2 className="mb-3 text-[14px] font-semibold text-[var(--danger)]">Danger zone</h2>
+        <div className="rounded-lg border p-5" style={{ borderColor: "var(--danger)", background: "var(--white)" }}>
+          <p className="text-[13px] text-[var(--ink-2)]">Delete all local CaberOS data and return to the initial setup state.</p>
+          <button type="button" onClick={() => void handleDeleteAll()} disabled={busy} className="mt-4 rounded-[5px] border px-3 py-1.5 text-[12px] font-medium" style={{ borderColor: "var(--danger)", color: "var(--danger)", cursor: busy ? "not-allowed" : "pointer" }}>Delete all data</button>
         </div>
       </div>
 
