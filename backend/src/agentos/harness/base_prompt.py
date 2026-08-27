@@ -142,12 +142,15 @@ def _build_capabilities_section(enabled_caps: list[str]) -> str:
 
     # Add tool-specific guidance based on what's enabled
     extra_notes: list[str] = []
-    if "doc_search" in enabled_caps:
+    if "doc_list" in enabled_caps or "doc_search" in enabled_caps or "doc_inspect" in enabled_caps:
         extra_notes.append(
             "- **Knowledge Vault:** You have access to the operator's indexed documents through "
-            "`doc_search`. It searches both shared knowledge and your private agent knowledge. "
-            "Use it when a question may be answered by those documents, and cite the returned "
-            "source metadata in your answer when relevant."
+            "`doc_list` and `doc_search`. Use `doc_list` to discover available documents without "
+            "loading their contents; `doc_search` searches both shared knowledge and your private "
+            "agent knowledge. Use it when a question may be answered by those documents, and cite "
+            "the returned source metadata in your answer when relevant. If a result points to a "
+            "PDF page or DOCX image, use `doc_inspect` to inspect the visual content before "
+            "answering."
         )
 
     if has_approval:

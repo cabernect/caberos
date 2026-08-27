@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from urllib.parse import quote
 
 from mcp.client.auth import OAuthClientProvider
 
@@ -394,7 +395,7 @@ def handle_oauth_callback(code: str, state: str | None = None, error: str | None
         # Find the pending flow and reject it
         for server_id, flow in list(_pending_flows.items()):
             flow.reject(error)
-        return f"{base}/mcps?oauth_error={error}"
+        return f"{base}/mcps?oauth_error={quote(error, safe='')}"
 
     # Find the pending flow — we don't know which server this is for from the
     # callback alone, so we resolve the first pending flow.

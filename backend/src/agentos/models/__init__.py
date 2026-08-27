@@ -16,7 +16,9 @@ from .operator_session import OperatorSession
 from .provider import Provider
 from .run import Message, Run
 from .session import Session
+from .source import RunSource
 from .sub_agent import SubAgent
+from .web_source import WebSource
 
 __all__ = [
     "Base",
@@ -38,6 +40,8 @@ __all__ = [
     "Session",
     "Run",
     "Message",
+    "RunSource",
+    "WebSource",
     "AuditRecord",
     "ApprovalRequest",
     "ElicitationRequest",

@@ -61,7 +61,6 @@ async def ingest_document(
         return document
 
     extracted = extract_document(source_file)
-    chunks = chunk_extracted_blocks(extracted.blocks)
     await db.execute(
         text("DELETE FROM document_chunks_fts WHERE document_id = :document_id"),
         {"document_id": document.id},
@@ -73,10 +72,12 @@ async def ingest_document(
     document.mime_type = extracted.mime_type
     document.content_hash = content_hash
     document.size_bytes = source_file.stat().st_size
+    document.structure_json = json.dumps(extracted.structure, ensure_ascii=False)
     document.status = "indexed"
     document.error = None
     document.indexed_at = datetime.now(UTC)
 
+    chunks = chunk_extracted_blocks(extracted.blocks)
     for sequence, chunk in enumerate(chunks):
         row = DocumentChunk(
             document_id=document.id,
@@ -84,6 +85,8 @@ async def ingest_document(
             text=chunk.text,
             heading_path=json.dumps(chunk.heading_path, ensure_ascii=False),
             page_number=chunk.page_number,
+            source_location=chunk.source_location,
+            block_type=chunk.block_type,
             token_count=chunk.token_count,
         )
         db.add(row)
@@ -91,8 +94,8 @@ async def ingest_document(
         await db.execute(
             text(
                 "INSERT INTO document_chunks_fts "
-                "(text, chunk_id, document_id, agent_id, source_path, storage_path, heading_path, "
-                "page_number, sheet_name, source_location) "
+                "(text, chunk_id, document_id, agent_id, source_path, storage_path, "
+                "heading_path, page_number, sheet_name, source_location) "
                 "VALUES (:content, :chunk_id, :document_id, :agent_id, :source_path, "
                 ":storage_path, :heading_path, :page_number, :sheet_name, :source_location)"
             ),
@@ -151,12 +154,13 @@ async def search_documents(
     if not terms:
         return []
     limit = max(1, min(limit, 20))
+    fts_query = " ".join('"' + term.replace('"', '""') + '"' for term in terms)
     if db.get_bind().dialect.name == "postgresql":
         result = await db.execute(
             text(
                 "SELECT c.id AS chunk_id, c.document_id, d.agent_id, c.text, "
                 "d.source_path, d.storage_path, c.heading_path, c.page_number, "
-                "NULL AS sheet_name, NULL AS source_location, "
+                "NULL AS sheet_name, NULL AS source_location, c.block_type, "
                 "ts_rank(c.search_vector, plainto_tsquery('simple', :query)) AS rank "
                 "FROM document_chunks c JOIN documents d ON d.id = c.document_id "
                 "WHERE c.search_vector @@ plainto_tsquery('simple', :query) "
@@ -168,14 +172,16 @@ async def search_documents(
     else:
         result = await db.execute(
             text(
-                "SELECT chunk_id, document_id, agent_id, text, source_path, storage_path, "
-                "heading_path, page_number, sheet_name, source_location "
-                "FROM document_chunks_fts "
+                "SELECT fts.chunk_id, fts.document_id, fts.agent_id, fts.text, fts.source_path, "
+                "fts.storage_path, fts.heading_path, fts.page_number, fts.sheet_name, "
+                "fts.source_location, dc.block_type "
+                "FROM document_chunks_fts fts "
+                "JOIN document_chunks dc ON dc.id = fts.chunk_id "
                 "WHERE document_chunks_fts MATCH :query "
-                "AND (:agent_id IS NULL OR agent_id IS NULL OR agent_id = :agent_id) "
+                "AND (:agent_id IS NULL OR fts.agent_id IS NULL OR fts.agent_id = :agent_id) "
                 "ORDER BY rank LIMIT :limit"
             ),
-            {"query": " ".join(terms), "agent_id": agent_id, "limit": limit},
+            {"query": fts_query, "agent_id": agent_id, "limit": limit},
         )
     return [
         {
@@ -189,6 +195,7 @@ async def search_documents(
             "page_number": row[7],
             "sheet_name": row[8],
             "source_location": row[9],
+            "block_type": row[10],
         }
         for row in result.fetchall()
     ]

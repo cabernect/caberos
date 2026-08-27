@@ -1,5 +1,6 @@
 """Agent files API — MEMORY.md, skills, workspace browser, memory management (D34, D37)."""
 
+import re
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -15,10 +16,18 @@ from ..skills.loader import _load_skill_from_dir
 from ..skills.loader import list_skills as load_available_skills
 
 router = APIRouter(prefix="/api/agents", tags=["agent-files"])
+_IDENTIFIER = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+
+def _safe_component(value: str, label: str) -> str:
+    if not _IDENTIFIER.fullmatch(value):
+        raise HTTPException(status_code=400, detail=f"Invalid {label}")
+    return value
 
 
 def _agent_home(agent_id: str) -> Path:
     """Get the agent's home directory."""
+    agent_id = _safe_component(agent_id, "agent id")
     home = settings.agent_home_root / agent_id
     home.mkdir(parents=True, exist_ok=True)
     return home
@@ -33,6 +42,7 @@ def _skills_dir(agent_id: str) -> Path:
     """Get the agent's workspace skills directory."""
     from ..sandbox.workspace import WorkspaceManager
 
+    agent_id = _safe_component(agent_id, "agent id")
     skills = Path(WorkspaceManager().create_workspace(agent_id)) / "skills"
     skills.mkdir(parents=True, exist_ok=True)
     return skills
@@ -43,6 +53,7 @@ def _workspace_path(agent_id: str) -> Path:
     from ..sandbox.workspace import WorkspaceManager
 
     wm = WorkspaceManager()
+    agent_id = _safe_component(agent_id, "agent id")
     return Path(wm.create_workspace(agent_id))
 
 
@@ -141,14 +152,15 @@ async def create_skill(
 ) -> dict:
     """Create a new skill (as a directory with SKILL.md)."""
     skills_dir = _skills_dir(agent_id)
-    skill_path = skills_dir / req.name
+    skill_name = _safe_component(req.name, "skill name")
+    skill_path = skills_dir / skill_name
     if skill_path.exists():
         raise HTTPException(status_code=409, detail="Skill already exists")
     skill_path.mkdir(parents=True)
     skill_md = skill_path / "SKILL.md"
-    content = req.content or f"# {req.name}\n\nDescribe this skill here.\n"
+    content = req.content or f"# {skill_name}\n\nDescribe this skill here.\n"
     skill_md.write_text(content, encoding="utf-8")
-    return {"name": req.name, "path": str(skill_path)}
+    return {"name": skill_name, "path": str(skill_path)}
 
 
 @router.delete("/{agent_id}/skills/{skill_name}")
@@ -160,6 +172,7 @@ async def delete_skill(
 ) -> dict:
     """Delete a skill."""
     skills_dir = _skills_dir(agent_id)
+    skill_name = _safe_component(skill_name, "skill name")
     skill_path = skills_dir / skill_name
     if not skill_path.exists():
         raise HTTPException(status_code=404, detail="Skill not found")
@@ -183,14 +196,13 @@ async def list_workspace(
     path: str = "",
 ) -> dict:
     """List files in the agent's workspace."""
-    ws = _workspace_path(agent_id)
-    target = ws / path if path else ws
+    from ..sandbox.workspace import WorkspaceManager
 
-    # Security: ensure target is within workspace
+    ws = _workspace_path(agent_id)
     try:
-        target.resolve().relative_to(ws.resolve())
-    except ValueError:
-        raise HTTPException(status_code=403, detail="Path outside workspace")
+        target = Path(WorkspaceManager().validate_path(str(ws), path or "."))
+    except ValueError as error:
+        raise HTTPException(status_code=403, detail="Path outside workspace") from error
 
     if not target.exists():
         raise HTTPException(status_code=404, detail="Path not found")

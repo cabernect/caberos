@@ -1,14 +1,17 @@
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import path from "path";
-import { defineConfig } from "vite";
-
-export default defineConfig({
+const config = {
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
     },
+  },
+  test: {
+    environment: "jsdom",
+    setupFiles: "./src/test-setup.ts",
+    globals: true,
   },
   server: {
     port: 5173,
@@ -24,4 +27,6 @@ export default defineConfig({
       },
     },
   },
-});
+};
+
+export default config;

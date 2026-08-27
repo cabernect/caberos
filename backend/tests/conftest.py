@@ -26,6 +26,7 @@ async def db_engine():
         provider,
         run,
         session,
+        source,
         sub_agent,
     )
     from agentos.models.base import Base

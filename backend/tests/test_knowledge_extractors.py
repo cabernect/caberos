@@ -21,6 +21,13 @@ def test_markdown_extraction_preserves_heading_context(tmp_path: Path):
         ["Setup", "Config"],
     ]
     assert document.blocks[0].text == "Install CaberOS."
+    assert document.structure == {
+        "sections": [["Setup"], ["Setup", "Config"]],
+        "pages": [],
+        "tables": [],
+        "images": [],
+        "sheets": [],
+    }
 
 
 def test_pdf_extraction_preserves_page_numbers(tmp_path: Path):
@@ -37,6 +44,7 @@ def test_pdf_extraction_preserves_page_numbers(tmp_path: Path):
 
     assert document.mime_type == "application/pdf"
     assert document.blocks[0].page_number == 1
+    assert document.blocks[0].block_type == "page"
 
 
 def test_docx_extraction_preserves_heading_context(tmp_path: Path):

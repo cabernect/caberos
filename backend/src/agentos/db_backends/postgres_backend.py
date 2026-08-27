@@ -4,6 +4,7 @@ Uses asyncpg as the async driver. Full-text search via tsvector + GIN index.
 Schema management via Alembic (recommended) or create_all + patches.
 """
 
+import re
 from typing import Any
 
 from sqlalchemy import text
@@ -68,6 +69,9 @@ class PostgresBackend(DatabaseBackend):
             ("sessions", "channel", "VARCHAR(50)"),
             ("sessions", "external_user_id", "VARCHAR(255)"),
             ("channel_configs", "approval_policy", "VARCHAR(20) DEFAULT 'deny'"),
+            ("documents", "structure_json", "TEXT NOT NULL DEFAULT '{}'"),
+            ("document_chunks", "source_location", "TEXT"),
+            ("document_chunks", "block_type", "VARCHAR(30) NOT NULL DEFAULT 'paragraph'"),
         ]
         for table, column, col_type in patches:
             if not await self.column_exists(conn, table, column):
@@ -134,7 +138,27 @@ class PostgresBackend(DatabaseBackend):
         )
         return result.fetchone() is not None
 
+    @staticmethod
+    def _identifier(value: str) -> str:
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
+            raise ValueError("Invalid database identifier")
+        return value
+
     async def add_column(self, conn: Any, table: str, column: str, col_type: str) -> None:
+        table = self._identifier(table)
+        column = self._identifier(column)
+        if col_type not in {
+            "TEXT",
+            "VARCHAR(36)",
+            "VARCHAR(30) NOT NULL DEFAULT 'paragraph'",
+            "VARCHAR(50)",
+            "VARCHAR(255)",
+            "VARCHAR(20) DEFAULT 'deny'",
+            "BOOLEAN DEFAULT TRUE",
+            "TEXT NOT NULL DEFAULT '[]'",
+            "TEXT NOT NULL DEFAULT '{}'",
+        }:
+            raise ValueError("Invalid database column type")
         await conn.execute(
             text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {col_type}")
         )

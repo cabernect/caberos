@@ -224,6 +224,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ query, limit }),
     }),
+  reindexKnowledgeDocument: (scope: string, documentId: string) =>
+    request<KnowledgeDocument>(`/api/knowledge/scopes/${scope}/documents/${documentId}/reindex`, {
+      method: "POST",
+    }),
   deleteKnowledgeScope: (scope: string, documentId: string) =>
     request<void>(`/api/knowledge/scopes/${scope}/documents/${documentId}`, { method: "DELETE" }),
 

@@ -113,6 +113,14 @@ export interface KnowledgeScope {
   chunk_count: number;
 }
 
+export interface KnowledgeStructure {
+  sections: string[][];
+  pages: number[];
+  tables: string[];
+  images: string[];
+  sheets: string[];
+}
+
 export interface KnowledgeDocument {
   id: string;
   agent_id: string | null;
@@ -125,6 +133,8 @@ export interface KnowledgeDocument {
   status: "pending" | "indexed" | "failed";
   error: string | null;
   indexed_at: string | null;
+  chunk_count?: number;
+  structure?: KnowledgeStructure;
 }
 
 export interface KnowledgeResult {
@@ -139,6 +149,22 @@ export interface KnowledgeResult {
   source_location: string | null;
 }
 
+export interface Citation {
+  id: string;
+  source_type?: "knowledge" | "web";
+  chunk_id: string | null;
+  document_id: string | null;
+  source_path: string;
+  storage_path: string;
+  title?: string;
+  heading_path: string[];
+  page_number: number | null;
+  sheet_name: string | null;
+  source_location: string | null;
+  excerpt: string;
+  rank: number | null;
+}
+
 export interface Message {
   id: string;
   role: "user" | "assistant" | "system" | "tool" | "tool_call" | "thinking" | "heartbeat";
@@ -151,6 +177,7 @@ export interface Message {
   cost?: number;
   subagent_id?: string | null;
   attachments?: string | null;
+  citations?: Citation[];
 }
 
 export interface SessionInfo {

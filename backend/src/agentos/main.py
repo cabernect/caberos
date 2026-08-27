@@ -198,7 +198,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="CaberOS",
     description="Local-first AI Agent Operating System",
-    version="0.1.3",
+    version="0.1.5",
     lifespan=lifespan,
 )
 
@@ -246,7 +246,7 @@ def _get_app_version() -> str:
 
         return version("agentos")
     except Exception:
-        return "0.1.3"
+        return "0.1.5"
 
 
 @app.get("/api/version")

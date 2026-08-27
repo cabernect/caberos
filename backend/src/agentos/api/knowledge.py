@@ -1,5 +1,6 @@
 """Shared Knowledge Vault API — ingest, list, search, and delete documents."""
 
+import json
 import uuid
 from pathlib import Path
 
@@ -7,6 +8,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from ..auth import require_operator
 from ..config import settings
@@ -41,8 +43,33 @@ async def _resolve_scope(scope: str, db: AsyncSession) -> str | None:
     return agent.id
 
 
-def _document_response(document) -> dict:
-    return {
+async def _document_chunk_count(db: AsyncSession, document_id: str) -> int:
+    count = await db.scalar(
+        select(func.count(DocumentChunk.id)).where(DocumentChunk.document_id == document_id)
+    )
+    return int(count or 0)
+
+
+def _remove_document_file(document) -> None:
+    """Remove a Vault file without allowing storage paths to escape the Vault."""
+    root = Path(settings.knowledge_root).resolve()
+    scope_root = root / (
+        "shared" if document.agent_id is None else Path("agents") / document.agent_id
+    )
+    for candidate_root in (scope_root, root):
+        candidate_root = candidate_root.resolve()
+        candidate = (candidate_root / document.storage_path).resolve()
+        try:
+            candidate.relative_to(candidate_root)
+        except ValueError:
+            continue
+        if candidate.is_file():
+            candidate.unlink()
+            return
+
+
+def _document_response(document, chunk_count: int | None = None) -> dict:
+    response = {
         "id": document.id,
         "agent_id": document.agent_id,
         "source_path": document.source_path,
@@ -54,7 +81,11 @@ def _document_response(document) -> dict:
         "status": document.status,
         "error": document.error,
         "indexed_at": document.indexed_at.isoformat() if document.indexed_at else None,
+        "structure": json.loads(document.structure_json or "{}"),
     }
+    if chunk_count is not None:
+        response["chunk_count"] = chunk_count
+    return response
 
 
 @router.get("/documents")
@@ -85,18 +116,19 @@ async def upload(
     if len(content) > _MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="File exceeds the 25 MB upload limit")
 
-    vault_root = Path(settings.knowledge_root) / "shared"
+    vault_root = (Path(settings.knowledge_root) / "shared").resolve()
     vault_root.mkdir(parents=True, exist_ok=True)
-    target = vault_root / filename
+    target = vault_root / f"{uuid.uuid4().hex}{file_path.suffix.lower()}"
     target.write_bytes(content)
     try:
         document = await ingest_document(db, target, vault_root, filename)
+        document.display_name = filename
         await db.commit()
     except (ValueError, UnicodeError) as error:
         await db.rollback()
         target.unlink(missing_ok=True)
-        raise HTTPException(status_code=400, detail=str(error)) from error
-    return _document_response(document)
+        raise HTTPException(status_code=400, detail="Document could not be indexed") from error
+    return _document_response(document, await _document_chunk_count(db, document.id))
 
 
 @router.get("/overview")
@@ -136,7 +168,55 @@ async def get_scope_documents(
 ) -> dict:
     """List documents in Shared or one agent's private scope."""
     agent_id = await _resolve_scope(scope, db)
-    return {"documents": [_document_response(d) for d in await list_documents(db, agent_id)]}
+    documents = list(
+        (
+            await db.execute(
+                select(Document)
+                .where(Document.agent_id == agent_id)
+                .options(selectinload(Document.chunks))
+                .order_by(Document.display_name)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return {
+        "documents": [_document_response(document, len(document.chunks)) for document in documents]
+    }
+
+
+@router.post("/scopes/{scope}/documents/{document_id}/reindex")
+async def reindex_scope_document(
+    scope: str,
+    document_id: str,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Re-extract and index an existing document without replacing its file."""
+    agent_id = await _resolve_scope(scope, db)
+    document = await db.scalar(
+        select(Document).where(Document.id == document_id, Document.agent_id == agent_id)
+    )
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    knowledge_root = Path(settings.knowledge_root).resolve()
+    scope_root = (
+        knowledge_root / ("shared" if agent_id is None else Path("agents") / agent_id)
+    ).resolve()
+    source = (scope_root / document.storage_path).resolve()
+    try:
+        source.relative_to(scope_root)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="Document storage path is invalid") from error
+    if not source.is_file():
+        raise HTTPException(status_code=404, detail="Document file is missing")
+    try:
+        document = await ingest_document(db, source, scope_root, document.source_path, agent_id)
+        await db.commit()
+    except (ValueError, UnicodeError) as error:
+        await db.rollback()
+        raise HTTPException(status_code=400, detail="Document could not be indexed") from error
+    return _document_response(document, await _document_chunk_count(db, document.id))
 
 
 @router.post("/scopes/{scope}/search")
@@ -191,8 +271,8 @@ async def upload_scope(
     except (ValueError, UnicodeError) as error:
         await db.rollback()
         target.unlink(missing_ok=True)
-        raise HTTPException(status_code=400, detail=str(error)) from error
-    return _document_response(document)
+        raise HTTPException(status_code=400, detail="Document could not be indexed") from error
+    return _document_response(document, await _document_chunk_count(db, document.id))
 
 
 @router.delete("/scopes/{scope}/documents/{document_id}", status_code=204)
@@ -207,8 +287,10 @@ async def remove_scope(
     document = await db.scalar(
         select(Document).where(Document.id == document_id, Document.agent_id == agent_id)
     )
-    if document is None or not await delete_document(db, document_id):
+    if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
+    _remove_document_file(document)
+    await delete_document(db, document_id)
     await db.commit()
 
 
@@ -223,19 +305,20 @@ async def ingest_workspace_file(
     workspace = Path(WorkspaceManager().get_workspace_path(agent_id)).resolve()
     source = Path(WorkspaceManager().validate_path(str(workspace), request.path))
     if not source.is_file():
-        raise HTTPException(status_code=400, detail=f"Document does not exist: {request.path}")
-    vault_root = Path(settings.knowledge_root)
+        raise HTTPException(status_code=400, detail="Document does not exist")
+    vault_root = Path(settings.knowledge_root).resolve()
     vault_root.mkdir(parents=True, exist_ok=True)
-    target = vault_root / source.name
+    target = vault_root / f"{uuid.uuid4().hex}{source.suffix.lower()}"
     target.write_bytes(source.read_bytes())
     try:
         document = await ingest_document(db, target, vault_root, request.path)
+        document.display_name = source.name
         await db.commit()
     except (ValueError, UnicodeError) as error:
         await db.rollback()
         target.unlink(missing_ok=True)
-        raise HTTPException(status_code=400, detail=str(error)) from error
-    return _document_response(document)
+        raise HTTPException(status_code=400, detail="Document could not be indexed") from error
+    return _document_response(document, await _document_chunk_count(db, document.id))
 
 
 @router.post("/search")
@@ -254,7 +337,10 @@ async def remove(
     operator: Operator = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    """Delete a document and its indexed chunks."""
-    if not await delete_document(db, document_id):
+    """Delete a document, its indexed chunks, and its stored Vault file."""
+    document = await db.scalar(select(Document).where(Document.id == document_id))
+    if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
+    _remove_document_file(document)
+    await delete_document(db, document_id)
     await db.commit()

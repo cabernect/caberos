@@ -28,10 +28,12 @@ on:
       - "v*.*.*"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build-macos-arm64:
+    permissions:
+      contents: write
     name: Build macOS ARM64
     runs-on: macos-14  # Apple Silicon runner
     steps:
@@ -110,17 +112,27 @@ jobs:
       - name: Generate updater manifest
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#v}"
-          UPDATER_TARGZ=$(find frontend/src-tauri/target/release/bundle -name "*.tar.gz" -path "*macos*" | head -1)
-          UPDATER_SIG=$(find frontend/src-tauri/target/release/bundle -name "*.tar.gz.sig" -path "*macos*" | head -1)
+          UPDATER_TARGZ="frontend/src-tauri/target/release/bundle/macos/CaberOS.app.tar.gz"
+          UPDATER_SIG="${UPDATER_TARGZ}.sig"
 
-          if [ -z "$UPDATER_TARGZ" ] || [ -z "$UPDATER_SIG" ]; then
-            echo "⚠️ No updater artifacts found — publishing without auto-update metadata"
-            exit 0
+          if [ ! -f "$UPDATER_TARGZ" ] || [ ! -f "$UPDATER_SIG" ]; then
+            echo "Updater artifacts are missing: expected $UPDATER_TARGZ and $UPDATER_SIG"
+            exit 1
           fi
 
           SIGNATURE=$(cat "$UPDATER_SIG")
+          if [ -z "$SIGNATURE" ]; then
+            echo "Updater signature is empty"
+            exit 1
+          fi
+
           REPO="cabernect/caberos"
           TARGZ_NAME=$(basename "$UPDATER_TARGZ")
+          SIG_NAME=$(basename "$UPDATER_SIG")
+          if [ "$SIG_NAME" != "${TARGZ_NAME}.sig" ]; then
+            echo "Updater signature does not match archive: $SIG_NAME vs ${TARGZ_NAME}.sig"
+            exit 1
+          fi
 
           cat > latest.json << EOF
           {
@@ -137,6 +149,19 @@ jobs:
           EOF
           echo "Generated latest.json:"
           cat latest.json
+          python3 - "$TARGZ_NAME" <<'PY'
+          import json
+          import sys
+          from urllib.parse import urlparse
+
+          with open("latest.json", encoding="utf-8") as manifest_file:
+              manifest = json.load(manifest_file)
+          platform = manifest["platforms"]["darwin-aarch64"]
+          if urlparse(platform["url"]).path.rsplit("/", 1)[-1] != sys.argv[1]:
+              raise SystemExit("Updater manifest URL does not target the generated archive")
+          if not platform["signature"]:
+              raise SystemExit("Updater manifest signature is empty")
+          PY
 
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v4

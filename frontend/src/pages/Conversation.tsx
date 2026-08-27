@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowDown, PanelLeft, AlertCircle, FileIcon, Paperclip, Loader2, MessageSquare } from "lucide-react";
+import { ArrowDown, PanelLeft, AlertCircle, BookOpen, ChevronDown, FileIcon, Paperclip, Loader2, MessageSquare } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Agent, Message, Provider, SessionInfo } from "@/lib/types";
 import { ToolCallBlock, type ToolCallData, type SubAgentStreamData } from "@/components/ToolCallBlock";
@@ -10,6 +10,7 @@ import { ProcessSteps } from "@/components/ProcessSteps";
 import { ChatSidebar } from "@/components/ChatSidebar";
 import { ChatInputBar, type ChatInputBarHandle, type ContextItem } from "@/components/ChatInputBar";
 import { SettingsOverlay } from "@/components/SettingsOverlay";
+import { useDesktopFileDrop } from "@/lib/desktopFileDrop";
 
 interface ChatMessage {
   id: string;
@@ -23,6 +24,7 @@ interface ChatMessage {
   cost?: number;
   subagent_id?: string | null;
   attachments?: string | null;
+  citations?: Message["citations"];
 }
 
 interface TurnCost {
@@ -177,6 +179,7 @@ export function Conversation() {
           cost: m.cost,
           subagent_id: m.subagent_id,
           attachments: m.attachments,
+          citations: m.citations,
         }));
         // If this session has an active run that we're streaming, drop the
         // run's non-user messages (thinking, tool_call, assistant) — they're
@@ -526,6 +529,7 @@ export function Conversation() {
               cost: m.cost,
               subagent_id: m.subagent_id,
               attachments: m.attachments,
+              citations: m.citations,
             }));
 
             // A top-level run failure can happen before the pipeline stores
@@ -548,6 +552,7 @@ export function Conversation() {
                 cost: undefined,
                 subagent_id: undefined,
                 attachments: null,
+                citations: undefined,
               });
             }
 
@@ -857,6 +862,7 @@ export function Conversation() {
             cost: m.cost,
             subagent_id: m.subagent_id,
             attachments: m.attachments,
+            citations: m.citations,
           })),
         );
       }).catch(() => {});
@@ -1115,6 +1121,12 @@ export function Conversation() {
       inputBarRef.current.addFiles(files);
     }
   };
+
+  useDesktopFileDrop({
+    onFiles: (files) => inputBarRef.current?.addFiles(files),
+    onDraggingChange: setIsDraggingFile,
+    onError: () => setInputWarnings(["The dropped file could not be read."]),
+  });
 
   const handleCompact = async () => {
     if (!agentId || !activeSessionId) return;
@@ -1667,12 +1679,57 @@ function MessageRow({ message, isLastInRun, subagentMessages }: { message: ChatM
       <div className="markdown-body text-[14px] leading-[1.65] text-[var(--ink)]">
         <Markdown>{message.content}</Markdown>
       </div>
+      {message.citations && message.citations.length > 0 && <CitationList citations={message.citations} />}
       {hasCost && (
         <div className="mt-1.5 font-mono text-[11px]" style={{ color: "var(--ink-3)" }}>
           {message.tokens_out || 0} tokens · ${(message.cost || 0).toFixed(3)}
         </div>
       )}
     </div>
+  );
+}
+
+function CitationList({ citations }: { citations: NonNullable<Message["citations"]> }) {
+  return (
+    <details
+      className="group mt-3 rounded-md border p-3"
+      style={{ borderColor: "var(--border)", background: "var(--sidebar)" }}
+    >
+      <summary
+        className="flex cursor-pointer list-none items-center justify-between gap-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--ink-2)] [&::-webkit-details-marker]:hidden"
+      >
+        <span className="flex items-center gap-1.5">
+          <BookOpen className="h-3.5 w-3.5" style={{ color: "var(--accent)" }} />
+          Sources used <span className="font-normal normal-case text-[var(--ink-3)]">({citations.length})</span>
+        </span>
+        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[var(--ink-3)] transition-transform duration-200 group-open:rotate-180" />
+      </summary>
+      <div className="mt-2 space-y-2">
+        {citations.map((citation, index) => {
+          const location = citation.page_number
+            ? `page ${citation.page_number}`
+            : citation.sheet_name || citation.heading_path.at(-1) || citation.source_location;
+          return (
+            <details key={citation.id} className="rounded border px-2.5 py-2" style={{ borderColor: "var(--border)" }}>
+              <summary className="cursor-pointer text-xs font-medium text-[var(--ink)]">
+                [{index + 1}] {citation.title || citation.source_path}{location ? ` · ${location}` : ""}
+              </summary>
+              <p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-[var(--ink-2)]">{citation.excerpt}</p>
+              {citation.source_type === "web" && (
+                <a
+                  href={citation.source_path}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-2 block truncate text-xs text-[var(--accent)] underline-offset-2 hover:underline"
+                >
+                  {citation.source_path}
+                </a>
+              )}
+            </details>
+          );
+        })}
+      </div>
+    </details>
   );
 }
 

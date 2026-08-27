@@ -27,6 +27,7 @@ class Document(Base, IdMixin, TimestampMixin):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     indexed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    structure_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
 
     chunks: Mapped[list["DocumentChunk"]] = relationship(
         back_populates="document", cascade="all, delete-orphan"
@@ -49,6 +50,8 @@ class DocumentChunk(Base, IdMixin):
     text: Mapped[str] = mapped_column(Text, nullable=False)
     heading_path: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     page_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_location: Mapped[str | None] = mapped_column(Text, nullable=True)
+    block_type: Mapped[str] = mapped_column(String(30), nullable=False, default="paragraph")
     token_count: Mapped[int] = mapped_column(Integer, nullable=False)
 
     document: Mapped[Document] = relationship(back_populates="chunks")

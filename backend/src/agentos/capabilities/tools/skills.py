@@ -64,7 +64,9 @@ async def skills_read_resource(args: dict[str, Any], **kwargs: Any) -> dict[str,
     # Validate the resource path — must stay within the skill directory
     resource_path = (skill_obj.path / resource_name).resolve()
     skill_dir = skill_obj.path.resolve()
-    if not str(resource_path).startswith(str(skill_dir)):
+    try:
+        resource_path.relative_to(skill_dir)
+    except ValueError:
         return {"error": "Resource path escapes skill directory"}
 
     if not resource_path.is_file():

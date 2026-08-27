@@ -2,8 +2,10 @@
 
 import mimetypes
 import re
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 
 class UnsupportedDocumentError(ValueError):
@@ -19,6 +21,7 @@ class ExtractedBlock:
     page_number: int | None = None
     sheet_name: str | None = None
     source_location: str | None = None
+    block_type: str = "paragraph"
 
 
 @dataclass(frozen=True)
@@ -28,6 +31,7 @@ class ExtractedDocument:
     path: Path
     mime_type: str
     blocks: list[ExtractedBlock]
+    structure: dict[str, Any]
 
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
@@ -59,7 +63,40 @@ def extract_document(path: Path) -> ExtractedDocument:
         blocks = _extract_docx(path)
     else:
         blocks = _extract_xlsx(path)
-    return ExtractedDocument(path=path, mime_type=mime_type, blocks=blocks)
+    return ExtractedDocument(
+        path=path,
+        mime_type=mime_type,
+        blocks=blocks,
+        structure=_build_structure(blocks),
+    )
+
+
+def _build_structure(blocks: list[ExtractedBlock]) -> dict[str, Any]:
+    """Build compact structural metadata without copying document contents."""
+    sections: list[list[str]] = []
+    pages: set[int] = set()
+    tables: list[str] = []
+    images: list[str] = []
+    sheets: set[str] = set()
+    for block in blocks:
+        if block.heading_path and block.heading_path not in sections:
+            sections.append(block.heading_path.copy())
+        if block.page_number is not None:
+            pages.add(block.page_number)
+        if block.sheet_name:
+            sheets.add(block.sheet_name)
+        if block.source_location:
+            if block.source_location.startswith("table "):
+                tables.append(block.source_location)
+            elif block.source_location.startswith("image "):
+                images.append(block.source_location)
+    return {
+        "sections": sections,
+        "pages": sorted(pages),
+        "tables": tables,
+        "images": images,
+        "sheets": sorted(sheets),
+    }
 
 
 def _extract_text(path: Path) -> list[ExtractedBlock]:
@@ -89,11 +126,52 @@ def _extract_text(path: Path) -> list[ExtractedBlock]:
 def _extract_pdf(path: Path) -> list[ExtractedBlock]:
     from pypdf import PdfReader
 
+    reader = PdfReader(path)
+    outline_paths = _pdf_outline_paths(reader)
     blocks: list[ExtractedBlock] = []
-    for page_number, page in enumerate(PdfReader(path).pages, start=1):
+    for page_number, page in enumerate(reader.pages, start=1):
         text = (page.extract_text() or "").strip()
-        blocks.append(ExtractedBlock(text=text, heading_path=[], page_number=page_number))
+        blocks.append(
+            ExtractedBlock(
+                text=text,
+                heading_path=outline_paths.get(page_number, []),
+                page_number=page_number,
+                block_type="page",
+            )
+        )
     return blocks
+
+
+def _pdf_outline_paths(reader: Any) -> dict[int, list[str]]:
+    """Map each PDF page to the deepest bookmark path that starts on it."""
+    entries: list[tuple[int, list[str]]] = []
+
+    def visit(items: list[Any], parents: list[str]) -> None:
+        current_parents = parents
+        for item in items:
+            if isinstance(item, list):
+                visit(item, current_parents)
+                continue
+            try:
+                page_number = reader.get_destination_page_number(item) + 1
+            except (TypeError, ValueError, IndexError):
+                continue
+            title = str(getattr(item, "title", "")).strip()
+            if not title:
+                continue
+            current_parents = [*parents, title]
+            entries.append((page_number, current_parents))
+
+    visit(reader.outline or [], [])
+    entries.sort(key=lambda entry: (entry[0], len(entry[1])))
+    return {
+        page_number: max(
+            (entry for entry in entries if entry[0] <= page_number),
+            key=lambda entry: (entry[0], len(entry[1])),
+            default=(0, []),
+        )[1]
+        for page_number in range(1, len(reader.pages) + 1)
+    }
 
 
 def _extract_docx(path: Path) -> list[ExtractedBlock]:
@@ -122,8 +200,21 @@ def _extract_docx(path: Path) -> list[ExtractedBlock]:
                     text="\n".join(rows),
                     heading_path=heading_stack.copy(),
                     source_location=f"table {table_index}",
+                    block_type="table",
                 )
             )
+
+    with zipfile.ZipFile(path) as archive:
+        images = sorted(name for name in archive.namelist() if name.startswith("word/media/"))
+    for image_index, image_name in enumerate(images, start=1):
+        blocks.append(
+            ExtractedBlock(
+                text=f"Embedded image: {Path(image_name).name}",
+                heading_path=heading_stack.copy(),
+                source_location=f"image {image_index}",
+                block_type="figure",
+            )
+        )
     return blocks
 
 
@@ -147,6 +238,7 @@ def _extract_xlsx(path: Path) -> list[ExtractedBlock]:
                 heading_path=[],
                 sheet_name=sheet.title,
                 source_location=location,
+                block_type="sheet",
             )
         )
     return blocks

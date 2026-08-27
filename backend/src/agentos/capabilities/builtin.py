@@ -7,7 +7,7 @@ run_subagent is just another tool.
 from .registry import CapabilityDef, registry
 from .tools.datetime_tool import datetime_now
 from .tools.file import read_file, search_files, write_file
-from .tools.knowledge import doc_search
+from .tools.knowledge import doc_inspect, doc_list, doc_search
 from .tools.memory import (
     memory_query_facts,
     memory_recall,
@@ -205,6 +205,40 @@ def register_builtin_capabilities() -> None:
 
     registry.register(
         CapabilityDef(
+            name="doc_list",
+            kind="tool",
+            description=(
+                "List documents available in the shared and active agent's private Knowledge Vault. "
+                "Returns metadata only; use doc_search for excerpts and doc_inspect for visuals."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Optional filename or source-path filter",
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["pending", "indexed", "failed"],
+                        "description": "Optional document status filter",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum documents to return (default 20, maximum 50)",
+                        "default": 20,
+                    },
+                },
+            },
+            egress=False,
+            require_approval=False,
+            subject_scoped=False,
+            execute=doc_list,
+        )
+    )
+
+    registry.register(
+        CapabilityDef(
             name="doc_search",
             kind="tool",
             description=(
@@ -228,6 +262,34 @@ def register_builtin_capabilities() -> None:
             require_approval=False,
             subject_scoped=False,
             execute=doc_search,
+        )
+    )
+
+    registry.register(
+        CapabilityDef(
+            name="doc_inspect",
+            kind="tool",
+            description=(
+                "Inspect a page of a PDF or an embedded image in a DOCX using the model's "
+                "vision capability. Use after doc_search identifies a relevant visual source."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "document_id": {"type": "string", "description": "Document ID from doc_search"},
+                    "page_number": {"type": "integer", "description": "PDF page number"},
+                    "image_index": {
+                        "type": "integer",
+                        "description": "DOCX embedded image number",
+                        "default": 1,
+                    },
+                },
+                "required": ["document_id"],
+            },
+            egress=False,
+            require_approval=False,
+            subject_scoped=False,
+            execute=doc_inspect,
         )
     )
 
