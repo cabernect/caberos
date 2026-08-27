@@ -316,6 +316,7 @@ export interface McpCatalogEntry {
   env_template: Record<string, string> | null;
   vendor: string;
   homepage: string;
+  installable?: boolean;
 }
 
 export interface ChannelInfo {

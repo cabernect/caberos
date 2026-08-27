@@ -1433,6 +1433,16 @@ function CatalogBrowser({
                     >
                       Installed
                     </span>
+                  ) : entry.installable === false ? (
+                    <a
+                      href={entry.homepage}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-block rounded-[5px] border px-3 py-1.5 text-[12px] font-medium"
+                      style={{ borderColor: "var(--border)", color: "var(--ink-2)" }}
+                    >
+                      Setup required
+                    </a>
                   ) : (
                     <button
                       onClick={() => handleInstall(entry.name)}

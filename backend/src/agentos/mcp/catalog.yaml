@@ -246,3 +246,194 @@ servers:
     auth_type: none
     vendor: Anthropic
     homepage: https://github.com/modelcontextprotocol/servers
+  
+  # --- Search & Web (addition) ---
+
+  - name: Firecrawl
+    category: search
+    description: "Web scraping, crawling, and structured extraction with JS rendering — built for feeding clean page content to LLMs."
+    transport: stdio
+    command: npx
+    args: ["-y", "firecrawl-mcp"]
+    auth_type: api_key
+    env_template:
+      FIRECRAWL_API_KEY: "{{credential_value}}"
+    vendor: Firecrawl
+    homepage: https://github.com/firecrawl/firecrawl-mcp-server
+
+  # --- Documentation & Context ---
+
+  - name: Context7
+    category: documentation
+    description: "Injects current, version-specific library and framework docs into prompts so coding agents stop hallucinating outdated APIs. Works keyless at low rate limits; API key raises the limit."
+    transport: http
+    url: https://mcp.context7.com/mcp
+    auth_type: api_key
+    vendor: Upstash
+    homepage: https://context7.com
+
+  # --- Dev Tools (additions) ---
+
+  - name: Chrome DevTools
+    category: dev-tools
+    description: "Lets agents control and inspect a live Chrome browser — network requests, console logs, performance traces, screenshots — for real debugging, not screen scraping."
+    transport: stdio
+    command: npx
+    args: ["-y", "chrome-devtools-mcp@latest"]
+    auth_type: none
+    vendor: Google
+    homepage: https://github.com/ChromeDevTools/chrome-devtools-mcp
+
+  - name: Git
+    category: dev-tools
+    description: "Read, search, and manipulate local Git repositories — diffs, commits, branches, blame — as structured tool calls."
+    transport: stdio
+    command: uvx
+    args: ["mcp-server-git", "--repository", "{{repo_path}}"]
+    auth_type: none
+    vendor: Anthropic
+    homepage: https://github.com/modelcontextprotocol/servers
+
+  # --- CRM ---
+
+  - name: HubSpot
+    category: crm
+    description: "Read and write CRM records — contacts, companies, deals, tickets — plus marketing content and activity history, scoped to the connecting user's HubSpot permissions."
+    transport: http
+    url: https://mcp.hubspot.com
+    auth_type: oauth
+    vendor: HubSpot
+    homepage: https://developers.hubspot.com/ai-tools/mcp
+
+  # --- Automation ---
+
+  - name: Zapier
+    category: automation
+    description: "Bridges agents to 8,000+ apps — search connected tools and trigger real actions (create records, send messages, run workflows) under Zapier's existing governance model."
+    transport: http
+    url: https://mcp.zapier.com/api/v1/connect
+    auth_type: oauth
+    vendor: Zapier
+    homepage: https://docs.zapier.com/mcp/home
+
+  # --- Databases (addition) ---
+
+  - name: Neon
+    category: databases
+    description: "Manage serverless Postgres on Neon — create projects/branches, run schema migrations, and execute SQL in natural language. Instant branching makes it good for spin-up/spin-down dev databases."
+    transport: http
+    url: https://mcp.neon.tech/mcp
+    auth_type: oauth
+    vendor: Neon
+    homepage: https://neon.tech
+
+  # --- DevOps & Infra (addition) ---
+
+  - name: AWS
+    category: devops
+    description: "Managed access to 15,000+ AWS API operations plus live docs and sandboxed Python execution, governed by IAM and logged to CloudTrail/CloudWatch. Requires AWS's local MCP Proxy to bridge SigV4 auth to MCP — not a plain paste-the-URL remote server; see homepage."
+    transport: external
+    installable: false
+    auth_type: aws_iam
+    vendor: AWS
+    homepage: https://awslabs.github.io/mcp/
+
+  # --- Reasoning & Memory Utilities ---
+
+  - name: Memory
+    category: utility
+    description: "Persistent knowledge-graph memory so agents can store and recall facts, entities, and relationships across sessions."
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-memory"]
+    auth_type: none
+    vendor: Anthropic
+    homepage: https://github.com/modelcontextprotocol/servers
+
+  - name: Sequential Thinking
+    category: utility
+    description: "Structured, revisable step-by-step reasoning tool for breaking down complex problems before acting."
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+    auth_type: none
+    vendor: Anthropic
+    homepage: https://github.com/modelcontextprotocol/servers
+
+  # --- Search & Web (addition) ---
+
+  - name: Perplexity
+    category: search
+    description: "Real-time, citation-backed web research via Perplexity's Sonar models — quick answers, deep multi-step research reports, and dedicated reasoning tasks."
+    transport: http
+    url: https://api.perplexity.ai/mcp
+    auth_type: api_key
+    env_template:
+      PERPLEXITY_API_KEY: "{{credential_value}}"
+    vendor: Perplexity
+    homepage: https://github.com/perplexityai/modelcontextprotocol
+
+  # --- Databases (additions) ---
+
+  - name: MongoDB
+    category: databases
+    description: "Query and administer MongoDB Atlas or self-managed deployments — schema inspection, CRUD, index/cluster management, and the Performance Advisor."
+    transport: stdio
+    command: npx
+    args: ["-y", "mongodb-mcp-server"]
+    auth_type: api_key
+    env_template:
+      MDB_MCP_CONNECTION_STRING: "{{credential_value}}"
+    vendor: MongoDB
+    homepage: https://github.com/mongodb-js/mongodb-mcp-server
+
+  - name: Snowflake
+    category: databases
+    description: "Natural-language SQL via Cortex Analyst, semantic search over documents via Cortex Search, and Cortex Agent orchestration. Not a single public URL — you create an account-scoped MCP server object (CREATE MCP SERVER) and connect to that endpoint, governed by your existing Snowflake roles and network policies."
+    transport: external
+    installable: false
+    auth_type: oauth
+    vendor: Snowflake
+    homepage: https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-agents-mcp
+
+  # --- DevOps & Infra (additions) ---
+
+  - name: Docker Hub
+    category: devops
+    description: "Search, inspect, and pull images from Docker Hub. Also the entry point to Docker's MCP Toolkit/Gateway — a local catalog of 300+ other MCP servers (Stripe, Elastic, Grafana, New Relic, etc.) run as managed, sandboxed containers rather than raw npx processes."
+    transport: external
+    installable: false
+    auth_type: none
+    vendor: Docker
+    homepage: https://hub.docker.com/mcp/server/dockerhub/manual
+
+  - name: Datadog
+    category: devops
+    description: "Query logs, metrics, traces, monitors, dashboards, and incidents for troubleshooting and root-cause analysis. Endpoint is region-specific — replace the host with your Datadog site (US1, US3, US5, EU, AP1, AP2)."
+    transport: http
+    url: https://mcp.datadoghq.com
+    auth_type: oauth
+    vendor: Datadog
+    homepage: https://docs.datadoghq.com/mcp_server/setup/
+
+  # --- CRM (addition) ---
+
+  - name: Salesforce
+    category: crm
+    description: "Salesforce DX MCP Server — query and modify org metadata, records, and flows from an AI coding agent, authenticated through the Salesforce CLI. A separate, newer 'Hosted MCP' option (beta) exists for production/remote agents rather than local dev — see homepage for which one fits."
+    transport: external
+    installable: false
+    auth_type: oauth
+    vendor: Salesforce
+    homepage: https://developer.salesforce.com/docs/platform/einstein-for-devs/guide/devagent-mcpservers.html
+
+  # --- Payments ---
+
+  - name: PayPal
+    category: payments
+    description: "Create and manage invoices, orders, payments, refunds, subscriptions, disputes, and shipment tracking through PayPal's merchant APIs. Sandbox and production use different hosts."
+    transport: http
+    url: https://mcp.paypal.com/http
+    auth_type: oauth
+    vendor: PayPal
+    homepage: https://developer.paypal.com/ai-tools/mcp-server

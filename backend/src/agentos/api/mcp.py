@@ -568,6 +568,11 @@ async def install_from_catalog(
     entry = mcp_catalog.get_catalog_entry(req.name)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"Catalog entry '{req.name}' not found")
+    if entry.get("installable", True) is False:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{req.name} requires external setup before it can be added to CaberOS",
+        )
 
     # Check if a server with this name already exists
     result = await db.execute(select(McpServer).where(McpServer.name == req.name))
