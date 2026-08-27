@@ -131,7 +131,7 @@ the workspace `attachments/` directory.
 
 Tickets **01–09 implemented**: smoke slice, real-model chat + SSE streaming, file ops + tool call UI, approval flow + elicitation (`agent.ask_user`), guardrails, run manager, agent management UI, providers, `run_subagent`, memory + skills (ticket 06), scheduler/heartbeat (ticket 07), MCP client infrastructure (08a), MCP credentials/OAuth (08b), external channels (08c), and observability + spend (ticket 09).
 
-**Current: Ticket 10 (Tauri desktop app) in progress. Next: Ticket 11 (Testing hardening). CaberCore extraction is deferred.**
+**Current: v0.1.52 updater patch / Ticket 10 desktop hardening in progress. Next: v0.1.6 early-adopter usability. CaberCore extraction and the minimal CLI are deferred.**
 
 **Ticket 10 (Tauri Desktop App):** IN PROGRESS. macOS ARM64 (Apple Silicon) only — macOS Intel and Windows builds require cross-compilation/CI and are not yet set up.
 - Tauri 2 shell wraps the React frontend + packaged PyInstaller gateway.
@@ -173,7 +173,11 @@ Tickets **01–09 implemented**: smoke slice, real-model chat + SSE streaming, f
 - Image-generation models filtered from chat discovery (402 → 393 models)
 - OpenRouter discovery uses live metadata instead of LiteLLM static catalog
 
-**311 backend tests pass.** Frontend type-checks cleanly (`tsc --noEmit`).
+**Current release status:** v0.1.5 is tagged and released. v0.1.51 is the free macOS Apple Silicon installation workaround release: it distributes an ad-hoc signed DMG and documents verifying the official download before running `xattr -dr com.apple.quarantine /Applications/CaberOS.app`. Apple Developer signing/notarization is not configured.
+
+**v0.1.52 updater patch:** The startup update popup and Settings → About share updater state. Update flow is `downloading → installing → ready`, followed by an explicit `Restart now` action using the Tauri process plugin. The v0.1.52 work is on branch `fix/v0.1.52-updater` and PR #24.
+
+**Verification status:** 416 backend tests pass. Frontend tests: 4 passed. Frontend build, TypeScript check, Tauri `cargo check`, Ruff checks, and Ruff format checks pass. Frontend lint has 0 errors and only existing warnings.
 
 ## Build & test commands
 
