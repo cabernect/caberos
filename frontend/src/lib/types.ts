@@ -410,6 +410,18 @@ export interface SpendSummary {
   by_trigger: Record<string, number>;
 }
 
+export interface Notification {
+  id: string;
+  notification_type: string;
+  severity: "info" | "success" | "warning" | "error";
+  title: string;
+  message: string;
+  action_path: string | null;
+  entity_id: string | null;
+  read: boolean;
+  created_at: string;
+}
+
 export interface OperatorAuditOut {
   id: string;
   operator_id: string;

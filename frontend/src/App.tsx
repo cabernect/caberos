@@ -16,6 +16,7 @@ import { Observability } from "./pages/Observability";
 import { Traces } from "./pages/Traces";
 import { UpdateChecker } from "./components/UpdateChecker";
 import { Onboarding } from "./components/Onboarding";
+import { NotificationCenter } from "./components/NotificationCenter";
 import { needsOnboarding } from "./components/onboardingEligibility";
 
 export default function App() {
@@ -147,6 +148,7 @@ export default function App() {
           element={authed ? <Traces /> : <Navigate to="/login" />}
         />
       </Routes>
+      {authed && <NotificationCenter />}
     </BrowserRouter>
     {setupData && needsOnboarding(setupData.providers, setupData.agents) && (
       <Onboarding

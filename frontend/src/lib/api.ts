@@ -18,6 +18,7 @@ import type {
   McpToolInfo,
   Message,
   ModelInfo,
+  Notification,
   Operator,
   OperatorAuditOut,
   Provider,
@@ -373,6 +374,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ session_id: sessionId }),
     }),
+
+  // Notifications
+  listNotifications: (unreadOnly = false) =>
+    request<Notification[]>(`/api/notifications${unreadOnly ? "?unread_only=true" : ""}`),
+  markNotificationRead: (id: string) =>
+    request<{ updated: boolean }>(`/api/notifications/${id}/read`, { method: "POST" }),
+  markAllNotificationsRead: () =>
+    request<{ updated: boolean }>("/api/notifications/read-all", { method: "POST" }),
 
   // Providers
   listProviders: () => request<Provider[]>("/api/providers"),

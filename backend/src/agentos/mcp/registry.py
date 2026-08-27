@@ -45,6 +45,32 @@ _tool_map: dict[str, tuple[str, str]] = {}
 
 # Process-global map: {server_id: error_message} for last connection error
 _connect_errors: dict[str, str] = {}
+_notification_errors: dict[str, str] = {}
+
+
+async def _notify_oauth_reauth(server: McpServer, error: str) -> None:
+    if "OAuth" not in error or _notification_errors.get(server.id) == error:
+        return
+    from ..notifications import create_notification
+
+    try:
+        async with async_session_factory() as db:
+            await create_notification(
+                db,
+                notification_type="oauth_reauth_required",
+                severity="error",
+                title=f"Reconnect {server.name}",
+                message=(
+                    "The OAuth refresh token is no longer valid. "
+                    "Re-authorize this MCP server to restore access."
+                ),
+                action_path="/mcps",
+                entity_id=server.id,
+            )
+            await db.commit()
+            _notification_errors[server.id] = error
+    except Exception:
+        log.exception("Failed to persist OAuth re-authentication notification")
 
 
 def _namespace(server_name: str, tool_name: str) -> str:
@@ -195,6 +221,7 @@ async def connect_server(server: McpServer) -> bool:
 
     except ConnectionError as e:
         _connect_errors[server.id] = str(e)
+        await _notify_oauth_reauth(server, str(e))
         log.warning("Failed to connect to MCP server '%s': %s", server.name, e)
         # Clean up partial connection
         if server.id in _clients:
@@ -206,6 +233,7 @@ async def connect_server(server: McpServer) -> bool:
         return False
     except Exception as e:
         _connect_errors[server.id] = str(e)
+        await _notify_oauth_reauth(server, str(e))
         log.exception("Failed to connect to MCP server '%s'", server.name)
         # Clean up partial connection
         if server.id in _clients:
