@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..capabilities.registry import CapabilityDef
 from ..capabilities.registry import registry as cap_registry
+from ..config import settings
 from ..db import async_session_factory
 from ..models.mcp import McpServer, McpTool
 from . import credentials as mcp_creds
@@ -142,7 +143,7 @@ async def connect_server(server: McpServer) -> bool:
 
                 redirect_uri = oauth_config.get(
                     "redirect_uri",
-                    "http://localhost:8081/api/mcp/oauth/callback",
+                    f"http://localhost:{settings.control_plane_port}/api/mcp/oauth/callback",
                 )
                 client_metadata = OAuthClientMetadata(
                     redirect_uris=[redirect_uri],

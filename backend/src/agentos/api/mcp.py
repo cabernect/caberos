@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import require_operator
 from ..capabilities.registry import registry as cap_registry
+from ..config import settings
 from ..db import get_db
 from ..mcp import binding as mcp_binding
 from ..mcp import catalog as mcp_catalog
@@ -583,7 +584,7 @@ async def install_from_catalog(
         oauth_config_json = json.dumps(
             {
                 "scope": entry.get("oauth_scope", ""),
-                "redirect_uri": "http://localhost:8081/api/mcp/oauth/callback",
+                "redirect_uri": f"http://localhost:{settings.control_plane_port}/api/mcp/oauth/callback",
             }
         )
 
