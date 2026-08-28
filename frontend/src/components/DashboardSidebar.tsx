@@ -12,6 +12,7 @@ import {
   GitBranch,
 } from "lucide-react";
 import { LogoMark } from "@/components/LogoMark";
+import { NotificationCenter } from "@/components/NotificationCenter";
 
 export type NavKey =
   | "agents"
@@ -133,6 +134,9 @@ export function DashboardSidebar({
           );
         })}
         <div className="flex-1" />
+        <div className="mb-1 w-8">
+          <NotificationCenter sidebar />
+        </div>
         <button
           onClick={() => onNavigate("settings")}
           className="flex h-7 w-7 items-center justify-center rounded text-[var(--ink-2)] transition hover:bg-[var(--border)] hover:text-[var(--ink)]"
@@ -211,6 +215,7 @@ export function DashboardSidebar({
 
       {/* Footer: Settings + Sign out */}
       <div className="px-2 py-2" style={{ borderTop: "1px solid var(--border)" }}>
+        <NotificationCenter sidebar />
         <NavButton
           item={{ key: "settings", label: "Settings", icon: Settings }}
           isActive={active === "settings"}

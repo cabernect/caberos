@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import type { Notification } from "@/lib/types";
 
-export function NotificationCenter() {
+export function NotificationCenter({ sidebar = false }: { sidebar?: boolean }) {
   const navigate = useNavigate();
   const [items, setItems] = useState<Notification[]>([]);
   const [open, setOpen] = useState(false);
@@ -26,19 +26,20 @@ export function NotificationCenter() {
   };
 
   return (
-    <div className="fixed right-5 top-5 z-[80]">
+    <div className={sidebar ? "relative z-[80] w-full" : "fixed right-5 top-5 z-[80]"}>
       <button
         type="button"
         aria-label={`Notifications${unread ? `, ${unread} unread` : ""}`}
         onClick={() => setOpen((value) => !value)}
-        className="relative flex h-9 w-9 items-center justify-center rounded-full border shadow-sm transition hover:bg-[var(--hover)]"
+        className={sidebar ? "relative flex h-8 w-full items-center justify-start gap-2 rounded-md px-2 text-[12px] transition hover:bg-[var(--border)]" : "relative flex h-9 w-9 items-center justify-center rounded-full border shadow-sm transition hover:bg-[var(--hover)]"}
         style={{ background: "var(--white)", borderColor: "var(--border)", color: "var(--ink-2)", cursor: "pointer" }}
       >
         <Bell className="h-4 w-4" />
+        {sidebar && <span>Notifications</span>}
         {unread > 0 && <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold text-white" style={{ background: "var(--danger)" }}>{unread > 9 ? "9+" : unread}</span>}
       </button>
       {open && (
-        <section className="absolute right-0 mt-2 w-80 rounded-lg border p-3 shadow-xl" style={{ background: "var(--white)", borderColor: "var(--border)" }}>
+        <section className={sidebar ? "absolute bottom-0 left-full ml-2 w-80 rounded-lg border p-3 shadow-xl" : "absolute right-0 mt-2 w-80 rounded-lg border p-3 shadow-xl"} style={{ background: "var(--white)", borderColor: "var(--border)" }}>
           <div className="flex items-center justify-between border-b pb-2" style={{ borderColor: "var(--border)" }}>
             <h2 className="text-[13px] font-semibold text-[var(--ink)]">Notifications</h2>
             <div className="flex items-center gap-1">
