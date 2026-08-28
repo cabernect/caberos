@@ -224,8 +224,17 @@ class CaberOSOAuthProvider(OAuthClientProvider):
                 await self._initialize()
             self._prepare_refresh_window()
 
-        async for next_request in super().async_auth_flow(request):
-            yield next_request
+        parent_flow = super().async_auth_flow(request)
+        try:
+            next_request = await parent_flow.__anext__()
+            while True:
+                response = yield next_request
+                try:
+                    next_request = await parent_flow.asend(response)
+                except StopAsyncIteration:
+                    return
+        finally:
+            await parent_flow.aclose()
 
 
 # --- OAuth flow management ---
@@ -363,11 +372,10 @@ async def _run_oauth_flow(server_id: str, server_url: str, auth, flow: OAuthFlow
             except httpx2.HTTPStatusError as e:
                 log.info("OAuth flow: HTTPStatusError (expected): %s", e)
             except Exception as e:
-                log.info("OAuth flow: exception (may be expected): %s", type(e).__name__, e)
-                log.exception("OAuth flow: full exception")
+                log.info("OAuth flow failed: %s: %s", type(e).__name__, e)
+                flow.reject(str(e))
+                return
 
-        # If we get here without the flow being completed, the token
-        # was stored successfully
         if not flow.completed:
             flow.completed = True
 

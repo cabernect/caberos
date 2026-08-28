@@ -3,12 +3,16 @@
 Uses MockMcpClient — no real process or network needed.
 """
 
+import asyncio
 import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
 from sqlalchemy import select
 
+from agentos.api.mcp import delete_server
 from agentos.capabilities.registry import registry as cap_registry
 from agentos.mcp import binding as mcp_binding
 from agentos.mcp import credentials as mcp_creds
@@ -16,6 +20,7 @@ from agentos.mcp import registry as mcp_registry
 from agentos.mcp.client import MockMcpClient
 from agentos.models.contact import Contact
 from agentos.models.mcp import (
+    ContactMcpBinding,
     McpServer,
     McpServerCredential,
     McpTool,
@@ -343,6 +348,36 @@ async def test_delete_server_cascades_credentials(db, mcp_server, mcp_credential
     assert result.scalar_one_or_none() is None
 
 
+@pytest.mark.asyncio
+async def test_delete_server_removes_tools_and_bindings(
+    db, mcp_server, mcp_credential, contact, monkeypatch
+):
+    """Deleting a server removes every row that references it."""
+    tool = McpTool(
+        mcp_server_id=mcp_server.id,
+        tool_name="email_read",
+        capability_name="mcp.test-server.email_read",
+        parameters_schema='{"type": "object"}',
+        description="Read emails",
+    )
+    binding = ContactMcpBinding(
+        contact_id=contact.id,
+        mcp_server_id=mcp_server.id,
+        credential_id=mcp_credential.id,
+    )
+    db.add_all([tool, binding])
+    await db.commit()
+    monkeypatch.setattr(mcp_registry, "disconnect_server", AsyncMock())
+
+    result = await delete_server(mcp_server.id, None, db)
+
+    assert result == {"id": mcp_server.id, "deleted": True}
+    assert await db.get(McpServer, mcp_server.id) is None
+    assert await db.get(McpTool, tool.id) is None
+    assert await db.get(ContactMcpBinding, binding.id) is None
+    assert await db.get(McpServerCredential, mcp_credential.id) is None
+
+
 # --- Credential injection on connect tests (08b) ---
 
 
@@ -498,6 +533,37 @@ async def test_credential_encrypted_at_rest(db):
 
 
 # --- OAuth tests (08b) ---
+
+
+@pytest.mark.asyncio
+async def test_oauth_auth_flow_forwards_responses_to_sdk(monkeypatch):
+    """The OAuth wrapper must pass each HTTP response back to the SDK flow."""
+    import httpx2
+    from mcp.client.auth import OAuthClientProvider
+
+    from agentos.mcp.oauth import CaberOSOAuthProvider
+
+    received = []
+
+    async def parent_flow(_provider, request):
+        response = yield request
+        received.append(response)
+
+    monkeypatch.setattr(OAuthClientProvider, "async_auth_flow", parent_flow)
+    provider = object.__new__(CaberOSOAuthProvider)
+    provider.context = SimpleNamespace(lock=asyncio.Lock(), current_tokens=None)
+    provider._initialized = True
+
+    request = httpx2.Request("POST", "https://example.com/mcp")
+    response = httpx2.Response(401, request=request)
+    flow = provider.async_auth_flow(request)
+
+    first_request = await flow.__anext__()
+    assert first_request is request
+    with pytest.raises(StopAsyncIteration):
+        await flow.asend(response)
+
+    assert received == [response]
 
 
 def test_oauth_refresh_window_uses_provider_expiry():

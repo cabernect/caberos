@@ -4,7 +4,7 @@ import { Plug, Plus, Trash2, RefreshCw, ChevronDown, ChevronRight, Key, Search, 
 import { DashboardSidebar, type NavKey } from "@/components/DashboardSidebar";
 import { PageHeader } from "@/components/PageHeader";
 import { api } from "@/lib/api";
-import { useConfirm } from "@/lib/confirm";
+import { useConfirm } from "@/lib/confirmHook";
 import { openUrl } from "@/lib/openUrl";
 import type { McpServerInfo, McpToolInfo, McpCatalogEntry } from "@/lib/types";
 
@@ -23,7 +23,7 @@ export function Mcps() {
   const [showAdd, setShowAdd] = useState(false);
   const [tab, setTab] = useState<Tab>("mine");
   const navigate = useNavigate();
-  const { confirm } = useConfirm();
+  const { confirm, toast } = useConfirm();
 
   const fetchServers = useCallback(async () => {
     try {
@@ -88,8 +88,8 @@ export function Mcps() {
     try {
       await api.deleteMcpServer(serverId);
       fetchServers();
-    } catch {
-      // ignore
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Could not remove this MCP server.");
     }
   };
 
@@ -649,15 +649,29 @@ function ServerCard({
             Set Key
           </button>
         )}
-        {needsOAuth && (
+        {needsOAuth && (oauthLoading ? (
+          <div className="flex items-center gap-1 rounded-[4px] px-2 py-1 text-[11px] font-medium" style={{ background: "var(--surface)", color: "var(--ink-3)" }}>
+            <Key className="h-3 w-3" />
+            <span>Waiting…</span>
+            <button
+              type="button"
+              onClick={() => {
+                if ((window as any)._oauthCleanup) (window as any)._oauthCleanup();
+              }}
+              className="ml-1 text-[10px] underline"
+              style={{ color: "var(--danger)", cursor: "pointer" }}
+            >
+              Cancel
+            </button>
+          </div>
+        ) : (
           <button
+            type="button"
             onClick={async () => {
               setOauthLoading(true);
               try {
                 const { authorize_url } = await api.startMcpOAuth(server.id);
-                // Open the authorize URL in a new tab
-                openUrl(authorize_url);
-                // Start polling for OAuth completion
+                await openUrl(authorize_url);
                 const poll = setInterval(async () => {
                   try {
                     const status = await api.getMcpOAuthStatus(server.id);
@@ -670,7 +684,6 @@ function ServerCard({
                       setOauthLoading(false);
                       toast(`OAuth failed: ${status.error}`);
                     } else if (status.status === "none") {
-                      // Flow ended — check if we're connected now
                       clearInterval(poll);
                       setOauthLoading(false);
                       onCredentialChanged();
@@ -679,13 +692,11 @@ function ServerCard({
                     // ignore poll errors
                   }
                 }, 2000);
-                // Stop polling after 5 minutes (matches backend timeout)
                 const timeout = setTimeout(() => {
                   clearInterval(poll);
                   setOauthLoading(false);
                   toast("OAuth timed out — you didn't complete the authorization in 5 minutes. Click 'Connect OAuth' to try again.");
                 }, 300000);
-                // Store cleanup function so the cancel button can stop polling
                 (window as any)._oauthCleanup = () => {
                   clearInterval(poll);
                   clearTimeout(timeout);
@@ -696,36 +707,14 @@ function ServerCard({
                 toast(e instanceof Error ? e.message : "Failed to start OAuth flow");
               }
             }}
-            disabled={oauthLoading}
             className="flex items-center gap-1 rounded-[4px] px-2 py-1 text-[11px] font-medium transition"
-            style={{
-              background: oauthLoading ? "var(--surface)" : "var(--accent)",
-              color: oauthLoading ? "var(--ink-3)" : "#fff",
-              border: "none",
-              cursor: oauthLoading ? "not-allowed" : "pointer",
-            }}
+            style={{ background: "var(--accent)", color: "#fff", border: "none", cursor: "pointer" }}
             title="Connect with OAuth"
           >
             <Key className="h-3 w-3" />
-            {oauthLoading ? (
-              <>
-                <span>Waiting…</span>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if ((window as any)._oauthCleanup) (window as any)._oauthCleanup();
-                  }}
-                  className="ml-1 text-[10px] underline"
-                  style={{ color: "var(--danger)" }}
-                >
-                  Cancel
-                </button>
-              </>
-            ) : (
-              "Connect OAuth"
-            )}
+            Connect OAuth
           </button>
-        )}
+        ))}
         {server.enabled && (
           <button
             onClick={async () => {
@@ -777,7 +766,7 @@ function ServerCard({
                 setOauthLoading(true);
                 try {
                   const { authorize_url } = await api.startMcpOAuth(server.id);
-                  if (authorize_url) openUrl(authorize_url);
+                  if (authorize_url) await openUrl(authorize_url);
                 } catch (e) {
                   setOauthLoading(false);
                   toast(e instanceof Error ? e.message : "Failed to start OAuth flow");

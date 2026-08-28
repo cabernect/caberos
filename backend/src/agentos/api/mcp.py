@@ -24,7 +24,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import require_operator
@@ -36,7 +36,7 @@ from ..mcp import catalog as mcp_catalog
 from ..mcp import credentials as mcp_creds
 from ..mcp import registry as mcp_registry
 from ..models.contact import Contact
-from ..models.mcp import McpServer
+from ..models.mcp import ContactMcpBinding, McpServer, McpTool
 from ..models.operator import Operator
 
 router = APIRouter(prefix="/api/mcp", tags=["mcp"])
@@ -176,6 +176,10 @@ async def delete_server(
 
     # Disconnect and unregister tools
     await mcp_registry.disconnect_server(server_id)
+
+    # Delete bindings before credentials because each binding references both.
+    await db.execute(delete(ContactMcpBinding).where(ContactMcpBinding.mcp_server_id == server_id))
+    await db.execute(delete(McpTool).where(McpTool.mcp_server_id == server_id))
 
     # Delete all credentials
     await mcp_creds.delete_server_credentials(db, server_id)
