@@ -160,13 +160,14 @@ async def delete_all_data(
         raise HTTPException(status_code=400, detail="Type DELETE ALL DATA to confirm")
 
     from ..db import engine, init_db
-    from ..seed import seed_operator_if_needed
+    from ..seed import seed_default_agents, seed_operator_if_needed
 
     await engine.dispose()
     try:
         delete_all_local_data()
         await init_db()
         await seed_operator_if_needed()
+        await seed_default_agents()
     except DataResetError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except OSError as error:
