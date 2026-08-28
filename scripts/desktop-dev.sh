@@ -28,7 +28,7 @@ if ! is_gateway_ready; then
 
   (
     cd "${ROOT_DIR}/backend"
-    exec uv run uvicorn agentos.main:app --port 8081 --host 127.0.0.1
+    AGENTOS_LOG_LEVEL="${AGENTOS_LOG_LEVEL:-warning}" AGENTOS_LOG_ACCESS="${AGENTOS_LOG_ACCESS:-false}" exec uv run python -m agentos.gateway_entry
   ) >"${LOG_FILE}" 2>&1 &
   BACKEND_PID=$!
   STARTED_BACKEND=1
