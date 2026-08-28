@@ -1,8 +1,8 @@
 import { useEffect, useState, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Plus, Trash2, Save, X, RefreshCw, Check, Info, Settings, Server, Cpu, Download, Upload, HardDrive } from "lucide-react";
 import { api } from "@/lib/api";
-import { useConfirm } from "@/lib/confirm";
+import { useConfirm } from "@/lib/confirmHook";
 import { openUrl } from "@/lib/openUrl";
 import type { Provider, ModelInfo, Operator } from "@/lib/types";
 import { DashboardSidebar, type NavKey } from "@/components/DashboardSidebar";
@@ -74,6 +74,7 @@ export function ProvidersSettings() {
   const [addingPreset, setAddingPreset] = useState<number | null>(null);  // preset index being configured
   const [showCustom, setShowCustom] = useState(false);  // custom provider form
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { confirm, toast } = useConfirm();
 
   const load = useCallback(async () => {
@@ -89,6 +90,10 @@ export function ProvidersSettings() {
   }, [navigate]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (searchParams.get("guide") === "provider") setActiveTab("providers");
+  }, [searchParams]);
 
   const handleLogout = async () => {
     try { await api.logout(); } catch {}
@@ -139,7 +144,6 @@ export function ProvidersSettings() {
         onLogout={handleLogout}
         collapsed={sidebarCollapsed}
         onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
-        agentCount={0}
       />
 
       <div className="flex min-w-0 flex-1 flex-col">

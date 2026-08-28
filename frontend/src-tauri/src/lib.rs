@@ -3,7 +3,7 @@ mod gateway;
 use gateway::{GatewayProcess, GATEWAY_PORT};
 use serde::Serialize;
 use std::path::Path;
-use tauri::{AppHandle, Manager, RunEvent};
+use tauri::{AppHandle, Emitter, Manager, RunEvent};
 
 #[derive(Serialize)]
 struct DroppedFile {
@@ -13,7 +13,15 @@ struct DroppedFile {
 
 #[tauri::command]
 fn gateway_url(gateway: tauri::State<'_, GatewayProcess>) -> String {
-    format!("http://127.0.0.1:{}", gateway.port().unwrap_or(GATEWAY_PORT))
+    format!(
+        "http://127.0.0.1:{}",
+        gateway.port().unwrap_or(GATEWAY_PORT)
+    )
+}
+
+#[tauri::command]
+fn quit_app(app: AppHandle) {
+    app.exit(0);
 }
 
 #[tauri::command]
@@ -68,11 +76,16 @@ pub fn run() {
                 .map_err(std::io::Error::other)?;
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![gateway_url, gateway_log_path, read_dropped_file])
+        .invoke_handler(tauri::generate_handler![
+            quit_app,
+            gateway_url,
+            gateway_log_path,
+            read_dropped_file
+        ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                let _ = window.hide();
+                let _ = window.emit("caberos://quit-requested", ());
             }
         })
         .build(tauri::generate_context!())
@@ -86,7 +99,7 @@ pub fn run() {
                 let _ = window.set_focus();
             }
         }
-        RunEvent::ExitRequested { .. } | RunEvent::Exit => {
+        RunEvent::Exit => {
             app.state::<GatewayProcess>().stop();
         }
         _ => {}
