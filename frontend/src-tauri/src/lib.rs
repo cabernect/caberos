@@ -1,6 +1,6 @@
 mod gateway;
 
-use gateway::GatewayProcess;
+use gateway::{GatewayProcess, GATEWAY_PORT};
 use serde::Serialize;
 use std::path::Path;
 use tauri::{AppHandle, Manager, RunEvent};
@@ -13,7 +13,7 @@ struct DroppedFile {
 
 #[tauri::command]
 fn gateway_url(gateway: tauri::State<'_, GatewayProcess>) -> String {
-    format!("http://127.0.0.1:{}", gateway.port().unwrap_or(8081))
+    format!("http://127.0.0.1:{}", gateway.port().unwrap_or(GATEWAY_PORT))
 }
 
 #[tauri::command]

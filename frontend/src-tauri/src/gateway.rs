@@ -10,6 +10,8 @@ use std::os::unix::process::CommandExt;
 
 use tauri::{AppHandle, Manager};
 
+pub const GATEWAY_PORT: u16 = 51718;
+
 pub struct GatewayProcess {
     child: Mutex<Option<Child>>,
     port: Mutex<Option<u16>>,
@@ -38,7 +40,7 @@ impl GatewayProcess {
             return Ok(());
         };
 
-        let port = reserve_gateway_port()?;
+        let port = GATEWAY_PORT;
 
         let data_dir = app
             .path()
@@ -135,15 +137,6 @@ impl GatewayProcess {
     }
 }
 
-fn reserve_gateway_port() -> Result<u16, String> {
-    let listener = std::net::TcpListener::bind(("127.0.0.1", 0))
-        .map_err(|error| format!("could not reserve a gateway port: {error}"))?;
-    listener
-        .local_addr()
-        .map_err(|error| format!("could not inspect gateway port: {error}"))
-        .map(|address| address.port())
-}
-
 fn gateway_executable(app: &AppHandle) -> Result<Option<PathBuf>, String> {
     if let Some(path) = env::var_os("CABEROS_GATEWAY_EXECUTABLE") {
         return Ok(Some(PathBuf::from(path)));
@@ -177,11 +170,10 @@ fn gateway_executable(app: &AppHandle) -> Result<Option<PathBuf>, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::reserve_gateway_port;
+    use super::GATEWAY_PORT;
 
     #[test]
-    fn reserves_a_loopback_port() {
-        let port = reserve_gateway_port().expect("an available loopback port");
-        assert!(port > 0);
+    fn uses_the_stable_oauth_callback_port() {
+        assert_eq!(GATEWAY_PORT, 51718);
     }
 }

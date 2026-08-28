@@ -39,7 +39,7 @@ const isDesktopShell =
   typeof window !== "undefined" &&
   (window.location.protocol === "tauri:" || window.location.hostname === "tauri.localhost");
 const configuredBase = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "");
-let resolvedBase = configuredBase || (isDesktopShell ? "http://127.0.0.1:8081" : "");
+let resolvedBase = configuredBase || (isDesktopShell ? "http://127.0.0.1:51718" : "");
 
 const baseReady = configuredBase || !isDesktopShell
   ? Promise.resolve(resolvedBase)

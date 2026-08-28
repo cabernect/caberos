@@ -22,7 +22,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' http://tauri.localhost:* http://127.0.0.1:* http://localhost:* ws://localhost:5173 https://github.com https://api.github.com https://*.githubusercontent.com; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:"
+      "csp": "default-src 'self'; connect-src 'self' http://tauri.localhost:51718 http://127.0.0.1:51718 http://localhost:51718 ws://localhost:5173 https://github.com https://api.github.com https://*.githubusercontent.com; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:"
     }
   },
   "bundle": {
