@@ -192,11 +192,14 @@ jobs:
             **macOS Apple Silicon (ARM64)** — download the `.dmg` file below.
 
             > macOS Intel and Windows builds are not yet available.
+            > This free release is ad-hoc signed and is not notarized by Apple.
 
             ### Install
 
-            1. Download the `.dmg` file
-            2. Open it and drag **CaberOS** to your Applications folder
+            1. Download and open the `.dmg` file, then drag **CaberOS** to Applications
+            2. If macOS reports that CaberOS is damaged, first verify that the DMG
+               came from this GitHub release, then run:
+               `xattr -dr com.apple.quarantine /Applications/CaberOS.app`
             3. Launch CaberOS — the gateway starts automatically
             4. Default login: `admin` / `admin` (change it immediately)
 

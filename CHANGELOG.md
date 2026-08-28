@@ -9,19 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- First-run onboarding for provider, model, and initial agent setup
-- Dynamic loopback gateway ports for the Tauri desktop app
+- Guided first-run setup for provider, model, and initial agent configuration
+- Stable loopback gateway port for the Tauri desktop app
 - Persistent operator notifications for run failures, approvals, MCP failures, and OAuth re-authentication
+- Dedicated Notifications page with unread filtering and related-page actions
 - Live system health status in the observability dashboard
 - Expanded MCP catalog with setup-required entries for account-specific integrations
+- Configurable logging levels and bounded desktop gateway log rotation
 
 ### Fixed
 
 - OAuth access tokens refresh proactively using the provider-reported expiration
 - Rotated OAuth refresh tokens are persisted for providers such as Notion
 - OAuth callback URLs follow the configured gateway port
+- Desktop app close confirmation uses the application confirmation UI
 
-## [0.1.5] - Unreleased
+## [0.1.5] - Released
 
 ### Added
 

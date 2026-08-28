@@ -5,6 +5,13 @@ import { api } from "@/lib/api";
 import { useConfirm } from "@/lib/confirmHook";
 import { openUrl } from "@/lib/openUrl";
 import type { Provider, ModelInfo, Operator } from "@/lib/types";
+import {
+  downloadAndInstallUpdate,
+  refreshUpdates,
+  restartApp,
+  resetUpdater,
+  useUpdater,
+} from "@/lib/updater";
 import { DashboardSidebar, type NavKey } from "@/components/DashboardSidebar";
 import { PageHeader } from "@/components/PageHeader";
 import { LogoMark } from "@/components/LogoMark";
@@ -1235,10 +1242,7 @@ function ModelsTab({
 
 function AboutTab() {
   const [version, setVersion] = useState<string>("...");
-  const [updateStatus, setUpdateStatus] = useState<"idle" | "checking" | "up-to-date" | "available" | "downloading" | "error">("idle");
-  const [updateInfo, setUpdateInfo] = useState<{ latestVersion?: string; notes?: string }>({});
-  const [updateError, setUpdateError] = useState<string>("");
-  const [downloadProgress, setDownloadProgress] = useState<{ downloaded?: number; total?: number }>({});
+  const updater = useUpdater();
 
   useEffect(() => {
     // In desktop mode, read from Tauri. In web mode, fetch from the backend.
@@ -1264,34 +1268,15 @@ function AboutTab() {
   }, []);
 
   const handleCheckUpdates = useCallback(async () => {
-    setUpdateStatus("checking");
-    setUpdateError("");
-    try {
-      const { checkForUpdates } = await import("@/lib/updater");
-      const info = await checkForUpdates();
-      if (info.available) {
-        setUpdateStatus("available");
-        setUpdateInfo({ latestVersion: info.latestVersion, notes: info.notes });
-      } else {
-        setUpdateStatus("up-to-date");
-      }
-    } catch (e) {
-      setUpdateStatus("error");
-      setUpdateError(String(e));
-    }
+    await refreshUpdates().catch(() => {});
   }, []);
 
-  const handleDownloadAndRestart = useCallback(async () => {
-    setUpdateStatus("downloading");
-    setUpdateError("");
-    try {
-      const { downloadAndInstallUpdate } = await import("@/lib/updater");
-      await downloadAndInstallUpdate((progress) => setDownloadProgress(progress));
-      // The app will restart automatically after installation
-    } catch (e) {
-      setUpdateStatus("error");
-      setUpdateError(String(e));
-    }
+  const handleDownload = useCallback(async () => {
+    await downloadAndInstallUpdate().catch(() => {});
+  }, []);
+
+  const handleRestart = useCallback(async () => {
+    await restartApp().catch(() => {});
   }, []);
 
   return (
@@ -1309,7 +1294,7 @@ function AboutTab() {
         </div>
         {/* Update check */}
         <div className="flex flex-col items-end gap-2">
-          {updateStatus === "idle" && (
+          {updater.status === "idle" && (
             <button
               onClick={handleCheckUpdates}
               className="rounded-md border px-3 py-1.5 text-[12px] font-medium text-[var(--ink-2)] hover:bg-[var(--hover)]"
@@ -1318,48 +1303,59 @@ function AboutTab() {
               Check for Updates
             </button>
           )}
-          {updateStatus === "checking" && (
+          {updater.status === "checking" && (
             <p className="text-[12px] text-[var(--ink-3)]">Checking...</p>
           )}
-          {updateStatus === "up-to-date" && (
+          {updater.status === "up-to-date" && (
             <p className="text-[12px] text-[var(--accent)]">You're up to date</p>
           )}
-          {updateStatus === "available" && (
+          {updater.status === "available" && (
             <div className="flex flex-col items-end gap-2">
               <p className="text-[12px] font-medium text-[var(--ink)]">
-                v{updateInfo.latestVersion} is available
+                v{updater.info?.latestVersion} is available
               </p>
-              {updateInfo.notes && (
-                <p className="max-w-xs text-[11px] text-[var(--ink-3)]">{updateInfo.notes}</p>
+              {updater.info?.notes && (
+                <p className="max-w-xs text-[11px] text-[var(--ink-3)]">{updater.info?.notes}</p>
               )}
               <div className="flex gap-2">
                 <button
-                  onClick={() => setUpdateStatus("idle")}
+                  onClick={() => resetUpdater()}
                   className="rounded-md border px-3 py-1.5 text-[12px] text-[var(--ink-2)] hover:bg-[var(--hover)]"
                   style={{ borderColor: "var(--border)" }}
                 >
                   Later
                 </button>
                 <button
-                  onClick={handleDownloadAndRestart}
+                  onClick={handleDownload}
                   className="rounded-md bg-[var(--accent)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90"
                 >
-                  Download and Restart
+                  Download update
                 </button>
               </div>
             </div>
           )}
-          {updateStatus === "downloading" && (
+          {updater.status === "downloading" && (
             <div className="flex flex-col items-end gap-1">
               <p className="text-[12px] text-[var(--ink-2)]">
-                Downloading... {downloadProgress.downloaded && downloadProgress.total
-                  ? `${Math.round((downloadProgress.downloaded / downloadProgress.total) * 100)}%`
+                Downloading... {updater.progress.downloaded && updater.progress.total
+                  ? `${Math.round((updater.progress.downloaded / updater.progress.total) * 100)}%`
                   : ""}
               </p>
             </div>
           )}
-          {updateStatus === "error" && (
-            <p className="text-[12px] text-red-500">{updateError || "Update check failed"}</p>
+          {updater.status === "installing" && (
+            <p className="text-[12px] text-[var(--ink-2)]">Installing update...</p>
+          )}
+          {updater.status === "ready" && (
+            <button
+              onClick={handleRestart}
+              className="rounded-md bg-[var(--accent)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90"
+            >
+              Restart now
+            </button>
+          )}
+          {updater.status === "error" && (
+            <p className="text-[12px] text-red-500">{updater.error || "Update check failed"}</p>
           )}
         </div>
       </div>

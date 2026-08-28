@@ -1,12 +1,11 @@
+import { useSyncExternalStore } from "react";
+
 /**
- * Auto-update utilities for CaberOS desktop (v0.1.3).
+ * Auto-update utilities for CaberOS desktop.
  *
  * Uses the Tauri v2 updater plugin to check for, download, and install
- * signed updates from GitHub releases. The signing key is NOT stored in
- * GitHub — the user signs the update archive locally and uploads the
- * .sig file with the release manually.
- *
- * In web mode, these functions are no-ops that report "not available".
+ * signed updates from GitHub releases. The updater signing key is not stored
+ * in GitHub; it is used by the release workflow to sign update archives.
  */
 
 export interface UpdateInfo {
@@ -17,6 +16,37 @@ export interface UpdateInfo {
   downloadUrl?: string;
 }
 
+export type UpdateStatus = "idle" | "checking" | "available" | "downloading" | "installing" | "ready" | "up-to-date" | "error";
+
+export interface UpdaterState {
+  info: UpdateInfo | null;
+  status: UpdateStatus;
+  progress: { downloaded?: number; total?: number };
+  error: string;
+}
+
+const initialState: UpdaterState = { info: null, status: "idle", progress: {}, error: "" };
+let state = initialState;
+const listeners = new Set<() => void>();
+
+function setState(next: Partial<UpdaterState>) {
+  state = { ...state, ...next };
+  listeners.forEach((listener) => listener());
+}
+
+function subscribe(listener: () => void) {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+function getSnapshot() {
+  return state;
+}
+
+export function useUpdater(): UpdaterState {
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
 /**
  * Check if we're running inside the Tauri desktop shell.
  */
@@ -25,79 +55,80 @@ export function isDesktopMode(): boolean {
 }
 
 /**
- * Check for available updates.
- *
- * In desktop mode, uses the Tauri updater plugin.
- * In web mode, returns { available: false }.
+ * Check for available updates using the Tauri updater plugin.
  */
 export async function checkForUpdates(): Promise<UpdateInfo> {
-  if (!isDesktopMode()) {
-    return { available: false, currentVersion: "web" };
+  if (!isDesktopMode()) return { available: false, currentVersion: "web" };
+
+  const updater = await import("@tauri-apps/plugin-updater");
+  const update = await updater.check();
+  if (update) {
+    return {
+      available: true,
+      currentVersion: update.currentVersion,
+      latestVersion: update.version,
+      notes: update.body,
+    };
   }
 
+  const app = await import("@tauri-apps/api/app");
+  return { available: false, currentVersion: await app.getVersion() };
+}
+
+export async function refreshUpdates(): Promise<UpdateInfo> {
+  setState({ status: "checking", error: "" });
   try {
-    const updater = await import("@tauri-apps/plugin-updater");
-    const update = await updater.check();
-
-    if (update) {
-      return {
-        available: true,
-        currentVersion: update.currentVersion,
-        latestVersion: update.version,
-        notes: update.body,
-      };
-    }
-
-    // No update available — get current version for display
-    const app = await import("@tauri-apps/api/app");
-    const currentVersion = await app.getVersion();
-    return { available: false, currentVersion };
-  } catch (e) {
-    // Degrade quietly — the app remains usable
-    console.error("Update check failed:", e);
-    return { available: false, currentVersion: "unknown", notes: String(e) };
+    const info = await checkForUpdates();
+    setState({ info, status: info.available ? "available" : "up-to-date" });
+    return info;
+  } catch (error) {
+    const message = String(error);
+    setState({ status: "error", error: message });
+    throw error;
   }
 }
 
 /**
- * Download and install the update, then restart the app.
- *
- * The Tauri updater handles signature verification internally.
- * If the signature is invalid, the update is rejected.
+ * Download and install the update without restarting the app.
+ * The UI shows the ready state and lets the user choose when to relaunch.
  */
-export async function downloadAndInstallUpdate(
-  onProgress?: (progress: { total?: number; downloaded?: number }) => void,
-): Promise<void> {
-  if (!isDesktopMode()) {
-    throw new Error("Auto-update is only available in desktop mode");
-  }
+export async function downloadAndInstallUpdate(): Promise<void> {
+  if (!isDesktopMode()) throw new Error("Auto-update is only available in desktop mode");
 
   const updater = await import("@tauri-apps/plugin-updater");
   const update = await updater.check();
-
-  if (!update) {
-    throw new Error("No update available");
-  }
+  if (!update) throw new Error("No update available");
 
   let downloaded = 0;
   let total = 0;
+  setState({ status: "downloading", progress: {}, error: "" });
 
   await update.downloadAndInstall((event) => {
     switch (event.event) {
       case "Started":
         total = event.data.contentLength ?? 0;
+        setState({ progress: { total, downloaded: 0 } });
         break;
       case "Progress":
         downloaded += event.data.chunkLength;
-        onProgress?.({ total, downloaded });
+        setState({ progress: { total, downloaded } });
         break;
       case "Finished":
-        onProgress?.({ total, downloaded: total });
+        setState({ status: "installing", progress: { total, downloaded: total } });
         break;
     }
   });
 
-  // The updater will restart the app automatically after installation.
-  // The bundled gateway is terminated by Tauri's shutdown handler.
   await update.close();
+  setState({ status: "ready", progress: { total, downloaded: total } });
+}
+
+export async function restartApp(): Promise<void> {
+  if (!isDesktopMode()) throw new Error("Restart is only available in desktop mode");
+  const process = await import("@tauri-apps/plugin-process");
+  await process.relaunch();
+}
+
+export function resetUpdater(): void {
+  setState(initialState);
 }
