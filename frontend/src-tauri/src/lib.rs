@@ -78,9 +78,17 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
-    app.run(|app, event| {
-        if matches!(event, RunEvent::ExitRequested { .. } | RunEvent::Exit) {
+    app.run(|app, event| match event {
+        RunEvent::Reopen { .. } => {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }
+        RunEvent::ExitRequested { .. } | RunEvent::Exit => {
             app.state::<GatewayProcess>().stop();
         }
+        _ => {}
     });
 }
