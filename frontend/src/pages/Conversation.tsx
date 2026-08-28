@@ -567,6 +567,9 @@ export function Conversation() {
     }
   };
 
+  const handleEventRef = useRef(handleEvent);
+  handleEventRef.current = handleEvent;
+
   // Poll for new runs on channel sessions (Zalo, Telegram, etc.) and
   // stream them live in the dashboard. Dashboard sessions don't need this
   // because the user initiates the run and subscribes directly.
@@ -635,7 +638,7 @@ export function Conversation() {
                 if (cancelled) break;
                 const e = runEntriesRef.current.get(runSessionId);
                 if (e) e.lastEventId = id;
-                handleEvent(event, data, runSessionId);
+                handleEventRef.current(event, data, runSessionId);
               }
             } catch {
               // SSE disconnected — ok

@@ -4,7 +4,7 @@ import { Radio, Plus, Trash2, Send, MessageCircle, Settings2 } from "lucide-reac
 import { DashboardSidebar, type NavKey } from "@/components/DashboardSidebar";
 import { PageHeader } from "@/components/PageHeader";
 import { api } from "@/lib/api";
-import { useConfirm } from "@/lib/confirm";
+import { useConfirm } from "@/lib/confirmHook";
 import type { ChannelInfo, Agent } from "@/lib/types";
 
 const PLATFORMS = [

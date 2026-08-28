@@ -3,7 +3,7 @@ import { ArrowRight, Database, FileText, Search, Trash2, Upload } from "lucide-r
 import { useNavigate, useParams } from "react-router-dom";
 import { DashboardSidebar, type NavKey } from "@/components/DashboardSidebar";
 import { PageHeader } from "@/components/PageHeader";
-import { useConfirm } from "@/lib/confirm";
+import { useConfirm } from "@/lib/confirmHook";
 import { api } from "@/lib/api";
 import type { KnowledgeDocument, KnowledgeResult, KnowledgeScope } from "@/lib/types";
 import { formatBytes } from "@/lib/knowledge";
@@ -36,7 +36,7 @@ function useVaultNavigation() {
 function Shell({ children, ...navigation }: { children: React.ReactNode } & ReturnType<typeof useVaultNavigation>) {
   return (
     <div className="flex h-screen overflow-hidden" style={{ background: "var(--surface)" }}>
-      <DashboardSidebar active="vault" onNavigate={navigation.handleNavigate} onLogout={navigation.handleLogout} collapsed={navigation.sidebarCollapsed} onToggleCollapse={() => navigation.setSidebarCollapsed(!navigation.sidebarCollapsed)} agentCount={0} />
+      <DashboardSidebar active="vault" onNavigate={navigation.handleNavigate} onLogout={navigation.handleLogout} collapsed={navigation.sidebarCollapsed} onToggleCollapse={() => navigation.setSidebarCollapsed(!navigation.sidebarCollapsed)} />
       <div className="flex min-w-0 flex-1 flex-col overflow-auto">{children}</div>
     </div>
   );
