@@ -1,14 +1,35 @@
 mod gateway;
 
-use gateway::GatewayProcess;
+use gateway::{GatewayProcess, GATEWAY_PORT};
 use serde::Serialize;
 use std::path::Path;
-use tauri::{Manager, RunEvent};
+use tauri::{AppHandle, Emitter, Manager, RunEvent};
 
 #[derive(Serialize)]
 struct DroppedFile {
     name: String,
     bytes: Vec<u8>,
+}
+
+#[tauri::command]
+fn gateway_url(gateway: tauri::State<'_, GatewayProcess>) -> String {
+    format!(
+        "http://127.0.0.1:{}",
+        gateway.port().unwrap_or(GATEWAY_PORT)
+    )
+}
+
+#[tauri::command]
+fn quit_app(app: AppHandle) {
+    app.exit(0);
+}
+
+#[tauri::command]
+fn gateway_log_path(app: AppHandle) -> Result<String, String> {
+    app.path()
+        .app_data_dir()
+        .map(|path| path.join("logs").join("gateway.log").display().to_string())
+        .map_err(|error| format!("could not resolve gateway log path: {error}"))
 }
 
 #[tauri::command]
@@ -56,18 +77,32 @@ pub fn run() {
                 .map_err(std::io::Error::other)?;
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![read_dropped_file])
+        .invoke_handler(tauri::generate_handler![
+            quit_app,
+            gateway_url,
+            gateway_log_path,
+            read_dropped_file
+        ])
         .on_window_event(|window, event| {
-            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
-                window.app_handle().state::<GatewayProcess>().stop();
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.emit("caberos://quit-requested", ());
             }
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
-    app.run(|app, event| {
-        if matches!(event, RunEvent::ExitRequested { .. } | RunEvent::Exit) {
+    app.run(|app, event| match event {
+        RunEvent::Reopen { .. } => {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }
+        RunEvent::Exit => {
             app.state::<GatewayProcess>().stop();
         }
+        _ => {}
     });
 }

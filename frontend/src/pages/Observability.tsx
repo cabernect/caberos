@@ -8,6 +8,7 @@ import type { DashboardStats, Agent } from "@/lib/types";
 export function Observability() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [health, setHealth] = useState<Awaited<ReturnType<typeof api.getHealth>> | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [days, setDays] = useState(7);
   const navigate = useNavigate();
@@ -34,6 +35,20 @@ export function Observability() {
   useEffect(() => {
     fetchStats();
   }, [fetchStats]);
+
+  const fetchHealth = useCallback(async () => {
+    try {
+      setHealth(await api.getHealth());
+    } catch {
+      setHealth(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchHealth();
+    const interval = setInterval(fetchHealth, 15000);
+    return () => clearInterval(interval);
+  }, [fetchHealth]);
 
   const handleLogout = async () => {
     try {
@@ -124,6 +139,28 @@ export function Observability() {
         {/* Dashboard content */}
         <div className="flex-1 overflow-y-auto px-8 py-6">
           <div className="mx-auto max-w-6xl space-y-6">
+            <div className="rounded-[8px] border p-4" style={{ borderColor: "var(--border)", background: "var(--white)" }}>
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-[14px] font-semibold text-[var(--ink)]">System health</h2>
+                  <p className="mt-1 text-[12px] text-[var(--ink-2)]">Live gateway and workspace readiness.</p>
+                </div>
+                <button type="button" onClick={() => void fetchHealth()} className="rounded border px-2.5 py-1 text-[11px] text-[var(--ink-2)] hover:bg-[var(--hover)]" style={{ borderColor: "var(--border)", cursor: "pointer" }}>Refresh</button>
+              </div>
+              {health ? (
+                <div className="mt-4 grid grid-cols-4 gap-3 text-[12px]">
+                  <HealthMetric label="Database" value={health.database} good={health.database === "connected"} />
+                  <HealthMetric label="Providers" value={String(health.providers)} good={health.providers > 0} />
+                  <HealthMetric label="Agents" value={String(health.agents)} good={health.agents > 0} />
+                  <HealthMetric label="Active runs" value={String(health.active_runs)} good />
+                </div>
+              ) : (
+                <div className="mt-4 flex items-center justify-between gap-3 rounded-md border px-3 py-2" style={{ borderColor: "var(--danger)" }}>
+                  <p className="text-[12px] text-[var(--danger)]">Health data is unavailable. Check the gateway and retry.</p>
+                  <button type="button" onClick={() => void fetchHealth()} className="shrink-0 rounded border px-2.5 py-1 text-[11px] text-[var(--ink-2)]" style={{ borderColor: "var(--border)", cursor: "pointer" }}>Retry</button>
+                </div>
+              )}
+            </div>
             {stats ? (
               <>
                 {/* KPI cards */}
@@ -279,6 +316,15 @@ export function Observability() {
 }
 
 // --- Reusable components ---
+
+function HealthMetric({ label, value, good }: { label: string; value: string; good: boolean }) {
+  return (
+    <div className="rounded-md border px-3 py-2" style={{ borderColor: "var(--border)" }}>
+      <p className="text-[10px] uppercase tracking-wide text-[var(--ink-3)]">{label}</p>
+      <p className="mt-1 font-medium" style={{ color: good ? "var(--accent)" : "var(--danger)" }}>{value}</p>
+    </div>
+  );
+}
 
 function KpiCard({
   icon: Icon,

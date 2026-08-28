@@ -1,5 +1,6 @@
 // API client — the only way the frontend talks to the backend (D33)
 
+import { invoke } from "@tauri-apps/api/core";
 import type {
   Agent,
   AgentVersion,
@@ -17,6 +18,7 @@ import type {
   McpToolInfo,
   Message,
   ModelInfo,
+  Notification,
   Operator,
   OperatorAuditOut,
   Provider,
@@ -37,7 +39,16 @@ const isDesktopShell =
   typeof window !== "undefined" &&
   (window.location.protocol === "tauri:" || window.location.hostname === "tauri.localhost");
 const configuredBase = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "");
-const BASE = configuredBase || (isDesktopShell ? "http://127.0.0.1:8081" : "");
+let resolvedBase = configuredBase || (isDesktopShell ? "http://127.0.0.1:51718" : "");
+
+const baseReady = configuredBase || !isDesktopShell
+  ? Promise.resolve(resolvedBase)
+  : invoke<string>("gateway_url")
+      .then((url) => {
+        resolvedBase = url.replace(/\/$/, "");
+        return resolvedBase;
+      })
+      .catch(() => resolvedBase);
 
 const SESSION_TOKEN_KEY = "agentos_session_token";
 
@@ -67,7 +78,8 @@ async function request<T>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
-  const resp = await fetch(`${BASE}${path}`, {
+  const base = await baseReady;
+  const resp = await fetch(`${base}${path}`, {
     credentials: "include",
     headers: { "Content-Type": "application/json", ...authHeaders(), ...options.headers },
     ...options,
@@ -81,10 +93,13 @@ async function request<T>(
 }
 
 export const api = {
-  baseURL: BASE,
+  get baseURL() {
+    return resolvedBase;
+  },
   authHeaders,
 
   gatewayHealth: () => request<{ status: string }>("/health"),
+  gatewayLogPath: () => invoke<string>("gateway_log_path"),
 
   // Auth
   login: (username: string, password: string) =>
@@ -189,7 +204,8 @@ export const api = {
   uploadKnowledgeDocument: async (file: File) => {
     const form = new FormData();
     form.append("file", file);
-    const response = await fetch(`${BASE}/api/knowledge/documents/upload`, {
+    const base = await baseReady;
+    const response = await fetch(`${base}/api/knowledge/documents/upload`, {
       method: "POST",
       credentials: "include",
       headers: authHeaders(),
@@ -210,7 +226,8 @@ export const api = {
   uploadKnowledgeScope: async (scope: string, file: File) => {
     const form = new FormData();
     form.append("file", file);
-    const response = await fetch(`${BASE}/api/knowledge/scopes/${scope}/documents/upload`, {
+    const base = await baseReady;
+    const response = await fetch(`${base}/api/knowledge/scopes/${scope}/documents/upload`, {
       method: "POST",
       credentials: "include",
       headers: authHeaders(),
@@ -265,8 +282,9 @@ export const api = {
     lastEventId = 0,
     signal?: AbortSignal,
   ): AsyncGenerator<{ event: string; data: any; id: number }> {
+    const base = await baseReady;
     const resp = await fetch(
-      `${BASE}/api/chat/${agentId}/runs/${runId}/events`,
+      `${base}/api/chat/${agentId}/runs/${runId}/events`,
       {
         credentials: "include",
         headers: {
@@ -358,6 +376,35 @@ export const api = {
       body: JSON.stringify({ session_id: sessionId }),
     }),
 
+  // Notifications
+  listNotifications: (unreadOnly = false) =>
+    request<Notification[]>(`/api/notifications${unreadOnly ? "?unread_only=true" : ""}`),
+  markNotificationRead: (id: string) =>
+    request<{ updated: boolean }>(`/api/notifications/${id}/read`, { method: "POST" }),
+  markAllNotificationsRead: () =>
+    request<{ updated: boolean }>("/api/notifications/read-all", { method: "POST" }),
+
+  // Data migration
+  importBackup: async (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("mode", "merge");
+    const base = await baseReady;
+    const response = await fetch(`${base}/api/data/import`, {
+      method: "POST",
+      credentials: "include",
+      headers: authHeaders(),
+      body: form,
+    });
+    if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`);
+    return response.json() as Promise<{ status: string }>;
+  },
+  deleteAllData: () =>
+    request<{ status: string; requires_relogin: boolean }>("/api/data/delete-all", {
+      method: "POST",
+      body: JSON.stringify({ confirmation: "DELETE ALL DATA" }),
+    }),
+
   // Providers
   listProviders: () => request<Provider[]>("/api/providers"),
   createProvider: (data: Partial<Provider> & { api_key?: string }) =>
@@ -404,10 +451,11 @@ export const api = {
   // Skills management (system-level)
   listSkills: () =>
     request<{ skills: SkillInfo[]; count: number }>("/api/skills"),
-  importSkillZip: (file: File) => {
+  importSkillZip: async (file: File) => {
     const formData = new FormData();
     formData.append("file", file);
-    return fetch(`${BASE}/api/skills/import`, {
+    const base = await baseReady;
+    return fetch(`${base}/api/skills/import`, {
       method: "POST",
       credentials: "include",
       headers: { ...authHeaders() },

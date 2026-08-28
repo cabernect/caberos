@@ -6,6 +6,7 @@ never returned in plaintext. Model discovery is dynamic where available
 """
 
 import json
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -20,9 +21,25 @@ from ..harness.litellm_adapter import LiteLLMAdapter
 from ..models.agent import Agent
 from ..models.operator import Operator
 from ..models.provider import Provider
+from ..notifications import create_notification
 from ..secret_store import encrypt
 
+log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/providers", tags=["providers"])
+
+
+def classify_provider_error(error: str) -> tuple[str, str]:
+    message = error.lower()
+    if "429" in message or "rate limit" in message or "too many requests" in message:
+        return "rate_limit", "The provider rate limit was reached. Wait and try again."
+    if any(
+        term in message
+        for term in ("401", "403", "unauthorized", "invalid api key", "authentication")
+    ):
+        return "authentication", "Check the provider credentials in Settings."
+    if any(term in message for term in ("timeout", "timed out", "connection", "ssl", "dns")):
+        return "network", "Check your network connection and provider endpoint."
+    return "internal", "The provider returned an unexpected error. Check the gateway logs."
 
 
 class ProviderCreate(BaseModel):
@@ -217,8 +234,20 @@ async def validate_model(
     try:
         await adapter.validate_model(provider_id, model_name)
         return {"valid": True}
-    except Exception as e:
-        return {"valid": False, "error": str(e)}
+    except Exception as error:
+        log.exception("Provider model validation failed for provider %s", provider.id)
+        error_type, guidance = classify_provider_error(str(error))
+        await create_notification(
+            db,
+            notification_type=f"provider_{error_type}",
+            severity="error",
+            title=f"Provider {error_type.replace('_', ' ')}: {provider.name}",
+            message=guidance,
+            action_path="/settings",
+            entity_id=provider.id,
+        )
+        await db.commit()
+        return {"valid": False, "error": guidance}
 
 
 class CustomModelIn(BaseModel):

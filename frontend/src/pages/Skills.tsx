@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Sparkles, Upload, Trash2, FileText, Search, Package } from "lucide-react";
 import { DashboardSidebar, type NavKey } from "@/components/DashboardSidebar";
 import { api } from "@/lib/api";
-import { useConfirm } from "@/lib/confirm";
+import { useConfirm } from "@/lib/confirmHook";
 import type { SkillInfo } from "@/lib/types";
 
 export function Skills() {
@@ -101,7 +101,6 @@ export function Skills() {
         onLogout={handleLogout}
         collapsed={sidebarCollapsed}
         onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
-        agentCount={0}
       />
 
       <div className="flex min-w-0 flex-1 flex-col">

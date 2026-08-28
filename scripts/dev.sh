@@ -22,7 +22,7 @@ fi
 # Start backend
 echo "[dev] Starting backend on :8081..."
 cd backend
-uv run uvicorn agentos.main:app --reload --port 8081 --host 127.0.0.1 &
+AGENTOS_RELOAD=true uv run python -m agentos.gateway_entry &
 BACKEND_PID=$!
 
 # Start frontend (when it exists)

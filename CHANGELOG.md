@@ -5,18 +5,24 @@ All notable changes to CaberOS are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.52] - Unreleased
+## [0.1.6] - Unreleased
+
+### Added
+
+- Guided first-run setup for provider, model, and initial agent configuration
+- Stable loopback gateway port for the Tauri desktop app
+- Persistent operator notifications for run failures, approvals, MCP failures, and OAuth re-authentication
+- Dedicated Notifications page with unread filtering and related-page actions
+- Live system health status in the observability dashboard
+- Expanded MCP catalog with setup-required entries for account-specific integrations
+- Configurable logging levels and bounded desktop gateway log rotation
 
 ### Fixed
 
-- Synchronized the startup update popup with Settings → About.
-- Added explicit installing progress and a Restart now action after update installation.
-
-## [0.1.51] - Released
-
-### Fixed
-
-- Added Gatekeeper workaround instructions for the free, non-notarized macOS Apple Silicon DMG release.
+- OAuth access tokens refresh proactively using the provider-reported expiration
+- Rotated OAuth refresh tokens are persisted for providers such as Notion
+- OAuth callback URLs follow the configured gateway port
+- Desktop app close confirmation uses the application confirmation UI
 
 ## [0.1.5] - Released
 

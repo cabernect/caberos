@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..capabilities.registry import CapabilityDef
 from ..capabilities.registry import registry as cap_registry
+from ..config import settings
 from ..db import async_session_factory
 from ..models.mcp import McpServer, McpTool
 from . import credentials as mcp_creds
@@ -45,6 +46,32 @@ _tool_map: dict[str, tuple[str, str]] = {}
 
 # Process-global map: {server_id: error_message} for last connection error
 _connect_errors: dict[str, str] = {}
+_notification_errors: dict[str, str] = {}
+
+
+async def _notify_oauth_reauth(server: McpServer, error: str) -> None:
+    if "OAuth" not in error or _notification_errors.get(server.id) == error:
+        return
+    from ..notifications import create_notification
+
+    try:
+        async with async_session_factory() as db:
+            await create_notification(
+                db,
+                notification_type="oauth_reauth_required",
+                severity="error",
+                title=f"Reconnect {server.name}",
+                message=(
+                    "The OAuth refresh token is no longer valid. "
+                    "Re-authorize this MCP server to restore access."
+                ),
+                action_path="/mcps",
+                entity_id=server.id,
+            )
+            await db.commit()
+            _notification_errors[server.id] = error
+    except Exception:
+        log.exception("Failed to persist OAuth re-authentication notification")
 
 
 def _namespace(server_name: str, tool_name: str) -> str:
@@ -116,7 +143,7 @@ async def connect_server(server: McpServer) -> bool:
 
                 redirect_uri = oauth_config.get(
                     "redirect_uri",
-                    "http://localhost:8081/api/mcp/oauth/callback",
+                    f"http://localhost:{settings.control_plane_port}/api/mcp/oauth/callback",
                 )
                 client_metadata = OAuthClientMetadata(
                     redirect_uris=[redirect_uri],
@@ -190,11 +217,13 @@ async def connect_server(server: McpServer) -> bool:
 
         # Discover and register tools
         await _discover_tools(server, client)
+        _notification_errors.pop(server.id, None)
         log.info("Connected to MCP server '%s' (%s)", server.name, server.id)
         return True
 
     except ConnectionError as e:
         _connect_errors[server.id] = str(e)
+        await _notify_oauth_reauth(server, str(e))
         log.warning("Failed to connect to MCP server '%s': %s", server.name, e)
         # Clean up partial connection
         if server.id in _clients:
@@ -206,6 +235,7 @@ async def connect_server(server: McpServer) -> bool:
         return False
     except Exception as e:
         _connect_errors[server.id] = str(e)
+        await _notify_oauth_reauth(server, str(e))
         log.exception("Failed to connect to MCP server '%s'", server.name)
         # Clean up partial connection
         if server.id in _clients:

@@ -18,8 +18,37 @@ only needed for the HTTP/SSE transport (reconnectable streams).
 import asyncio
 from dataclasses import dataclass, field
 
+from .db import async_session_factory
+from .notifications import create_notification
 from .pipeline import Attachment
 from .runner import run_agent
+
+
+async def _notify_run_event(
+    *,
+    notification_type: str,
+    severity: str,
+    title: str,
+    message: str,
+    run_id: str,
+    action_path: str = "/observability",
+) -> None:
+    try:
+        async with async_session_factory() as db:
+            await create_notification(
+                db,
+                notification_type=notification_type,
+                severity=severity,
+                title=title,
+                message=message,
+                action_path=action_path,
+                entity_id=run_id,
+            )
+            await db.commit()
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).exception("Failed to persist run notification")
 
 
 @dataclass
@@ -120,8 +149,28 @@ async def start_run(
             ctx = _active_runs[rid]
             if event_type == "tool_call" and payload.get("status") == "pending_approval":
                 ctx.status = "awaiting_approval"
+                asyncio.create_task(
+                    _notify_run_event(
+                        notification_type="approval_required",
+                        severity="warning",
+                        title="Approval required",
+                        message="An agent is waiting for approval before continuing.",
+                        run_id=rid,
+                        action_path="/agents",
+                    )
+                )
             elif event_type == "message_complete":
                 ctx.status = "completed" if payload.get("status") == "completed" else "failed"
+                if ctx.status == "failed":
+                    asyncio.create_task(
+                        _notify_run_event(
+                            notification_type="run_failed",
+                            severity="error",
+                            title="Run failed",
+                            message=payload.get("error", "An agent run failed."),
+                            run_id=rid,
+                        )
+                    )
             ctx.append_event(event_type, payload)
 
     async def _execute() -> None:

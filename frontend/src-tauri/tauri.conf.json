@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "CaberOS",
-  "version": "0.1.52",
+  "version": "0.1.6",
   "identifier": "com.caberos.desktop",
   "build": {
     "frontendDist": "../dist",
@@ -22,7 +22,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' http://tauri.localhost:8081 http://127.0.0.1:8081 http://localhost:8081 ws://localhost:5173 https://github.com https://api.github.com https://*.githubusercontent.com; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:"
+      "csp": "default-src 'self'; connect-src 'self' http://tauri.localhost:51718 http://127.0.0.1:51718 http://localhost:51718 ws://localhost:5173 https://github.com https://api.github.com https://*.githubusercontent.com; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:"
     }
   },
   "bundle": {

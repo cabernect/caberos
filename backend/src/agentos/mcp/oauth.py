@@ -34,6 +34,17 @@ from . import credentials as mcp_creds
 
 log = logging.getLogger("agentos.mcp.oauth")
 
+TOKEN_REFRESH_SKEW_SECONDS = 5 * 60
+
+
+def should_refresh_access_token(
+    expires_at: float | None,
+    now: float,
+    skew: int = TOKEN_REFRESH_SKEW_SECONDS,
+) -> bool:
+    return expires_at is not None and expires_at - now <= skew
+
+
 # --- Pending OAuth flows ---
 # Maps server_id → OAuthFlowState (in-memory, not persisted)
 _pending_flows: dict[str, OAuthFlowState] = {}
@@ -195,24 +206,35 @@ class EncryptedTokenStorage:
 
 
 class CaberOSOAuthProvider(OAuthClientProvider):
-    """OAuthClientProvider that restores token_expiry_time on init.
-
-    The MCP SDK's _initialize() loads tokens and client_info from storage but
-    does NOT call update_token_expiry(), so token_expiry_time stays None and
-    is_token_valid() returns True even for expired tokens. This causes the SDK
-    to send an expired access token, get 401, and fall back to full
-    re-authorization (which fails with noop redirect/callback handlers).
-
-    This subclass calls update_token_expiry() after _initialize() so that
-    expired tokens are detected immediately and the refresh flow is used
-    instead of full re-authorization.
-    """
-
     async def _initialize(self) -> None:
         await super()._initialize()
-        # Restore token expiry time from the loaded token's expires_in
+        self._prepare_refresh_window()
+
+    def _prepare_refresh_window(self) -> None:
         if self.context.current_tokens and self.context.current_tokens.expires_in is not None:
             self.context.update_token_expiry(self.context.current_tokens)
+            import time
+
+            if should_refresh_access_token(self.context.token_expiry_time, time.time()):
+                self.context.token_expiry_time = 0
+
+    async def async_auth_flow(self, request):
+        async with self.context.lock:
+            if not self._initialized:
+                await self._initialize()
+            self._prepare_refresh_window()
+
+        parent_flow = super().async_auth_flow(request)
+        try:
+            next_request = await parent_flow.__anext__()
+            while True:
+                response = yield next_request
+                try:
+                    next_request = await parent_flow.asend(response)
+                except StopAsyncIteration:
+                    return
+        finally:
+            await parent_flow.aclose()
 
 
 # --- OAuth flow management ---
@@ -350,11 +372,10 @@ async def _run_oauth_flow(server_id: str, server_url: str, auth, flow: OAuthFlow
             except httpx2.HTTPStatusError as e:
                 log.info("OAuth flow: HTTPStatusError (expected): %s", e)
             except Exception as e:
-                log.info("OAuth flow: exception (may be expected): %s", type(e).__name__, e)
-                log.exception("OAuth flow: full exception")
+                log.info("OAuth flow failed: %s: %s", type(e).__name__, e)
+                flow.reject(str(e))
+                return
 
-        # If we get here without the flow being completed, the token
-        # was stored successfully
         if not flow.completed:
             flow.completed = True
 

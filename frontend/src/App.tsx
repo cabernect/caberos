@@ -1,7 +1,11 @@
 import { useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import { api } from "./lib/api";
+import type { Agent, Provider } from "./lib/types";
 import { ConfirmProvider } from "./lib/confirm";
+import { useConfirm } from "./lib/confirmHook";
 import { Login } from "./pages/Login";
 import { AgentList } from "./pages/AgentList";
 import { Conversation } from "./pages/Conversation";
@@ -13,12 +17,15 @@ import { Mcps } from "./pages/Mcps";
 import { Channels } from "./pages/Channels";
 import { Observability } from "./pages/Observability";
 import { Traces } from "./pages/Traces";
+import { Notifications } from "./pages/Notifications";
 import { UpdateChecker } from "./components/UpdateChecker";
+import { SetupGuide } from "./components/SetupGuide";
 
 export default function App() {
   const [gatewayReady, setGatewayReady] = useState<boolean | null>(null);
   const [gatewayAttempt, setGatewayAttempt] = useState(0);
   const [authed, setAuthed] = useState<boolean | null>(null);
+  const [setupData, setSetupData] = useState<{ providers: Provider[]; agents: Agent[] } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -52,6 +59,20 @@ export default function App() {
       .catch(() => setAuthed(false));
   }, [gatewayReady]);
 
+  useEffect(() => {
+    if (!authed) {
+      setSetupData(null);
+      return;
+    }
+    let cancelled = false;
+    Promise.all([api.listProviders(), api.listAgents()]).then(([providers, agents]) => {
+      if (!cancelled) setSetupData({ providers, agents });
+    }).catch(() => {
+      if (!cancelled) setSetupData({ providers: [], agents: [] });
+    });
+    return () => { cancelled = true; };
+  }, [authed]);
+
   if (gatewayReady !== true) {
     return (
       <GatewayStatus
@@ -75,6 +96,7 @@ export default function App() {
   return (
     <>
     <ConfirmProvider>
+    <QuitConfirmationBridge />
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={authed ? <Navigate to="/agents" /> : <Login />} />
@@ -128,12 +150,55 @@ export default function App() {
           path="/traces/:agentId/:runId"
           element={authed ? <Traces /> : <Navigate to="/login" />}
         />
+        <Route
+          path="/notifications"
+          element={authed ? <Notifications /> : <Navigate to="/login" />}
+        />
       </Routes>
+      {setupData && authed && (
+        <SetupGuide
+          setupIncomplete={
+            !setupData.providers.some((provider) => provider.has_key) ||
+            !setupData.agents.some((agent) => agent.name.toLowerCase() === "caber" && agent.provider_id && agent.model)
+          }
+        />
+      )}
     </BrowserRouter>
     </ConfirmProvider>
     <UpdateChecker />
     </>
   );
+}
+
+function QuitConfirmationBridge() {
+  const { confirm } = useConfirm();
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) return;
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+
+    void listen("caberos://quit-requested", async () => {
+      if (cancelled) return;
+      const shouldQuit = await confirm({
+        title: "Quit CaberOS?",
+        message: "Active runs will be stopped.",
+        confirmLabel: "Quit",
+        cancelLabel: "Keep open",
+      });
+      if (shouldQuit && !cancelled) await invoke("quit_app");
+    }).then((cleanup) => {
+      if (cancelled) cleanup();
+      else unlisten = cleanup;
+    }).catch(() => {});
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [confirm]);
+
+  return null;
 }
 
 function GatewayStatus({ retrying, onRetry }: { retrying: boolean; onRetry: () => void }) {

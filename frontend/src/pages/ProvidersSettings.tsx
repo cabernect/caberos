@@ -1,8 +1,8 @@
 import { useEffect, useState, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Plus, Trash2, Save, X, RefreshCw, Check, Info, Settings, Server, Cpu, Download, Upload, HardDrive } from "lucide-react";
 import { api } from "@/lib/api";
-import { useConfirm } from "@/lib/confirm";
+import { useConfirm } from "@/lib/confirmHook";
 import { openUrl } from "@/lib/openUrl";
 import type { Provider, ModelInfo, Operator } from "@/lib/types";
 import {
@@ -81,6 +81,7 @@ export function ProvidersSettings() {
   const [addingPreset, setAddingPreset] = useState<number | null>(null);  // preset index being configured
   const [showCustom, setShowCustom] = useState(false);  // custom provider form
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { confirm, toast } = useConfirm();
 
   const load = useCallback(async () => {
@@ -96,6 +97,10 @@ export function ProvidersSettings() {
   }, [navigate]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (searchParams.get("guide") === "provider") setActiveTab("providers");
+  }, [searchParams]);
 
   const handleLogout = async () => {
     try { await api.logout(); } catch {}
@@ -146,7 +151,6 @@ export function ProvidersSettings() {
         onLogout={handleLogout}
         collapsed={sidebarCollapsed}
         onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
-        agentCount={0}
       />
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -450,6 +454,26 @@ function MigrationTab() {
     setResult(null);
   };
 
+  const handleDeleteAll = async () => {
+    const confirmed = await confirm({
+      title: "Delete all CaberOS data?",
+      message: "This permanently deletes agents, providers, MCP credentials, channels, sessions, memory, workspaces, attachments, and restore points. This cannot be undone.",
+      confirmLabel: "Delete everything",
+      cancelLabel: "Cancel",
+      danger: true,
+    });
+    if (!confirmed) return;
+    setBusy(true);
+    try {
+      await api.deleteAllData();
+      localStorage.removeItem("agentos_session_token");
+      window.location.assign("/login");
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Could not delete all data");
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="max-w-2xl space-y-6">
       {/* Export */}
@@ -482,6 +506,14 @@ function MigrationTab() {
               Export Data
             </button>
           </div>
+        </div>
+      </div>
+
+      <div>
+        <h2 className="mb-3 text-[14px] font-semibold text-[var(--danger)]">Danger zone</h2>
+        <div className="rounded-lg border p-5" style={{ borderColor: "var(--danger)", background: "var(--white)" }}>
+          <p className="text-[13px] text-[var(--ink-2)]">Delete all local CaberOS data and return to the initial setup state.</p>
+          <button type="button" onClick={() => void handleDeleteAll()} disabled={busy} className="mt-4 rounded-[5px] border px-3 py-1.5 text-[12px] font-medium" style={{ borderColor: "var(--danger)", color: "var(--danger)", cursor: busy ? "not-allowed" : "pointer" }}>Delete all data</button>
         </div>
       </div>
 

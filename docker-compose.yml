@@ -38,6 +38,8 @@ services:
       - PYDANTIC_DISABLE_PLUGINS=1
       # YOLO mode — skip approval gates (useful for headless/Docker)
       - AGENTOS_YOLO_MODE=${AGENTOS_YOLO_MODE:-false}
+      - AGENTOS_LOG_LEVEL=${AGENTOS_LOG_LEVEL:-info}
+      - AGENTOS_LOG_ACCESS=${AGENTOS_LOG_ACCESS:-true}
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8081/health"]
       interval: 10s

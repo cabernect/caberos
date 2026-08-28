@@ -1,30 +1,11 @@
-import { useState, useCallback, createContext, useContext, type ReactNode } from "react";
+import { useState, useCallback, type ReactNode } from "react";
+import { ConfirmContext } from "./confirmContext";
+import type { ConfirmOptions } from "./confirmTypes";
 
 /**
  * Tauri's webview does not support window.confirm() or window.alert().
  * These helpers provide inline alternatives that work in both web and desktop.
  */
-
-interface ConfirmOptions {
-  title?: string;
-  message: string;
-  confirmLabel?: string;
-  cancelLabel?: string;
-  danger?: boolean;
-}
-
-interface ConfirmContextValue {
-  confirm: (opts: ConfirmOptions) => Promise<boolean>;
-  toast: (message: string) => void;
-}
-
-const ConfirmContext = createContext<ConfirmContextValue | null>(null);
-
-export function useConfirm() {
-  const ctx = useContext(ConfirmContext);
-  if (!ctx) throw new Error("useConfirm must be used within ConfirmProvider");
-  return ctx;
-}
 
 export function ConfirmProvider({ children }: { children: ReactNode }) {
   const [dialog, setDialog] = useState<(ConfirmOptions & { resolve: (v: boolean) => void }) | null>(null);

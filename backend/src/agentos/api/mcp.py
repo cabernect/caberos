@@ -24,18 +24,19 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import require_operator
 from ..capabilities.registry import registry as cap_registry
+from ..config import settings
 from ..db import get_db
 from ..mcp import binding as mcp_binding
 from ..mcp import catalog as mcp_catalog
 from ..mcp import credentials as mcp_creds
 from ..mcp import registry as mcp_registry
 from ..models.contact import Contact
-from ..models.mcp import McpServer
+from ..models.mcp import ContactMcpBinding, McpServer, McpTool
 from ..models.operator import Operator
 
 router = APIRouter(prefix="/api/mcp", tags=["mcp"])
@@ -175,6 +176,10 @@ async def delete_server(
 
     # Disconnect and unregister tools
     await mcp_registry.disconnect_server(server_id)
+
+    # Delete bindings before credentials because each binding references both.
+    await db.execute(delete(ContactMcpBinding).where(ContactMcpBinding.mcp_server_id == server_id))
+    await db.execute(delete(McpTool).where(McpTool.mcp_server_id == server_id))
 
     # Delete all credentials
     await mcp_creds.delete_server_credentials(db, server_id)
@@ -567,6 +572,11 @@ async def install_from_catalog(
     entry = mcp_catalog.get_catalog_entry(req.name)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"Catalog entry '{req.name}' not found")
+    if entry.get("installable", True) is False:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{req.name} requires external setup before it can be added to CaberOS",
+        )
 
     # Check if a server with this name already exists
     result = await db.execute(select(McpServer).where(McpServer.name == req.name))
@@ -583,7 +593,7 @@ async def install_from_catalog(
         oauth_config_json = json.dumps(
             {
                 "scope": entry.get("oauth_scope", ""),
-                "redirect_uri": "http://localhost:8081/api/mcp/oauth/callback",
+                "redirect_uri": f"http://localhost:{settings.control_plane_port}/api/mcp/oauth/callback",
             }
         )
 

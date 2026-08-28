@@ -5,10 +5,6 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-# Enable INFO-level logging for agentos modules so channel loading, polling,
-# and other startup activity is visible in the console.
-logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
-
 # Fix SSL certificate verification for LiteLLM's remote model catalog fetch
 # and httpx requests. On macOS behind a corporate firewall/proxy, the system
 # cert store (/etc/ssl/cert.pem) includes the proxy's CA, but Python's
@@ -34,6 +30,7 @@ from .api import (  # noqa: E402
     elicitation,
     knowledge,
     mcp,
+    notifications,
     observability,
     providers,
     scheduler,
@@ -43,6 +40,9 @@ from .api import (  # noqa: E402
 from .auth import router as auth_router  # noqa: E402
 from .capabilities.builtin import register_builtin_capabilities  # noqa: E402
 from .db import init_db  # noqa: E402
+from .logging_config import configure_logging  # noqa: E402
+
+configure_logging()
 
 # Background sweeper task handle
 _sweeper_task: asyncio.Task | None = None
@@ -228,6 +228,7 @@ app.include_router(knowledge.router)
 app.include_router(skills.router)
 app.include_router(scheduler.router)
 app.include_router(mcp.router)
+app.include_router(notifications.router)
 app.include_router(channels.router)
 app.include_router(observability.router)
 app.include_router(settings.router)

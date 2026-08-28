@@ -22,6 +22,7 @@ from ..db import get_db
 from ..models.agent import Agent
 from ..models.audit import AuditRecord
 from ..models.operator import OperatorAuditLog
+from ..models.provider import Provider
 from ..models.run import Message, Run
 
 log = logging.getLogger(__name__)
@@ -413,13 +414,14 @@ async def system_health(
     """System health check — DB, provider count, agent count, active runs."""
     from ..run_manager import list_active_runs
 
+    provider_count = (await db.execute(select(func.count(Provider.id)))).scalar() or 0
     agent_count = (await db.execute(select(func.count(Agent.id)))).scalar() or 0
     active_runs = len(list_active_runs())
 
     return HealthStatus(
         status="ok",
         database="connected",
-        providers=0,  # simplified — no provider count query needed
+        providers=provider_count,
         agents=agent_count,
         active_runs=active_runs,
         timestamp=datetime.now(UTC),

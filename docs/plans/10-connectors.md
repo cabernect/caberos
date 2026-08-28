@@ -92,7 +92,7 @@ v0.1 uses option 1 (strict) — only single-account MCP servers are supported. M
 `backend/src/agentos/mcp/credentials.py`:
 - Credentials stored encrypted in the DB (Fernet, same secret store as provider keys — D13, D39)
 - Credential types: OAuth token (access + refresh), API key, bearer token
-- **OAuth flow:** CaberOS runs the OAuth loopback redirect itself (`http://localhost:8081/api/mcp/oauth/callback`), exchanges the auth code, stores the token encrypted. The MCP server never sees the OAuth flow — it receives the access token via env var or header at call time.
+- **OAuth flow:** CaberOS runs the OAuth loopback redirect itself (`http://localhost:51718/api/mcp/oauth/callback` in the desktop app; `http://localhost:8081/api/mcp/oauth/callback` in development), exchanges the auth code, stores the token encrypted. The MCP server never sees the OAuth flow — it receives the access token via env var or header at call time.
 - **Token refresh:** CaberOS refreshes expired tokens using the stored refresh token, updates the encrypted value in the DB, and injects the fresh token on the next call.
 - **Never returned to dashboard or logs.** Same rule as D13.
 

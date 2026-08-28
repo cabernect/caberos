@@ -131,13 +131,13 @@ the workspace `attachments/` directory.
 
 Tickets **01–09 implemented**: smoke slice, real-model chat + SSE streaming, file ops + tool call UI, approval flow + elicitation (`agent.ask_user`), guardrails, run manager, agent management UI, providers, `run_subagent`, memory + skills (ticket 06), scheduler/heartbeat (ticket 07), MCP client infrastructure (08a), MCP credentials/OAuth (08b), external channels (08c), and observability + spend (ticket 09).
 
-**Current: v0.1.52 updater patch / Ticket 10 desktop hardening in progress. Next: v0.1.6 early-adopter usability. CaberCore extraction and the minimal CLI are deferred.**
+**Current: v0.1.6 Early-Adopter Usability in progress. Ticket 10 desktop hardening and Ticket 11 testing hardening are in scope. CaberCore extraction and the minimal CLI are deferred.**
 
 **Ticket 10 (Tauri Desktop App):** IN PROGRESS. macOS ARM64 (Apple Silicon) only — macOS Intel and Windows builds require cross-compilation/CI and are not yet set up.
 - Tauri 2 shell wraps the React frontend + packaged PyInstaller gateway.
 - Gateway supervisor (`frontend/src-tauri/src/gateway.rs`): starts the PyInstaller gateway in its own process group, routes stdout/stderr to `<app_data_dir>/logs/gateway.log`, kills the full process group on app exit.
-- Desktop auth uses **bearer token** (not cookies): login returns `session_token` in the JSON response, frontend stores it in `localStorage`, sends it as `Authorization: Bearer <token>` on every request. The backend accepts the token from either the cookie or the bearer header. This avoids cross-site cookie issues between the Tauri webview origin (`tauri.localhost`) and the gateway (`127.0.0.1:8081`).
-- Desktop API base: `http://127.0.0.1:8081` (not `tauri.localhost`, which is intercepted by Tauri's custom protocol handler).
+- Desktop auth uses **bearer token** (not cookies): login returns `session_token` in the JSON response, frontend stores it in `localStorage`, sends it as `Authorization: Bearer <token>` on every request. The backend accepts the token from either the cookie or the bearer header. This avoids cross-site cookie issues between the Tauri webview origin (`tauri.localhost`) and the gateway (`127.0.0.1:51718`).
+- Desktop API base: Tauri uses stable `http://127.0.0.1:51718` through the `gateway_url` command; development mode continues using the Vite proxy on port 8081. OAuth callbacks use `http://localhost:51718/api/mcp/oauth/callback` in the desktop app.
 - Default agents (`caber`, `agent-builder`) seed on first launch — PyInstaller bundles `defaults/*.yaml` via `--add-data` in `scripts/build-gateway.sh`.
 - Gateway log: `tail -f "$HOME/Library/Application Support/com.caberos.desktop/logs/gateway.log"`
 

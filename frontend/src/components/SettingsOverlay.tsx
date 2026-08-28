@@ -4,7 +4,7 @@ import {
   FileText, Folder, ChevronRight, ChevronDown, FolderOpen,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import { useConfirm } from "@/lib/confirm";
+import { useConfirm } from "@/lib/confirmHook";
 import type { Agent, ChannelInfo, ModelInfo, Provider, Skill, SkillInfo, WorkspaceEntry } from "@/lib/types";
 import { ModelSelect } from "@/components/ModelSelect";
 import { ThinkingToggle } from "@/components/ThinkingToggle";

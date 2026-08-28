@@ -22,10 +22,12 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
 from ..auth import require_operator
 from ..models.operator import Operator
 from ..services.backups import create_backup, delete_backup, list_backups, restore_backup
+from ..services.data_lifecycle import DataResetError, delete_all_local_data
 from ..services.migration import (
     do_merge,
     do_replace_validated,
@@ -35,6 +37,10 @@ from ..services.migration import (
 )
 
 router = APIRouter(prefix="/api/data", tags=["data"])
+
+
+class DeleteAllDataRequest(BaseModel):
+    confirmation: str
 
 
 @router.get("/export")
@@ -86,7 +92,7 @@ async def preview_data(
         raise HTTPException(status_code=400, detail="Empty file")
 
     try:
-        return preview_archive(io.BytesIO(content))
+        preview = preview_archive(io.BytesIO(content))
     except zipfile.BadZipFile:
         raise HTTPException(status_code=400, detail="Invalid ZIP file")
     except KeyError:
@@ -94,6 +100,9 @@ async def preview_data(
             status_code=400,
             detail="ZIP must contain agentos.db at the root",
         )
+
+    preview["db_integrity"] = "ok" if preview.get("db_integrity") == "ok" else "failed"
+    return preview
 
 
 @router.post("/import")
@@ -143,6 +152,30 @@ async def import_data(
             return do_merge(zf, names)
         except (ValueError, OSError) as e:
             raise HTTPException(status_code=400, detail="Data import failed") from e
+
+
+@router.post("/delete-all")
+async def delete_all_data(
+    request: DeleteAllDataRequest,
+    _operator: Operator = Depends(require_operator),
+) -> dict:
+    if request.confirmation != "DELETE ALL DATA":
+        raise HTTPException(status_code=400, detail="Type DELETE ALL DATA to confirm")
+
+    from ..db import engine, init_db
+    from ..seed import seed_default_agents, seed_operator_if_needed
+
+    await engine.dispose()
+    try:
+        delete_all_local_data()
+        await init_db()
+        await seed_operator_if_needed()
+        await seed_default_agents()
+    except DataResetError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except OSError as error:
+        raise HTTPException(status_code=500, detail="Could not delete all local data") from error
+    return {"status": "deleted", "requires_relogin": True}
 
 
 # --- Backup / restore point endpoints ---

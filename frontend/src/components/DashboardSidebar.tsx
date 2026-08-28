@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import {
   Bot,
   CalendarClock,
@@ -12,6 +13,8 @@ import {
   GitBranch,
 } from "lucide-react";
 import { LogoMark } from "@/components/LogoMark";
+import { NotificationCenter } from "@/components/NotificationCenter";
+import { api } from "@/lib/api";
 
 export type NavKey =
   | "agents"
@@ -22,6 +25,7 @@ export type NavKey =
   | "vault"
   | "observability"
   | "traces"
+  | "notifications"
   | "settings";
 
 interface DashboardSidebarProps {
@@ -53,11 +57,19 @@ export function DashboardSidebar({
   onToggleCollapse,
   agentCount,
 }: DashboardSidebarProps) {
+  const [loadedAgentCount, setLoadedAgentCount] = useState<number | undefined>(undefined);
+
+  useEffect(() => {
+    if (agentCount !== undefined) return;
+    api.listAgents().then((agents) => setLoadedAgentCount(agents.length)).catch(() => {});
+  }, [agentCount]);
+
+  const visibleAgentCount = agentCount ?? loadedAgentCount;
   const sections: NavSection[] = [
     {
       label: "Workspace",
       items: [
-        { key: "agents", label: "Agents", icon: Bot, badge: agentCount },
+        { key: "agents", label: "Agents", icon: Bot, badge: visibleAgentCount },
         { key: "scheduler", label: "Scheduler", icon: CalendarClock },
       ],
     },
@@ -116,16 +128,12 @@ export function DashboardSidebar({
               }}
               title={item.label}
               onMouseEnter={(e) => {
-                if (!isActive) {
-                  e.currentTarget.style.background = "var(--border)";
-                  e.currentTarget.style.color = "var(--ink)";
-                }
+                e.currentTarget.style.background = isActive ? "var(--ink-2)" : "var(--border)";
+                e.currentTarget.style.color = isActive ? "var(--white)" : "var(--ink)";
               }}
               onMouseLeave={(e) => {
-                if (!isActive) {
-                  e.currentTarget.style.background = "none";
-                  e.currentTarget.style.color = "var(--ink-2)";
-                }
+                e.currentTarget.style.background = isActive ? "var(--ink)" : "none";
+                e.currentTarget.style.color = isActive ? "var(--white)" : "var(--ink-2)";
               }}
             >
               <Icon className="h-4 w-4" />
@@ -133,6 +141,9 @@ export function DashboardSidebar({
           );
         })}
         <div className="flex-1" />
+        <div className="mb-1 w-8">
+          <NotificationCenter sidebar active={active === "notifications"} />
+        </div>
         <button
           onClick={() => onNavigate("settings")}
           className="flex h-7 w-7 items-center justify-center rounded text-[var(--ink-2)] transition hover:bg-[var(--border)] hover:text-[var(--ink)]"
@@ -143,6 +154,8 @@ export function DashboardSidebar({
             cursor: "pointer",
           }}
           title="Settings"
+          onMouseEnter={(e) => { e.currentTarget.style.background = active === "settings" ? "var(--ink-2)" : "var(--border)"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = active === "settings" ? "var(--ink)" : "none"; }}
         >
           <Settings className="h-4 w-4" />
         </button>
@@ -161,7 +174,7 @@ export function DashboardSidebar({
   // Expanded sidebar
   return (
     <aside
-      className="flex flex-col overflow-hidden border-r transition-all duration-200"
+      className="flex flex-col overflow-visible border-r transition-all duration-200"
       style={{
         width: 240,
         minWidth: 240,
@@ -211,6 +224,7 @@ export function DashboardSidebar({
 
       {/* Footer: Settings + Sign out */}
       <div className="px-2 py-2" style={{ borderTop: "1px solid var(--border)" }}>
+        <NotificationCenter sidebar active={active === "notifications"} />
         <NavButton
           item={{ key: "settings", label: "Settings", icon: Settings }}
           isActive={active === "settings"}
@@ -259,16 +273,12 @@ function NavButton({
         cursor: "pointer",
       }}
       onMouseEnter={(e) => {
-        if (!isActive) {
-          e.currentTarget.style.background = "var(--border)";
-          e.currentTarget.style.color = "var(--ink)";
-        }
+        e.currentTarget.style.background = isActive ? "var(--ink-2)" : "var(--border)";
+        e.currentTarget.style.color = isActive ? "var(--white)" : "var(--ink)";
       }}
       onMouseLeave={(e) => {
-        if (!isActive) {
-          e.currentTarget.style.background = "none";
-          e.currentTarget.style.color = "var(--ink-2)";
-        }
+        e.currentTarget.style.background = isActive ? "var(--ink)" : "none";
+        e.currentTarget.style.color = isActive ? "var(--white)" : "var(--ink-2)";
       }}
     >
       <Icon className="h-4 w-4 shrink-0" />

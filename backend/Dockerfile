@@ -47,4 +47,4 @@ EXPOSE 8081
 HEALTHCHECK --interval=10s --timeout=5s --start-period=15s --retries=5 \
     CMD curl -fsS http://localhost:8081/health || exit 1
 
-CMD ["uv", "run", "uvicorn", "agentos.main:app", "--host", "0.0.0.0", "--port", "8081"]
+CMD ["uv", "run", "python", "-m", "agentos.gateway_entry"]

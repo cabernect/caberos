@@ -316,6 +316,7 @@ export interface McpCatalogEntry {
   env_template: Record<string, string> | null;
   vendor: string;
   homepage: string;
+  installable?: boolean;
 }
 
 export interface ChannelInfo {
@@ -408,6 +409,18 @@ export interface SpendSummary {
   total_tokens_out: number;
   by_agent: SpendBreakdown[];
   by_trigger: Record<string, number>;
+}
+
+export interface Notification {
+  id: string;
+  notification_type: string;
+  severity: "info" | "success" | "warning" | "error";
+  title: string;
+  message: string;
+  action_path: string | null;
+  entity_id: string | null;
+  read: boolean;
+  created_at: string;
 }
 
 export interface OperatorAuditOut {

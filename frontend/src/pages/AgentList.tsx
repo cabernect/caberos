@@ -9,6 +9,7 @@ import {
 } from "@/components/DashboardSidebar";
 import { CreateAgentModal } from "@/components/CreateAgentModal";
 import { SettingsOverlay } from "@/components/SettingsOverlay";
+import { getSetupGuidePhase, setSetupGuideAgentId, setSetupGuidePhase } from "@/components/setupGuideState";
 
 interface AgentWithActivity extends Agent {
   sessionCount: number;
@@ -98,6 +99,14 @@ export function AgentList() {
     if (page === "traces") navigate("/traces");
   };
 
+  const openAgent = (agent: AgentWithActivity) => {
+    if (agent.name.toLowerCase() === "caber" && getSetupGuidePhase() === 0) {
+      setSetupGuideAgentId(agent.id);
+      setSetupGuidePhase(1);
+    }
+    navigate(`/agents/${agent.id}/chat`);
+  };
+
   return (
     <div className="flex h-screen overflow-hidden" style={{ background: "var(--surface)" }}>
       <DashboardSidebar
@@ -172,7 +181,8 @@ export function AgentList() {
                 <AgentCard
                   key={agent.id}
                   agent={agent}
-                  onClick={() => navigate(`/agents/${agent.id}/chat`)}
+                  guideTarget={agent.name.toLowerCase() === "caber" && getSetupGuidePhase() === 0}
+                  onClick={() => openAgent(agent)}
                   onSettings={() => {
                     setSettingsAgent(agent);
                     setShowSettings(true);
@@ -210,10 +220,12 @@ function AgentCard({
   agent,
   onClick,
   onSettings,
+  guideTarget,
 }: {
   agent: AgentWithActivity;
   onClick: () => void;
   onSettings: () => void;
+  guideTarget: boolean;
 }) {
   const statusLabel = agent.enabled ? "Active" : "Disabled";
   const statusColor = agent.enabled ? "var(--success)" : "var(--ink-3)";
@@ -225,9 +237,10 @@ function AgentCard({
     <div
       role="button"
       tabIndex={0}
+      data-agent-name={agent.name}
       onClick={onClick}
       onKeyDown={(e) => e.key === "Enter" && onClick()}
-      className="group flex cursor-pointer flex-col rounded-lg border p-5 transition"
+      className={`group flex cursor-pointer flex-col rounded-lg border p-5 transition ${guideTarget ? "ring-2 ring-[var(--accent)] ring-offset-2" : ""}`}
       style={{
         borderColor: "var(--border)",
         background: "var(--white)",
