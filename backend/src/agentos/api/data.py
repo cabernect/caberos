@@ -92,7 +92,7 @@ async def preview_data(
         raise HTTPException(status_code=400, detail="Empty file")
 
     try:
-        return preview_archive(io.BytesIO(content))
+        preview = preview_archive(io.BytesIO(content))
     except zipfile.BadZipFile:
         raise HTTPException(status_code=400, detail="Invalid ZIP file")
     except KeyError:
@@ -100,6 +100,9 @@ async def preview_data(
             status_code=400,
             detail="ZIP must contain agentos.db at the root",
         )
+
+    preview["db_integrity"] = "ok" if preview.get("db_integrity") == "ok" else "failed"
+    return preview
 
 
 @router.post("/import")

@@ -1,7 +1,10 @@
 """Shared utilities for the service layer."""
 
+import logging
 import sqlite3
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 
 def get_app_version() -> str:
@@ -17,12 +20,24 @@ def get_app_version() -> str:
 def check_db_integrity(db_path: Path) -> str:
     """Run PRAGMA integrity_check on a SQLite database file.
 
-    Returns "ok" or the error string.
+    Returns "ok" or "failed". Detailed failures are logged for diagnostics.
     """
     try:
         conn = sqlite3.connect(str(db_path))
-        result = conn.execute("PRAGMA integrity_check").fetchone()[0]
-        conn.close()
-        return result
-    except sqlite3.DatabaseError as e:
-        return str(e)
+        try:
+            result = conn.execute("PRAGMA integrity_check").fetchone()
+        finally:
+            conn.close()
+    except sqlite3.DatabaseError:
+        log.exception("SQLite integrity check could not run for %s", db_path)
+        return "failed"
+
+    if result and result[0] == "ok":
+        return "ok"
+
+    log.error(
+        "SQLite integrity check failed for %s: %r",
+        db_path,
+        result[0] if result else "no result",
+    )
+    return "failed"

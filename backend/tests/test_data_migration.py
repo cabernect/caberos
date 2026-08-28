@@ -157,14 +157,49 @@ class TestMigrationIntegrity:
 
         is_valid, error = migration_svc.validate_archive(io.BytesIO(archive))
         assert is_valid is False
-        assert (
-            "integrity" in error.lower()
-            or "malformed" in error.lower()
-            or "database" in error.lower()
-        )
+        assert error == "Archive database failed integrity check"
 
         # Target untouched
         assert tgt_db.read_bytes() == original_bytes
+
+    def test_integrity_check_logs_details_without_returning_them(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """Database diagnostics stay in logs instead of the returned status."""
+        from agentos.services import _utils
+
+        raw_error = "database disk image is malformed at /private/internal.db"
+
+        def fail_connect(_path):
+            raise sqlite3.DatabaseError(raw_error)
+
+        monkeypatch.setattr(_utils.sqlite3, "connect", fail_connect)
+        with caplog.at_level("ERROR", logger="agentos.services._utils"):
+            integrity = _utils.check_db_integrity(tmp_path / "agentos.db")
+
+        assert integrity == "failed"
+        assert raw_error in caplog.text
+
+    async def test_preview_sanitizes_integrity_status(self):
+        """The preview endpoint does not return arbitrary integrity details."""
+        from fastapi import UploadFile
+
+        from agentos.api.data import preview_data
+        from agentos.models.operator import Operator
+
+        raw_error = "database disk image is malformed at /private/internal.db"
+        upload = UploadFile(filename="backup.zip", file=io.BytesIO(b"archive"))
+        with patch(
+            "agentos.api.data.preview_archive",
+            return_value={"db_integrity": raw_error, "tables": []},
+        ):
+            preview = await preview_data(
+                upload,
+                Operator(id="operator-1", username="admin", password_hash="unused"),
+            )
+
+        assert preview["db_integrity"] == "failed"
+        assert raw_error not in str(preview)
 
     async def test_path_traversal_rejected(self, tmp_path, monkeypatch):
         """Archive paths with traversal (../../etc/passwd) are rejected."""
@@ -300,9 +335,7 @@ class TestMigrationIntegrity:
 
         with pytest.raises(Exception) as exc_info:
             migration_svc.export_archive_bytes()
-        assert (
-            "integrity" in str(exc_info.value).lower() or "corrupt" in str(exc_info.value).lower()
-        )
+        assert str(exc_info.value) == "Source database failed integrity check"
 
     async def test_merge_same_archive_twice_adds_nothing(self, tmp_path, monkeypatch):
         """Merging the same archive twice adds nothing the second time."""

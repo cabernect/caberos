@@ -6,6 +6,7 @@ never returned in plaintext. Model discovery is dynamic where available
 """
 
 import json
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -23,6 +24,7 @@ from ..models.provider import Provider
 from ..notifications import create_notification
 from ..secret_store import encrypt
 
+log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/providers", tags=["providers"])
 
 
@@ -232,20 +234,20 @@ async def validate_model(
     try:
         await adapter.validate_model(provider_id, model_name)
         return {"valid": True}
-    except Exception as e:
-        error = str(e)
-        error_type, guidance = classify_provider_error(error)
+    except Exception as error:
+        log.exception("Provider model validation failed for provider %s", provider.id)
+        error_type, guidance = classify_provider_error(str(error))
         await create_notification(
             db,
             notification_type=f"provider_{error_type}",
             severity="error",
             title=f"Provider {error_type.replace('_', ' ')}: {provider.name}",
-            message=f"{guidance} Details: {error}",
+            message=guidance,
             action_path="/settings",
             entity_id=provider.id,
         )
         await db.commit()
-        return {"valid": False, "error": error}
+        return {"valid": False, "error": guidance}
 
 
 class CustomModelIn(BaseModel):

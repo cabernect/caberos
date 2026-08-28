@@ -112,7 +112,7 @@ def export_archive_bytes() -> bytes:
         _checkpoint_wal(db_path)
         integrity = check_db_integrity(db_path)
         if integrity != "ok":
-            raise ValueError(f"Source database is corrupt (integrity_check: {integrity})")
+            raise ValueError("Source database failed integrity check")
 
     pairs = collect_paths()
     if not pairs:
@@ -207,7 +207,7 @@ def validate_archive(
     try:
         integrity = check_db_integrity(Path(tmp_db_path))
         if integrity != "ok":
-            return False, f"Archive database is corrupt (integrity_check: {integrity})"
+            return False, "Archive database failed integrity check"
     finally:
         Path(tmp_db_path).unlink(missing_ok=True)
 
@@ -258,7 +258,7 @@ def do_replace_validated(zf: zipfile.ZipFile, names: list[str]) -> dict:
         # Validate the extracted DB
         integrity = check_db_integrity(tmp_db_path)
         if integrity != "ok":
-            raise ValueError(f"Imported database is corrupt (integrity_check: {integrity})")
+            raise ValueError("Imported database failed integrity check")
 
         # Remove stale WAL/SHM before swap
         for suffix in ("-wal", "-shm"):
@@ -318,7 +318,7 @@ def do_merge(zf: zipfile.ZipFile, names: list[str]) -> dict:
     integrity = check_db_integrity(Path(imported_db_path))
     if integrity != "ok":
         Path(imported_db_path).unlink(missing_ok=True)
-        raise ValueError(f"Imported database is corrupt (integrity_check: {integrity})")
+        raise ValueError("Imported database failed integrity check")
 
     target_db_path = Path(settings.db_path)
     imported_rows = 0

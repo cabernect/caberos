@@ -158,6 +158,47 @@ class TestProviderCRUD:
         assert resp.status_code == 200
         assert resp.json()["has_key"] is False
 
+    async def test_validate_model_does_not_expose_provider_exception(
+        self, client, auth_headers, monkeypatch, caplog
+    ):
+        """Provider validation returns guidance while keeping raw errors in logs."""
+        create = await client.post(
+            "/api/providers",
+            json={"name": "Validation Provider", "type": "openai", "api_key": "sk-test"},
+            headers=auth_headers,
+        )
+        provider_id = create.json()["id"]
+        raw_error = "provider-internal-detail /srv/private/config"
+
+        async def fail_validation(_adapter, _provider_id, _model_name):
+            raise RuntimeError(raw_error)
+
+        monkeypatch.setattr(
+            "agentos.harness.litellm_adapter.LiteLLMAdapter.validate_model",
+            fail_validation,
+        )
+
+        with caplog.at_level("ERROR", logger="agentos.api.providers"):
+            response = await client.post(
+                f"/api/providers/{provider_id}/validate",
+                json={"model_name": "test-model"},
+                headers=auth_headers,
+            )
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "valid": False,
+            "error": "The provider returned an unexpected error. Check the gateway logs.",
+        }
+        assert raw_error not in response.text
+        assert raw_error in caplog.text
+
+        notifications = await client.get("/api/notifications", headers=auth_headers)
+        assert notifications.status_code == 200
+        notification = notifications.json()[0]
+        assert notification["message"] == response.json()["error"]
+        assert raw_error not in notification["message"]
+
     async def test_key_encrypted_at_rest(self, client, auth_headers, db_engine):
         """Verify the API key is encrypted in the DB, not stored in plaintext."""
         from sqlalchemy import select
