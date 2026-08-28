@@ -246,7 +246,7 @@ servers:
     auth_type: none
     vendor: Anthropic
     homepage: https://github.com/modelcontextprotocol/servers
-  
+
   # --- Search & Web (addition) ---
 
   - name: Firecrawl
