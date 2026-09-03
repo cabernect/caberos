@@ -509,3 +509,37 @@ async def test_capability_load_limits_are_bounded():
     second = await per_run_catalog.load(["read_file", "write_file"])
     assert second["accepted"] == ["read_file"]
     assert second["rejected"] == [{"name": "write_file", "reason": "Run capability limit reached"}]
+
+
+@pytest.mark.asyncio
+async def test_refresh_removes_disabled_mcp_schema_from_model_turn(db):
+    from agentos.capabilities.catalog import CapabilityRunCatalog
+    from agentos.models.mcp import McpServer, McpTool
+
+    server = McpServer(name="Refresh Archive", transport="stdio", command="demo", enabled=True)
+    db.add(server)
+    await db.flush()
+    tool = McpTool(
+        mcp_server_id=server.id,
+        tool_name="search",
+        capability_name="mcp.refresh_archive.search",
+        description="Search the refresh archive",
+        parameters_schema='{"type":"object","properties":{}}',
+    )
+    db.add(tool)
+    await db.flush()
+
+    config = AgentConfig(
+        id="refresh-agent",
+        name="Refresh Agent",
+        model=ModelConfig(provider_id="test", name="scripted"),
+        capabilities=[CapabilityGrant(name=tool.capability_name, always_loaded=True)],
+    )
+    catalog = CapabilityRunCatalog(config, db=db)
+    await catalog.prepare()
+    assert tool.capability_name in catalog.model_capability_names()
+
+    server.enabled = False
+    await db.commit()
+    await catalog.prepare(refresh=True)
+    assert tool.capability_name not in catalog.model_capability_names()

@@ -265,12 +265,21 @@ class CapabilityRunCatalog:
             return []
 
         names: list[str] = []
+        available_names = (
+            {item["name"] for item in self._metadata_cache}
+            if self._metadata_cache is not None
+            else None
+        )
         for capability in registry.list_all():
             server_id = _server_id_for_capability(capability.name)
             if capability.name in DISCOVERY_CAPABILITY_NAMES:
                 names.append(capability.name)
             elif capability.name in self.loaded or self._always_loaded(capability.name, server_id):
-                if self._is_permitted(capability.name, server_id):
+                if self._is_permitted(capability.name, server_id) and (
+                    capability.kind != "mcp_tool"
+                    or available_names is None
+                    or capability.name in available_names
+                ):
                     names.append(capability.name)
         return names
 
