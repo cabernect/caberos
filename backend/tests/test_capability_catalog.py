@@ -176,6 +176,18 @@ async def test_harness_loads_schemas_for_the_next_model_turn(db, workspace):
     )
     assert result.loaded_capabilities == ["read_file"]
 
+    from sqlalchemy import select
+
+    from agentos.models.audit import AuditRecord
+
+    audit_result = await db.execute(
+        select(AuditRecord).where(
+            AuditRecord.run_id == "catalog-harness-run",
+            AuditRecord.capability_name == "capabilities_load",
+        )
+    )
+    assert audit_result.scalar_one().allowed is True
+
 
 @pytest.mark.asyncio
 async def test_server_grant_searches_mcp_tools_from_the_database(db):
@@ -433,3 +445,67 @@ async def test_capability_listing_exposes_mcp_server_identity(db):
     assert listed["server_id"] == server.id
     assert listed["server_name"] == server.name
     assert listed["kind"] == "mcp_tool"
+
+
+@pytest.mark.asyncio
+async def test_large_mcp_server_keeps_optional_schemas_out_of_initial_turn(db):
+    from agentos.capabilities.catalog import CapabilityRunCatalog, mcp_server_grant_name
+    from agentos.models.mcp import McpServer, McpTool
+
+    server = McpServer(name="Large Archive", transport="stdio", command="demo", enabled=True)
+    db.add(server)
+    await db.flush()
+    tools = [
+        McpTool(
+            mcp_server_id=server.id,
+            tool_name=f"tool_{index}",
+            capability_name=f"mcp.large_archive.tool_{index}",
+            description=f"Archive tool {index}",
+            parameters_schema='{"type":"object","properties":{}}',
+        )
+        for index in range(100)
+    ]
+    db.add_all(tools)
+    await db.flush()
+
+    config = AgentConfig(
+        id="large-server-agent",
+        name="Large Server Agent",
+        model=ModelConfig(provider_id="test", name="scripted"),
+        capabilities=[CapabilityGrant(name=mcp_server_grant_name(server.id))],
+    )
+    catalog = CapabilityRunCatalog(config, db=db, run_id="run-large")
+    await catalog.prepare()
+
+    assert set(catalog.model_capability_names()) == {
+        "capabilities_search",
+        "capabilities_load",
+    }
+    results = await catalog.search("archive", limit=50)
+    assert len(results) == 50
+    assert all("parameters_schema" not in result for result in results)
+
+
+@pytest.mark.asyncio
+async def test_capability_load_limits_are_bounded():
+    from agentos.capabilities.catalog import CapabilityRunCatalog
+
+    config = AgentConfig(
+        id="limit-agent",
+        name="Limit Agent",
+        model=ModelConfig(provider_id="test", name="scripted"),
+        capabilities=[
+            CapabilityGrant(name="read_file", always_loaded=False),
+            CapabilityGrant(name="write_file", always_loaded=False),
+        ],
+    )
+    per_call_catalog = CapabilityRunCatalog(config, db=None, max_load_per_call=1, max_loaded=10)
+
+    first = await per_call_catalog.load(["read_file", "write_file"])
+    assert first["accepted"] == ["read_file"]
+    assert first["rejected"] == [{"name": "write_file", "reason": "Load request limit reached"}]
+
+    per_run_catalog = CapabilityRunCatalog(config, db=None, max_load_per_call=10, max_loaded=1)
+    second = await per_run_catalog.load(["read_file", "write_file"])
+    assert second["accepted"] == ["read_file"]
+    assert second["rejected"] == [{"name": "write_file", "reason": "Run capability limit reached"}]

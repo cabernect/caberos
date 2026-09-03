@@ -75,7 +75,7 @@ class CapabilityRunCatalog:
     db: Any = None
     run_id: str | None = None
     parent_config: AgentConfig | None = None
-    max_results: int = 20
+    max_results: int = 50
     max_load_per_call: int = 10
     max_loaded: int = 50
     loaded: set[str] = field(default_factory=set)
@@ -191,7 +191,10 @@ class CapabilityRunCatalog:
         result = await self.db.execute(
             select(McpTool.tool_name, McpServer.enabled, McpServer.tool_filter)
             .join(McpServer, McpServer.id == McpTool.mcp_server_id)
-            .where(McpTool.capability_name == item["name"])
+            .where(
+                McpTool.capability_name == item["name"],
+                McpTool.mcp_server_id == item["server_id"],
+            )
         )
         row = result.one_or_none()
         if row is None or not row[1]:

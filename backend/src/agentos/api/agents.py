@@ -1,5 +1,6 @@
 """Agent management API routes — CRUD, versioning, YAML import/export, duplicate, disable."""
 
+import json
 import uuid
 from typing import Any
 
@@ -43,11 +44,22 @@ async def list_capabilities(
     from ..capabilities.registry import registry
 
     enabled_result = await db.execute(
-        select(McpTool.capability_name, McpServer.id, McpServer.name)
+        select(
+            McpTool.capability_name,
+            McpTool.tool_name,
+            McpServer.id,
+            McpServer.name,
+            McpServer.tool_filter,
+        )
         .join(McpServer, McpServer.id == McpTool.mcp_server_id)
         .where(McpServer.enabled.is_(True))
     )
-    enabled_mcp = {row[0]: {"server_id": row[1], "server_name": row[2]} for row in enabled_result}
+    enabled_mcp = {}
+    for cap_name, tool_name, server_id, server_name, tool_filter_json in enabled_result:
+        tool_filter = json.loads(tool_filter_json) if tool_filter_json else None
+        if tool_filter and tool_name not in tool_filter:
+            continue
+        enabled_mcp[cap_name] = {"server_id": server_id, "server_name": server_name}
 
     capabilities = []
     for cap in registry.list_all():
