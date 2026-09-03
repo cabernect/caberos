@@ -312,56 +312,16 @@ async def _discover_tools(server: McpServer, client: McpClient) -> None:
             else:
                 raise
 
-    # Auto-enable new MCP tools for all agents that have an explicit
-    # capability list. Agents with capabilities=None already get all
-    # tools (including new MCP ones) implicitly.
+    # Discovery registers metadata but does not modify agent permission grants.
+    # Agents can grant the server or selected tools from the dashboard.
     await _auto_enable_mcp_tools(server, [t["name"] for t in tools])
 
     log.info("Discovered %d tools from '%s'", len(tools), server.name)
 
 
 async def _auto_enable_mcp_tools(server: McpServer, tool_names: list[str]) -> None:
-    """Add newly discovered MCP tools to agents with explicit capability lists.
-
-    Agents with capabilities=None already get all tools implicitly, so we
-    skip them. For agents with an explicit list, we append the new MCP
-    capability names so they're available without manual enabling in
-    Settings → Capabilities.
-    """
-    from ..agent_service import get_active_config, save_agent
-    from ..config_schema import CapabilityGrant
-    from ..models.agent import Agent
-
-    cap_names = {_namespace(server.name, t) for t in tool_names}
-    if not cap_names:
-        return
-
-    async with async_session_factory() as db:
-        result = await db.execute(select(Agent))
-        for agent in result.scalars().all():
-            config = await get_active_config(db, agent.id)
-            if config is None or config.capabilities is None:
-                continue  # null = all tools, no action needed
-
-            existing = {c.name for c in config.capabilities}
-            new_caps = [
-                CapabilityGrant(
-                    name=name,
-                    subject="none",
-                    require_approval=server.require_approval,
-                )
-                for name in cap_names
-                if name not in existing
-            ]
-            if new_caps:
-                config.capabilities = list(config.capabilities) + new_caps
-                await save_agent(db, config)
-                log.info(
-                    "Auto-enabled %d MCP tools from '%s' for agent '%s'",
-                    len(new_caps),
-                    server.name,
-                    agent.id,
-                )
+    """Keep discovery separate from the agent permission configuration."""
+    return
 
 
 async def disconnect_server(server_id: str) -> None:
@@ -406,13 +366,18 @@ async def load_tools_from_db() -> None:
     """
     async with async_session_factory() as db:
         result = await db.execute(
-            select(McpTool)
+            select(McpTool, McpServer)
             .join(McpServer, McpServer.id == McpTool.mcp_server_id)
             .where(McpServer.enabled.is_(True))
         )
-        tools = result.scalars().all()
+        tool_rows = result.all()
 
-    for tool in tools:
+    tools = []
+    for tool, server in tool_rows:
+        tool_filter = json.loads(server.tool_filter) if server.tool_filter else None
+        if tool_filter and tool.tool_name not in tool_filter:
+            continue
+        tools.append(tool)
         _tool_map[tool.capability_name] = (tool.mcp_server_id, tool.tool_name)
         cap_registry.register(
             CapabilityDef(

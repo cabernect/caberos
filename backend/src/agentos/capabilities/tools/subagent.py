@@ -196,6 +196,7 @@ async def _execute_subagent(
             recent_messages=[],
             trigger="user_message",
             event_emitter=tagged_emitter,
+            parent_config=parent_config,
         )
 
         return {
@@ -266,6 +267,7 @@ class _SubAgentSyscallHandler:
         sub_agent_id: str | None = None,
         event_emitter: Any = None,
         parent_config: Any = None,
+        capability_catalog: Any = None,
     ) -> Any:
         # Use the parent config passed at construction time, or the one
         # passed to this call (for nested sub-agents)
@@ -279,6 +281,7 @@ class _SubAgentSyscallHandler:
             sub_agent_id=self._sub_agent_id,
             event_emitter=event_emitter,
             parent_config=effective_parent,
+            capability_catalog=capability_catalog,
         )
 
 

@@ -29,6 +29,11 @@ class Run(Base, IdMixin):
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    context_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    max_context_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    compacted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    context_breakdown: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    loaded_capabilities: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
 
 
 class Message(Base, IdMixin):

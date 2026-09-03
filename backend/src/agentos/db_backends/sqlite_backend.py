@@ -137,6 +137,11 @@ class SQLiteBackend(DatabaseBackend):
             ("documents", "structure_json", "TEXT NOT NULL DEFAULT '{}'"),
             ("document_chunks", "source_location", "TEXT"),
             ("document_chunks", "block_type", "VARCHAR(30) NOT NULL DEFAULT 'paragraph'"),
+            ("runs", "context_tokens", "INTEGER DEFAULT 0"),
+            ("runs", "max_context_tokens", "INTEGER DEFAULT 0"),
+            ("runs", "compacted", "BOOLEAN DEFAULT 0"),
+            ("runs", "context_breakdown", "TEXT NOT NULL DEFAULT '{}'"),
+            ("runs", "loaded_capabilities", "TEXT NOT NULL DEFAULT '[]'"),
         ]
         for table, column, col_type in patches:
             if not await self.column_exists(conn, table, column):
@@ -288,6 +293,7 @@ class SQLiteBackend(DatabaseBackend):
         column = self._identifier(column)
         if col_type not in {
             "TEXT",
+            "INTEGER DEFAULT 0",
             "VARCHAR(36)",
             "VARCHAR(30) NOT NULL DEFAULT 'paragraph'",
             "VARCHAR(50)",

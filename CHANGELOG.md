@@ -5,7 +5,7 @@ All notable changes to CaberOS are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.6] - Unreleased
+## [0.1.6] - Released
 
 ### Added
 
@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rotated OAuth refresh tokens are persisted for providers such as Notion
 - OAuth callback URLs follow the configured gateway port
 - Desktop app close confirmation uses the application confirmation UI
+
+### Security
+
+- Sanitized SQLite integrity-check and provider-validation failures so raw exception details remain in server logs instead of API responses or notifications
 
 ## [0.1.5] - Released
 

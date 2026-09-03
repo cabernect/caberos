@@ -2,6 +2,10 @@
 
 Each file in this folder is an implementation plan for one part of CaberOS v0.1, derived from [`docs/spec-v0.1.md`](../spec-v0.1.md).
 
+## Active release plan
+
+The current next release is **v0.1.7 — Progressive Capability Discovery**. Its outcome, module interface, invariants, tests, and release gate are documented in [`v0.2-release-plan.md`](v0.2-release-plan.md#v017--progressive-capability-discovery). Older numbered plans remain architectural and historical references; they do not override the current release section.
+
 ## Build order
 
 Following **D27** — vertical slice first, then the rest of the dashboard.

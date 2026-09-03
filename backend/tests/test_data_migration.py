@@ -337,6 +337,85 @@ class TestMigrationIntegrity:
             migration_svc.export_archive_bytes()
         assert str(exc_info.value) == "Source database failed integrity check"
 
+    async def test_merge_old_run_schema_into_current_database(self, tmp_path, monkeypatch):
+        """Archives without v0.1.7 trace columns remain importable."""
+        from agentos.config import settings
+        from agentos.services import migration as migration_svc
+
+        target_dir = tmp_path / "target"
+        target_dir.mkdir()
+        target_db = target_dir / "agentos.db"
+        source_db = tmp_path / "source.db"
+        target_run_columns = """
+            id TEXT PRIMARY KEY, session_id TEXT, contact_id TEXT, agent_id TEXT,
+            status TEXT, trigger TEXT, message_id TEXT, tokens_in INTEGER,
+            tokens_out INTEGER, cost REAL, latency_ms INTEGER, is_test INTEGER,
+            started_at TEXT, completed_at TEXT, error TEXT,
+            context_tokens INTEGER DEFAULT 0, max_context_tokens INTEGER DEFAULT 0,
+            compacted INTEGER DEFAULT 0, context_breakdown TEXT DEFAULT '{}',
+            loaded_capabilities TEXT DEFAULT '[]'
+        """
+        old_run_columns = """
+            id TEXT PRIMARY KEY, session_id TEXT, contact_id TEXT, agent_id TEXT,
+            status TEXT, trigger TEXT, message_id TEXT, tokens_in INTEGER,
+            tokens_out INTEGER, cost REAL, latency_ms INTEGER, is_test INTEGER,
+            started_at TEXT, completed_at TEXT, error TEXT
+        """
+
+        def make_db(path: Path, run_columns: str, run_id: str) -> None:
+            conn = sqlite3.connect(str(path))
+            conn.execute("CREATE TABLE operators (id TEXT PRIMARY KEY, username TEXT)")
+            conn.execute("INSERT INTO operators VALUES ('op-1', 'admin')")
+            conn.execute(f"CREATE TABLE runs ({run_columns})")
+            old_columns = (
+                "id, session_id, contact_id, agent_id, status, trigger, message_id, "
+                "tokens_in, tokens_out, cost, latency_ms, is_test, started_at, completed_at, error"
+            )
+            conn.execute(
+                f"INSERT INTO runs ({old_columns}) VALUES ({','.join('?' for _ in range(15))})",
+                (
+                    run_id,
+                    "session-1",
+                    "contact-1",
+                    "agent-1",
+                    "completed",
+                    "user_message",
+                    None,
+                    1,
+                    1,
+                    0.0,
+                    1,
+                    0,
+                    "",
+                    None,
+                    None,
+                ),
+            )
+            conn.commit()
+            conn.close()
+
+        make_db(target_db, target_run_columns, "target-run")
+        make_db(source_db, old_run_columns, "source-run")
+        archive = _make_zip(db_bytes=source_db.read_bytes())
+
+        monkeypatch.setattr(settings, "db_path", target_db)
+        monkeypatch.setattr(settings, "secret_key_path", target_dir / "secret.key")
+        monkeypatch.setattr(settings, "agent_home_root", target_dir / "agents")
+        monkeypatch.setattr(settings, "workspace_root", target_dir / "workspaces")
+        (target_dir / "agents").mkdir()
+        (target_dir / "workspaces").mkdir()
+
+        zf = zipfile.ZipFile(io.BytesIO(archive))
+        result = migration_svc.do_merge(zf, zf.namelist())
+
+        assert result["rows_added"] >= 1
+        conn = sqlite3.connect(str(target_db))
+        imported = conn.execute(
+            "SELECT id, context_breakdown, loaded_capabilities FROM runs WHERE id = 'source-run'"
+        ).fetchone()
+        conn.close()
+        assert imported == ("source-run", "{}", "[]")
+
     async def test_merge_same_archive_twice_adds_nothing(self, tmp_path, monkeypatch):
         """Merging the same archive twice adds nothing the second time."""
         from agentos.config import settings
