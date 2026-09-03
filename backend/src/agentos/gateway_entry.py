@@ -4,7 +4,7 @@ import os
 
 import uvicorn
 
-from .logging_config import configure_logging
+from agentos.logging_config import configure_logging
 
 
 def main() -> None:
