@@ -354,6 +354,18 @@ function RunTraceView({
             <p className="text-[12px]" style={{ color: "#ef4444" }}>{run.error}</p>
           </div>
         )}
+        {(run.context_tokens > 0 || run.loaded_capabilities.length > 0) && (
+          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 border-t pt-3 text-[11px] text-[var(--ink-2)]" style={{ borderColor: "var(--border)" }}>
+            <span>Context: {run.context_tokens.toLocaleString()}{run.max_context_tokens > 0 ? ` / ${run.max_context_tokens.toLocaleString()}` : ""}</span>
+            <span>Tool schemas: {run.context_breakdown.tools.toLocaleString()} tokens</span>
+            <span>{run.loaded_capabilities.length} loaded on demand</span>
+            {run.loaded_capabilities.length > 0 && (
+              <span className="font-mono text-[var(--ink-3)]" title={run.loaded_capabilities.join(", ")}>
+                {run.loaded_capabilities.join(", ")}
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Sub-tabs: Trace | Syscalls */}
