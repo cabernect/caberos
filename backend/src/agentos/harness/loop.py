@@ -39,6 +39,7 @@ class RunResult:
     max_context_tokens: int = 0  # model's context window
     compacted: bool = False  # whether compaction occurred this run
     context_breakdown: dict[str, int] = field(default_factory=dict)  # per-section token counts
+    loaded_capabilities: list[str] = field(default_factory=list)
 
 
 # SSE event emitter type: async callable that takes (event_type: str, payload: dict)
@@ -274,6 +275,7 @@ class Harness:
         # Steps 8-11: the loop
         while result.total_turns < max_turns:
             result.total_turns += 1
+            await capability_catalog.prepare(refresh=True)
             visible_capability_names = capability_catalog.model_capability_names()
             tool_schemas = assemble_tool_schemas(
                 agent_config,
@@ -282,6 +284,7 @@ class Harness:
             result.context_breakdown["conversation"] = count_tokens(history[1:], model_str)
             result.context_breakdown["tools"] = count_tool_tokens(tool_schemas, model_str)
             result.context_tokens = sum(result.context_breakdown.values())
+            result.loaded_capabilities = sorted(capability_catalog.loaded)
 
             # Step 8: Call model
             # Use streaming if the adapter supports it (LiteLLMAdapter);
@@ -503,6 +506,7 @@ class Harness:
                     )
 
                 # Emit turn_complete
+                result.loaded_capabilities = sorted(capability_catalog.loaded)
                 if event_emitter:
                     await self._emit(
                         event_emitter,
@@ -513,6 +517,8 @@ class Harness:
                             "tokens_out": response.tokens_out,
                             "cached_tokens": response.cached_tokens,
                             "cost": response.cost,
+                            "loaded_capabilities": list(result.loaded_capabilities),
+                            "context_breakdown": dict(result.context_breakdown),
                         },
                     )
 
@@ -560,6 +566,8 @@ class Harness:
                         "tokens_out": response.tokens_out,
                         "cached_tokens": response.cached_tokens,
                         "cost": response.cost,
+                        "loaded_capabilities": list(result.loaded_capabilities),
+                        "context_breakdown": dict(result.context_breakdown),
                     },
                 )
 

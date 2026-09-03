@@ -151,6 +151,10 @@ async def test_harness_loads_schemas_for_the_next_model_turn(db, workspace):
         capabilities=[CapabilityGrant(name="read_file", always_loaded=False)],
     )
     model = CapturingModel()
+    events: list[tuple[str, dict]] = []
+
+    async def emit(event_type: str, payload: dict) -> None:
+        events.append((event_type, payload))
 
     result = await Harness(model=model).run(
         agent_config=config,
@@ -158,16 +162,25 @@ async def test_harness_loads_schemas_for_the_next_model_turn(db, workspace):
         message="Load the file capability",
         syscall_handler=StubSyscallHandler(db=db, workspace_path=workspace),
         run_id="catalog-harness-run",
+        event_emitter=emit,
     )
 
     assert result.final_answer == "Loaded the file capability."
     assert "read_file" not in model.tool_names[0]
     assert set(model.tool_names[0]) == {"capabilities_search", "capabilities_load"}
     assert "read_file" in model.tool_names[1]
+    turn_events = [payload for event, payload in events if event == "turn_complete"]
+    assert turn_events[0]["loaded_capabilities"] == ["read_file"]
+    assert (
+        turn_events[1]["context_breakdown"]["tools"] > turn_events[0]["context_breakdown"]["tools"]
+    )
+    assert result.loaded_capabilities == ["read_file"]
 
 
 @pytest.mark.asyncio
 async def test_server_grant_searches_mcp_tools_from_the_database(db):
+    import json
+
     from agentos.capabilities.catalog import CapabilityRunCatalog, mcp_server_grant_name
     from agentos.models.mcp import McpServer, McpTool
 
@@ -213,6 +226,11 @@ async def test_server_grant_searches_mcp_tools_from_the_database(db):
     loaded = await catalog.load([tool.capability_name])
     assert loaded["accepted"] == [tool.capability_name]
     assert tool.capability_name in catalog.model_capability_names()
+
+    server.tool_filter = json.dumps(["other_tool"])
+    await db.commit()
+    filtered_catalog = CapabilityRunCatalog(config, db=db, run_id="run-2")
+    assert await filtered_catalog.search("documents", kind="mcp_tool") == []
 
 
 @pytest.mark.asyncio
@@ -300,6 +318,36 @@ async def test_explicit_mcp_grants_are_on_demand_unless_marked_always_loaded(mon
 
 
 @pytest.mark.asyncio
+async def test_subagent_catalog_is_limited_by_parent_ceiling(monkeypatch):
+    from agentos.capabilities.catalog import CapabilityRunCatalog
+    from agentos.capabilities.registry import CapabilityDef, registry
+    from agentos.mcp import registry as mcp_registry
+
+    allowed_name = "mcp.parent.allowed"
+    blocked_name = "mcp.parent.blocked"
+    for name in (allowed_name, blocked_name):
+        registry.register(
+            CapabilityDef(
+                name=name,
+                kind="mcp_tool",
+                description=name.rsplit(".", 1)[-1],
+                parameters_schema={"type": "object", "properties": {}},
+            )
+        )
+        monkeypatch.setitem(mcp_registry._tool_map, name, ("server-1", name.rsplit(".", 1)[-1]))
+
+    parent = _agent_config(allowed_name)
+    child = _agent_config(allowed_name, blocked_name)
+    catalog = CapabilityRunCatalog(child, db=None, parent_config=parent)
+
+    results = await catalog.search()
+    assert [result["name"] for result in results] == [allowed_name]
+    rejected = await catalog.load([blocked_name])
+    assert rejected["accepted"] == []
+    assert rejected["rejected"] == [{"name": blocked_name, "reason": "Capability is not permitted"}]
+
+
+@pytest.mark.asyncio
 async def test_mcp_discovery_does_not_modify_agent_grants(db, monkeypatch):
     from sqlalchemy import select
 
@@ -348,3 +396,40 @@ async def test_mcp_discovery_does_not_modify_agent_grants(db, monkeypatch):
     assert [grant.name for grant in updated.capabilities] == ["read_file"]
     result = await db.execute(select(McpTool).where(McpTool.mcp_server_id == server.id))
     assert result.scalar_one().capability_name == "mcp.demo.search"
+
+
+@pytest.mark.asyncio
+async def test_capability_listing_exposes_mcp_server_identity(db):
+    from agentos.api.agents import list_capabilities
+    from agentos.capabilities.registry import CapabilityDef, registry
+    from agentos.models.mcp import McpServer, McpTool
+
+    server = McpServer(name="Listing Archive", transport="stdio", command="demo", enabled=True)
+    db.add(server)
+    await db.flush()
+    tool = McpTool(
+        mcp_server_id=server.id,
+        tool_name="search",
+        capability_name="mcp.listing_archive.search",
+        description="Search the listing archive",
+        parameters_schema='{"type":"object","properties":{}}',
+    )
+    db.add(tool)
+    registry.register(
+        CapabilityDef(
+            name=tool.capability_name,
+            kind="mcp_tool",
+            description=tool.description,
+            parameters_schema={"type": "object", "properties": {}},
+        )
+    )
+    await db.commit()
+
+    capabilities = await list_capabilities(None, db)
+
+    listed = next(
+        capability for capability in capabilities if capability["name"] == tool.capability_name
+    )
+    assert listed["server_id"] == server.id
+    assert listed["server_name"] == server.name
+    assert listed["kind"] == "mcp_tool"

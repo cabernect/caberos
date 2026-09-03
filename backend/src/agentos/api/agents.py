@@ -43,23 +43,29 @@ async def list_capabilities(
     from ..capabilities.registry import registry
 
     enabled_result = await db.execute(
-        select(McpTool.capability_name)
+        select(McpTool.capability_name, McpServer.id, McpServer.name)
         .join(McpServer, McpServer.id == McpTool.mcp_server_id)
         .where(McpServer.enabled.is_(True))
     )
-    enabled_mcp_names = {row[0] for row in enabled_result}
+    enabled_mcp = {row[0]: {"server_id": row[1], "server_name": row[2]} for row in enabled_result}
 
-    return [
-        {
-            "name": cap.name,
-            "kind": cap.kind,
-            "description": cap.description,
-            "egress": cap.egress,
-            "require_approval": cap.require_approval,
-        }
-        for cap in registry.list_all()
-        if not cap.name.startswith("mcp.") or cap.name in enabled_mcp_names
-    ]
+    capabilities = []
+    for cap in registry.list_all():
+        server_info = enabled_mcp.get(cap.name)
+        if cap.name.startswith("mcp.") and server_info is None:
+            continue
+        capabilities.append(
+            {
+                "name": cap.name,
+                "kind": cap.kind,
+                "description": cap.description,
+                "egress": cap.egress,
+                "require_approval": cap.require_approval,
+                "server_id": server_info["server_id"] if server_info else None,
+                "server_name": server_info["server_name"] if server_info else None,
+            }
+        )
+    return capabilities
 
 
 # --- Request models ---

@@ -352,6 +352,15 @@ class SyscallHandler:
             return await self._deny(
                 run_id, call, agent_config, "MCP server config not found", start, sub_agent_id
             )
+        if not server.enabled:
+            return await self._deny(
+                run_id, call, agent_config, "MCP server is disabled", start, sub_agent_id
+            )
+        tool_filter = _json.loads(server.tool_filter) if server.tool_filter else None
+        if tool_filter and tool_name not in tool_filter:
+            return await self._deny(
+                run_id, call, agent_config, "MCP tool is filtered", start, sub_agent_id
+            )
 
         # For servers that need credentials (env_template or headers), resolve
         # the subject binding to get the decrypted credential.

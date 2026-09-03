@@ -49,11 +49,10 @@ def _grant_for(config: AgentConfig, name: str, server_id: str | None = None) -> 
         return capability if capability.kind != "mcp_tool" else None
 
     for grant in config.capabilities:
-        if not grant.enabled:
-            continue
         if grant.name == name:
-            return grant
-        if server_id and grant.name == mcp_server_grant_name(server_id):
+            return grant if grant.enabled else None
+    for grant in config.capabilities:
+        if grant.enabled and server_id and grant.name == mcp_server_grant_name(server_id):
             return grant
     return None
 
@@ -124,6 +123,9 @@ class CapabilityRunCatalog:
                 .where(McpServer.enabled.is_(True))
             )
             for tool, server in result.all():
+                tool_filter = json.loads(server.tool_filter) if server.tool_filter else None
+                if tool_filter and tool.tool_name not in tool_filter:
+                    continue
                 capability = registry.get(tool.capability_name)
                 if capability is None:
                     capability = CapabilityDef(
@@ -176,9 +178,26 @@ class CapabilityRunCatalog:
         self._metadata_cache = list(metadata_by_name.values())
         return self._metadata_cache
 
-    async def prepare(self) -> None:
-        """Load the permission-filtered catalog before the first model turn."""
-        await self._metadata()
+    async def prepare(self, *, refresh: bool = False) -> None:
+        """Load the permission-filtered catalog before a model turn."""
+        if refresh:
+            self._metadata_cache = None
+        metadata = await self._metadata()
+        self.loaded.intersection_update(item["name"] for item in metadata)
+
+    async def _is_mcp_available(self, item: dict[str, Any]) -> bool:
+        if self.db is None or item["kind"] != "mcp_tool":
+            return True
+        result = await self.db.execute(
+            select(McpTool.tool_name, McpServer.enabled, McpServer.tool_filter)
+            .join(McpServer, McpServer.id == McpTool.mcp_server_id)
+            .where(McpTool.capability_name == item["name"])
+        )
+        row = result.one_or_none()
+        if row is None or not row[1]:
+            return False
+        tool_filter = json.loads(row[2]) if row[2] else None
+        return not tool_filter or row[0] in tool_filter
 
     async def search(
         self,
@@ -266,6 +285,9 @@ class CapabilityRunCatalog:
             item = metadata.get(name)
             if item is None:
                 rejected.append({"name": name, "reason": "Capability is not permitted"})
+                continue
+            if not await self._is_mcp_available(item):
+                rejected.append({"name": name, "reason": "Capability is unavailable"})
                 continue
             if name in self.loaded:
                 accepted.append(name)
