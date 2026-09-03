@@ -42,6 +42,7 @@ Usage from the API server:
     )
 """
 
+import json
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -288,7 +289,10 @@ async def run_agent(
                         "context_tokens": getattr(run, "context_tokens", 0),
                         "max_context_tokens": getattr(run, "max_context_tokens", 0),
                         "compacted": getattr(run, "compacted", False),
-                        "context_breakdown": getattr(run, "context_breakdown", {}),
+                        "context_breakdown": json.loads(getattr(run, "context_breakdown", "{}")),
+                        "loaded_capabilities": json.loads(
+                            getattr(run, "loaded_capabilities", "[]")
+                        ),
                     },
                 )
                 if hasattr(result, "__await__"):

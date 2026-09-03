@@ -9,8 +9,10 @@ GET  /api/operator-audit — operator action audit trail
 GET  /api/stats          — dashboard stats (KPIs + time-series + per-agent)
 """
 
+import json
 import logging
 from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -28,6 +30,13 @@ from ..models.run import Message, Run
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["observability"])
+
+
+def _decode_json(value: str | None, default: Any) -> Any:
+    try:
+        return json.loads(value) if value else default
+    except (TypeError, json.JSONDecodeError):
+        return default
 
 
 # --- Response models ---
@@ -89,6 +98,11 @@ class RunDetail(BaseModel):
     started_at: datetime
     completed_at: datetime | None = None
     error: str | None = None
+    context_tokens: int = 0
+    max_context_tokens: int = 0
+    compacted: bool = False
+    context_breakdown: dict[str, int] = {}
+    loaded_capabilities: list[str] = []
     messages: list[MessageOut]
     audit_records: list[AuditOut]
 
@@ -237,6 +251,13 @@ async def get_run_detail(
         for a in audit_result.scalars().all()
     ]
 
+    context_breakdown = _decode_json(run.context_breakdown, {})
+    if not isinstance(context_breakdown, dict):
+        context_breakdown = {}
+    loaded_capabilities = _decode_json(run.loaded_capabilities, [])
+    if not isinstance(loaded_capabilities, list):
+        loaded_capabilities = []
+
     return RunDetail(
         id=run.id,
         agent_id=run.agent_id,
@@ -252,6 +273,11 @@ async def get_run_detail(
         started_at=run.started_at,
         completed_at=run.completed_at,
         error=run.error,
+        context_tokens=run.context_tokens,
+        max_context_tokens=run.max_context_tokens,
+        compacted=run.compacted,
+        context_breakdown=context_breakdown,
+        loaded_capabilities=loaded_capabilities,
         messages=messages,
         audit_records=audit_records,
     )

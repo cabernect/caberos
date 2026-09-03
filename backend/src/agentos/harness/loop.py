@@ -11,6 +11,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..capabilities.catalog import CapabilityRunCatalog
 from ..config_schema import AgentConfig
 from ..syscall.protocol import SyscallHandler, SyscallResult, ToolCall
 from .context import assemble_system_prompt, assemble_tool_schemas, build_message_history
@@ -38,6 +39,7 @@ class RunResult:
     max_context_tokens: int = 0  # model's context window
     compacted: bool = False  # whether compaction occurred this run
     context_breakdown: dict[str, int] = field(default_factory=dict)  # per-section token counts
+    loaded_capabilities: list[str] = field(default_factory=list)
 
 
 # SSE event emitter type: async callable that takes (event_type: str, payload: dict)
@@ -63,6 +65,7 @@ class Harness:
         event_emitter: EventEmitter = None,
         attachments: list[Any] | None = None,
         skill: str | None = None,
+        parent_config: AgentConfig | None = None,
     ) -> RunResult:
         """Execute the agent loop (D19 steps 7-11).
 
@@ -130,6 +133,14 @@ class Harness:
         if hasattr(syscall_handler, "supports_vision"):
             syscall_handler.supports_vision = bool(supports_vision)
 
+        capability_catalog = CapabilityRunCatalog(
+            agent_config=agent_config,
+            db=getattr(syscall_handler, "db", None),
+            run_id=run_id,
+            parent_config=parent_config,
+        )
+        await capability_catalog.prepare()
+        visible_capability_names = capability_catalog.model_capability_names()
         system_prompt = assemble_system_prompt(
             agent_config,
             message,
@@ -138,8 +149,12 @@ class Harness:
             forced_skill=skill,
             past_sessions=past_sessions,
             supports_vision=supports_vision,
+            enabled_caps=visible_capability_names,
         )
-        tool_schemas = assemble_tool_schemas(agent_config)
+        tool_schemas = assemble_tool_schemas(
+            agent_config,
+            capability_names=visible_capability_names,
+        )
         history = build_message_history(system_prompt, recent_messages or [], message, attachments)
 
         result = RunResult()
@@ -260,6 +275,16 @@ class Harness:
         # Steps 8-11: the loop
         while result.total_turns < max_turns:
             result.total_turns += 1
+            await capability_catalog.prepare(refresh=True)
+            visible_capability_names = capability_catalog.model_capability_names()
+            tool_schemas = assemble_tool_schemas(
+                agent_config,
+                capability_names=visible_capability_names,
+            )
+            result.context_breakdown["conversation"] = count_tokens(history[1:], model_str)
+            result.context_breakdown["tools"] = count_tool_tokens(tool_schemas, model_str)
+            result.context_tokens = sum(result.context_breakdown.values())
+            result.loaded_capabilities = sorted(capability_catalog.loaded)
 
             # Step 8: Call model
             # Use streaming if the adapter supports it (LiteLLMAdapter);
@@ -401,6 +426,7 @@ class Harness:
                         agent_config=agent_config,
                         run_id=run_id,
                         event_emitter=event_emitter,
+                        capability_catalog=capability_catalog,
                     )
 
                 syscall_results = await asyncio.gather(*[_mediate_one(c) for c in calls])
@@ -480,6 +506,7 @@ class Harness:
                     )
 
                 # Emit turn_complete
+                result.loaded_capabilities = sorted(capability_catalog.loaded)
                 if event_emitter:
                     await self._emit(
                         event_emitter,
@@ -490,6 +517,8 @@ class Harness:
                             "tokens_out": response.tokens_out,
                             "cached_tokens": response.cached_tokens,
                             "cost": response.cost,
+                            "loaded_capabilities": list(result.loaded_capabilities),
+                            "context_breakdown": dict(result.context_breakdown),
                         },
                     )
 
@@ -537,6 +566,8 @@ class Harness:
                         "tokens_out": response.tokens_out,
                         "cached_tokens": response.cached_tokens,
                         "cost": response.cost,
+                        "loaded_capabilities": list(result.loaded_capabilities),
+                        "context_breakdown": dict(result.context_breakdown),
                     },
                 )
 

@@ -5,6 +5,7 @@ run_subagent is just another tool.
 """
 
 from .registry import CapabilityDef, registry
+from .tools.catalog import capabilities_load, capabilities_search
 from .tools.datetime_tool import datetime_now
 from .tools.file import read_file, search_files, write_file
 from .tools.knowledge import doc_inspect, doc_list, doc_search
@@ -675,5 +676,71 @@ def register_builtin_capabilities() -> None:
             require_approval=False,
             subject_scoped=False,
             execute=skills_read_resource,
+        )
+    )
+
+    registry.register(
+        CapabilityDef(
+            name="capabilities_search",
+            kind="tool",
+            description=(
+                "Search the capabilities permitted for this run by name or description. "
+                "Returns compact metadata only; use capabilities_load to make selected "
+                "tool schemas available for the next model turn."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Optional text to match against capability names and descriptions",
+                    },
+                    "server": {
+                        "type": "string",
+                        "description": "Optional MCP server name or ID filter",
+                    },
+                    "kind": {
+                        "type": "string",
+                        "enum": ["tool", "memory", "mcp_tool"],
+                        "description": "Optional capability kind filter",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum results to return (default 20, maximum 50)",
+                        "default": 20,
+                    },
+                },
+            },
+            egress=False,
+            require_approval=False,
+            subject_scoped=False,
+            execute=capabilities_search,
+        )
+    )
+
+    registry.register(
+        CapabilityDef(
+            name="capabilities_load",
+            kind="tool",
+            description=(
+                "Load selected permitted capability schemas for the next model turn. "
+                "Use exact names returned by capabilities_search. Loading never grants "
+                "new authority."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "names": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Exact capability names to load",
+                    }
+                },
+                "required": ["names"],
+            },
+            egress=False,
+            require_approval=False,
+            subject_scoped=False,
+            execute=capabilities_load,
         )
     )

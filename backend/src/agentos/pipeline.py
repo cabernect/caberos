@@ -5,6 +5,7 @@ scheduler (plan 12) call pipeline.handle_inbound() to trigger a run.
 The pipeline is channel-agnostic.
 """
 
+import json
 import logging
 import uuid
 from dataclasses import dataclass
@@ -584,11 +585,12 @@ class Pipeline:
                 if result.error:
                     run.error = result.error
 
-                # Context compaction metadata (for the context bar — not persisted)
+                # Context and capability metadata for the run trace
                 run.context_tokens = result.context_tokens
                 run.max_context_tokens = result.max_context_tokens
                 run.compacted = result.compacted
-                run.context_breakdown = result.context_breakdown
+                run.context_breakdown = json.dumps(result.context_breakdown)
+                run.loaded_capabilities = json.dumps(result.loaded_capabilities)
 
                 # Update session activity
                 session.last_activity_at = datetime.now(UTC)
