@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
+from sqlalchemy import select
+
 from ..config_schema import AgentConfig
-from .registry import registry
+from ..models.mcp import McpServer, McpTool
+from .registry import CapabilityDef, registry
 
 DISCOVERY_CAPABILITY_NAMES = ("capabilities_search", "capabilities_load")
 MCP_SERVER_GRANT_PREFIX = "mcp_server:"
@@ -26,10 +30,20 @@ def _server_id_for_capability(name: str) -> str | None:
     return mapping[0] if mapping else None
 
 
+def has_discovery_access(config: AgentConfig) -> bool:
+    """Return whether an agent has any enabled authority to discover tools."""
+    if config.capabilities is None:
+        return True
+    return any(grant.enabled for grant in config.capabilities)
+
+
 def _grant_for(config: AgentConfig, name: str, server_id: str | None = None) -> Any:
     capability = registry.get(name)
     if capability is None:
         return None
+
+    if name in DISCOVERY_CAPABILITY_NAMES:
+        return capability if has_discovery_access(config) else None
 
     if config.capabilities is None:
         return capability if capability.kind != "mcp_tool" else None
@@ -66,6 +80,7 @@ class CapabilityRunCatalog:
     max_load_per_call: int = 10
     max_loaded: int = 50
     loaded: set[str] = field(default_factory=set)
+    _metadata_cache: list[dict[str, Any]] | None = field(default=None, init=False, repr=False)
 
     def _is_permitted(self, name: str, server_id: str | None = None) -> bool:
         if not is_capability_granted(self.agent_config, name, server_id=server_id):
@@ -77,33 +92,93 @@ class CapabilityRunCatalog:
         return True
 
     async def _metadata(self) -> list[dict[str, Any]]:
-        metadata: list[dict[str, Any]] = []
+        if self._metadata_cache is not None:
+            return self._metadata_cache
+
+        metadata_by_name: dict[str, dict[str, Any]] = {}
         for capability in registry.list_all():
-            if capability.name in DISCOVERY_CAPABILITY_NAMES:
+            if capability.name in DISCOVERY_CAPABILITY_NAMES or capability.kind == "mcp_tool":
                 continue
-            server_id = _server_id_for_capability(capability.name)
-            if not self._is_permitted(capability.name, server_id):
+            if not self._is_permitted(capability.name):
                 continue
-            grant = _grant_for(self.agent_config, capability.name, server_id)
-            metadata.append(
-                {
+            grant = _grant_for(self.agent_config, capability.name)
+            metadata_by_name[capability.name] = {
+                "name": capability.name,
+                "kind": capability.kind,
+                "description": capability.description,
+                "server_id": None,
+                "server_name": None,
+                "egress": capability.egress,
+                "require_approval": (
+                    grant.require_approval
+                    if grant is not None and hasattr(grant, "require_approval")
+                    else capability.require_approval
+                ),
+                "always_loaded": self._always_loaded(capability.name),
+            }
+
+        if self.db is not None:
+            result = await self.db.execute(
+                select(McpTool, McpServer)
+                .join(McpServer, McpServer.id == McpTool.mcp_server_id)
+                .where(McpServer.enabled.is_(True))
+            )
+            for tool, server in result.all():
+                capability = registry.get(tool.capability_name)
+                if capability is None:
+                    capability = CapabilityDef(
+                        name=tool.capability_name,
+                        kind="mcp_tool",
+                        description=tool.description,
+                        parameters_schema=json.loads(tool.parameters_schema),
+                        egress=tool.egress,
+                        require_approval=tool.require_approval,
+                        subject_scoped=tool.subject_scoped,
+                    )
+                    registry.register(capability)
+                from ..mcp import registry as mcp_registry
+
+                mcp_registry._tool_map[tool.capability_name] = (server.id, tool.tool_name)
+                if not self._is_permitted(tool.capability_name, server.id):
+                    continue
+                grant = _grant_for(self.agent_config, tool.capability_name, server.id)
+                metadata_by_name[tool.capability_name] = {
+                    "name": tool.capability_name,
+                    "kind": "mcp_tool",
+                    "description": tool.description,
+                    "server_id": server.id,
+                    "server_name": server.name,
+                    "egress": tool.egress,
+                    "require_approval": (
+                        grant.require_approval if grant is not None else tool.require_approval
+                    ),
+                    "always_loaded": self._always_loaded(tool.capability_name, server.id),
+                }
+        else:
+            for capability in registry.list_by_kind("mcp_tool"):
+                server_id = _server_id_for_capability(capability.name)
+                if not self._is_permitted(capability.name, server_id):
+                    continue
+                grant = _grant_for(self.agent_config, capability.name, server_id)
+                metadata_by_name[capability.name] = {
                     "name": capability.name,
                     "kind": capability.kind,
                     "description": capability.description,
                     "server_id": server_id,
                     "server_name": None,
                     "egress": capability.egress,
-                    "require_approval": (
-                        grant.require_approval
-                        if grant is not None and hasattr(grant, "require_approval")
-                        else capability.require_approval
-                    ),
-                    "always_loaded": bool(
-                        grant is not None and getattr(grant, "always_loaded", False)
-                    ),
+                    "require_approval": grant.require_approval
+                    if grant is not None
+                    else capability.require_approval,
+                    "always_loaded": self._always_loaded(capability.name, server_id),
                 }
-            )
-        return metadata
+
+        self._metadata_cache = list(metadata_by_name.values())
+        return self._metadata_cache
+
+    async def prepare(self) -> None:
+        """Load the permission-filtered catalog before the first model turn."""
+        await self._metadata()
 
     async def search(
         self,
@@ -121,7 +196,8 @@ class CapabilityRunCatalog:
 
         results = []
         for item in await self._metadata():
-            if query_text and query_text not in (f"{item['name']} {item['description']}".lower()):
+            searchable = f"{item['name']} {item['description']}".lower()
+            if query_text and not all(token in searchable for token in query_text.split()):
                 continue
             if kind_text and item["kind"].lower() != kind_text:
                 continue

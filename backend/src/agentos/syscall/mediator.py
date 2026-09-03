@@ -26,6 +26,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..capabilities.catalog import is_capability_granted
 from ..capabilities.registry import registry
 from ..config import settings
 from ..config_schema import AgentConfig
@@ -70,6 +71,7 @@ class SyscallHandler:
         sub_agent_id: str | None = None,
         event_emitter: Any = None,
         parent_config: AgentConfig | None = None,
+        capability_catalog: Any = None,
     ) -> SyscallResult:
         start = time.monotonic()
         self._event_emitter = event_emitter
@@ -82,43 +84,28 @@ class SyscallHandler:
             )
 
         # 2. Check grant
-        # capabilities is None = all tools enabled (default), [] = none
-        # For sub-agents, intersect with parent's effective capability set.
-        if is_sub_agent and parent_config is not None:
-            # Compute the parent's effective granted set
-            if parent_config.capabilities is not None:
-                parent_granted = {g.name for g in parent_config.capabilities}
-            else:
-                # Parent has all tools — sub-agent is bounded by its own set
-                parent_granted = None
+        server_id = None
+        if cap.kind == "mcp_tool":
+            from ..mcp import registry as mcp_registry
 
-            if parent_granted is not None:
-                # Sub-agent's requested set must be within parent's set
-                if agent_config.capabilities is not None:
-                    sub_granted = {g.name for g in agent_config.capabilities}
-                else:
-                    # Sub-agent says "all tools" — but it can only get what
-                    # the parent has
-                    sub_granted = parent_granted
+            mapping = mcp_registry._tool_map.get(call.name)
+            server_id = mapping[0] if mapping else None
 
-                effective_granted = sub_granted & parent_granted
-                if call.name not in effective_granted:
-                    return await self._deny(
-                        run_id,
-                        call,
-                        agent_config,
-                        "not granted by parent agent",
-                        start,
-                        sub_agent_id,
-                    )
-            # If parent has all tools (parent_granted is None), fall through
-            # to the normal grant check below
-        elif agent_config.capabilities is not None:
-            granted_names = {g.name for g in agent_config.capabilities}
-            if call.name not in granted_names:
-                return await self._deny(
-                    run_id, call, agent_config, "not granted", start, sub_agent_id
-                )
+        if (
+            is_sub_agent
+            and parent_config is not None
+            and not is_capability_granted(parent_config, call.name, server_id=server_id)
+        ):
+            return await self._deny(
+                run_id,
+                call,
+                agent_config,
+                "not granted by parent agent",
+                start,
+                sub_agent_id,
+            )
+        if not is_capability_granted(agent_config, call.name, server_id=server_id):
+            return await self._deny(run_id, call, agent_config, "not granted", start, sub_agent_id)
 
         # 3. Resolve subject (D10 — for subject-scoped capabilities)
         subject_contact_id: str | None = None
@@ -276,6 +263,9 @@ class SyscallHandler:
         # For skill capabilities, inject agent_id (needed to find skill dirs)
         if call.name in ("skills_list", "skills_load", "skills_read_resource"):
             extra_kwargs["agent_id"] = agent_config.id
+
+        if call.name in ("capabilities_search", "capabilities_load"):
+            extra_kwargs["capability_catalog"] = capability_catalog
 
         if call.name in ("read_file", "doc_search", "doc_inspect"):
             extra_kwargs["supports_vision"] = self.supports_vision
