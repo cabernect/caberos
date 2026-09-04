@@ -188,13 +188,32 @@ jobs:
           set -euo pipefail
           mkdir -p staging
           BUNDLE="frontend/src-tauri/target/release/bundle"
+
+          # The updater archive and its .sig are produced by the signing step, so
+          # they are absent whenever TAURI_SIGNING_PRIVATE_KEY is unset. Check for
+          # them explicitly: an unmatched glob under `set -e` would otherwise fail
+          # this job with a bare "cp: cannot stat" and no hint at the cause.
+          stage_updater() {
+            local archive="$1"
+            if [ ! -f "$archive" ]; then
+              echo "Updater artifact missing: $archive"
+              echo "This is produced by the Tauri signing step. Check that the"
+              echo "TAURI_SIGNING_PRIVATE_KEY secret is set for this workflow."
+              exit 1
+            fi
+            if [ ! -f "$archive.sig" ]; then
+              echo "Updater signature missing: $archive.sig"
+              exit 1
+            fi
+            cp "$archive" "$archive.sig" staging/
+          }
+
           if [ "${{ runner.os }}" = "macOS" ]; then
-            cp "$BUNDLE/macos/CaberOS.app.tar.gz" staging/
-            cp "$BUNDLE/macos/CaberOS.app.tar.gz.sig" staging/
+            stage_updater "$BUNDLE/macos/CaberOS.app.tar.gz"
             cp "$BUNDLE"/dmg/*.dmg staging/
           else
-            cp "$BUNDLE"/nsis/*-setup.nsis.zip staging/
-            cp "$BUNDLE"/nsis/*-setup.nsis.zip.sig staging/
+            # Tauri names this <product>_<version>_x64-setup.nsis.zip
+            stage_updater "$(ls "$BUNDLE"/nsis/*-setup.nsis.zip 2>/dev/null | head -1)"
             cp "$BUNDLE"/nsis/*-setup.exe staging/
           fi
           ls -la staging
