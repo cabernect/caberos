@@ -25,17 +25,42 @@ Structure every review this way. Consistency matters more than length.
 What the PR does in two or three sentences, then one explicit verdict:
 **approve** / **changes recommended** / **blocked**. Say which, do not imply it.
 
-### 2. Per-file findings
+### 2. Findings, ordered by priority
 
-Group by file. For each finding give all five of these:
+**Sort every finding P1 first, then P2, then P3 — across the whole review, not
+per file.** A reviewer reading top-to-bottom must hit the blocker before the nit.
+Group by file only within a priority band, and put the priority in the heading:
+
+```
+#### P1 - backend/src/agentos/sandbox/base.py:41
+#### P2 - frontend/vite.config.ts:4
+#### P3 - README.md:175
+```
+
+| Priority | Means | Merge impact |
+|---|---|---|
+| **P1** | Data loss, credential exposure, a silent failure, or a regression for users already on a released version | **Blocks merge** |
+| **P2** | A real defect with a workaround, or one confined to a specific platform, locale, runtime version or input | **Fix before merge** unless explicitly deferred with a reason |
+| **P3** | Correctness-neutral: clarity, naming, duplication, docs, test coverage | **Non-blocking**, may become a follow-up issue |
+
+Weight *silence* heavily when choosing a priority. A defect that fails loudly is
+usually P2; the same defect that corrupts data, strands users, or reports success
+while doing nothing is P1, because nobody will notice it in time.
+
+For each finding give all six of these:
 
 - **What happens** — the observable defect. Not a restatement of the diff.
 - **Root cause** — why the code produces it.
 - **Impact** — who hits it, on which platform, OS locale, Node/Python version or
   input, and how badly. "Could break" is not impact; name the condition.
-- **Proposed fix** — concrete, ideally a diff or exact replacement line.
+- **How to fix** — numbered, concrete steps someone can follow without rereading
+  the whole diff. Include the exact replacement line or a diff block, the file and
+  line to change, and how to verify the fix (the command to run, or the observable
+  that should change).
 - **Confidence** — high / medium / low. Say plainly when you are inferring rather
   than certain.
+- **If not fixed** — what a maintainer accepts by deferring it. This is what makes
+  a P2-vs-P3 argument possible instead of a guess.
 
 ### 3. Cross-cutting concerns
 
