@@ -5,6 +5,8 @@ All notable changes to CaberOS are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+
+
 ## [Unreleased]
 
 ### Added
@@ -26,7 +28,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `datetime_now` rejected every named timezone on Windows, which ships no system tz database
 - The Fernet key was left readable by other local users on Windows, where `chmod(0o600)` only toggles the read-only flag
 - `check-version.sh` ignored `agentos/__init__.py`, which had drifted to 0.1.5, and assumed a working `python3` that Windows does not provide
-
 ## [0.1.6] - Released
 
 ### Added
@@ -45,6 +46,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rotated OAuth refresh tokens are persisted for providers such as Notion
 - OAuth callback URLs follow the configured gateway port
 - Desktop app close confirmation uses the application confirmation UI
+
+### Security
+
+- Sanitized SQLite integrity-check and provider-validation failures so raw exception details remain in server logs instead of API responses or notifications
 
 ## [0.1.5] - Released
 

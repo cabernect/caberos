@@ -90,6 +90,51 @@ jobs:
           restore-keys: |
             pyinstaller-${{ runner.os }}-
 
+      - name: Build PyInstaller gateway
+        run: node scripts/build-gateway.mjs
+
+      # Catches a packaged gateway that builds but cannot start - the exact
+      # class of failure that shipped in v0.1.6 (relative import under
+      # PyInstaller) and that a build-only check cannot see.
+      - name: Smoke test packaged gateway
+        shell: bash
+        run: |
+          set -euo pipefail
+          GATEWAY_DIR="$(pwd)/frontend/src-tauri/resources/gateway/caberos-gateway"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            GATEWAY="$GATEWAY_DIR/caberos-gateway.exe"
+          else
+            GATEWAY="$GATEWAY_DIR/caberos-gateway"
+          fi
+          CHECK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/caberos-gateway-release.XXXXXX")"
+          GATEWAY_PID=""
+          cleanup() {
+            if [ -n "$GATEWAY_PID" ]; then
+              kill "$GATEWAY_PID" 2>/dev/null || true
+              wait "$GATEWAY_PID" 2>/dev/null || true
+            fi
+            rm -rf "$CHECK_DIR"
+          }
+          trap cleanup EXIT
+          cd "$CHECK_DIR"
+          AGENTOS_CONTROL_PLANE_HOST=127.0.0.1           AGENTOS_CONTROL_PLANE_PORT=51999           AGENTOS_DB_PATH="$CHECK_DIR/agentos.db"           AGENTOS_SECRET_KEY_PATH="$CHECK_DIR/secret.key"           AGENTOS_WORKSPACE_ROOT="$CHECK_DIR/workspaces"           AGENTOS_KNOWLEDGE_ROOT="$CHECK_DIR/knowledge"           AGENTOS_AGENT_HOME_ROOT="$CHECK_DIR/agents"           AGENTOS_LOG_LEVEL=warning           AGENTOS_LOG_ACCESS=false           "$GATEWAY" >"$CHECK_DIR/gateway.log" 2>&1 &
+          GATEWAY_PID=$!
+          for _ in $(seq 1 120); do
+            if curl --silent --fail --max-time 1 http://127.0.0.1:51999/health >/dev/null 2>&1; then
+              echo "Packaged gateway health check passed"
+              exit 0
+            fi
+            if ! kill -0 "$GATEWAY_PID" 2>/dev/null; then
+              echo "Packaged gateway exited before becoming ready"
+              cat "$CHECK_DIR/gateway.log"
+              exit 1
+            fi
+            sleep 0.25
+          done
+          echo "Packaged gateway did not become ready"
+          cat "$CHECK_DIR/gateway.log"
+          exit 1
+
       - name: Set up Node
         uses: actions/setup-node@v4
         with:

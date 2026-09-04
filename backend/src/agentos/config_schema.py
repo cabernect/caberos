@@ -34,6 +34,7 @@ class CapabilityGrant(BaseModel):
     enabled: bool = True
     subject: Literal["self", "any", "none"] = "none"
     require_approval: bool = False
+    always_loaded: bool | None = None
 
 
 class Limits(BaseModel):

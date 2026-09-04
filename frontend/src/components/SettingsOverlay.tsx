@@ -5,16 +5,19 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useConfirm } from "@/lib/confirmHook";
-import type { Agent, ChannelInfo, ModelInfo, Provider, Skill, SkillInfo, WorkspaceEntry } from "@/lib/types";
+import type {
+  Agent,
+  CapabilityGrant,
+  CapabilityInfo,
+  ChannelInfo,
+  ModelInfo,
+  Provider,
+  Skill,
+  SkillInfo,
+  WorkspaceEntry,
+} from "@/lib/types";
 import { ModelSelect } from "@/components/ModelSelect";
 import { ThinkingToggle } from "@/components/ThinkingToggle";
-
-interface CapabilityInfo {
-  name: string;
-  desc: string;
-  egress: boolean;
-  approval: boolean;
-}
 
 interface SettingsOverlayProps {
   agent: Agent | null;
@@ -443,6 +446,15 @@ function GeneralTab({
 // Capabilities are fetched from the backend API (single source of truth)
 // Falls back to empty list if the API call fails.
 const FALLBACK_CAPABILITIES: CapabilityInfo[] = [];
+type GrantMode = "none" | "on_demand" | "always";
+const SERVER_GRANT_PREFIX = "mcp_server:";
+
+function grantMode(grant: CapabilityGrant | undefined, kind: string): GrantMode {
+  if (!grant || grant.enabled === false) return "none";
+  if (grant.always_loaded === true) return "always";
+  if (grant.always_loaded === false) return "on_demand";
+  return kind === "mcp_tool" ? "on_demand" : "always";
+}
 
 function CapabilitiesTab({
   agent,
@@ -454,8 +466,10 @@ function CapabilitiesTab({
   onClose: () => void;
   showSaved: (msg: string) => void;
 }) {
-  const [granted, setGranted] = useState<Set<string>>(new Set());
+  const [grantModes, setGrantModes] = useState<Map<string, GrantMode>>(new Map());
+  const [serverModes, setServerModes] = useState<Map<string, GrantMode>>(new Map());
   const [approvals, setApprovals] = useState<Set<string>>(new Set());
+  const [serverApprovals, setServerApprovals] = useState<Map<string, boolean>>(new Map());
   const [saving, setSaving] = useState(false);
   const [allCaps, setAllCaps] = useState<CapabilityInfo[]>(FALLBACK_CAPABILITIES);
   const [yoloMode, setYoloMode] = useState(false);
@@ -478,67 +492,103 @@ function CapabilitiesTab({
 
   // Fetch capability list from backend (single source of truth)
   useEffect(() => {
-    api.listCapabilities().then((caps) => {
-      setAllCaps(caps.map((c) => ({
-        name: c.name,
-        desc: c.description,
-        egress: c.egress,
-        approval: c.require_approval,
-      })));
-    }).catch(() => {});
+    api.listCapabilities().then(setAllCaps).catch(() => {});
   }, []);
 
   useEffect(() => {
+    const nextModes = new Map<string, GrantMode>();
+    const nextServerModes = new Map<string, GrantMode>();
+    const nextApprovals = new Set<string>();
+    const nextServerApprovals = new Map<string, boolean>();
+
     if (agent?.capabilities) {
-      // Explicit list (including empty = no tools)
-      setGranted(new Set(agent.capabilities.map((c) => c.name)));
-      setApprovals(new Set(agent.capabilities.filter((c) => c.require_approval).map((c) => c.name)));
+      for (const grant of agent.capabilities) {
+        if (grant.name.startsWith(SERVER_GRANT_PREFIX)) {
+          const serverId = grant.name.slice(SERVER_GRANT_PREFIX.length);
+          const mode = grantMode(grant, "mcp_tool");
+          if (mode !== "none") nextServerModes.set(serverId, mode);
+          nextServerApprovals.set(serverId, grant.require_approval);
+          continue;
+        }
+        const kind = allCaps.find((cap) => cap.name === grant.name)?.kind || "tool";
+        const mode = grantMode(grant, kind);
+        if (mode !== "none") nextModes.set(grant.name, mode);
+        if (grant.require_approval) nextApprovals.add(grant.name);
+      }
     } else {
-      // capabilities is null/missing = all tools enabled (default)
-      setGranted(new Set(allCaps.map((c) => c.name)));
-      setApprovals(new Set(allCaps.filter((c) => c.approval).map((c) => c.name)));
+      for (const cap of allCaps) {
+        if (cap.kind !== "mcp_tool") nextModes.set(cap.name, "always");
+      }
     }
+
+    setGrantModes(nextModes);
+    setServerModes(nextServerModes);
+    setApprovals(nextApprovals);
+    setServerApprovals(nextServerApprovals);
   }, [agent, allCaps]);
 
-  const toggle = (name: string) => {
-    const next = new Set(granted);
-    if (next.has(name)) next.delete(name);
-    else next.add(name);
-    setGranted(next);
-    // Auto-save with the updated granted set
-    void saveCapabilities(next, approvals);
-  };
-
-  const toggleApproval = (name: string) => {
-    const next = new Set(approvals);
-    if (next.has(name)) next.delete(name);
-    else next.add(name);
-    setApprovals(next);
-    // Auto-save with the updated approvals set
-    void saveCapabilities(granted, next);
-  };
-
-  const toggleAll = (capNames: string[], enable: boolean) => {
-    const next = new Set(granted);
-    for (const name of capNames) {
-      if (enable) next.add(name);
-      else next.delete(name);
+  const modeFor = (cap: CapabilityInfo): GrantMode => {
+    if (cap.server_id && serverModes.has(cap.server_id)) {
+      return serverModes.get(cap.server_id) || "none";
     }
-    setGranted(next);
-    void saveCapabilities(next, approvals);
+    return grantModes.get(cap.name) || "none";
   };
 
-  const saveCapabilities = async (grantedSet: Set<string>, approvalSet: Set<string>) => {
+  const saveCapabilities = async (
+    modeMap: Map<string, GrantMode> = grantModes,
+    serverModeMap: Map<string, GrantMode> = serverModes,
+    approvalSet: Set<string> = approvals,
+    serverApprovalMap: Map<string, boolean> = serverApprovals,
+  ) => {
     if (!agent) return;
     setSaving(true);
     try {
-      // Always save the explicit list with approval settings.
-      // (Saving null = "all tools, default approvals" would lose approval toggles.)
-      const caps = Array.from(grantedSet).map((name) => ({
-        name,
-        subject: "none" as const,
-        require_approval: approvalSet.has(name),
-      }));
+      const caps: CapabilityGrant[] = [];
+      const builtinCaps = allCaps.filter((cap) => cap.kind !== "mcp_tool");
+      for (const cap of builtinCaps) {
+        const mode = modeMap.get(cap.name) || "none";
+        if (mode !== "none") {
+          caps.push({
+            name: cap.name,
+            subject: "none",
+            require_approval: approvalSet.has(cap.name),
+            always_loaded: mode === "always",
+          });
+        }
+      }
+
+      const mcpServers = new Map<string, CapabilityInfo[]>();
+      for (const cap of allCaps) {
+        if (cap.kind !== "mcp_tool") continue;
+        const key = cap.server_id || "other";
+        if (!mcpServers.has(key)) mcpServers.set(key, []);
+        mcpServers.get(key)!.push(cap);
+      }
+      for (const [serverId, serverCaps] of mcpServers) {
+        const serverMode = serverModeMap.get(serverId) || "none";
+        if (serverId !== "other" && serverMode !== "none") {
+          caps.push({
+            name: `${SERVER_GRANT_PREFIX}${serverId}`,
+            subject: "none",
+            require_approval:
+              serverApprovalMap.get(serverId) ?? serverCaps.some((cap) => cap.egress),
+            always_loaded: serverMode === "always",
+          });
+          continue;
+        }
+        for (const cap of serverCaps) {
+          const mode = modeMap.get(cap.name) || "none";
+          if (mode !== "none") {
+            caps.push({
+              name: cap.name,
+              subject: "none",
+              require_approval: approvalSet.has(cap.name),
+              always_loaded: mode === "always",
+            });
+          }
+        }
+      }
+
       await api.updateAgent(agent.id, { capabilities: caps });
       onSaved();
     } catch {
@@ -548,16 +598,64 @@ function CapabilitiesTab({
     }
   };
 
-  // Group capabilities: built-in vs MCP (grouped by server)
-  const builtinCaps = allCaps.filter((c) => !c.name.startsWith("mcp."));
+  const updateMode = (name: string, mode: GrantMode) => {
+    const next = new Map(grantModes);
+    if (mode === "none") next.delete(name);
+    else next.set(name, mode);
+    setGrantModes(next);
+    void saveCapabilities(next, serverModes, approvals, serverApprovals);
+  };
+
+  const updateServerMode = (serverId: string, mode: GrantMode, caps: CapabilityInfo[]) => {
+    const next = new Map(serverModes);
+    const nextApprovals = new Map(serverApprovals);
+    if (mode === "none") {
+      next.delete(serverId);
+      nextApprovals.delete(serverId);
+    } else {
+      next.set(serverId, mode);
+      if (!nextApprovals.has(serverId)) {
+        nextApprovals.set(serverId, caps.some((cap) => cap.egress));
+      }
+    }
+    setServerModes(next);
+    setServerApprovals(nextApprovals);
+    void saveCapabilities(grantModes, next, approvals, nextApprovals);
+  };
+
+  const updateServerApproval = (serverId: string, required: boolean) => {
+    const next = new Map(serverApprovals);
+    next.set(serverId, required);
+    setServerApprovals(next);
+    void saveCapabilities(grantModes, serverModes, approvals, next);
+  };
+
+  const toggleApproval = (name: string) => {
+    const next = new Set(approvals);
+    if (next.has(name)) next.delete(name);
+    else next.add(name);
+    setApprovals(next);
+    void saveCapabilities(grantModes, serverModes, next, serverApprovals);
+  };
+
+  const setAllModes = (caps: CapabilityInfo[], enable: boolean) => {
+    const next = new Map(grantModes);
+    for (const cap of caps) {
+      if (enable) next.set(cap.name, cap.kind === "mcp_tool" ? "on_demand" : "always");
+      else next.delete(cap.name);
+    }
+    setGrantModes(next);
+    void saveCapabilities(next, serverModes, approvals, serverApprovals);
+  };
+
+  // Group capabilities: built-in vs MCP (grouped by stable server ID)
+  const builtinCaps = allCaps.filter((cap) => cap.kind !== "mcp_tool");
   const mcpServers = new Map<string, CapabilityInfo[]>();
   for (const cap of allCaps) {
-    if (cap.name.startsWith("mcp.")) {
-      // mcp.{server}.{tool} — server is the second segment
-      const parts = cap.name.split(".");
-      const serverName = parts.length >= 2 ? parts[1] : "other";
-      if (!mcpServers.has(serverName)) mcpServers.set(serverName, []);
-      mcpServers.get(serverName)!.push(cap);
+    if (cap.kind === "mcp_tool") {
+      const serverId = cap.server_id || "other";
+      if (!mcpServers.has(serverId)) mcpServers.set(serverId, []);
+      mcpServers.get(serverId)!.push(cap);
     }
   }
 
@@ -602,31 +700,40 @@ function CapabilitiesTab({
       </div>
 
       <p className="text-[12px] text-[var(--ink-3)]">
-        Select which tools this agent can use. Egress tools (network access) can require approval.
+        Permit tools directly or make large MCP integrations discoverable on demand. Egress tools can require approval.
       </p>
       <CapabilityGroup
         title="Built-in Tools"
         caps={builtinCaps}
-        granted={granted}
+        modeFor={modeFor}
+        onModeChange={updateMode}
+        onSetAll={setAllModes}
         approvals={approvals}
-        toggle={toggle}
         toggleApproval={toggleApproval}
-        toggleAll={toggleAll}
         defaultExpanded
       />
-      {Array.from(mcpServers.entries()).map(([serverName, caps]) => (
-        <CapabilityGroup
-          key={serverName}
-          title={`MCP: ${serverName}`}
-          caps={caps}
-          granted={granted}
-          approvals={approvals}
-          toggle={toggle}
-          toggleApproval={toggleApproval}
-          toggleAll={toggleAll}
-          defaultExpanded={false}
-        />
-      ))}
+      {Array.from(mcpServers.entries()).map(([serverId, caps]) => {
+        const serverMode = serverModes.get(serverId) || "none";
+        const serverRequiresApproval = serverApprovals.get(serverId) ?? caps.some((cap) => cap.egress);
+        const serverName = caps[0]?.server_name || serverId;
+        return (
+          <CapabilityGroup
+            key={serverId}
+            title={`MCP: ${serverName}`}
+            caps={caps}
+            modeFor={modeFor}
+            onModeChange={updateMode}
+            onSetAll={setAllModes}
+            approvals={approvals}
+            toggleApproval={toggleApproval}
+            serverMode={serverId === "other" ? undefined : serverMode}
+            onServerModeChange={serverId === "other" ? undefined : (mode) => updateServerMode(serverId, mode, caps)}
+            serverRequiresApproval={serverId === "other" ? undefined : serverRequiresApproval}
+            onServerApprovalChange={serverId === "other" ? undefined : (required) => updateServerApproval(serverId, required)}
+            defaultExpanded={false}
+          />
+        );
+      })}
       {saving && (
         <p className="font-mono text-[11px] text-[var(--ink-3)]">Saving…</p>
       )}
@@ -637,36 +744,46 @@ function CapabilitiesTab({
 function CapabilityGroup({
   title,
   caps,
-  granted,
+  modeFor,
+  onModeChange,
+  onSetAll,
   approvals,
-  toggle,
   toggleApproval,
-  toggleAll,
+  serverMode,
+  onServerModeChange,
+  serverRequiresApproval,
+  onServerApprovalChange,
   defaultExpanded,
 }: {
   title: string;
   caps: CapabilityInfo[];
-  granted: Set<string>;
+  modeFor: (cap: CapabilityInfo) => GrantMode;
+  onModeChange: (name: string, mode: GrantMode) => void;
+  onSetAll: (caps: CapabilityInfo[], enable: boolean) => void;
   approvals: Set<string>;
-  toggle: (name: string) => void;
   toggleApproval: (name: string) => void;
-  toggleAll: (capNames: string[], enable: boolean) => void;
+  serverMode?: GrantMode;
+  onServerModeChange?: (mode: GrantMode) => void;
+  serverRequiresApproval?: boolean;
+  onServerApprovalChange?: (required: boolean) => void;
   defaultExpanded: boolean;
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [expandedDesc, setExpandedDesc] = useState<string | null>(null);
-  const grantedCount = caps.filter((c) => granted.has(c.name)).length;
+  const serverGrantActive = serverMode !== undefined;
+  const grantedCount = caps.filter((cap) => modeFor(cap) !== "none").length;
+  const allGranted = caps.length > 0 && grantedCount === caps.length;
 
   const handleToggleAll = () => {
-    const allGranted = caps.every((c) => granted.has(c.name));
-    toggleAll(caps.map((c) => c.name), !allGranted);
+    if (serverGrantActive && onServerModeChange) {
+      onServerModeChange(serverMode === "none" ? "on_demand" : "none");
+    } else {
+      onSetAll(caps, !allGranted);
+    }
   };
-
-  const allGranted = caps.every((c) => granted.has(c.name));
 
   return (
     <div className="rounded-[6px] border" style={{ borderColor: "var(--border)" }}>
-      {/* Group header */}
       <div
         className="flex items-center gap-2 px-4 py-2.5 cursor-pointer"
         onClick={() => setExpanded(!expanded)}
@@ -682,24 +799,49 @@ function CapabilityGroup({
         <span className="font-mono text-[11px]" style={{ color: "var(--ink-3)" }}>
           {grantedCount}/{caps.length}
         </span>
-        <button
-          onClick={(e) => { e.stopPropagation(); handleToggleAll(); }}
-          className="ml-auto rounded-[4px] px-2 py-0.5 font-mono text-[10px] transition"
-          style={{
-            background: "none",
-            border: "1px solid var(--border)",
-            color: "var(--ink-3)",
-            cursor: "pointer",
-          }}
-        >
-          {allGranted ? "Disable all" : "Enable all"}
-        </button>
+        {serverGrantActive ? (
+          <select
+            value={serverMode}
+            onClick={(event) => event.stopPropagation()}
+            onChange={(event) => onServerModeChange?.(event.target.value as GrantMode)}
+            className="ml-auto rounded-[4px] border px-1.5 py-1 text-[10px]"
+            style={{ borderColor: "var(--border)", color: "var(--ink-2)", background: "var(--white)" }}
+          >
+            <option value="none">Not permitted</option>
+            <option value="on_demand">Permitted on demand</option>
+            <option value="always">Always available</option>
+          </select>
+        ) : (
+          <button
+            onClick={(event) => { event.stopPropagation(); handleToggleAll(); }}
+            className="ml-auto rounded-[4px] px-2 py-0.5 font-mono text-[10px] transition"
+            style={{
+              background: "none",
+              border: "1px solid var(--border)",
+              color: "var(--ink-3)",
+              cursor: "pointer",
+            }}
+          >
+            {allGranted ? "Disable all" : "Enable all"}
+          </button>
+        )}
+        {serverGrantActive && serverMode !== "none" && caps.some((cap) => cap.egress) && (
+          <label className="flex items-center gap-1.5 text-[10px] text-[var(--ink-2)]" onClick={(event) => event.stopPropagation()}>
+            <input
+              type="checkbox"
+              checked={serverRequiresApproval}
+              onChange={(event) => onServerApprovalChange?.(event.target.checked)}
+              style={{ cursor: "pointer" }}
+            />
+            approval
+          </label>
+        )}
       </div>
-      {/* Tools list */}
       {expanded && (
         <div className="space-y-1.5 px-4 pb-3">
           {caps.map((cap) => {
-            const isGranted = granted.has(cap.name);
+            const mode = modeFor(cap);
+            const viaServer = serverGrantActive && serverMode !== "none";
             const needsApproval = approvals.has(cap.name);
             return (
               <div
@@ -707,9 +849,8 @@ function CapabilityGroup({
                 className="flex items-center justify-between rounded-[5px] px-3 py-2"
                 style={{ background: "var(--surface)" }}
               >
-                <div className="flex items-center gap-2.5">
-                  <input type="checkbox" checked={isGranted} onChange={() => toggle(cap.name)} style={{ cursor: "pointer" }} />
-                  <div>
+                <div className="flex min-w-0 items-center gap-2.5">
+                  <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="font-mono text-[12px] font-medium text-[var(--ink)]">{cap.name}</span>
                       {cap.egress && (
@@ -720,14 +861,14 @@ function CapabilityGroup({
                     </div>
                     <p
                       className="text-[11px] text-[var(--ink-2)]"
-                      style={{ cursor: cap.desc.length > 80 ? "pointer" : "default" }}
-                      title={cap.desc.length > 80 ? cap.desc : undefined}
-                      onClick={() => cap.desc.length > 80 && setExpandedDesc(expandedDesc === cap.name ? null : cap.name)}
+                      style={{ cursor: cap.description.length > 80 ? "pointer" : "default" }}
+                      title={cap.description.length > 80 ? cap.description : undefined}
+                      onClick={() => cap.description.length > 80 && setExpandedDesc(expandedDesc === cap.name ? null : cap.name)}
                     >
-                      {cap.desc.length > 80
-                        ? (expandedDesc === cap.name ? cap.desc : cap.desc.slice(0, 80) + "…")
-                        : cap.desc}
-                      {cap.desc.length > 80 && (
+                      {cap.description.length > 80
+                        ? (expandedDesc === cap.name ? cap.description : cap.description.slice(0, 80) + "…")
+                        : cap.description}
+                      {cap.description.length > 80 && (
                         <span className="ml-1 font-mono text-[10px] text-[var(--ink-3)]">
                           {expandedDesc === cap.name ? "[-]" : "[+]"}
                         </span>
@@ -735,12 +876,28 @@ function CapabilityGroup({
                     </p>
                   </div>
                 </div>
-                {isGranted && cap.egress && (
-                  <label className="flex items-center gap-1.5 text-[11px] text-[var(--ink-2)]">
-                    <input type="checkbox" checked={needsApproval} onChange={() => toggleApproval(cap.name)} style={{ cursor: "pointer" }} />
-                    require approval
-                  </label>
-                )}
+                <div className="flex shrink-0 items-center gap-2">
+                  {viaServer ? (
+                    <span className="font-mono text-[10px] text-[var(--ink-3)]">via server</span>
+                  ) : (
+                    <select
+                      value={mode}
+                      onChange={(event) => onModeChange(cap.name, event.target.value as GrantMode)}
+                      className="rounded-[4px] border px-1.5 py-1 text-[10px]"
+                      style={{ borderColor: "var(--border)", color: "var(--ink-2)", background: "var(--white)" }}
+                    >
+                      <option value="none">Not permitted</option>
+                      <option value="on_demand">On demand</option>
+                      <option value="always">Always</option>
+                    </select>
+                  )}
+                  {!viaServer && mode !== "none" && cap.egress && (
+                    <label className="flex items-center gap-1.5 text-[10px] text-[var(--ink-2)]">
+                      <input type="checkbox" checked={needsApproval} onChange={() => toggleApproval(cap.name)} style={{ cursor: "pointer" }} />
+                      approval
+                    </label>
+                  )}
+                </div>
               </div>
             );
           })}

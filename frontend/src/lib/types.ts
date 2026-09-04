@@ -49,8 +49,20 @@ export interface Agent {
 
 export interface CapabilityGrant {
   name: string;
+  enabled?: boolean;
   subject: "self" | "any" | "none";
   require_approval: boolean;
+  always_loaded?: boolean | null;
+}
+
+export interface CapabilityInfo {
+  name: string;
+  kind: string;
+  description: string;
+  egress: boolean;
+  require_approval: boolean;
+  server_id: string | null;
+  server_name: string | null;
 }
 
 export interface Limits {
@@ -235,6 +247,7 @@ export interface MessageCompleteEvent {
     conversation: number;
     tools: number;
   };
+  loaded_capabilities?: string[];
 }
 
 export interface Approval {
@@ -389,6 +402,11 @@ export interface RunDetail {
   started_at: string;
   completed_at: string | null;
   error: string | null;
+  context_tokens: number;
+  max_context_tokens: number;
+  compacted: boolean;
+  context_breakdown: { system_prompt: number; conversation: number; tools: number };
+  loaded_capabilities: string[];
   messages: MessageOut[];
   audit_records: AuditOut[];
 }

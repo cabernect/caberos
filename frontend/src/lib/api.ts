@@ -7,6 +7,7 @@ import type {
   Approval,
   AuditOut,
   CapabilityGrant,
+  CapabilityInfo,
   ChannelInfo,
   DashboardStats,
   HealthStatus,
@@ -120,7 +121,7 @@ export const api = {
   // Agents
   listAgents: () => request<Agent[]>("/api/agents"),
   getAgent: (id: string) => request<Agent>(`/api/agents/${id}`),
-  listCapabilities: () => request<{ name: string; kind: string; description: string; egress: boolean; require_approval: boolean }[]>("/api/agents/capabilities"),
+  listCapabilities: () => request<CapabilityInfo[]>("/api/agents/capabilities"),
   createAgent: (data: { name: string; provider_id?: string; model_name?: string; soul?: string; persona?: string; task?: string }) =>
     request<{ id: string; name: string; enabled: boolean }>("/api/agents", {
       method: "POST",

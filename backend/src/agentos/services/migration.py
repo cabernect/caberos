@@ -562,7 +562,11 @@ def do_merge(zf: zipfile.ZipFile, names: list[str]) -> dict:
             if "fts" in table:
                 continue
 
-            cols = [row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+            target_cols = [row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+            source_cols = {
+                row[1] for row in conn.execute(f"PRAGMA imported.table_info({table})").fetchall()
+            }
+            cols = [column for column in target_cols if column in source_cols]
             if not cols:
                 continue
             col_list = ", ".join(_sql_identifier(column) for column in cols)

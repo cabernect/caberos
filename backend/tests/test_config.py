@@ -40,6 +40,16 @@ def test_config_invalid_capability_subject():
     assert grant2.subject == "none"
 
 
+def test_capability_grant_preserves_schema_loading_mode():
+    """Capability grants distinguish permitted-on-demand from always-loaded schemas."""
+    on_demand = CapabilityGrant(name="mcp.notion.search", always_loaded=False)
+    always_loaded = CapabilityGrant(name="mcp.notion.create", always_loaded=True)
+
+    assert on_demand.always_loaded is False
+    assert always_loaded.always_loaded is True
+    assert on_demand.model_dump()["always_loaded"] is False
+
+
 @pytest.mark.asyncio
 async def test_create_and_get_agent(db):
     """Create an agent and retrieve its config."""

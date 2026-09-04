@@ -32,6 +32,11 @@ def _make_run(
     tokens_out=50,
     is_test=False,
     error=None,
+    context_tokens=0,
+    max_context_tokens=0,
+    compacted=False,
+    context_breakdown="{}",
+    loaded_capabilities="[]",
 ):
     """Helper to insert a Run + Session + Contact + Agent."""
     import asyncio
@@ -66,6 +71,11 @@ def _make_run(
                 latency_ms=500,
                 is_test=is_test,
                 error=error,
+                context_tokens=context_tokens,
+                max_context_tokens=max_context_tokens,
+                compacted=compacted,
+                context_breakdown=context_breakdown,
+                loaded_capabilities=loaded_capabilities,
             )
             db.add(run)
             # Messages
@@ -212,6 +222,31 @@ class TestObservabilityAPI:
         assert len(detail["audit_records"]) == 1
         assert detail["audit_records"][0]["capability_name"] == "read_file"
         assert detail["audit_records"][0]["allowed"] is True
+
+    def test_get_run_detail_includes_capability_context_metadata(self, client, db_session):
+        run_id = _make_run(
+            db_session,
+            agent_id="agent-context",
+            context_tokens=240,
+            max_context_tokens=1000,
+            compacted=True,
+            context_breakdown='{"system_prompt": 80, "conversation": 120, "tools": 40}',
+            loaded_capabilities='["mcp.demo.search"]',
+        )
+
+        resp = client.get(f"/api/runs/{run_id}")
+
+        assert resp.status_code == 200
+        detail = resp.json()
+        assert detail["context_tokens"] == 240
+        assert detail["max_context_tokens"] == 1000
+        assert detail["compacted"] is True
+        assert detail["context_breakdown"] == {
+            "system_prompt": 80,
+            "conversation": 120,
+            "tools": 40,
+        }
+        assert detail["loaded_capabilities"] == ["mcp.demo.search"]
 
     def test_get_run_detail_404(self, client, db_session):
         resp = client.get("/api/runs/nonexistent")

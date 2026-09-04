@@ -67,6 +67,7 @@ def assemble_system_prompt(
     forced_skill: str | None = None,
     past_sessions: list[dict[str, Any]] | None = None,
     supports_vision: bool | None = None,
+    enabled_caps: list[str] | None = None,
 ) -> str:
     """Build the system prompt from base prompt + agent identity (D35 order).
 
@@ -86,7 +87,8 @@ def assemble_system_prompt(
     parts: list[str] = []
 
     # 1. Base system prompt — adaptive to enabled capabilities
-    enabled_caps = get_enabled_capabilities(agent_config)
+    if enabled_caps is None:
+        enabled_caps = get_enabled_capabilities(agent_config)
     parts.append(get_base_system_prompt(enabled_caps))
 
     # 2-4. Agent identity (D35)
@@ -170,14 +172,20 @@ def assemble_system_prompt(
     return "\n\n---\n\n".join(parts)
 
 
-def assemble_tool_schemas(agent_config: AgentConfig) -> list[dict[str, Any]]:
+def assemble_tool_schemas(
+    agent_config: AgentConfig,
+    capability_names: list[str] | None = None,
+) -> list[dict[str, Any]]:
     """Build tool schemas from the agent's enabled capabilities.
 
-    If capabilities is empty, all registered tools are included.
+    If capability names are supplied, only those names are included. Otherwise,
+    the names are derived from the agent configuration.
     """
     from ..capabilities.registry import registry
 
-    enabled = get_enabled_capabilities(agent_config)
+    enabled = (
+        get_enabled_capabilities(agent_config) if capability_names is None else capability_names
+    )
     schemas: list[dict[str, Any]] = []
     for name in enabled:
         cap = registry.get(name)

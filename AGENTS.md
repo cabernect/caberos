@@ -131,8 +131,11 @@ the workspace `attachments/` directory.
 
 Tickets **01–09 implemented**: smoke slice, real-model chat + SSE streaming, file ops + tool call UI, approval flow + elicitation (`agent.ask_user`), guardrails, run manager, agent management UI, providers, `run_subagent`, memory + skills (ticket 06), scheduler/heartbeat (ticket 07), MCP client infrastructure (08a), MCP credentials/OAuth (08b), external channels (08c), and observability + spend (ticket 09).
 
-**Current: v0.1.6 Early-Adopter Usability in progress. Ticket 10 desktop hardening and Ticket 11 testing hardening are in scope. CaberCore extraction and the minimal CLI are deferred.**
+**Current: v0.1.6 Early-Adopter Usability is released. Next: v0.1.7 Progressive Capability Discovery. CaberCore extraction and the CLI/TUI remain deferred.**
 
+**v0.1.7 design rule:** Agent configuration defines the permission ceiling; the harness separately tracks which schemas are loaded into the current run. `capabilities_search` exposes bounded metadata for permitted tools, and `capabilities_load` makes selected schemas available on the next model turn without widening syscall authority.
+
+**Ticket 10 (Tauri Desktop App):** SHIPPED for macOS ARM64 (Apple Silicon). macOS Intel and Windows builds require cross-compilation/CI and are not yet set up.
 **Ticket 10 (Tauri Desktop App):** IN PROGRESS. macOS ARM64 (Tier 1) and Windows x64 (Tier 2, beta). macOS Intel, Windows on ARM and Linux desktop builds are not set up. See `docs/platform-support.md` for the tier contract — it is the canonical platform statement, and README/release notes link to it rather than restating platform claims.
 - **Windows shell capability** depends on WSL2 + `bubblewrap`. Without them the `terminal` capability is explicitly disabled and the reason is surfaced through `GET /api/health` and Observability → Health. `get_backend()` never raises: a machine with no sandbox still runs agents, it just refuses one capability of 22.
 - **Windows process cleanup** uses a Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` (`gateway.rs`), because `Child::kill()` leaves grandchildren alive and the gateway binds a fixed port.
@@ -177,11 +180,11 @@ Tickets **01–09 implemented**: smoke slice, real-model chat + SSE streaming, f
 - Image-generation models filtered from chat discovery (402 → 393 models)
 - OpenRouter discovery uses live metadata instead of LiteLLM static catalog
 
-**Current release status:** v0.1.5 is tagged and released. v0.1.51 is the free macOS Apple Silicon installation workaround release: it distributes an ad-hoc signed DMG and documents verifying the official download before running `xattr -dr com.apple.quarantine /Applications/CaberOS.app`. Apple Developer signing/notarization is not configured.
+**Current release status:** v0.1.6 is tagged and released from merge commit `48de8a9`. The incorrectly ordered v0.1.51 and v0.1.52 tags/releases were removed. Apple Developer signing/notarization is not configured.
 
-**v0.1.52 updater patch:** The startup update popup and Settings → About share updater state. Update flow is `downloading → installing → ready`, followed by an explicit `Restart now` action using the Tauri process plugin. The v0.1.52 work is on branch `fix/v0.1.52-updater` and PR #24.
+**Updater status:** The startup update popup and Settings → About share updater state. Update flow is `downloading → installing → ready`, followed by an explicit `Restart now` action using the Tauri process plugin.
 
-**Verification status:** 416 backend tests pass. Frontend tests: 4 passed. Frontend build, TypeScript check, Tauri `cargo check`, Ruff checks, and Ruff format checks pass. Frontend lint has 0 errors and only existing warnings.
+**v0.1.6 verification status:** 431 backend tests pass with 21 warnings. Frontend lint has 0 warnings/errors, 9 frontend tests pass, and the frontend build passes. Tauri tests and `cargo check` pass. CodeQL analysis for the final v0.1.6 pull request reported zero results.
 
 ## Build & test commands
 
