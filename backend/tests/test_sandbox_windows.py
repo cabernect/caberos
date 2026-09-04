@@ -25,8 +25,16 @@ def test_get_backend_never_raises(platform):
     Regression guard: get_backend() used to raise RuntimeError on any platform
     that was not darwin or linux, which surfaced mid-run as a tool crash rather
     than as a platform capability decision.
+
+    The WSL probe is stubbed out because this asserts the *factory* contract,
+    not probe behaviour. It also has to be: faking sys.platform makes
+    shutil.which() take its Windows branch, which calls into _winapi — and
+    that module is None anywhere but Windows.
     """
-    with patch.object(sys, "platform", platform):
+    with (
+        patch.object(sys, "platform", platform),
+        patch.object(WslBwrapBackend, "is_available", return_value=False),
+    ):
         backend = get_backend()
     assert isinstance(backend, SandboxBackend)
     assert backend.kind
