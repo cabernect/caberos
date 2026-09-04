@@ -5,7 +5,29 @@ All notable changes to CaberOS are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.6] - Unreleased
+## [Unreleased]
+
+### Added
+
+- Windows x64 desktop support (Tier 2, beta) — NSIS installer, packaged gateway, WebView2 bootstrapper
+- Windows shell sandboxing by delegating to bubblewrap inside WSL2, reusing the Linux isolation profile
+- Sandbox availability reported by `GET /api/health` and shown on the Observability → Health tab, naming any missing dependency
+- `docs/platform-support.md` — canonical platform tier contract, linked from README and AGENTS.md
+- Gateway version reported over `/health`; the dashboard flags a shell/gateway version mismatch after an update
+- Multi-platform release matrix, with the updater manifest built in a dedicated job that fails when a platform is missing
+
+### Fixed
+
+- `get_backend()` no longer raises on unsupported platforms — the shell capability is refused with a reason instead, leaving the other 21 capabilities working
+- The bwrap availability probe bound no filesystem, so it failed with "execvp /bin/sh: No such file or directory" on every host and reported working sandboxes as unavailable
+- Packaged gateway crashed on startup with "attempted relative import with no known parent package" — the frozen entry point runs as `__main__` and needs absolute imports
+- The desktop shell could not locate the gateway on Windows, where the PyInstaller directory and executable names differ
+- Windows process cleanup left orphaned gateway processes holding the fixed port; the gateway now runs inside a kill-on-close Job Object
+- `datetime_now` rejected every named timezone on Windows, which ships no system tz database
+- The Fernet key was left readable by other local users on Windows, where `chmod(0o600)` only toggles the read-only flag
+- `check-version.sh` ignored `agentos/__init__.py`, which had drifted to 0.1.5, and assumed a working `python3` that Windows does not provide
+
+## [0.1.6] - Released
 
 ### Added
 

@@ -148,9 +148,13 @@ git clone <repo-url> && cd foundation-agentos
 
 Open `http://localhost:5173` — the Vite dev server proxies `/api` to the backend.
 
-### Option 3: Desktop app (macOS Apple Silicon only)
+### Option 3: Desktop app (macOS Apple Silicon, Windows x64)
 
-> **Platform support:** The desktop app currently supports **macOS ARM64 (Apple Silicon)** only — M1/M2/M3/M4 chips. macOS Intel and Windows builds require cross-compilation or CI runners and are not yet set up. Use Docker or local dev on other platforms.
+> **Platform support:** **macOS ARM64** (Tier 1) and **Windows x64** (Tier 2, beta).
+> On Windows, shell commands additionally need WSL2 with `bubblewrap`; every other
+> capability works natively. macOS Intel, Windows on ARM and Linux desktop builds
+> are not available yet — use Docker or local dev there.
+> Full matrix: [docs/platform-support.md](docs/platform-support.md).
 
 **Download the latest release:** [GitHub Releases](../../releases/latest)
 
@@ -349,7 +353,8 @@ CaberOS tracks every run, every capability call, and every dollar spent.
 
 ## Desktop app
 
-> **Platform support:** macOS ARM64 (Apple Silicon) only. macOS Intel and Windows are not yet supported — use Docker or local dev on those platforms.
+> **Platform support:** macOS ARM64 (Tier 1) and Windows x64 (Tier 2, beta).
+> See [docs/platform-support.md](docs/platform-support.md) for what each tier guarantees.
 >
 > **Download:** [Latest release](../../releases/latest)
 
