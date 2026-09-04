@@ -119,6 +119,18 @@ class OperatorAuditOut(BaseModel):
     created_at: datetime
 
 
+class SandboxHealth(BaseModel):
+    """Shell-isolation availability on this machine.
+
+    Surfaced so a disabled shell reads as a known configuration with a named
+    cause, rather than as a tool that mysteriously fails at call time.
+    """
+
+    kind: str
+    state: str  # available | degraded | unavailable
+    reason: str | None = None
+
+
 class HealthStatus(BaseModel):
     status: str
     database: str
@@ -126,6 +138,12 @@ class HealthStatus(BaseModel):
     agents: int
     active_runs: int
     timestamp: datetime
+    sandbox: SandboxHealth | None = None
+    # The desktop shell compares this against its own version. An installer that
+    # replaces the shell but leaves the bundled gateway stale would otherwise
+    # run a new frontend against an old backend — silently, and across schema
+    # patches applied by init_db() at startup.
+    version: str | None = None
 
 
 # --- Routes ---
@@ -411,12 +429,16 @@ async def system_health(
     db: AsyncSession = Depends(get_db),
     _op=Depends(require_operator),
 ) -> HealthStatus:
-    """System health check — DB, provider count, agent count, active runs."""
+    """System health check — DB, provider count, agent count, active runs, sandbox."""
+    from .. import __version__
     from ..run_manager import list_active_runs
+    from ..sandbox import probe as sandbox_probe
 
     provider_count = (await db.execute(select(func.count(Provider.id)))).scalar() or 0
     agent_count = (await db.execute(select(func.count(Agent.id)))).scalar() or 0
     active_runs = len(list_active_runs())
+
+    sb = sandbox_probe()
 
     return HealthStatus(
         status="ok",
@@ -425,6 +447,8 @@ async def system_health(
         agents=agent_count,
         active_runs=active_runs,
         timestamp=datetime.now(UTC),
+        sandbox=SandboxHealth(kind=sb.kind, state=sb.state, reason=sb.reason),
+        version=__version__,
     )
 
 

@@ -1,8 +1,17 @@
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import path from "path";
+import pkg from "./package.json" with { type: "json" };
+
 const config = {
   plugins: [react(), tailwindcss()],
+  // The dashboard ships inside the desktop shell, so its version *is* the shell
+  // version. Exposing it lets the UI compare against the gateway's reported
+  // version and catch an update that replaced the shell but not the bundled
+  // gateway — a documented Tauri NSIS failure mode for bundled sidecars.
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

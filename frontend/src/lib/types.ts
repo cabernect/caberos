@@ -431,6 +431,14 @@ export interface OperatorAuditOut {
   created_at: string;
 }
 
+export interface SandboxHealth {
+  kind: string;
+  /** available = isolated shell works; otherwise `terminal` is refused. */
+  state: "available" | "degraded" | "unavailable";
+  /** What is missing and how to fix it. Null only when state is available. */
+  reason: string | null;
+}
+
 export interface HealthStatus {
   status: string;
   database: string;
@@ -438,6 +446,9 @@ export interface HealthStatus {
   agents: number;
   active_runs: number;
   timestamp: string;
+  sandbox?: SandboxHealth | null;
+  /** Gateway version. Compared against the shell's own to catch a stale gateway after an update. */
+  version?: string | null;
 }
 
 export interface TimeSeriesPoint {
