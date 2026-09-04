@@ -166,13 +166,14 @@ cd frontend && npm run desktop:build
 open src-tauri/target/release/bundle/macos/CaberOS.app
 ```
 
-```powershell
-# Windows — needs VS Build Tools (VCTools workload) + a Windows SDK,
-# and the MSVC rust toolchain rather than GNU.
-& "C:\Program Files (x86)\Microsoft Visual Studio2\BuildTools\VC\Auxiliary\Buildcvars64.bat"
-cd frontend; npm run desktop:build:windows
-# -> src-tauri	argeteleaseundle
-sis\CaberOS_<version>_x64-setup.exe
+```cmd
+:: Windows - needs VS Build Tools (VCTools workload) + a Windows SDK,
+:: and the MSVC rust toolchain rather than GNU.
+:: Run both in one cmd session: vcvars64 sets env for the session it runs in,
+:: so calling it from PowerShell would not carry link.exe into the build.
+call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+cd frontend && npm run desktop:build:windows
+:: -> src-tauri\target\release\bundle\nsis\CaberOS_<version>_x64-setup.exe
 ```
 
 Without sourcing `vcvars64.bat` first, the Rust link step fails with
