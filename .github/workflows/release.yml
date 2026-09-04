@@ -98,6 +98,11 @@ jobs:
       # PyInstaller) and that a build-only check cannot see.
       - name: Smoke test packaged gateway
         shell: bash
+        env:
+          AGENTOS_CONTROL_PLANE_HOST: 127.0.0.1
+          AGENTOS_CONTROL_PLANE_PORT: "51999"
+          AGENTOS_LOG_LEVEL: warning
+          AGENTOS_LOG_ACCESS: "false"
         run: |
           set -euo pipefail
           GATEWAY_DIR="$(pwd)/frontend/src-tauri/resources/gateway/caberos-gateway"
@@ -116,8 +121,13 @@ jobs:
             rm -rf "$CHECK_DIR"
           }
           trap cleanup EXIT
+          export AGENTOS_DB_PATH="$CHECK_DIR/agentos.db"
+          export AGENTOS_SECRET_KEY_PATH="$CHECK_DIR/secret.key"
+          export AGENTOS_WORKSPACE_ROOT="$CHECK_DIR/workspaces"
+          export AGENTOS_KNOWLEDGE_ROOT="$CHECK_DIR/knowledge"
+          export AGENTOS_AGENT_HOME_ROOT="$CHECK_DIR/agents"
           cd "$CHECK_DIR"
-          AGENTOS_CONTROL_PLANE_HOST=127.0.0.1           AGENTOS_CONTROL_PLANE_PORT=51999           AGENTOS_DB_PATH="$CHECK_DIR/agentos.db"           AGENTOS_SECRET_KEY_PATH="$CHECK_DIR/secret.key"           AGENTOS_WORKSPACE_ROOT="$CHECK_DIR/workspaces"           AGENTOS_KNOWLEDGE_ROOT="$CHECK_DIR/knowledge"           AGENTOS_AGENT_HOME_ROOT="$CHECK_DIR/agents"           AGENTOS_LOG_LEVEL=warning           AGENTOS_LOG_ACCESS=false           "$GATEWAY" >"$CHECK_DIR/gateway.log" 2>&1 &
+          "$GATEWAY" >"$CHECK_DIR/gateway.log" 2>&1 &
           GATEWAY_PID=$!
           for _ in $(seq 1 120); do
             if curl --silent --fail --max-time 1 http://127.0.0.1:51999/health >/dev/null 2>&1; then

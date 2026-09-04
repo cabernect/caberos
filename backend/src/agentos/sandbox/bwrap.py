@@ -52,7 +52,12 @@ def build_bwrap_args(workspace_mount_source: str, allow_network: bool) -> list[s
         "--ro-bind",
         "/lib",
         "/lib",
-        "--ro-bind",
+        # --ro-bind-try, not --ro-bind: /lib64 does not exist on every distro
+        # (notably arm64 and musl systems). A hard bind makes bwrap fail to
+        # start there, which the probe would then report as "no sandbox
+        # available" and refuse the terminal capability outright - even though
+        # /lib alone is sufficient on those systems.
+        "--ro-bind-try",
         "/lib64",
         "/lib64",
         "--dev",
