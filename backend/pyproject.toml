@@ -29,6 +29,10 @@ dependencies = [
     "python-multipart>=0.0.32",
     "pyyaml>=6.0.3",
     "sqlalchemy[asyncio]>=2.0.51",
+    # Windows ships no system tz database, so zoneinfo resolves zero timezones
+    # and the datetime_now tool rejects every named zone. macOS and Linux read
+    # the OS copy and do not need this.
+    "tzdata>=2025.2; sys_platform == 'win32'",
     "uvicorn[standard]>=0.51.0",
 ]
 
