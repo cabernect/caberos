@@ -1,26 +1,25 @@
 name: Release
 
-# Builds the CaberOS desktop app (.dmg) with signed updater artifacts and
-# attaches them to a GitHub release.
+# Builds the CaberOS desktop app for every supported platform and attaches the
+# installers plus signed updater artifacts to a GitHub release.
 # Triggers when a tag matching v*.*.* is pushed.
 #
 # Usage:
-#   git tag v0.1.3
-#   git push origin v0.1.3
+#   git tag v0.3.0
+#   git push origin v0.3.0
 #
-# The workflow will:
-#   1. Verify version manifests agree with the tag
-#   2. Build the PyInstaller gateway (macOS ARM64)
-#   3. Build the Tauri app with updater artifacts (signed)
-#   4. Create a DMG
-#   5. Generate the updater manifest (latest.json)
-#   6. Create a GitHub release with the DMG + updater artifacts attached
+# Structure: a `build` matrix produces per-platform artifacts, then a single
+# `release` job assembles the updater manifest from ALL of them.
 #
-# Required secrets (set once in GitHub repo settings → Secrets and variables → Actions):
+# The manifest is deliberately NOT written inside a platform job. It lives at a
+# fixed URL and holds every platform's entry, so a per-platform job writing it
+# would overwrite the others — silently stopping updates for every platform
+# that lost the race. scripts/build-updater-manifest.py enforces that the
+# manifest covers every expected platform before a release is published.
+#
+# Required secrets:
 #   TAURI_SIGNING_PRIVATE_KEY — Ed25519 private key for signing updates
-#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD — password for the private key (empty string if none)
-#
-# Platform: macOS ARM64 (Apple Silicon) only for now.
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD — password for the private key
 
 on:
   push:
@@ -30,27 +29,44 @@ on:
 permissions:
   contents: read
 
+env:
+  # Every platform this release must contain. The manifest step fails if any is
+  # missing, rather than publishing a manifest that strands those users.
+  EXPECTED_PLATFORMS: darwin-aarch64,windows-x86_64
+
 jobs:
-  build-macos-arm64:
-    permissions:
-      contents: write
-    name: Build macOS ARM64
-    runs-on: macos-14  # Apple Silicon runner
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      # One platform failing must not discard the other's artifacts.
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS ARM64
+            runner: macos-14
+            platform_key: darwin-aarch64
+            bundle_script: desktop:build
+          - name: Windows x64
+            runner: windows-2022
+            platform_key: windows-x86_64
+            bundle_script: desktop:build:windows
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Verify version manifests agree with tag
+        shell: bash
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#v}"
           ./scripts/check-version.sh
           BACKEND_VERSION=$(grep '^version = ' backend/pyproject.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
           if [ "$BACKEND_VERSION" != "$TAG_VERSION" ]; then
-            echo "❌ Tag version ($TAG_VERSION) does not match manifest version ($BACKEND_VERSION)"
+            echo "Tag version ($TAG_VERSION) does not match manifest version ($BACKEND_VERSION)"
             echo "Run: ./scripts/set-version.sh $TAG_VERSION"
             exit 1
           fi
-          echo "✅ Tag and manifests agree: $TAG_VERSION"
+          echo "Tag and manifests agree: $TAG_VERSION"
 
       - name: Install uv
         uses: astral-sh/setup-uv@v3
@@ -70,17 +86,31 @@ jobs:
           path: |
             backend/build/pyinstaller
             frontend/src-tauri/resources/gateway
-          key: pyinstaller-${{ runner.os }}-${{ hashFiles('backend/uv.lock', 'scripts/build-gateway.sh') }}
+          key: pyinstaller-${{ runner.os }}-${{ hashFiles('backend/uv.lock', 'scripts/build-gateway.sh', 'scripts/build-gateway.ps1') }}
           restore-keys: |
             pyinstaller-${{ runner.os }}-
 
       - name: Build PyInstaller gateway
-        run: bash scripts/build-gateway.sh
+        run: node scripts/build-gateway.mjs
 
+      # Catches a packaged gateway that builds but cannot start - the exact
+      # class of failure that shipped in v0.1.6 (relative import under
+      # PyInstaller) and that a build-only check cannot see.
       - name: Smoke test packaged gateway
+        shell: bash
+        env:
+          AGENTOS_CONTROL_PLANE_HOST: 127.0.0.1
+          AGENTOS_CONTROL_PLANE_PORT: "51999"
+          AGENTOS_LOG_LEVEL: warning
+          AGENTOS_LOG_ACCESS: "false"
         run: |
           set -euo pipefail
-          GATEWAY="$(pwd)/frontend/src-tauri/resources/gateway/caberos-gateway/caberos-gateway"
+          GATEWAY_DIR="$(pwd)/frontend/src-tauri/resources/gateway/caberos-gateway"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            GATEWAY="$GATEWAY_DIR/caberos-gateway.exe"
+          else
+            GATEWAY="$GATEWAY_DIR/caberos-gateway"
+          fi
           CHECK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/caberos-gateway-release.XXXXXX")"
           GATEWAY_PID=""
           cleanup() {
@@ -91,16 +121,12 @@ jobs:
             rm -rf "$CHECK_DIR"
           }
           trap cleanup EXIT
+          export AGENTOS_DB_PATH="$CHECK_DIR/agentos.db"
+          export AGENTOS_SECRET_KEY_PATH="$CHECK_DIR/secret.key"
+          export AGENTOS_WORKSPACE_ROOT="$CHECK_DIR/workspaces"
+          export AGENTOS_KNOWLEDGE_ROOT="$CHECK_DIR/knowledge"
+          export AGENTOS_AGENT_HOME_ROOT="$CHECK_DIR/agents"
           cd "$CHECK_DIR"
-          AGENTOS_CONTROL_PLANE_HOST=127.0.0.1 \
-          AGENTOS_CONTROL_PLANE_PORT=51999 \
-          AGENTOS_DB_PATH="$CHECK_DIR/agentos.db" \
-          AGENTOS_SECRET_KEY_PATH="$CHECK_DIR/secret.key" \
-          AGENTOS_WORKSPACE_ROOT="$CHECK_DIR/workspaces" \
-          AGENTOS_KNOWLEDGE_ROOT="$CHECK_DIR/knowledge" \
-          AGENTOS_AGENT_HOME_ROOT="$CHECK_DIR/agents" \
-          AGENTOS_LOG_LEVEL=warning \
-          AGENTOS_LOG_ACCESS=false \
           "$GATEWAY" >"$CHECK_DIR/gateway.log" 2>&1 &
           GATEWAY_PID=$!
           for _ in $(seq 1 120); do
@@ -141,86 +167,104 @@ jobs:
           restore-keys: |
             rust-${{ runner.os }}-
 
+      # build-gateway.mjs dispatches to the .sh or .ps1 build. The two differ
+      # because PyInstaller's --add-data separator is platform-specific.
       - name: Build Tauri app with updater artifacts
         working-directory: frontend
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run desktop:build
+        run: npm run ${{ matrix.bundle_script }}
 
       - name: Build DMG
+        if: runner.os == 'macOS'
         run: bash scripts/build-dmg.sh
 
-      - name: Generate updater manifest
+      # Collect the installer and the updater archive+signature under stable
+      # names so the release job does not need to know platform layouts.
+      - name: Stage artifacts
+        shell: bash
         run: |
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
-          UPDATER_TARGZ="frontend/src-tauri/target/release/bundle/macos/CaberOS.app.tar.gz"
-          UPDATER_SIG="${UPDATER_TARGZ}.sig"
+          set -euo pipefail
+          mkdir -p staging
+          BUNDLE="frontend/src-tauri/target/release/bundle"
 
-          if [ ! -f "$UPDATER_TARGZ" ] || [ ! -f "$UPDATER_SIG" ]; then
-            echo "Updater artifacts are missing: expected $UPDATER_TARGZ and $UPDATER_SIG"
-            exit 1
-          fi
-
-          SIGNATURE=$(cat "$UPDATER_SIG")
-          if [ -z "$SIGNATURE" ]; then
-            echo "Updater signature is empty"
-            exit 1
-          fi
-
-          REPO="cabernect/caberos"
-          TARGZ_NAME=$(basename "$UPDATER_TARGZ")
-          SIG_NAME=$(basename "$UPDATER_SIG")
-          if [ "$SIG_NAME" != "${TARGZ_NAME}.sig" ]; then
-            echo "Updater signature does not match archive: $SIG_NAME vs ${TARGZ_NAME}.sig"
-            exit 1
-          fi
-
-          cat > latest.json << EOF
-          {
-            "version": "$TAG_VERSION",
-            "notes": "CaberOS $TAG_VERSION",
-            "pub_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "platforms": {
-              "darwin-aarch64": {
-                "signature": "$SIGNATURE",
-                "url": "https://github.com/$REPO/releases/download/${GITHUB_REF_NAME}/$TARGZ_NAME"
-              }
-            }
+          # The updater archive and its .sig are produced by the signing step, so
+          # they are absent whenever TAURI_SIGNING_PRIVATE_KEY is unset. Check for
+          # them explicitly: an unmatched glob under `set -e` would otherwise fail
+          # this job with a bare "cp: cannot stat" and no hint at the cause.
+          stage_updater() {
+            local archive="$1"
+            if [ ! -f "$archive" ]; then
+              echo "Updater artifact missing: $archive"
+              echo "This is produced by the Tauri signing step. Check that the"
+              echo "TAURI_SIGNING_PRIVATE_KEY secret is set for this workflow."
+              exit 1
+            fi
+            if [ ! -f "$archive.sig" ]; then
+              echo "Updater signature missing: $archive.sig"
+              exit 1
+            fi
+            cp "$archive" "$archive.sig" staging/
           }
-          EOF
-          echo "Generated latest.json:"
-          cat latest.json
-          python3 - "$TARGZ_NAME" <<'PY'
-          import json
-          import sys
-          from urllib.parse import urlparse
 
-          with open("latest.json", encoding="utf-8") as manifest_file:
-              manifest = json.load(manifest_file)
-          platform = manifest["platforms"]["darwin-aarch64"]
-          if urlparse(platform["url"]).path.rsplit("/", 1)[-1] != sys.argv[1]:
-              raise SystemExit("Updater manifest URL does not target the generated archive")
-          if not platform["signature"]:
-              raise SystemExit("Updater manifest signature is empty")
-          PY
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            stage_updater "$BUNDLE/macos/CaberOS.app.tar.gz"
+            cp "$BUNDLE"/dmg/*.dmg staging/
+          else
+            # Tauri names this <product>_<version>_x64-setup.nsis.zip
+            stage_updater "$(ls "$BUNDLE"/nsis/*-setup.nsis.zip 2>/dev/null | head -1)"
+            cp "$BUNDLE"/nsis/*-setup.exe staging/
+          fi
+          ls -la staging
 
-      - name: Upload DMG artifact
+      - name: Upload platform artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: CaberOS-dmg
-          path: frontend/src-tauri/target/release/bundle/dmg/*.dmg
+          name: caberos-${{ matrix.platform_key }}
+          path: staging/*
           if-no-files-found: error
 
-      - name: Upload updater artifacts
-        uses: actions/upload-artifact@v4
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all platform artifacts
+        uses: actions/download-artifact@v4
         with:
-          name: CaberOS-updater
-          path: |
-            frontend/src-tauri/target/release/bundle/**/*.tar.gz
-            frontend/src-tauri/target/release/bundle/**/*.tar.gz.sig
-            latest.json
-          if-no-files-found: warn
+          path: artifacts
+
+      - name: List downloaded artifacts
+        run: find artifacts -type f | sort
+
+      # Fails when a platform in EXPECTED_PLATFORMS is absent, so a half-built
+      # release can never quietly drop a platform from the updater.
+      - name: Build updater manifest
+        run: |
+          set -euo pipefail
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          MAC_ARCHIVE=$(find artifacts -name 'CaberOS.app.tar.gz' | head -1)
+          WIN_ARCHIVE=$(find artifacts -name '*-setup.nsis.zip' | head -1)
+
+          ARGS=()
+          [ -n "$MAC_ARCHIVE" ] && ARGS+=(--platform "darwin-aarch64=$MAC_ARCHIVE")
+          [ -n "$WIN_ARCHIVE" ] && ARGS+=(--platform "windows-x86_64=$WIN_ARCHIVE")
+
+          python3 scripts/build-updater-manifest.py \
+            --version "$TAG_VERSION" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --tag "${GITHUB_REF_NAME}" \
+            --expect "${EXPECTED_PLATFORMS}" \
+            --out latest.json \
+            "${ARGS[@]}"
+
+          cat latest.json
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -231,39 +275,46 @@ jobs:
 
             ### Download
 
-            **macOS Apple Silicon (ARM64)** — download the `.dmg` file below.
+            - **macOS Apple Silicon (ARM64)** — the `.dmg` file below.
+            - **Windows x64** — the `-setup.exe` file below.
 
-            > macOS Intel and Windows builds are not yet available.
-            > This free release is ad-hoc signed and is not notarized by Apple.
+            > macOS Intel, Windows on ARM, and Linux builds are not yet available.
+            > See `docs/platform-support.md` for the full support matrix.
 
-            ### Install
+            ### Install — macOS
 
-            1. Download and open the `.dmg` file, then drag **CaberOS** to Applications
-            2. If macOS reports that CaberOS is damaged, first verify that the DMG
-               came from this GitHub release, then run:
+            1. Open the `.dmg` and drag **CaberOS** to Applications
+            2. If macOS reports that CaberOS is damaged, verify the download came
+               from this release, then run:
                `xattr -dr com.apple.quarantine /Applications/CaberOS.app`
             3. Launch CaberOS — the gateway starts automatically
-            4. Default login: `admin` / `admin` (change it immediately)
 
-            ### Auto-update
+            ### Install — Windows
 
-            If you have a previous version of CaberOS installed, it will
-            automatically detect this release and offer to update. You can
-            also check manually from Settings → About → Check for Updates.
+            1. Run the `-setup.exe` installer (installs for the current user, no admin needed)
+            2. Windows SmartScreen may warn on first run while the signature builds
+               reputation — choose **More info → Run anyway**
+            3. Launch CaberOS — the gateway starts automatically
 
-            ### System requirements
+            **Shell commands on Windows** require WSL2 with `bubblewrap` installed:
+            `wsl --install` then `wsl -e sudo apt install bubblewrap`.
+            Without it, every other capability still works and the Observability →
+            Health tab explains what is missing.
 
-            - macOS 13+ (Apple Silicon)
-            - 200 MB free disk space
-            - Internet connection for cloud model providers (optional for local models via Ollama)
+            ### First login
+
+            Default credentials: `admin` / `admin` — change them immediately.
 
             ---
             **License:** MIT — Copyright (c) 2025 HoangPH25
           generate_release_notes: true
           files: |
-            frontend/src-tauri/target/release/bundle/dmg/*.dmg
-            frontend/src-tauri/target/release/bundle/**/*.tar.gz
-            frontend/src-tauri/target/release/bundle/**/*.tar.gz.sig
+            artifacts/**/*.dmg
+            artifacts/**/*-setup.exe
+            artifacts/**/*.tar.gz
+            artifacts/**/*.tar.gz.sig
+            artifacts/**/*.nsis.zip
+            artifacts/**/*.nsis.zip.sig
             latest.json
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}

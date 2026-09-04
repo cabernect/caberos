@@ -148,12 +148,43 @@ export function Observability() {
                 <button type="button" onClick={() => void fetchHealth()} className="rounded border px-2.5 py-1 text-[11px] text-[var(--ink-2)] hover:bg-[var(--hover)]" style={{ borderColor: "var(--border)", cursor: "pointer" }}>Refresh</button>
               </div>
               {health ? (
-                <div className="mt-4 grid grid-cols-4 gap-3 text-[12px]">
+                <>
+                <div className="mt-4 grid grid-cols-5 gap-3 text-[12px]">
                   <HealthMetric label="Database" value={health.database} good={health.database === "connected"} />
                   <HealthMetric label="Providers" value={String(health.providers)} good={health.providers > 0} />
                   <HealthMetric label="Agents" value={String(health.agents)} good={health.agents > 0} />
                   <HealthMetric label="Active runs" value={String(health.active_runs)} good />
+                  {health.sandbox ? (
+                    <HealthMetric
+                      label="Shell sandbox"
+                      value={health.sandbox.state === "available" ? health.sandbox.kind : "disabled"}
+                      good={health.sandbox.state === "available"}
+                    />
+                  ) : null}
                 </div>
+                {health.version && health.version !== __APP_VERSION__ ? (
+                  <div className="mt-3 rounded-md border px-3 py-2" style={{ borderColor: "var(--danger)" }}>
+                    <p className="text-[12px] font-medium text-[var(--danger)]">
+                      Version mismatch: this app is {__APP_VERSION__} but its gateway is {health.version}.
+                    </p>
+                    <p className="mt-1 text-[11px] text-[var(--ink-2)]">
+                      An update replaced the app but not its bundled gateway. Reinstall CaberOS from the
+                      latest release before relying on this session — the two halves may disagree about
+                      the database schema.
+                    </p>
+                  </div>
+                ) : null}
+                {health.sandbox && health.sandbox.state !== "available" ? (
+                  <div className="mt-3 rounded-md border px-3 py-2" style={{ borderColor: "var(--border)" }}>
+                    <p className="text-[12px] text-[var(--ink-2)]">
+                      Agents cannot run shell commands on this machine. {health.sandbox.reason}
+                    </p>
+                    <p className="mt-1 text-[11px] text-[var(--ink-3)]">
+                      Every other capability — files, web, memory, skills, knowledge and MCP tools — is unaffected.
+                    </p>
+                  </div>
+                ) : null}
+                </>
               ) : (
                 <div className="mt-4 flex items-center justify-between gap-3 rounded-md border px-3 py-2" style={{ borderColor: "var(--danger)" }}>
                   <p className="text-[12px] text-[var(--danger)]">Health data is unavailable. Check the gateway and retry.</p>

@@ -19,7 +19,9 @@ CATALOG_PATH = Path(__file__).parent / "catalog.yaml"
 @lru_cache(maxsize=1)
 def _load_catalog() -> list[dict[str, Any]]:
     """Load and cache the catalog YAML."""
-    with open(CATALOG_PATH) as f:
+    # encoding is explicit: Python on Windows defaults to the locale
+    # codepage (cp1252), which mangles the em-dashes in this catalog.
+    with open(CATALOG_PATH, encoding="utf-8") as f:
         data = yaml.safe_load(f)
     return data.get("servers", [])
 

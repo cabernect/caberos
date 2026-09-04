@@ -136,6 +136,11 @@ Tickets **01–09 implemented**: smoke slice, real-model chat + SSE streaming, f
 **v0.1.7 design rule:** Agent configuration defines the permission ceiling; the harness separately tracks which schemas are loaded into the current run. `capabilities_search` exposes bounded metadata for permitted tools, and `capabilities_load` makes selected schemas available on the next model turn without widening syscall authority.
 
 **Ticket 10 (Tauri Desktop App):** SHIPPED for macOS ARM64 (Apple Silicon). macOS Intel and Windows builds require cross-compilation/CI and are not yet set up.
+**Ticket 10 (Tauri Desktop App):** IN PROGRESS. macOS ARM64 (Tier 1) and Windows x64 (Tier 2, beta). macOS Intel, Windows on ARM and Linux desktop builds are not set up. See `docs/platform-support.md` for the tier contract — it is the canonical platform statement, and README/release notes link to it rather than restating platform claims.
+- **Windows shell capability** depends on WSL2 + `bubblewrap`. Without them the `terminal` capability is explicitly disabled and the reason is surfaced through `GET /api/health` and Observability → Health. `get_backend()` never raises: a machine with no sandbox still runs agents, it just refuses one capability of 22.
+- **Windows process cleanup** uses a Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` (`gateway.rs`), because `Child::kill()` leaves grandchildren alive and the gateway binds a fixed port.
+- **Gateway packaging** is per-platform: `scripts/build-gateway.sh` (POSIX) and `scripts/build-gateway.ps1` (Windows), dispatched by `scripts/build-gateway.mjs`. They differ because PyInstaller's `--add-data` separator is `:` on POSIX and `;` on Windows; using the wrong one silently omits the bundled agent defaults, so `gateway_entry.py` asserts they are present in frozen builds.
+- **The updater manifest** is built once in a dedicated release job by `scripts/build-updater-manifest.py`, never inside a platform job. It lives at a fixed URL and holds every platform key, so a per-platform job writing it would overwrite the others and silently stop updates for everyone else.
 - Tauri 2 shell wraps the React frontend + packaged PyInstaller gateway.
 - Gateway supervisor (`frontend/src-tauri/src/gateway.rs`): starts the PyInstaller gateway in its own process group, routes stdout/stderr to `<app_data_dir>/logs/gateway.log`, kills the full process group on app exit.
 - Desktop auth uses **bearer token** (not cookies): login returns `session_token` in the JSON response, frontend stores it in `localStorage`, sends it as `Authorization: Bearer <token>` on every request. The backend accepts the token from either the cookie or the bearer header. This avoids cross-site cookie issues between the Tauri webview origin (`tauri.localhost`) and the gateway (`127.0.0.1:51718`).
@@ -286,9 +291,10 @@ backend/src/agentos/
 │   ├── credentials.py   — encrypted credential storage
 │   └── oauth.py         — OAuth loopback flow
 ├── sandbox/             — process-level sandbox
-│   ├── base.py          — SandboxBackend ABC, get_backend()
+│   ├── base.py          — SandboxBackend ABC, get_backend(), probe() (never raises)
 │   ├── seatbelt.py      — macOS sandbox-exec
-│   ├── bwrap.py         — Linux bubblewrap
+│   ├── bwrap.py         — Linux bubblewrap + the shared arg/profile builder
+│   ├── windows.py       — WSL2 bwrap delegate + UnavailableBackend (degrades)
 │   └── workspace.py     — path validation, workspace creation
 ├── syscall/             — the single boundary every capability call crosses
 │   ├── protocol.py      — SyscallHandler Protocol, ToolCall, SyscallResult

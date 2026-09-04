@@ -7,7 +7,7 @@
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
     "beforeDevCommand": "bash ../scripts/desktop-dev.sh",
-    "beforeBuildCommand": "bash ../scripts/build-gateway.sh && npm run build"
+    "beforeBuildCommand": "node ../scripts/build-gateway.mjs && npm run build"
   },
   "app": {
     "windows": [
@@ -38,6 +38,14 @@
     ],
     "android": {
       "debugApplicationIdSuffix": ".debug"
+    },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "embedBootstrapper"
+      },
+      "nsis": {
+        "installMode": "currentUser"
+      }
     },
     "createUpdaterArtifacts": true
   },

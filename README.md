@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <a href="../../releases/latest">Download (macOS ARM64)</a> ·
+  <a href="../../releases/latest">Download (macOS · Windows)</a> ·
   <a href="#features">Features</a> ·
   <a href="#quick-start">Quick Start</a> ·
   <a href="#architecture">Architecture</a> ·
@@ -148,21 +148,36 @@ git clone <repo-url> && cd foundation-agentos
 
 Open `http://localhost:5173` — the Vite dev server proxies `/api` to the backend.
 
-### Option 3: Desktop app (macOS Apple Silicon only)
+### Option 3: Desktop app (macOS Apple Silicon, Windows x64)
 
-> **Platform support:** The desktop app currently supports **macOS ARM64 (Apple Silicon)** only — M1/M2/M3/M4 chips. macOS Intel and Windows builds require cross-compilation or CI runners and are not yet set up. Use Docker or local dev on other platforms.
+> **Platform support:** **macOS ARM64** (Tier 1) and **Windows x64** (Tier 2, beta).
+> On Windows, shell commands additionally need WSL2 with `bubblewrap`; every other
+> capability works natively. macOS Intel, Windows on ARM and Linux desktop builds
+> are not available yet — use Docker or local dev there.
+> Full matrix: [docs/platform-support.md](docs/platform-support.md).
 
 **Download the latest release:** [GitHub Releases](../../releases/latest)
 
 Or build from source:
 
 ```bash
-# Build the Tauri app (bundles the PyInstaller gateway + React frontend)
+# macOS — bundles the PyInstaller gateway + React frontend
 cd frontend && npm run desktop:build
-
-# Launch
-open frontend/src-tauri/target/release/bundle/macos/CaberOS.app
+open src-tauri/target/release/bundle/macos/CaberOS.app
 ```
+
+```cmd
+:: Windows - needs VS Build Tools (VCTools workload) + a Windows SDK,
+:: and the MSVC rust toolchain rather than GNU.
+:: Run both in one cmd session: vcvars64 sets env for the session it runs in,
+:: so calling it from PowerShell would not carry link.exe into the build.
+call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+cd frontend && npm run desktop:build:windows
+:: -> src-tauri\target\release\bundle\nsis\CaberOS_<version>_x64-setup.exe
+```
+
+Without sourcing `vcvars64.bat` first, the Rust link step fails with
+`error: linker 'link.exe' not found`.
 
 The desktop app packages the entire backend as a PyInstaller executable and supervises it. No Python installation required. Gateway logs are at:
 
@@ -180,7 +195,15 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-Pushing a `v*.*.*` tag triggers the [release workflow](.github/workflows/release.yml) which builds the .dmg and creates a GitHub Release automatically. Tags with a `-` suffix (e.g., `v0.1.0-beta`) are marked as prerelease.
+**Merging to `main` does not publish anything.** The release workflow triggers only on a
+pushed `v*.*.*` tag. That tag builds every supported platform in parallel — the macOS
+`.dmg` and the Windows `-setup.exe` — and attaches them to a single GitHub Release along
+with one `latest.json` covering both, so auto-update keeps working on each.
+
+Tags with a `-` suffix (e.g. `v0.1.0-beta`) are marked as prerelease.
+
+The release fails rather than publishing a partial manifest if an expected platform is
+missing — see `EXPECTED_PLATFORMS` in the workflow.
 
 ## Architecture
 
@@ -349,16 +372,20 @@ CaberOS tracks every run, every capability call, and every dollar spent.
 
 ## Desktop app
 
-> **Platform support:** macOS ARM64 (Apple Silicon) only. macOS Intel and Windows are not yet supported — use Docker or local dev on those platforms.
+> **Platform support:** macOS ARM64 (Tier 1) and Windows x64 (Tier 2, beta).
+> See [docs/platform-support.md](docs/platform-support.md) for what each tier guarantees.
 >
 > **Download:** [Latest release](../../releases/latest)
 
-The Tauri 2 desktop app packages the entire stack into a native macOS application:
+The Tauri 2 desktop app packages the entire stack into a native application
+(macOS `.app`/`.dmg`, Windows NSIS `-setup.exe`):
 
 - **PyInstaller gateway** — the FastAPI backend is compiled to a standalone executable, no Python needed
 - **Process-group supervision** — the Tauri shell starts the gateway in its own process group and kills it cleanly on exit
 - **Bearer-token auth** — the desktop webview uses `Authorization: Bearer` headers instead of cookies (avoids cross-site cookie issues between `tauri.localhost` and `127.0.0.1`)
-- **Persistent logs** — gateway stdout/stderr written to `~/Library/Application Support/com.caberos.desktop/logs/gateway.log`
+- **Persistent logs** — gateway stdout/stderr written to
+  `~/Library/Application Support/com.caberos.desktop/logs/gateway.log` (macOS) or
+  `%APPDATA%\com.caberos.desktop\logs\gateway.log` (Windows)
 - **Default agents** — `caber` and `agent-builder` seed on first launch from YAML bundled into the executable
 
 ```bash
