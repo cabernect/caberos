@@ -1,0 +1,134 @@
+---
+title: Agents
+description: Understand agent identity, models, limits, workspaces, and configuration lifecycle.
+---
+
+An agent in CaberOS is a declarative configuration, not a plugin or a long-running process. CaberOS supplies the execution harness; the agent configuration selects the identity, model, authority, limits, workspace, memory, and automation behavior used by that harness.
+
+This separation lets you change an agent without writing or deploying code. It also gives CaberOS a stable place to enforce permissions and record what happened.
+
+## What an agent contains
+
+| Area | Purpose |
+| --- | --- |
+| Name and ID | Identify the agent in the dashboard and API. |
+| Soul | Durable values, principles, and behavioral boundaries. |
+| Persona | Tone, communication style, and presentation. |
+| Task | Mission, responsibilities, and task-specific instructions. |
+| Provider and model | Select the configured model transport and default model. |
+| Thinking defaults | Enable supported reasoning controls and choose an effort level. |
+| Capabilities | Define the maximum set of operations the agent may invoke. |
+| Limits | Bound turns, cost, context size, and session lifetime. |
+| Sandbox mode | Choose workspace-only or open filesystem access for file and shell operations. |
+| Heartbeat | Optionally run a prompt on a fixed interval. |
+| Memory and skills | Supply durable context and reusable procedural guidance. |
+
+## Identity: soul, persona, and task
+
+CaberOS keeps identity in three fields so each part can change independently:
+
+- **Soul** describes stable values and boundaries. Example: “Prefer reversible actions. Never send a message without confirmation.”
+- **Persona** describes how the agent communicates. Example: “Be concise, direct, and use checklists for operational work.”
+- **Task** describes the job. Example: “Triage project notes, find unresolved decisions, and prepare a daily summary.”
+
+These fields are included in the system context for every run and are saved with the agent configuration. Put durable behavioral instructions here; put user facts and evolving notes in [memory](/docs/core-concepts/memory/).
+
+### A practical first configuration
+
+```text
+Soul
+Be accurate, state uncertainty, and prefer changes that can be reviewed.
+
+Persona
+Write concise answers. Explain tool calls before consequential actions.
+
+Task
+Help maintain this project: inspect files, answer implementation questions,
+and prepare changes only when explicitly requested.
+```
+
+A narrow task usually produces more predictable capability selection than a broad instruction such as “do everything for me.”
+
+## Provider, model, and thinking
+
+Each agent selects one configured provider and one default model. The provider owns connection details and credentials; the agent stores only the provider reference and model name.
+
+The conversation model selector can override the model for an individual message. That override does not permanently change the agent. Models that advertise reasoning support can also expose a per-message thinking toggle and effort choices.
+
+An agent without both a provider and a model can be configured, duplicated, imported, and inspected, but it cannot start a normal model run.
+
+See [Configure a provider](/docs/getting-started/provider-setup/) for model discovery and validation behavior.
+
+## Limits
+
+Open an agent’s **Settings → General → Limits & Sandbox** to configure:
+
+| Limit | What happens |
+| --- | --- |
+| Max turns per run | Stops a tool/model loop from continuing indefinitely. One user message may require multiple turns. |
+| Max cost per run | Stops the run when its accumulated provider cost reaches the configured ceiling. |
+| Session idle timeout | Determines when an inactive conversation should no longer be automatically resumed. |
+| Max context tokens | Overrides the discovered model context window. Leave empty to use model metadata or the platform fallback. |
+
+A cost limit depends on the provider returning usable pricing or cost information. Treat it as a runtime guardrail, not an invoice guarantee, and verify actual usage in [Observability](/docs/guides/observability/).
+
+## Sandbox mode and workspace
+
+Every agent has a workspace for attachments and working files.
+
+- **Strict — workspace only** confines file paths and shell operations to the agent workspace. This is the recommended default.
+- **Open — full filesystem access** allows broader host paths. Use it only for an agent whose task genuinely requires them and whose capability grants you trust.
+
+Changing sandbox mode does not grant a capability. The agent still needs the relevant file or terminal capability, and approval policy still applies.
+
+Workspace files are not agent identity or durable memory. They are working material and may be shared depending on your configuration.
+
+## Capability ceiling
+
+The **Capabilities** tab defines the operations an agent may use. Each capability can be:
+
+| Mode | Discover metadata | Load full schema | Invoke |
+| --- | --- | --- | --- |
+| Not permitted | No | No | No |
+| On demand | Yes | Yes, during the run | Yes, after normal policy checks |
+| Always | Yes | Available from the first model turn | Yes, after normal policy checks |
+
+Approval is configured separately. A permitted capability may still pause for operator approval. Loading a schema never grants authority or bypasses the [syscall mediator](/docs/core-concepts/permissions/).
+
+## Sessions, runs, and agents
+
+These terms describe different lifetimes:
+
+- An **agent** is the reusable configuration.
+- A **session** is one conversation between a contact and one agent.
+- A **run** starts from one inbound message or heartbeat and ends with one outcome. It records model turns, tokens, cost, tool calls, and status.
+
+You can have multiple sessions for one agent. Runs in different sessions can continue independently, and the conversation sidebar marks sessions that still have active work. Within a session, messages remain ordered as one conversation.
+
+## Configuration lifecycle
+
+The agent card’s settings provide the main lifecycle actions:
+
+- **Save** creates a new active configuration version.
+- **Disable** prevents the agent from being used until re-enabled.
+- **Duplicate** creates a separate agent based on the current configuration.
+- **Export YAML** produces a portable representation of the configuration.
+- **Import YAML** validates and imports a configuration into CaberOS.
+
+The backend also exposes version-list, version-detail, and rollback operations. Rollback activates a previous stored configuration as the current version.
+
+`MEMORY.md`, workspace files, knowledge documents, credentials, and conversation history are not embedded in an agent YAML export.
+
+## Recommended setup sequence
+
+1. Configure and validate a provider.
+2. Give the agent a narrow task and clear identity.
+3. Keep **Strict** sandbox mode.
+4. Enable only the capabilities needed for the first workflow.
+5. Use **On demand** for large or occasional tool collections.
+6. Set conservative turn and cost limits.
+7. Run a small test task.
+8. Inspect the run, loaded capabilities, and syscalls in Observability.
+9. Add memory, skills, MCP servers, channels, or heartbeat automation only when the basic workflow is reliable.
+
+Next, read [Capability discovery](/docs/core-concepts/capabilities/) and [Permissions and authority](/docs/core-concepts/permissions/).

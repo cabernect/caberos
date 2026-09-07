@@ -1,0 +1,159 @@
+---
+title: Memory and knowledge
+description: Understand session context, MEMORY.md, contact-scoped recall, facts, and documents.
+---
+
+CaberOS uses multiple bounded memory layers. Each layer has a different lifetime and security scope, so the agent does not need the entire conversation archive or document library in every model request.
+
+Memory and the Knowledge Vault are related but not interchangeable:
+
+- **Memory** preserves conversational context, preferences, decisions, and structured facts.
+- **Knowledge** indexes operator-provided documents and retrieves excerpts with source locations.
+
+## Memory layers at a glance
+
+| Layer | Scope | Loaded automatically | Best for |
+| --- | --- | --- | --- |
+| Current session | One contact and one agent | Recent relevant messages | The active conversation and tool results. |
+| `MEMORY.md` | One agent | Yes, in every run | Stable instructions, conventions, and facts useful across all contacts. |
+| Working snippets | One run and contact | Only when recalled or consolidated | Notes the agent marks during a task. |
+| Recall snippets | One contact and agent | Bounded, query-dependent | Preferences or context from earlier conversations. |
+| Knowledge graph | One contact and agent | Bounded facts are selected for context | Exact, structured relationships. |
+| Episodic summaries | Previous sessions | Bounded topical summaries | What happened in earlier conversations. |
+| Raw history | One contact and agent | No | Exact quotes, error messages, or values found through search. |
+| Knowledge Vault | Shared or one agent | No | Documents retrieved through `doc_search`. |
+
+## Session context
+
+A session is one conversation between a contact and an agent. Recent messages and tool results form the working context for subsequent runs in that session.
+
+When context grows, CaberOS can compact older content while protecting the beginning and recent tail of the conversation. Type `/compact` in the conversation to force compaction even when the automatic threshold has not been reached. The run UI reports context-token usage and whether compaction occurred.
+
+Compaction changes the context supplied to later model calls; it does not delete the stored message history.
+
+## `MEMORY.md`
+
+Each agent has a living Markdown notebook at:
+
+```text
+~/agentos/agents/{agent_id}/MEMORY.md
+```
+
+You can edit it from **Agent Settings → Memory**, and an authorized agent can replace it with `memory_update`.
+
+`MEMORY.md` is:
+
+- agent-scoped rather than contact-scoped;
+- loaded into every run for that agent;
+- stored separately from the workspace;
+- not included in agent configuration versions;
+- not automatically included in an agent YAML export.
+
+Because it is always loaded, keep it concise. Put information here only when every future session for that agent is likely to benefit from it.
+
+### Example structure
+
+```markdown
+# Operating notes
+
+- Use ISO 8601 dates in reports.
+- Ask before publishing or sending external messages.
+
+## Project conventions
+
+- The release branch is `main`.
+- Draft notes belong under `notes/drafts/`.
+```
+
+Do not use `MEMORY.md` as a document archive. Large reference material belongs in the [Knowledge Vault](/docs/guides/knowledge-vault/), where it can be retrieved only when relevant.
+
+## Contact-scoped snippets
+
+`memory_store` records a labeled text snippet with optional tags. `memory_recall` retrieves matching snippets for the current contact and agent.
+
+CaberOS resolves the contact from the session. The model does not provide a contact identifier, which prevents it from selecting another contact’s memory through tool arguments.
+
+On SQLite, recall uses local FTS5 keyword search. Postgres uses a full-text search vector and index. Embedding-based recall is not currently the default implementation.
+
+## Structured facts
+
+The knowledge graph stores a fact as three strings:
+
+```text
+(entity, predicate, object)
+```
+
+Examples:
+
+```text
+(user, prefers, concise status updates)
+(project-caberos, release_branch, main)
+(user, timezone, Asia/Ho_Chi_Minh)
+```
+
+Use:
+
+- `memory_remember_fact` to write a fact;
+- `memory_query_facts` to query by exact entity, predicate, object, or any combination.
+
+Facts are contact-scoped and useful when a relationship should be queried precisely. A fact is not automatically verified merely because an agent stored it; review important facts before relying on them for consequential work.
+
+## Exact history search
+
+`search_history` searches verbatim past messages for exact phrases and details. It is useful for values that summaries may omit, such as:
+
+- error text;
+- version numbers;
+- configuration values;
+- names and quotes.
+
+This is different from `memory_recall`, which searches stored snippets rather than the complete message archive.
+
+## Automatic memory extraction
+
+After a run, CaberOS can ask the configured model to identify durable information from a bounded portion of the conversation and working-memory notes. The extraction prompt is limited to:
+
+- user preferences and working habits;
+- recurring project context;
+- important decisions or constraints;
+- patterns likely to matter again.
+
+It explicitly excludes one-off results and transient file content. New items are deduplicated into an `## Auto-extracted` section in `MEMORY.md`, and run-scoped working entries are then cleared.
+
+Automatic extraction is best-effort. Failures do not fail the completed run, and extracted statements should be treated as model-generated notes that may need correction.
+
+## Episodic context
+
+CaberOS can include short summaries of relevant previous sessions. This section is bounded to prevent old conversations from dominating the current request. It provides continuity, while `search_history` remains available when exact wording is needed.
+
+## Knowledge Vault
+
+The Knowledge Vault stores and indexes local documents in two scope types:
+
+- **Shared Knowledge** is visible to every agent through the document tools.
+- **Agent-private knowledge** is visible only when that agent uses the document tools.
+
+The agent calls `doc_list`, `doc_search`, and, for supported visual sources, `doc_inspect`. Search results preserve metadata such as headings, PDF pages, spreadsheet sheets, and source locations so responses can display citations.
+
+Document contents are not added to every prompt. Only retrieved excerpts or inspected visual content are sent to the selected model. If the model provider is hosted, that selected content leaves the machine as part of the model request.
+
+## Choosing the right layer
+
+| Information | Recommended layer |
+| --- | --- |
+| “Use short bullet lists in every reply.” | `MEMORY.md` |
+| “The user prefers dark mode.” | Structured fact or recall snippet |
+| “Build failed with error XYZ-204.” | Raw history; snippet if it will recur |
+| A product manual or project specification | Knowledge Vault |
+| Temporary notes needed only during one task | Working snippet or workspace file |
+| The current conversation | Session context |
+
+## Review and deletion
+
+- Edit `MEMORY.md` from the agent’s Memory settings.
+- Inspect and remove documents from the Knowledge Vault.
+- Use agent memory APIs to inspect triples or clear an agent/contact memory scope.
+- Deleting a conversation removes its messages and associated run data according to the local database operations.
+- Include the data directory in backups if memory and history must survive a reinstall.
+
+Memory is only useful when its scope is understandable. Prefer a small, reviewable notebook and explicit document sources over an unbounded accumulation of context.

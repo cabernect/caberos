@@ -1,0 +1,205 @@
+---
+title: External channels
+description: Connect Telegram, Discord, Zalo OA, and Zalo Bot to an agent.
+sidebar:
+  order: 6
+---
+
+External channels let people reach a CaberOS agent through a messaging platform. Each adapter normalizes an inbound platform message, resolves a CaberOS contact and session, runs the configured agent, then formats and delivers the reply under that platform’s limits.
+
+A channel changes transport, not authority. The same agent capabilities, memory scope, approval policy, model limits, audit path, and spend tracking still apply.
+
+## Supported platforms
+
+| Platform | Inbound mode | Output | Limit | Typing indicator |
+| --- | --- | --- | --- | --- |
+| Telegram | Polling or webhook | Markdown | 4,096 characters per message | Yes |
+| Discord | Webhook | Markdown | 2,000 characters per message | No |
+| Zalo OA | Webhook | Plain text | No hard limit configured for customer-service messages | No |
+| Zalo Bot Platform | Polling or webhook | Markdown | 2,000 characters per message | Yes |
+
+Long replies are split near a newline or word boundary before delivery. Plain-text channels remove basic Markdown formatting.
+
+Only supported text-message payloads start agent runs. Other event types and unsupported payloads are ignored.
+
+## Before you connect a channel
+
+1. Configure and test the agent in dashboard chat.
+2. Give it the minimum required capabilities.
+3. Decide how approval-requiring calls should behave outside the dashboard.
+4. Set conservative turn and cost limits.
+5. Create a dedicated platform bot or application.
+6. Use a least-privilege platform token.
+
+Do not expose an untested broadly privileged agent through a public bot.
+
+## Add a channel
+
+1. Open **Channels**.
+2. Select **New Channel**.
+3. Choose the platform.
+4. Bind one enabled agent.
+5. Enter the bot token.
+6. Choose polling or webhook where supported.
+7. For webhook mode, set a webhook secret.
+8. Save the channel.
+9. Enter a platform chat ID and send the built-in test message.
+10. Send a real inbound text message and inspect its run.
+
+CaberOS permits one configuration for the same platform and agent combination. Use a different agent or remove the existing configuration before creating another identical binding.
+
+Bot tokens are encrypted before storage. API responses expose whether a token exists rather than returning it.
+
+## Polling versus webhook
+
+### Polling
+
+The gateway repeatedly asks the platform for new updates. Use polling when CaberOS runs on a local machine without a public URL.
+
+Polling is available for Telegram and Zalo Bot Platform. Switching to polling removes an existing platform webhook because the two delivery modes are mutually exclusive for those adapters.
+
+Polling only works while the CaberOS gateway and machine are running.
+
+### Webhook
+
+The platform sends HTTP requests to CaberOS. Use webhook mode when you have a stable, public HTTPS endpoint that forwards to the gateway.
+
+The configured channel card shows a URL in this form:
+
+```text
+https://your-host/api/channels/{platform}/webhook?agent_id={agent_id}
+```
+
+The webhook route itself is unauthenticated because external platforms cannot use the CaberOS operator session. Configure a webhook secret so CaberOS can authenticate inbound requests through the platform header or query parameter.
+
+Do not expose the rest of the local gateway directly to the internet. Put a narrowly configured reverse proxy or tunnel in front of the webhook route and apply network controls appropriate to your deployment.
+
+## Telegram
+
+1. Create a bot with BotFather and copy the bot token.
+2. Add a Telegram channel and bind an agent.
+3. Choose **Polling** for local operation, or **Webhook** for a public HTTPS deployment.
+4. For webhook mode, register the displayed URL with Telegram and supply the matching secret.
+5. Send a text message to the bot.
+
+Telegram polling receives regular messages and channel posts. The adapter sends a typing indicator and splits replies longer than 4,096 characters.
+
+## Discord
+
+1. Create an application and bot in the Discord developer portal.
+2. Enable the message-content intent required by the intended workflow.
+3. Add the bot to the target server or configure direct-message access.
+4. Add a Discord channel in CaberOS and use webhook mode.
+5. Configure the displayed callback in the platform settings.
+
+Discord polling through the current dashboard is not supported because it would require a gateway WebSocket connection. Replies are split at 2,000 characters. The adapter handles supported message-create, direct-message, and slash-command payloads.
+
+## Zalo OA
+
+1. Create or select a Zalo Official Account and application.
+2. Obtain the access token required for message delivery.
+3. Add a **Zalo OA** channel and choose webhook mode.
+4. Configure an HTTPS webhook and secret in the OA settings.
+5. Send a supported customer-service text message.
+
+Zalo OA has no polling API in the current integration. The current public webhook route checks the configured secret supplied through a supported secret header or query parameter. Replies are delivered as plain customer-service text, so Markdown is stripped.
+
+## Zalo Bot Platform
+
+1. Create a bot through Zalo Bot Manager.
+2. Copy the bot token.
+3. Add a **Zalo Bot** channel.
+4. Choose polling for local operation or webhook for public delivery.
+5. Test with the destination chat ID.
+
+The adapter supports typing indicators and 2,000-character Markdown replies. If no explicit webhook secret is supplied, the integration derives the platform secret token from the bot token according to the adapter convention.
+
+## Contact and session mapping
+
+For each inbound sender, CaberOS resolves a contact using platform, bot/agent binding, and external user ID. Conversations remain associated with that contact and one agent.
+
+This mapping matters for subject-scoped memory: two people messaging the same bot do not automatically share recall snippets or structured facts. The model cannot choose another contact ID in a memory call.
+
+External sessions appear with channel and external-user metadata in the conversation/session API and their runs appear in Observability.
+
+## Approval policy
+
+Channel configuration supports three behaviors for a capability that requires approval:
+
+| Policy | Behavior |
+| --- | --- |
+| `deny` | Reject the capability call. This is the default. |
+| `operator` | Create a dashboard approval request and wait for the operator. |
+| `auto_approve` | Continue without an interactive confirmation. |
+
+A missing or unknown policy fails closed to denial. The policy affects only calls that already require approval and are authorized by the agent’s capability grants.
+
+Use `deny` for new channels. Move to `operator` only if someone reliably monitors pending approvals. Use `auto_approve` only for a narrow, well-tested agent whose external effects are constrained by service permissions and CaberOS grants.
+
+## Test delivery
+
+The **Test** control asks for a platform chat ID and sends a fixed CaberOS test message directly through the adapter. It verifies outbound token, destination, and platform reachability.
+
+It does not verify:
+
+- inbound polling or webhook configuration;
+- contact/session mapping;
+- model-provider access;
+- agent capability grants;
+- approval behavior;
+- the complete agent pipeline.
+
+After the outbound test succeeds, send a real inbound message and inspect the resulting run.
+
+## Enable, edit, and remove
+
+- **Disable** stops the channel from receiving or delivering agent traffic while retaining configuration.
+- **Edit** can replace the bot token or switch delivery mode. Leaving the token blank keeps the existing secret.
+- **Remove** deletes the channel configuration and stops its active polling task or registry entry.
+
+Changing a mode or token reloads the active adapter. Existing conversation records remain in local storage.
+
+## Security checklist
+
+- Store a webhook secret for public webhook routes.
+- Keep the gateway and operator API on loopback or behind authentication.
+- Restrict bot membership and platform scopes.
+- Bind the channel to a narrowly configured agent.
+- Keep channel approval policy on `deny` initially.
+- Review external-channel runs and denied syscalls.
+- Rotate a token immediately if it appears in logs, chat, or screenshots.
+- Remember that platform messages and replies are stored and processed by that external platform.
+
+## Troubleshooting
+
+### Outbound test fails
+
+Check the bot token, destination chat ID, platform permissions, TLS/network access, and whether the channel is enabled.
+
+### Outbound test works but inbound messages do not
+
+For polling, confirm the gateway remains running and no competing webhook is registered. For webhook mode, verify the public URL, HTTPS certificate, agent ID query parameter, and secret header.
+
+### Discord polling does not work
+
+Use webhook mode. The current Discord adapter does not implement gateway-WebSocket polling.
+
+### Zalo OA polling does not work
+
+Use webhook mode. Zalo OA is webhook-only in CaberOS.
+
+### Webhook returns 401
+
+The configured secret and supplied `X-Webhook-Secret`, `X-Bot-Api-Secret-Token`, or `webhook_secret` query parameter do not match.
+
+### Message is ignored
+
+The adapter may have received a non-text event or an unsupported payload shape. Check gateway logs and send a plain text message.
+
+### Agent replies but cannot use a tool
+
+Inspect the run’s syscall records. The channel does not add capabilities, and approval policy may deny calls that work interactively in dashboard chat.
+
+### Long replies arrive in parts
+
+This is expected for Telegram, Discord, and Zalo Bot. CaberOS splits replies to respect platform limits.

@@ -1,0 +1,230 @@
+---
+title: Security overview
+description: Understand CaberOS security goals, trust boundaries, controls, known limitations, and recommended configuration.
+sidebar:
+  order: 1
+---
+
+CaberOS runs models that can request access to files, commands, memory, web pages, and external services. Its security model assumes model output can be wrong or manipulated and therefore treats every requested action as untrusted input to an OS-owned policy boundary.
+
+Security comes from multiple independent controls: operator authentication, explicit capability grants, run-scoped schema visibility, subject binding, approval gates, credential injection, filesystem and process restrictions, audit records, and local data ownership.
+
+No individual control makes an agent safe by itself.
+
+## Security goals
+
+CaberOS is designed to:
+
+- keep application state under the operator’s control by default;
+- prevent a model from invoking capabilities it was not granted;
+- prevent subject-scoped tools from choosing another contact through model arguments;
+- require review for configured consequential operations;
+- keep stored provider and integration credentials out of normal model context and API responses;
+- restrict native file and shell writes in strict mode;
+- make allowed and denied capability calls inspectable;
+- keep new clients and channels on the same agent execution path;
+- bound model loops by turns, context, cost, and human-in-the-loop timeouts.
+
+## Non-goals and limits
+
+The current local, single-operator release is not designed to provide:
+
+- hostile multi-tenant isolation or role-based access control;
+- protection from another process already running as the same operating-system user;
+- full-disk encryption for the database, memory, documents, workspaces, or logs;
+- a sandbox around arbitrary third-party MCP server code;
+- a proof that model output is factually correct or free of prompt injection;
+- durable multi-process approval, scheduling, or run coordination;
+- a guarantee that hosted providers, MCP services, or messaging platforms retain no data;
+- complete detection of every possible secret format;
+- a guarantee that every command stops immediately when its configured wait timeout expires.
+
+CaberOS is local-first, not an air-gapped system unless the operator configures only local components and prevents all external capability paths.
+
+## Threat model
+
+### Protected assets
+
+Typical sensitive assets include:
+
+- provider API keys;
+- MCP API keys and OAuth tokens;
+- channel bot tokens and webhook secrets;
+- agent identity and task instructions;
+- conversations, memory, and structured facts;
+- Knowledge Vault documents;
+- workspace files and attachments;
+- run traces, syscall arguments, and results;
+- the local Fernet encryption key;
+- backup archives and restore points.
+
+### Relevant threats
+
+| Threat | Example | Main controls |
+| --- | --- | --- |
+| Prompt injection | A document tells the model to ignore the operator and send data elsewhere. | Capability ceiling, approvals, sandbox, egress labels, audit, heuristic warnings |
+| Excessive authority | A research agent receives terminal and write access it does not need. | Explicit grants, on-demand schemas, strict sandbox, narrow task |
+| Subject confusion | A channel user causes an agent to recall another person’s memory. | Contact/session resolution and subject injection |
+| Credential leakage | A model echoes a key read from a file or prompt. | Encrypted credential custody, runtime injection, output redaction, narrow file access |
+| Malicious integration | A third-party stdio MCP server reads local data when launched. | Publisher review, least-privilege credentials, isolated host account; not the agent shell sandbox |
+| Forged webhook | Someone sends messages directly to a public channel endpoint. | Configured webhook secret and network-layer protection |
+| Session theft | Local malware steals the desktop bearer token. | OS account protection, short exposure, logout, loopback binding |
+| Backup disclosure | A backup archive is uploaded publicly. | Private encrypted storage and access controls; archive contains the data and decryption key |
+| Host compromise | Another local process reads the application directory. | Operating-system permissions and disk encryption; outside CaberOS’s application boundary |
+
+## Defense-in-depth model
+
+```text
+Inbound message or document
+          │
+          ▼
+Input redaction and injection warnings
+          │
+          ▼
+Agent configuration and visible schemas
+          │
+          ▼
+Model proposes a capability call
+          │
+          ▼
+┌──────────────── Syscall mediator ────────────────┐
+│ capability grant                                 │
+│ parent/sub-agent intersection                    │
+│ contact-derived subject                          │
+│ approval or channel policy                       │
+│ MCP binding and credential injection             │
+│ workspace and sandbox context                    │
+└──────────────────────┬───────────────────────────┘
+                       ▼
+                 Tool execution
+                       │
+                       ▼
+           Audit record and model result
+                       │
+                       ▼
+       Output redaction and leakage warnings
+                       │
+                       ▼
+                    Reply
+```
+
+Guardrails occur before and after inference, but the syscall mediator is the execution boundary. A warning can miss an attack; an absent capability grant still prevents the action.
+
+## Security control matrix
+
+| Control | Protects against | Important limitation |
+| --- | --- | --- |
+| Operator login | Unauthenticated management API access | Single operator; no RBAC; default password must be changed |
+| Hashed session tokens | Database disclosure revealing active raw tokens | Desktop receives a raw bearer token in the login response |
+| Fernet credential encryption | Casual disclosure of database credential fields | Key is stored on the same machine and included in full backups |
+| Capability grants | Model requesting unapproved classes of action | An over-broad grant remains broad authority |
+| Progressive disclosure | Unnecessary schema exposure and confused tool selection | Context reduction is not authorization by itself |
+| Subject injection | Model selecting a different contact ID | Depends on correct channel/contact/session mapping |
+| Approvals | Unreviewed configured operations | Can be disabled per grant, remembered, auto-approved by channel policy, or globally skipped by YOLO mode |
+| Strict file path validation | `..` and symlink escape through native file tools | Open mode permits absolute host paths |
+| Shell sandbox | Unauthorized writes and network from strict terminal calls | macOS strict shell allows broad host reads; platform behavior differs |
+| Input/output redaction | Common credential patterns in messages and replies | Heuristic and incomplete; attachments and arbitrary tool results need separate care |
+| Audit records | Invisible capability effects | Logs are evidence after the decision, not prevention |
+| Cost/turn limits | Runaway model loops | Provider cost metadata can be incomplete |
+
+## Recommended baseline
+
+For a new installation:
+
+1. Change the default `admin` password immediately.
+2. Keep the gateway bound to loopback unless you have a protected reverse proxy.
+3. Keep agent sandbox mode **Strict**.
+4. Give each agent a narrow task and explicit capability list.
+5. Keep terminal, web, and consequential MCP operations on approval.
+6. Keep **YOLO Mode** disabled.
+7. Use on-demand mode for large integrations.
+8. Use separate least-privilege provider, MCP, and bot credentials.
+9. Configure a secret on every public webhook.
+10. Test external channels with approval policy set to deny first.
+11. Review denied and successful syscalls in Traces.
+12. Protect the application directory and backups with OS permissions and disk encryption.
+13. Treat imported skills, MCP configuration, documents, and backup archives as untrusted until reviewed.
+
+## Prompt injection model
+
+CaberOS scans input and final output for common instruction-override patterns. These checks produce warnings rather than proving intent or blocking all matching messages.
+
+Prompt injection may enter through:
+
+- user messages;
+- uploaded or workspace files;
+- Knowledge Vault documents;
+- fetched web pages;
+- MCP tool results;
+- external channel messages;
+- installed skill instructions.
+
+The primary defense is to limit what the model can do after reading hostile content. For example, an agent may be allowed to search documents but not send messages or run commands. If it is allowed to perform consequential operations, approval provides another review point.
+
+## Credentials and secrets
+
+Provider keys, MCP credentials, OAuth tokens, and channel bot tokens are encrypted with a local Fernet key. The key is stored separately with best-effort `0600` permissions. Plaintext is decrypted only when constructing the relevant provider, MCP, or channel client.
+
+This is credential-at-rest protection, not hardware-backed isolation. A process that can read both the database and `secret.key` can decrypt stored credentials. Full export archives intentionally contain both so they can be restored.
+
+Read [Authentication and credentials](/docs/security/authentication-and-credentials/) before moving or backing up an installation.
+
+## Local data and external data flows
+
+Most CaberOS state is stored locally, but configured operations can send selected data to:
+
+- hosted model providers;
+- remote MCP servers;
+- websites used by web tools;
+- Telegram, Discord, or Zalo;
+- any destination reached by software the operator launches outside strict restrictions.
+
+Read [Local-first and data boundaries](/docs/security/local-first/) for a data-by-data breakdown.
+
+## Approvals and sandboxing
+
+Capability authorization, human approval, and sandbox containment are separate decisions. Strict mode does not grant terminal access, and an approved terminal call does not automatically gain broad write or network access.
+
+Platform sandbox behavior is not identical. In particular, macOS Seatbelt allows broad reads needed for system libraries and executables while restricting writes and network. Read [Approvals and sandboxing](/docs/security/approvals-and-sandbox/) before enabling terminal access.
+
+## External integration trust
+
+### Hosted models
+
+A hosted model provider receives the system prompt and selected run context. Provider policy, account controls, and retention terms remain part of your security posture.
+
+### MCP servers
+
+MCP capability calls are mediated, but a local stdio MCP server is third-party code launched by the gateway. Review its package, install source, command, environment, and update behavior.
+
+### Skills
+
+Skills are prompt instructions. Installation does not execute them, but a model may later follow them using its existing capabilities. Review skill bodies and resources before use.
+
+### Channels
+
+Webhook routes are public by design. If no webhook secret is configured, the CaberOS route does not require one. Use a strong secret and protect the route at the network layer.
+
+## Incident response basics
+
+If you suspect a credential or session leak:
+
+1. Disable affected agents, channels, and MCP servers.
+2. Turn off YOLO mode.
+3. Revoke the credential at the provider or platform first.
+4. Replace the stored credential in CaberOS.
+5. Log out active operator sessions where possible and change the operator password.
+6. Review runs, messages, audit records, operator audit, and gateway logs.
+7. Preserve a private copy of relevant evidence before deleting local data.
+8. Rotate webhook secrets and public callback URLs when applicable.
+9. Inspect installed skills, MCP commands, workspaces, and recent imports.
+
+Changing the local Fernet key without re-encrypting existing values makes stored credentials unreadable; it does not revoke them at their providers.
+
+## Report a vulnerability
+
+Report security vulnerabilities through the repository’s **GitHub Security → Report a vulnerability** flow. Include reproduction steps, affected versions, impact, and any proposed mitigation.
+
+Do not open a public issue containing an unpatched vulnerability, active credential, private trace, or sensitive backup content.
+
+For implementation topology and process-local limitations, read [Architecture](/docs/development/architecture/).

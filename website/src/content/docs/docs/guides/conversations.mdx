@@ -1,0 +1,163 @@
+---
+title: Conversations and attachments
+description: Use sessions, streaming runs, model controls, files, URLs, approvals, and clarifying questions.
+sidebar:
+  order: 1
+---
+
+The CaberOS conversation view is an operational console, not only a chat transcript. It streams model output, thinking, capability calls, approvals, sub-agent activity, citations, token usage, and run status as they happen.
+
+## Sessions and runs
+
+A **session** is a conversation with one agent. A **run** is the work started by one message inside that session.
+
+Use **New conversation** when the next task should not inherit the current session history. Existing sessions remain in the sidebar with their title, activity time, and message count.
+
+CaberOS can execute runs in different sessions independently. Switching to another session does not cancel a run; the sidebar indicates sessions with active work, and the client can reconnect to the run’s event stream.
+
+## Send a message
+
+1. Open **Agents**.
+2. Select an enabled agent with a configured provider and model.
+3. Enter a message.
+4. Press **Enter** to send or **Shift+Enter** for a newline.
+5. Watch streamed text and process steps.
+
+Use the stop button to request cancellation of an active run. A run that already completed cannot be stopped.
+
+## Choose a model per message
+
+The input bar starts with the agent’s default provider and model. Use the model selector to override that choice for the next message without editing the agent configuration.
+
+Model discovery can expose:
+
+- vision support;
+- reasoning or thinking support;
+- supported thinking-effort values;
+- input context window;
+- maximum output tokens.
+
+Metadata depends on the provider. A model can still reject a feature even when metadata is incomplete, so validate important workflows directly.
+
+## Thinking controls
+
+For models that support reasoning controls, use the thinking button to enable or disable thinking and select an effort level. The choice is sent with that message’s model override.
+
+Thinking content, when returned by the provider, appears in collapsible blocks. Providers differ in what reasoning content they expose; absence of a thinking block does not necessarily mean no internal reasoning occurred.
+
+## Attach a local file
+
+You can select a file from the attachment menu or drag files into the conversation.
+
+When you send the message:
+
+1. CaberOS saves the uploaded bytes under the agent workspace’s `attachments/` directory.
+2. The initial model message receives metadata and a workspace-relative reference.
+3. The model chooses whether to call `read_file`, `search_files`, or another permitted tool.
+4. The file content is returned only through that mediated operation.
+
+Raw attachment bytes are not inserted automatically into the initial prompt and are not stored as base64 in the message database. Message history stores attachment metadata; the workspace stores the uploaded file.
+
+Text and JSON uploads are transported as text and then written to the workspace. Other files are transported as base64 and decoded locally before being saved.
+
+## Attach an image
+
+Images follow the same tool-mediated flow. A vision-capable model can call `read_file` to inspect the image. If the selected model does not support vision, `read_file` returns metadata rather than pretending the model can see the pixels.
+
+The UI warns when a selected model is known not to support image input. Provider metadata can be incomplete, so treat the warning as guidance rather than a universal capability test.
+
+## Attach a URL
+
+A URL attachment adds the URL as metadata; it does not fetch the page automatically. The agent needs the permitted `web_fetch` capability to retrieve it.
+
+Because `web_fetch` contacts an external host, it is an egress operation and normally requires approval. Retrieved text can then become part of the model context. Do not attach a URL if contacting that host would disclose sensitive query parameters or access patterns.
+
+## Use a skill
+
+Type `/` at the start of the composer to search installed skills. Select a skill and add the task after its name:
+
+```text
+/release-checklist prepare the v0.1.7 verification steps
+```
+
+CaberOS loads that skill’s full body into the run context. The built-in `/compact` command instead summarizes older conversation context.
+
+See [Skills](/docs/guides/skills/) for skill scope and installation.
+
+## Capability calls
+
+Tool calls appear inline with:
+
+- capability name;
+- arguments;
+- pending, approval, running, complete, or denied state;
+- result or denial information;
+- nested sub-agent activity when applicable.
+
+A visible tool request does not mean the operation was allowed. Check the final status and the syscall record.
+
+## Approvals
+
+When a call requires approval, the run pauses and presents the capability and arguments. You can:
+
+- approve once;
+- approve and remember a matching scope for the session;
+- reject the call.
+
+Rejecting a call returns a denied result to the model. The model may continue with a safer approach. For details, read [Permissions and authority](/docs/core-concepts/permissions/).
+
+## Clarifying questions
+
+An agent with `agent_ask_user` can pause and ask for:
+
+- free-text input;
+- one choice;
+- multiple choices with optional descriptions.
+
+For single-choice prompts, clicking an option responds immediately. Number keys select displayed options, and multi-select responses can combine choices with typed text.
+
+The response resumes the same run; it is not a new user message or a separate session.
+
+## Context meter and compaction
+
+The input area can show:
+
+- current context tokens;
+- model context ceiling;
+- cached-token information when available;
+- a breakdown across system prompt, conversation, and tools;
+- whether compaction occurred;
+- currently loaded capability schemas.
+
+Use `/compact` before a long task when the session has accumulated irrelevant history. Automatic compaction can also trigger at the agent’s configured threshold while preserving selected head and tail messages.
+
+## Citations
+
+Responses can include source cards for:
+
+- Knowledge Vault excerpts, with document, heading, page, sheet, or source location;
+- web pages fetched during the run, with URL, title, and excerpt.
+
+A citation shows which retrieved source was associated with the run. It does not independently validate the model’s interpretation of that source.
+
+## Troubleshooting
+
+### The send button is disabled
+
+Confirm that the agent has a provider and model. You can configure a default in agent settings or select a model override in the conversation.
+
+### The agent says it cannot open a file
+
+Check that `read_file` is permitted, the upload produced a workspace path, and strict sandbox mode still points at the expected workspace. For images, also check vision support.
+
+### A URL was not read
+
+Attaching a URL only creates a reference. Permit `web_fetch`, then approve the egress request if prompted.
+
+### A run appears stuck
+
+Look for a pending approval or clarifying question, switch back to the session with the active indicator, or inspect the run in [Observability](/docs/guides/observability/). If necessary, stop the run.
+
+### Earlier details disappeared from the answer
+
+Check the context meter and compaction status. Search exact message history, move durable facts into memory, or start a new focused session with the required source attached.

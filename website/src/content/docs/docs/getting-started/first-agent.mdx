@@ -1,0 +1,177 @@
+---
+title: Create and test your first agent
+description: Configure a focused agent, grant minimum capabilities, and verify its first run.
+sidebar:
+  order: 4
+---
+
+This guide creates a small, reviewable agent before adding integrations or automation. You need a [validated provider and model](/docs/getting-started/provider-setup/) first.
+
+## 1. Create the agent
+
+1. Open **Agents**.
+2. Select **New Agent**.
+3. Enter a stable name and ID.
+4. Select a configured provider and model.
+5. Create the agent, then open its Settings.
+
+An agent is a versioned configuration record. It is not a process and does not run until a message, channel, or heartbeat triggers it.
+
+## 2. Define a narrow identity
+
+Use the three identity fields for different concerns:
+
+```text
+Soul
+Be accurate and cautious. Prefer reversible actions. State uncertainty.
+
+Persona
+Be concise and explain any requested tool use.
+
+Task
+Help inspect and organize files in the assigned workspace. Do not access
+external services or run shell commands unless the operator asks.
+```
+
+- **Soul** should remain stable across tasks.
+- **Persona** controls presentation rather than authority.
+- **Task** should define the workflows this agent owns.
+
+Do not put API keys or passwords in these fields. They are included in model context and stored in version history.
+
+## 3. Choose the default model
+
+Under **General**:
+
+1. Select the provider.
+2. Search for or enter the model.
+3. If the model supports thinking, choose the default state and effort.
+4. Save.
+
+The conversation composer can override the model or thinking setting for one message later.
+
+## 4. Set limits and sandbox
+
+For a first test, keep:
+
+- **Sandbox mode:** Strict — workspace only.
+- **Max turns:** low enough to stop an accidental loop.
+- **Max cost:** appropriate for one short test.
+- **Session idle timeout:** long enough to complete the setup conversation.
+- **Max context tokens:** automatic unless the provider metadata is known to be wrong.
+
+Open mode allows broad filesystem paths and is not needed for the first workflow.
+
+## 5. Grant minimum capabilities
+
+Open **Capabilities** and start with:
+
+| Capability | Suggested mode | Why |
+| --- | --- | --- |
+| `read_file` | Always | Inspect a known workspace file. |
+| `search_files` | Always | List the workspace and find files. |
+| `write_file` | Not permitted initially | Add only after read-only behavior works. |
+| `terminal` | Not permitted initially | Avoid shell execution during the first test. |
+| `datetime_now` | On demand or Always | Useful for timestamped summaries. |
+| Memory, web, MCP, and sub-agent tools | Not permitted initially | Add one workflow at a time. |
+
+Capability modes save automatically in the current settings screen. Loading an on-demand schema never widens the grant.
+
+Keep global **YOLO Mode** disabled so any future approval-requiring call remains visible.
+
+## 6. Attach a test file
+
+Create a small non-sensitive text file named `project-status.txt`:
+
+```text
+Release: v0.1.7
+State: documentation review
+Blocked: no
+```
+
+Open the agent conversation, select the attachment button, and add the file. The upload will be saved under the workspace `attachments/` directory and exposed to the agent as metadata and a relative path when you send the message.
+
+## 7. Send the first message
+
+Send the attachment with this prompt:
+
+```text
+Find the attached project-status.txt file using its provided workspace path.
+Read it and summarize it. Do not create or modify files.
+```
+
+A successful run should show:
+
+1. the user message;
+2. streamed model or thinking output;
+3. `search_files` or `read_file` tool activity;
+4. a completed assistant response;
+5. token, cost, and context information;
+6. a completed run in Traces.
+
+The model may choose a different permitted route. The important check is that every operation remains inside the capability ceiling and is visible.
+
+## 8. Inspect the trace
+
+Open **Traces**, select the agent, and open the latest run. Confirm:
+
+- status is completed;
+- trigger is a user message;
+- loaded capabilities match the intended modes;
+- only expected syscalls were allowed;
+- no unexpected egress occurred;
+- cost and context usage are reasonable.
+
+If the agent tried a not-permitted capability, the denied audit record proves the boundary was applied. Improve the task instructions rather than automatically granting the tool.
+
+## 9. Add one feature at a time
+
+After the read-only test works, choose the next real workflow:
+
+- [Conversations and attachments](/docs/guides/conversations/) for files, URLs, model overrides, and approvals.
+- [Knowledge Vault](/docs/guides/knowledge-vault/) for document-grounded answers.
+- [Skills](/docs/guides/skills/) for reusable procedures.
+- [MCP servers](/docs/guides/mcp/) for external-service tools.
+- [External channels](/docs/guides/channels/) for Telegram, Discord, or Zalo.
+- [Scheduler and heartbeats](/docs/guides/scheduler/) for periodic autonomous runs.
+
+For each addition, grant the smallest capability set, test one representative action, and review the resulting trace.
+
+## Agent management actions
+
+The General settings also provide:
+
+- **Disable/Enable** — control whether the agent may run.
+- **Duplicate** — create a separate agent from the current setup.
+- **Export YAML** — export configuration without memory, credentials, workspace files, or history.
+- **Import YAML** — validate and import a configuration.
+
+Every normal save creates a new configuration version. Memory and workspace changes are independent and are not rolled back with agent configuration.
+
+## Troubleshooting
+
+### The agent card says no model
+
+Assign both a provider and model. A provider record by itself is not sufficient.
+
+### Sending returns “No model configured”
+
+The active agent version has an empty provider or model. Reopen General settings and save both fields.
+
+### The file cannot be found
+
+Confirm its workspace-relative path. Conversation uploads are stored under `attachments/`, so use the path shown in the attachment reference.
+
+### A capability is missing
+
+Open Capabilities and check its mode. On-demand tools must be discovered and loaded during the run.
+
+### A call waits for approval
+
+Review the capability and arguments, then approve or reject it. Do not enable YOLO mode merely to make a first test pass.
+
+### The answer ignores the task boundary
+
+Narrow the Task field, remove unrelated capabilities, start a fresh session, and test again. Prompts guide behavior; grants enforce the maximum authority.
+
+For the complete configuration model, read [Agents](/docs/core-concepts/agents/).

@@ -1,0 +1,168 @@
+---
+title: Scheduler and heartbeats
+description: Run agents on fixed intervals, constrain autonomous cost, and respond to failures.
+sidebar:
+  order: 4
+---
+
+A heartbeat runs an agent task automatically on a fixed interval. It uses the same model harness, capabilities, permissions, memory, syscall audit, and observability records as a user-triggered message.
+
+Heartbeats are useful for recurring local checks such as preparing a status summary, reviewing a workspace folder, or querying a connected service.
+
+## Current scheduling modes
+
+The Scheduler screen shows three scheduling models:
+
+| Mode | Status | Purpose |
+| --- | --- | --- |
+| Heartbeat | Available | Run a task after each fixed interval. |
+| Cron | Coming soon | Run on calendar expressions such as weekday mornings. |
+| Event | Coming soon | React to webhooks, file changes, connector events, or agent signals. |
+
+Only heartbeat intervals are currently executable from this screen.
+
+## Configure a heartbeat
+
+1. Open **Scheduler → Heartbeat**.
+2. Find the enabled agent.
+3. Enter a task prompt.
+4. Set the interval in minutes.
+5. Set a cost ceiling for each heartbeat.
+6. Set the consecutive-failure alert threshold.
+7. Enable the heartbeat.
+8. Use **Run now** to test it before waiting for the interval.
+
+Heartbeat configuration is part of the agent configuration. Saving a scheduler change creates a new agent version.
+
+## Configuration fields
+
+| Field | Behavior |
+| --- | --- |
+| Enabled | Starts or stops the periodic task after the scheduler synchronizes configuration. |
+| Task prompt | Becomes the inbound instruction for each automatic run. A blank prompt prevents scheduling. |
+| Interval | Delay between runs. Runtime enforces a minimum of one minute. |
+| Max cost per heartbeat | Replaces the normal per-run cost ceiling for heartbeat-triggered model loops. |
+| Failure threshold | Creates an alert after this many consecutive non-completed runs. |
+
+The scheduler scans agent configuration changes approximately every 30 seconds. Enabling or disabling a heartbeat may therefore not change runtime state instantly.
+
+## Write a safe task prompt
+
+A heartbeat has no new user message from which to infer intent. Make its prompt self-contained:
+
+```text
+Review the shared workspace status file. Summarize blocked items and stale
+timestamps. Do not edit files or contact external services. If the file is
+missing, report that as the result.
+```
+
+For a connected service:
+
+```text
+Check the project tracker for issues assigned to me that changed since the
+last run. Write a concise summary. Do not create, update, or close issues.
+```
+
+State what to inspect, what result to produce, and which actions are forbidden. Avoid broad prompts such as “take care of anything important.”
+
+## Execution behavior
+
+When the interval expires, CaberOS:
+
+1. Reads the active agent configuration.
+2. Creates a run with trigger `heartbeat` and system contact/channel metadata.
+3. Sends the configured task prompt through the normal pipeline.
+4. Applies the heartbeat cost ceiling and normal turn/context limits.
+5. Mediates every capability call.
+6. Stores the result as a heartbeat-tagged conversation message.
+7. Updates last-fire, status, error, next-fire, and failure state.
+
+The result appears in the agent conversation and in Observability. Spend reports can separate heartbeat and user-message triggers.
+
+## Permissions and approvals
+
+A heartbeat does not receive broader authority than the agent:
+
+- Not-permitted capabilities remain unavailable.
+- On-demand capabilities still require discovery and loading.
+- MCP servers still need to be connected and bound.
+- Sandbox rules still apply.
+- Calls still produce audit records.
+
+Be careful with capabilities that require an operator. An unattended heartbeat may pause waiting for approval or be denied according to its channel policy. For autonomous read-only checks, grant only the required read operations and test the approval behavior with **Run now**.
+
+## Run now
+
+**Run now** executes the heartbeat task immediately without changing the next periodic task’s prompt. It requires a non-empty task prompt.
+
+Use it to verify:
+
+- the model and provider are available;
+- the prompt is self-contained;
+- the needed capabilities are permitted;
+- approvals behave as expected;
+- cost and turn limits are adequate;
+- the result appears in the correct conversation and trace.
+
+A manual heartbeat is still recorded with the heartbeat trigger.
+
+## Failure tracking
+
+The scheduler tracks consecutive failures in process memory. A completed run resets the counter and clears the active alert. A failed, stopped, or exceptional run increments it.
+
+When the configured threshold is reached, the dashboard shows an alert with:
+
+- agent name;
+- consecutive failure count;
+- configured threshold;
+- latest error;
+- timestamp.
+
+Clearing an alert removes the visible alert but does not fix the underlying task. Run the heartbeat successfully to reset failure state.
+
+Because runtime state is process-local, restarting the gateway resets last-fire, next-fire, and in-memory consecutive-failure state. The heartbeat configuration itself remains stored with the agent.
+
+## Cost control
+
+Heartbeat runs use `max_cost_per_heartbeat` rather than the normal user-message cost ceiling. Start with a small value and inspect actual spend.
+
+Provider cost metadata may be absent or approximate. Combine the CaberOS limit with provider-side quotas or billing alerts for workloads where strict financial control is required.
+
+## Availability
+
+The scheduler runs inside the local CaberOS gateway. Heartbeats run only while:
+
+- the machine is awake;
+- the CaberOS gateway process is running;
+- the agent is enabled;
+- heartbeat is enabled;
+- the task prompt is not blank;
+- the configured model and required integrations are available.
+
+This is not a durable distributed scheduler. Missed intervals while the process is stopped are not replayed automatically.
+
+## Troubleshooting
+
+### Heartbeat never starts
+
+Confirm the agent is enabled, heartbeat is enabled, the task prompt is non-empty, and at least 30 seconds have passed for synchronization. The configured interval has a one-minute runtime minimum.
+
+### Run now says the configuration is invalid
+
+The agent may not exist or its heartbeat task prompt may be empty.
+
+### Heartbeat waits indefinitely
+
+Look for a pending approval. Adjust the capability or channel approval policy only after reviewing the requested operation.
+
+### Consecutive failures keep increasing
+
+Open the latest heartbeat run in Observability. Check provider errors, denied syscalls, disconnected MCP servers, context limits, and cost limits.
+
+### No run occurred while the computer was asleep
+
+Heartbeats are local in-process timers. Keep the gateway and machine running, or use an external always-on deployment when the workflow requires continuous scheduling.
+
+### Cron or Event cannot be selected
+
+Those modes are shown as future designs and are not implemented in the current scheduler.

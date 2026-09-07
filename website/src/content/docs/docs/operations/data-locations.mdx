@@ -1,0 +1,23 @@
+---
+title: Data locations
+description: Find the local database, credentials, workspaces, and gateway logs.
+---
+
+The desktop application stores its data under:
+
+```text
+~/Library/Application Support/com.caberos.desktop/
+```
+
+| Data | Location |
+| --- | --- |
+| SQLite database | `agentos.db` |
+| Encryption key | `secret.key` |
+| Gateway logs | `logs/gateway.log` and rotated backups |
+| Agent home directories | `agents/` |
+| Workspaces | `workspaces/` |
+| Knowledge documents | `knowledge/` |
+
+The secret key protects encrypted provider and connector credentials. Treat the complete application data directory as private and back it up securely.
+
+For local development, paths come from the `AGENTOS_*` environment variables and default to the repository’s `backend/data/` layout.

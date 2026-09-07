@@ -1,0 +1,63 @@
+---
+title: First launch
+description: Complete the CaberOS setup flow and reach your first response.
+sidebar:
+  order: 2
+---
+
+CaberOS creates its local application data directory the first time the gateway starts. The desktop shell waits for the local health endpoint before showing the dashboard.
+
+## 1. Sign in
+
+The initial operator account is:
+
+```text
+username: admin
+password: admin
+```
+
+Change the password immediately from the account or settings area.
+
+## 2. Follow the setup guide
+
+The guided setup checks that you have:
+
+- at least one model provider;
+- a provider API key or a local model connection;
+- an agent with a selected provider and model.
+
+You can import a backup or an initial knowledge document during onboarding, or do it later.
+
+## 3. Send a first message
+
+Open the **Caber** agent and ask it to inspect its workspace. A successful run should show:
+
+- the user message;
+- model response streaming;
+- any thinking or tool activity;
+- approval prompts when needed;
+- a completed run in the trace view.
+
+## 4. Check health
+
+The dashboard health view reports database, providers, agents, active runs, MCP servers, and channels. The desktop gateway itself can be checked without authentication:
+
+```bash
+curl http://127.0.0.1:51718/health
+```
+
+Expected response:
+
+```json
+{"status":"ok"}
+```
+
+## Where data lives
+
+The desktop data directory is:
+
+```text
+~/Library/Application Support/com.caberos.desktop/
+```
+
+See [Data locations](/docs/operations/data-locations/) for the complete layout.

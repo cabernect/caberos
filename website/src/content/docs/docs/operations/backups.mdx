@@ -1,0 +1,23 @@
+---
+title: Backups and restore
+description: Protect and move CaberOS agents, memory, credentials, and workspaces.
+---
+
+Use the data controls in **Settings** to export a CaberOS backup. A backup can include agent configuration, providers, MCP settings, channels, sessions, memory, encrypted credentials, and workspace files.
+
+## Before moving to another machine
+
+1. Create an export from the source instance.
+2. Store the archive somewhere private.
+3. Install CaberOS on the destination machine.
+4. Create or confirm the destination operator account.
+5. Import the archive using merge mode when you want to keep existing data.
+6. Verify agents, providers, workspaces, and memory.
+
+## Restore points
+
+Create a restore point before a risky migration or replacement import. Restore operations should be performed after confirming the target backup and should be followed by a database integrity check.
+
+Credential data remains encrypted in the archive. The destination secret key must be able to decrypt it; otherwise, re-enter affected credentials after import.
+
+Never upload a backup to a public location. It may contain private conversations, workspace files, and encrypted secrets.

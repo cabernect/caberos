@@ -1,0 +1,177 @@
+@import "./brand.css";
+
+:root,
+:root[data-theme="light"] {
+  --sl-color-white: var(--ink);
+  --sl-color-gray-1: #2b2b28;
+  --sl-color-gray-2: #5f5f5a;
+  --sl-color-gray-3: #878781;
+  --sl-color-gray-4: #c9c8c3;
+  --sl-color-gray-5: var(--line);
+  --sl-color-gray-6: var(--paper-strong);
+  --sl-color-gray-7: var(--paper);
+  --sl-color-black: var(--white);
+  --sl-color-accent-low: var(--olive-soft);
+  --sl-color-accent: var(--olive);
+  --sl-color-accent-high: var(--olive-dark);
+  --sl-color-text: var(--ink-2);
+  --sl-color-text-accent: var(--olive-dark);
+  --sl-color-text-invert: var(--white);
+  --sl-color-bg: var(--paper);
+  --sl-color-bg-nav: var(--white);
+  --sl-color-bg-sidebar: var(--paper-strong);
+  --sl-color-bg-inline-code: var(--paper-strong);
+  --sl-color-bg-accent: var(--olive);
+  --sl-color-hairline-light: var(--paper-strong);
+  --sl-color-hairline: var(--line);
+  --sl-color-hairline-shade: var(--line);
+  --sl-font-system: Arial, "Helvetica Neue", sans-serif;
+  --sl-font-system-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+:root[data-theme="dark"] {
+  --sl-color-white: #f5f5f3;
+  --sl-color-gray-1: #eef2e8;
+  --sl-color-gray-2: #c0c8b8;
+  --sl-color-gray-3: #929c89;
+  --sl-color-gray-4: #5c6655;
+  --sl-color-gray-5: #3d4935;
+  --sl-color-gray-6: #23291f;
+  --sl-color-gray-7: #1a1f17;
+  --sl-color-black: #151811;
+  --sl-color-accent-low: #2f3b20;
+  --sl-color-accent: #a8c04a;
+  --sl-color-accent-high: #d8e99b;
+  --sl-color-text: #c0c8b8;
+  --sl-color-text-accent: #d8e99b;
+  --sl-color-text-invert: #151811;
+  --sl-color-bg: #151811;
+  --sl-color-bg-nav: #1d2119;
+  --sl-color-bg-sidebar: #1d2119;
+  --sl-color-bg-inline-code: #2a3225;
+  --sl-color-bg-accent: #a8c04a;
+  --sl-color-hairline-light: #3d4935;
+  --sl-color-hairline: #2a3225;
+  --sl-color-hairline-shade: #151811;
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+}
+
+header.header {
+  width: min(calc(100% - 32px), 1240px);
+  margin: 16px auto 0;
+  padding: 0 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--white);
+  box-shadow: 0 8px 28px rgba(17, 17, 16, 0.04);
+}
+
+:root[data-theme="dark"] header.header {
+  background: var(--white);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+}
+
+header.header .title-wrapper a {
+  color: var(--ink);
+}
+
+header.header .title-wrapper img {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+}
+
+starlight-theme-select select {
+  border-color: var(--line);
+  background: var(--white);
+  color: var(--ink-2);
+}
+
+.sidebar-pane,
+.right-sidebar {
+  background: var(--paper-strong);
+  border-color: var(--line);
+}
+
+:root[data-theme="dark"] .sidebar a[aria-current="page"],
+:root[data-theme="dark"] .sidebar a[aria-current="page"]:hover,
+:root[data-theme="dark"] .sidebar a[aria-current="page"]:focus {
+  background: #35451f;
+  color: #d8e99b;
+}
+
+.content-panel {
+  border-color: var(--line);
+}
+
+.sl-markdown-content {
+  color: var(--ink-2);
+}
+
+.sl-markdown-content h1,
+.sl-markdown-content h2,
+.sl-markdown-content h3,
+.sl-markdown-content h4,
+.sl-markdown-content h5,
+.sl-markdown-content h6 {
+  color: var(--ink);
+}
+
+.sl-markdown-content a,
+.sl-link-button {
+  color: var(--olive-dark);
+}
+
+.sl-markdown-content a:hover {
+  color: var(--olive);
+}
+
+.sl-markdown-content code {
+  border-radius: 3px;
+  background: var(--paper-strong);
+  color: var(--ink);
+}
+
+.sl-markdown-content pre {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.sl-markdown-content blockquote {
+  border-inline-start-color: var(--olive);
+  color: var(--ink-2);
+}
+
+.sl-markdown-content table {
+  border-color: var(--line);
+}
+
+.sl-markdown-content th {
+  background: var(--paper-strong);
+  color: var(--ink);
+}
+
+.sl-markdown-content :is(th, td) {
+  border-color: var(--line);
+}
+
+.right-sidebar-panel h2,
+.right-sidebar-panel a:hover {
+  color: var(--ink);
+}
+
+@media (max-width: 700px) {
+  header.header {
+    width: min(calc(100% - 20px), 1240px);
+    margin-top: 10px;
+    padding: 0 10px;
+  }
+
+  .sl-markdown-content {
+    font-size: 0.96rem;
+  }
+}

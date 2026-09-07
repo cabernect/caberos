@@ -1,0 +1,165 @@
+---
+title: Knowledge Vault
+description: Upload, scope, index, search, inspect, and cite local reference documents.
+sidebar:
+  order: 2
+---
+
+The Knowledge Vault turns local reference documents into searchable, citation-aware excerpts. Documents remain in CaberOS storage and are retrieved only when a user, operator, or authorized agent searches for them.
+
+Use the Vault for manuals, project notes, specifications, reports, and spreadsheets. Use [memory](/docs/core-concepts/memory/) for preferences, decisions, and conversational continuity.
+
+## Knowledge scopes
+
+Open **Knowledge Vault** to see one card for each scope:
+
+- **Shared Knowledge** is searched by every agent that can use the document capabilities.
+- An **agent-private scope** contains documents visible only to that agent’s document tools.
+
+Each card reports its document and indexed-chunk count. Select a scope to upload files, inspect status, re-index documents, delete them, or preview retrieval.
+
+A scope is a retrieval boundary, not an external access-control system. The local operator can manage all scopes through the dashboard.
+
+## Supported formats
+
+| Format | Extraction behavior |
+| --- | --- |
+| Markdown (`.md`, `.markdown`) | Extracts paragraphs and preserves Markdown heading paths. |
+| Text (`.txt`) | Extracts plain-text paragraphs. |
+| PDF (`.pdf`) | Extracts text by page and uses PDF outline paths when available. |
+| Word (`.docx`) | Extracts paragraphs, heading hierarchy, tables, and embedded-image references. |
+| Excel (`.xlsx`) | Extracts each worksheet with its sheet name and cell range. |
+
+The upload limit is **25 MB per document**. Image-only OCR is not currently supported. A scanned PDF may index with little or no useful text unless it already contains a text layer.
+
+## Upload and index a document
+
+1. Open **Knowledge Vault**.
+2. Select **Shared Knowledge** or an agent.
+3. Drop a supported file into the upload area or choose it with the file picker.
+4. Wait for the document status to become **indexed**.
+5. Review its chunk and structure counts.
+6. Use **Retrieval preview** to test a realistic query.
+
+Uploaded files receive an internal storage name while retaining the original display and source names. CaberOS stores content hashes so ingestion can identify existing content.
+
+## What indexing records
+
+Indexing creates local chunks and preserves source metadata where the format provides it:
+
+- heading path;
+- PDF page number;
+- spreadsheet sheet name;
+- table or image identifier;
+- source range or location;
+- original source path.
+
+The dashboard displays document status, file size, chunks, sections, pages, tables, and images. If extraction fails, the document row displays an error.
+
+## Preview retrieval
+
+Use **Retrieval preview** inside a scope before expecting an agent to answer from a document.
+
+Good test queries use the terms that a user is likely to ask. If the expected excerpt does not appear:
+
+1. Confirm that the document is indexed rather than pending or failed.
+2. Try distinctive keywords that occur in the source.
+3. Check whether the file contains extractable text.
+4. Re-index the document.
+5. Move the document to the correct shared or agent-private scope if necessary.
+
+Search accepts up to 1,000 query characters and returns at most 20 excerpts. Agent tool calls default to a smaller result set to control context size.
+
+## Give an agent access
+
+The agent needs the relevant document capabilities:
+
+- `doc_list` to inspect available document metadata;
+- `doc_search` to retrieve excerpts;
+- `doc_inspect` to inspect a PDF page or embedded DOCX image with a vision-capable model.
+
+Configure these under **Agent Settings → Capabilities**. Use **Always** when document retrieval is central to the agent, or **On demand** when it is occasional.
+
+An agent’s `doc_search` combines Shared Knowledge with that agent’s private scope. It does not search another agent’s private scope.
+
+## Ask grounded questions
+
+A useful request tells the agent to use the Vault and cite its result:
+
+```text
+Search the Knowledge Vault for the release rollback procedure.
+Summarize the steps and cite the source page or section.
+```
+
+The agent should call `doc_search` before answering. Retrieved excerpts include source metadata, and the conversation view associates those sources with the response.
+
+Document retrieval does not guarantee factual correctness. Verify that the cited excerpt supports the claim, especially for tables, diagrams, or ambiguous language.
+
+## Inspect visual content
+
+`doc_inspect` can return provider-native image content for:
+
+- a selected PDF page; or
+- an embedded image in a DOCX document.
+
+The selected model must support vision. Use `doc_search` first to identify the relevant document and page or image, then inspect only the needed visual source.
+
+Image OCR as an indexing step is not available, and spreadsheet charts are not treated as image sources by the current extractor.
+
+## Add a workspace file
+
+The API can copy an existing file from an agent workspace into Shared Knowledge and index it. The source path is validated against that workspace before copying.
+
+This is useful when an agent produces a durable reference file during a task. The copy in the Vault is independent of the original workspace file; later workspace edits require re-importing or replacing the Vault copy.
+
+## Re-index
+
+Choose **Re-index** when:
+
+- extraction rules have changed after an update;
+- indexed chunks appear incomplete;
+- a stored document needs its metadata rebuilt.
+
+Re-indexing reads the Vault’s stored file and replaces its extracted representation. It does not fetch an external source or update from the original filesystem path.
+
+## Delete a document
+
+Deleting a Vault document removes:
+
+- the stored Vault file;
+- its database record;
+- its indexed chunks.
+
+This action does not remove an original file that was copied from a workspace or uploaded from elsewhere. Deletion is irreversible unless the CaberOS data directory has been backed up.
+
+## Local-first and cloud models
+
+Storage and indexing happen locally. However, when an agent uses a hosted model, the excerpts selected by `doc_search` or visual content returned by `doc_inspect` become part of that provider request.
+
+To keep retrieved document content on the machine, use a compatible local model endpoint such as Ollama. Review [The local-first model](/docs/security/local-first/) for the complete boundary.
+
+## Troubleshooting
+
+### Unsupported document format
+
+Convert the source to Markdown, text, PDF with a text layer, DOCX, or XLSX.
+
+### Upload rejected
+
+Check that the filename is a simple filename, the extension is supported, and the file is no larger than 25 MB.
+
+### PDF results are empty
+
+The PDF may be scanned images without embedded text. OCR is not currently performed during ingestion.
+
+### Agent does not find a shared document
+
+Confirm the document is indexed, `doc_search` is permitted, and the retrieval-preview query returns the expected excerpt.
+
+### Agent does not find another agent’s document
+
+Agent-private scopes are isolated by design. Put material intended for multiple agents in Shared Knowledge.
+
+### Citations do not show a page
+
+Page metadata exists for PDFs, while Markdown and text sources use heading or path metadata. Some source formats do not provide every location field.

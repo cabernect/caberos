@@ -1,0 +1,688 @@
+---
+title: Architecture
+description: Understand CaberOS process topology, execution pipeline, capability mediation, storage, concurrency, and integration boundaries.
+---
+
+CaberOS is a headless, local-first agent runtime with browser and desktop clients. Its central design is that an agent is **model reasoning plus an OS-owned harness**. Users configure the model, identity, capabilities, limits, memory, workspace, channels, and schedule; CaberOS owns how that configuration is executed.
+
+FastAPI is the current gateway and API adapter. It is not the product’s domain core. The reusable execution path begins at `run_agent()` and continues through the pipeline, harness, capability catalog, and syscall mediator.
+
+## System topology
+
+```text
+┌──────────────────────────────── Client and ingress layer ────────────────────────────────┐
+│                                                                                            │
+│  Browser dashboard       Tauri desktop shell      External channels       Heartbeat       │
+│  React + REST/SSE        WebView + supervisor     Telegram/Discord/Zalo   scheduler       │
+│          │                         │                        │                    │          │
+└──────────┼─────────────────────────┼────────────────────────┼────────────────────┼──────────┘
+           │                         │                        │                    │
+           └─────────────────────────┴──────────┬─────────────┴────────────────────┘
+                                               ▼
+┌──────────────────────────────── Gateway adapter ──────────────────────────────────────────┐
+│  FastAPI: authentication · REST resources · SSE streams · lifecycle · health              │
+└──────────────────────────────────────────────┬─────────────────────────────────────────────┘
+                                               ▼
+┌──────────────────────────────── Execution core ───────────────────────────────────────────┐
+│  run_agent() → Pipeline → Harness/model loop → Capability catalog → Syscall mediator      │
+└──────────────┬──────────────────────┬────────────────────┬──────────────────┬───────────────┘
+               │                      │                    │                  │
+               ▼                      ▼                    ▼                  ▼
+       Model providers          Native tools          MCP servers       Sub-agents
+       LiteLLM transport        files/web/shell       stdio or HTTP     bounded loops
+               │                      │                    │                  │
+┌──────────────┴──────────────────────┴────────────────────┴──────────────────┴───────────────┐
+│  Local state: SQL database · workspaces · agent homes · Knowledge Vault · skills · logs    │
+└─────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Architectural responsibilities
+
+| Layer | Owns | Does not own |
+| --- | --- | --- |
+| Client | Interaction, navigation, local UI state, rendering streamed events | Agent authority or tool execution |
+| Gateway | Authentication, API contracts, HTTP lifecycle, SSE delivery | Model policy or direct resource access |
+| Runner | Transport-neutral entry point and per-run dependency wiring | HTTP sessions or UI behavior |
+| Pipeline | Contact/session resolution, persistence, guardrails, workspace setup, run accounting | Model-specific protocol details |
+| Harness | Context assembly, model turns, compaction, token/cost limits, tool-call loop | Final authorization of tool calls |
+| Capability catalog | Permission-filtered metadata and run-scoped schema visibility | Execution authority beyond configured grants |
+| Syscall mediator | Grants, parent narrowing, subjects, approvals, credentials, execution, audit | Model reasoning |
+| Provider adapter | Model discovery and LiteLLM request/stream normalization | Agent identity and permissions |
+| Storage | Durable configuration, conversations, memory, knowledge, audit, credentials | A durable distributed work queue |
+
+## Deployment topology
+
+### Desktop application
+
+The macOS application packages three major pieces:
+
+```text
+CaberOS.app
+├── Tauri host process
+├── React dashboard in a WebView
+└── Packaged Python gateway executable
+```
+
+At startup, Tauri:
+
+1. resolves the application data directory;
+2. starts the packaged gateway as a child process;
+3. binds it to `127.0.0.1:51718`;
+4. passes explicit database, secret, workspace, knowledge, agent-home, and skill paths;
+5. captures stdout and stderr into a rotating gateway log;
+6. exposes the stable gateway URL to the WebView;
+7. terminates the gateway process group when the application exits.
+
+The desktop frontend authenticates with a bearer token because the WebView origin and loopback gateway are different origins. OAuth callbacks also use the stable loopback port.
+
+### Development
+
+Development separates the processes:
+
+```text
+Vite frontend :5173 ──proxy/REST/SSE──► FastAPI gateway :8081
+```
+
+CORS permits the Vite and Tauri origins. The backend uses development-relative data paths unless environment variables override them.
+
+### Docker
+
+Docker Compose builds the backend and frontend separately. Nginx serves the frontend and proxies API and health traffic to the backend, with buffering disabled for SSE. Persistent application data lives in the configured Docker volume.
+
+The execution architecture is the same in all three modes; only process supervision, addresses, and storage paths differ.
+
+## Domain model
+
+| Entity | Meaning |
+| --- | --- |
+| Agent | Versioned declarative configuration: identity, model, capabilities, limits, workspace, memory, heartbeat, and sandbox mode |
+| Provider | Shared model connection with encrypted credentials and model discovery metadata |
+| Contact | Stable caller identity derived from channel, agent/bot, and external user ID |
+| Session | Ordered conversation between one contact and one agent |
+| Run | One inbound message or heartbeat through the full agent loop |
+| Message | Persisted user, assistant, thinking, heartbeat, or tool-call record within a run |
+| Capability | Registered operation with schema, kind, egress, approval, and subject metadata |
+| Approval | Human decision that can pause and resume a mediated call |
+| Elicitation | Clarifying question that pauses the model loop for user input |
+| Audit record | Allowed or denied capability invocation with arguments, result, subject, and timing |
+| MCP server/tool | External tool source and its namespaced registered capabilities |
+| Channel config | Binding between a messaging platform and an agent |
+| Document/chunk | Knowledge Vault source and its citation-aware searchable units |
+
+The security boundary follows the session: one session belongs to one contact and one agent. Subject-scoped operations derive their subject from that session rather than from model arguments.
+
+## Ingress normalization
+
+Every entry point is converted into the same `InboundMessage` shape:
+
+```text
+channel
+agent ID
+external user ID
+text
+message ID
+test flag
+optional model override
+optional explicit/new session
+optional attachments
+optional forced skill
+```
+
+Dashboard chat creates this structure through the REST API. Channel adapters translate platform webhooks or polling updates. The scheduler creates a heartbeat message with a system caller. Once normalized, all sources use the same runner and pipeline.
+
+This is how CaberOS keeps transport-specific behavior outside agent execution policy.
+
+## Run entry points
+
+`run_agent()` is the universal execution entry point. It:
+
+1. opens a fresh async database session;
+2. validates the agent exists;
+3. creates the normalized inbound message;
+4. resolves either the real provider adapter or scripted test model;
+5. constructs the harness and pipeline;
+6. forwards lifecycle events through an optional callback;
+7. returns run ID, session ID, status, cost, and error information.
+
+The FastAPI chat adapter adds `RunManager` around this function. Channels and the heartbeat scheduler can call `run_agent()` directly because they do not need reconnectable browser SSE transport.
+
+## End-to-end run lifecycle
+
+A dashboard message follows this path:
+
+```text
+POST message
+    │
+    ▼
+RunManager creates asyncio task
+    │
+    ▼
+Pipeline resolves contact/session and persists pending run
+    │
+    ▼
+Input guardrails + attachment preparation + workspace
+    │
+    ▼
+Per-session lock
+    │
+    ▼
+Context assembly + capability catalog + compaction
+    │
+    ▼
+Model turn ──► tool calls? ──yes──► syscall mediator ──► tool results ─┐
+    │                                                                │
+    └──────────────────────── no/final answer ◄───────────────────────┘
+    │
+    ▼
+Output guardrails + persistence + accounting
+    │
+    ▼
+SSE completion + background title/memory work
+```
+
+### 1. Validate and deduplicate
+
+The API checks that the agent exists and has a configured model unless this is an explicit scripted test. The pipeline rejects a repeated inbound message ID by returning the existing run.
+
+### 2. Resolve contact and session
+
+A contact is looked up or created from `(channel, agent, external user)` before model inference.
+
+Session behavior depends on ingress:
+
+- Dashboard requests may target an explicit session, force a new session, or resume the latest active one.
+- External channels reuse a persistent session for the same platform user and agent, even after an idle period.
+- Idle dashboard sessions are closed lazily at run start and by a periodic sweeper.
+
+### 3. Persist before long-running work
+
+The pipeline creates a pending run, stores the redacted user message and attachment metadata, indexes the message for history search, and commits before entering the model loop.
+
+This early commit releases SQLite’s write lock so other requests can read and write while the model is running.
+
+### 4. Apply input guardrails
+
+Input guardrails redact detected secrets and flag prompt-injection patterns. The redacted content is what the database, frontend, and model receive. Warnings are emitted to the client but do not replace capability enforcement.
+
+### 5. Prepare workspace and attachments
+
+Uploads are stored under the workspace’s `attachments/` directory. The model initially receives only attachment metadata and a workspace-relative path or URL. It needs a mediated file or web capability to inspect the content.
+
+The pipeline then creates a syscall handler bound to the active database session, workspace, and sandbox mode.
+
+### 6. Serialize by session
+
+CaberOS acquires an in-process lock for the session before starting model work. Runs in one session do not interleave conversation turns. Runs in different sessions can execute concurrently, including sessions owned by the same agent.
+
+### 7. Run the harness
+
+The harness assembles context, computes context usage, optionally compacts the conversation, calls the model, and processes returned tool calls until it receives a final answer or reaches a limit.
+
+### 8. Persist and account
+
+Thinking blocks, intermediate text, completed tool calls, and sub-agent events are streamed and persisted in sequence. On completion, the pipeline writes the final answer and records:
+
+- status and error;
+- input and output tokens;
+- provider cost;
+- total latency;
+- context tokens and ceiling;
+- context-section breakdown;
+- compaction status;
+- dynamically loaded capability names.
+
+Knowledge and web sources are associated with the final response for citation rendering.
+
+### 9. Background follow-up
+
+After the main response is committed, background tasks may:
+
+- generate a more useful session title after the conversation has matured;
+- extract durable memory candidates into `MEMORY.md`;
+- clear run-scoped working memory after consolidation.
+
+These tasks do not delay the completion event and fail independently from the already completed run.
+
+## Context assembly
+
+The harness builds the system prompt in a stable order:
+
+1. CaberOS base operating rules, adapted to visible capabilities;
+2. agent soul;
+3. agent persona;
+4. agent task;
+5. agent-wide `MEMORY.md`;
+6. lightweight skill menu;
+7. contact-scoped knowledge-graph facts;
+8. relevant previous-session summaries;
+9. contact-scoped recall snippets;
+10. explicitly selected slash-command skill body;
+11. model capability notes such as vision support.
+
+It then appends recent session messages and the new user message. Attachments remain references until a tool reads them.
+
+The current pipeline initially fetches a bounded recent-message window. Memory recall, session summaries, document search, skills, and exact history search provide explicit paths to older information without injecting the whole archive.
+
+## Context compaction
+
+Before the first model call, automatic compaction can summarize older conversation content when the configured threshold is reached.
+
+The compactor:
+
+- always protects the system prompt;
+- preserves configured head and tail messages;
+- can prune oversized old tool results;
+- reuses the previous session summary;
+- records the resulting summary on the session;
+- reports context usage by system prompt, conversation, and tools.
+
+Manual `/compact` uses the same compaction subsystem but runs regardless of the threshold.
+
+Compaction changes future model context; it does not erase persisted conversation messages.
+
+## Provider and model transport
+
+Providers are first-class database records. An agent references a provider ID and model name instead of embedding a plaintext API key.
+
+`ProviderRegistry` resolves the provider for a run. The LiteLLM adapter normalizes:
+
+- model completion and streaming;
+- tool calls;
+- thinking content where available;
+- input/output and cached token counts;
+- provider-reported or calculated cost;
+- model discovery and validation;
+- vision, reasoning, context, and output metadata.
+
+A per-message model override is applied to a deep copy of the agent configuration, so the stored agent version is unchanged.
+
+The adapter boundary allows provider behavior to evolve without putting provider-specific code into the pipeline or syscall mediator.
+
+## Model loop
+
+Each harness iteration:
+
+1. refreshes the permission-filtered capability catalog;
+2. determines the schemas visible on the next turn;
+3. recalculates context and tool-schema token usage;
+4. calls the model, usually as a stream;
+5. accumulates tokens, cached tokens, and cost;
+6. converts returned tool requests into internal `ToolCall` values;
+7. emits pending and running events;
+8. mediates independent calls concurrently;
+9. appends results to model history in original call order;
+10. starts another model turn or accepts the final answer.
+
+The loop stops at the configured turn ceiling, run-cost ceiling, a model error, cancellation, or final answer. Heartbeats use their own per-heartbeat cost ceiling.
+
+After repeated empty, failed, or denied tool results, the harness instructs the model to stop calling tools and answer with what it knows.
+
+## Progressive capability discovery
+
+Agent configuration defines the permission ceiling. `CapabilityRunCatalog` derives the model-visible subset.
+
+```text
+Configured grants
+       │
+       ├── Always ───────────────► schema visible immediately
+       │
+       ├── On demand ─► metadata search ─► schema load ─► visible next turn
+       │
+       └── Not permitted ────────► absent from search and execution authority
+```
+
+`capabilities_search` returns bounded metadata for permitted native and MCP capabilities. `capabilities_load` adds selected schemas to an in-memory set for that run. Loading is limited per call and per run, and it does not alter the agent configuration.
+
+The catalog refreshes MCP metadata between turns, drops unavailable tools, applies server tool filters, and intersects sub-agent requests with parent authority.
+
+Read [Capabilities](/docs/core-concepts/capabilities/) for the complete user-facing model.
+
+## Syscall mediation
+
+Every model-reachable operation crosses `SyscallHandler.mediate()`.
+
+```text
+ToolCall
+   │
+   ├─ 1. Resolve registered capability
+   ├─ 2. Check agent grant
+   ├─ 3. Check parent grant for sub-agents
+   ├─ 4. Resolve contact subject when scoped
+   ├─ 5. Apply approval or channel policy
+   ├─ 6. Handle elicitation or MCP credential binding
+   ├─ 7. Execute with workspace and sandbox context
+   └─ 8. Persist allowed/denied audit record
+```
+
+Authorization, schema visibility, approval, subject resolution, credential access, and sandbox containment are separate controls. Passing one does not bypass the others.
+
+### Human-in-the-loop states
+
+Approval and elicitation are in-process wait registries backed by persisted request rows:
+
+- Approval pauses a consequential capability until the operator approves, rejects, or the timeout is reached.
+- Elicitation pauses `agent_ask_user` until the user supplies free text or choices.
+- Session-scoped remembered approvals can bypass repeated prompts for matching calls.
+- External channels choose deny, operator, or auto-approve behavior.
+
+The default wait timeout is five minutes and can be configured through the gateway environment.
+
+### MCP execution
+
+For an MCP capability, the mediator additionally:
+
+1. maps the namespaced capability to server and raw tool name;
+2. verifies the server still exists and is enabled;
+3. applies the server tool filter;
+4. resolves the current contact’s server binding when credentials are needed;
+5. decrypts the credential;
+6. renders environment or HTTP-header templates;
+7. forwards the call through the connected MCP client;
+8. stores the result without exposing the plaintext credential to the model.
+
+## Sandbox and workspace
+
+Native file and terminal capabilities receive the active workspace and sandbox mode from the pipeline.
+
+- **Strict** mode confines supported file and shell paths to the workspace and uses the platform sandbox backend.
+- **Open** mode allows broader filesystem access by operator choice.
+- macOS uses the process-level Seatbelt backend.
+- Linux uses Bubblewrap when deployed with the required host support.
+
+Capability grants decide whether a tool may be called. Sandbox mode decides where the allowed operation may act. Approval decides whether a specific call must pause. These controls are intentionally independent.
+
+A workspace contains working files and attachments. Agent identity lives in the database, while `MEMORY.md` lives in the agent home directory.
+
+## Persistence architecture
+
+The rest of the backend depends on SQLAlchemy `AsyncSession`, while a backend factory selects the database implementation.
+
+### SQLite default
+
+SQLite uses `aiosqlite` with:
+
+- write-ahead logging;
+- foreign-key enforcement;
+- a busy timeout for lock contention;
+- FTS5 indexes for memory snippets, raw messages, and Knowledge Vault chunks;
+- schema creation plus idempotent incremental patches.
+
+WAL permits concurrent readers but SQLite still has one writer. The pipeline uses short transactions, commits before model calls, and serializes shared async-session writes where concurrent tool execution could overlap.
+
+### Postgres option
+
+A Postgres backend can be selected through `AGENTOS_DATABASE_URL`. It preserves the async SQLAlchemy interface and uses Postgres full-text facilities in place of SQLite FTS5.
+
+SQLite is the desktop default and primary local-first path. Postgres support does not turn the in-process run manager, scheduler, approval registry, or channel registry into distributed coordination systems.
+
+## Storage map
+
+| Data | Durable store | Scope |
+| --- | --- | --- |
+| Agents and versions | SQL database | Local installation |
+| Providers and encrypted keys | SQL database + local Fernet key | Local installation |
+| Contacts, sessions, runs, messages | SQL database | Contact/agent/run |
+| Approvals, elicitations, audit, spend | SQL database | Run/operator |
+| MCP servers, tools, bindings, encrypted credentials | SQL database + local Fernet key | Server/contact |
+| Memory snippets and facts | SQL database + FTS | Contact and agent |
+| `MEMORY.md` | Agent-home filesystem | Agent |
+| Workspace and attachments | Workspace filesystem | Agent or configured shared path |
+| Knowledge source files | Knowledge filesystem | Shared or agent-private |
+| Knowledge chunks and citations | SQL database + FTS | Shared or agent-private |
+| System skills | Skills filesystem | All agents |
+| Agent skills | Workspace filesystem | One agent |
+| Gateway logs | Application log directory | Local installation |
+
+See [Data locations](/docs/operations/data-locations/) for concrete desktop paths.
+
+## SSE and reconnectable runs
+
+For dashboard chat, the run manager decouples execution from the HTTP request:
+
+1. `POST /api/chat/{agent_id}/message` starts an `asyncio.Task`.
+2. The pipeline emits `run_started` before the first model request.
+3. A `RunContext` stores status and sequenced events in memory.
+4. `GET .../events` streams buffered and new events over SSE.
+5. A reconnecting client resumes after its last event sequence.
+6. The run continues if the browser disconnects.
+7. Poll and stop endpoints operate on the same context.
+8. The in-memory event buffer is removed 60 seconds after task completion; durable messages and traces remain in the database.
+
+Typical events include typing, thinking, token, guardrail warning, tool-call state, clarifying question, turn completion, sub-agent activity, and message completion.
+
+SSE is a delivery mechanism, not the source of truth. Completed conversation and trace data comes from persistence.
+
+## Concurrency model
+
+CaberOS uses cooperative asyncio concurrency inside one gateway process.
+
+| Scope | Behavior |
+| --- | --- |
+| Same session | Serialized by an in-process session lock |
+| Different sessions | May execute concurrently, including for one agent |
+| Multiple model tool calls in one turn | Mediated concurrently with `asyncio.gather`, results appended in call order |
+| Shared SQLAlchemy session writes | Serialized by a mediator database lock where needed |
+| MCP servers | One process-global client entry per configured server |
+| External channels | Process-global adapter registry keyed by platform and agent |
+| Heartbeats | One in-process task per enabled agent |
+| Background sub-agents | In-memory registry; not a durable queue |
+
+This design fits a single-user local daemon. It is not a durable multi-worker execution architecture: active run buffers, session locks, approvals, heartbeat state, channel instances, MCP clients, and background sub-agent state are process-local.
+
+After a gateway restart, database runs left as `running` are marked failed because their executing tasks cannot be resumed.
+
+## Memory architecture
+
+Memory is split by lifetime and scope:
+
+```text
+Current session messages
+        │
+        ├─ compaction summary ───────────────► session
+        ├─ exact history FTS ────────────────► contact + agent
+        ├─ recall snippets ──────────────────► contact + agent
+        ├─ structured facts ─────────────────► contact + agent
+        ├─ episodic session summaries ───────► contact + agent
+        └─ durable MEMORY.md ────────────────► agent
+
+Knowledge Vault documents ──retrieval tools──► shared or agent-private context
+```
+
+Contact-scoped data is resolved from the session. Agent-wide `MEMORY.md` is always loaded and therefore should remain small. Knowledge documents are retrieved on demand and carry citation metadata.
+
+Post-run extraction and session-close summaries are best-effort background enrichment; they are not required for the main run to succeed.
+
+Read [Memory and knowledge](/docs/core-concepts/memory/) for operational guidance.
+
+## MCP architecture
+
+The MCP registry maintains:
+
+- persistent server and discovered-tool records in the database;
+- an in-memory map from namespaced capability to server/tool;
+- an in-memory client pool;
+- last connection errors;
+- OAuth reauthorization notifications.
+
+At gateway startup, stored tool definitions are loaded first so capability metadata is available. Enabled servers then connect in background, preventing slow package startup or remote connection attempts from blocking the API. Successful connection refreshes discovery and capability registration.
+
+Each MCP tool is namespaced as:
+
+```text
+mcp.{sanitized_server_name}.{raw_tool_name}
+```
+
+MCP tools default to egress, approval according to server policy, and contact-scoped credentials.
+
+Read [MCP servers](/docs/guides/mcp/) for setup and trust considerations.
+
+## Channel architecture
+
+Channel classes implement three responsibilities:
+
+- parse platform payloads into `InboundMessage`;
+- deliver normalized outbound messages;
+- optionally send a typing indicator.
+
+The channel registry holds active instances keyed by `(platform, agent_id)`. Enabled rows are loaded in background at gateway startup. Polling adapters own background polling tasks; webhook adapters receive public HTTP callbacks and return quickly while the run continues asynchronously.
+
+Each adapter declares formatting and message-length constraints. The shared base class strips unsupported Markdown and splits long replies before delivery.
+
+Read [External channels](/docs/guides/channels/) for supported modes and security policy.
+
+## Heartbeat architecture
+
+The scheduler scans enabled agent configurations and maintains one task per active heartbeat. Each task waits for its interval and invokes `run_agent()` with:
+
+```text
+trigger = heartbeat
+channel = heartbeat
+user = system
+message = configured task prompt
+```
+
+Heartbeat runs use the same pipeline and persistence but a heartbeat-specific cost ceiling. Consecutive failure state and alerts are held in process memory. Restarting the gateway recreates schedules from configuration but does not replay missed intervals.
+
+Read [Scheduler and heartbeats](/docs/guides/scheduler/).
+
+## Startup and shutdown lifecycle
+
+Gateway startup performs:
+
+1. logging and async exception-handler setup;
+2. built-in capability registration;
+3. database schema and FTS initialization;
+4. default operator and agent seeding;
+5. interruption cleanup for stale running rows;
+6. expired authentication-session cleanup;
+7. periodic idle-session sweeper startup;
+8. heartbeat scheduler startup;
+9. stored MCP tool loading and background server connection;
+10. background external-channel loading.
+
+Shutdown disconnects MCP clients, stops channel polling, stops the heartbeat scheduler, and cancels the session sweeper. In the desktop application, Tauri also terminates the packaged gateway process group.
+
+## API surface
+
+The gateway groups REST endpoints around resources rather than putting policy in route handlers:
+
+| Area | Responsibilities |
+| --- | --- |
+| Authentication | Login, logout, operator identity, desktop bearer sessions |
+| Providers | CRUD, model discovery, custom models, validation |
+| Agents | CRUD, enable/disable, duplicate, YAML import/export, versions, rollback |
+| Chat | Start, stream, poll, and stop runs; session and message operations |
+| Approvals and elicitation | List and resolve paused human decisions |
+| Knowledge | Scope overview, upload, index, search, re-index, delete |
+| Skills | List, import, delete, promote |
+| Scheduler | Heartbeat configuration, manual fire, alerts |
+| MCP | Servers, connection, tools, credentials, OAuth, bindings, catalog |
+| Channels | Configuration, delivery tests, webhook ingress |
+| Observability | Runs, audit, spend, operator audit, health, aggregate stats |
+| Data | Export, import preview, import, backups, restore, local deletion |
+
+The API is client-facing infrastructure. Domain behavior belongs in services, runner, pipeline, harness, registries, and mediators so future adapters do not have to reimplement agent policy.
+
+## Security and trust boundaries
+
+### Model boundary
+
+The model receives selected context and tool schemas but does not execute resources directly. Hosted providers receive prompts and selected content according to operator configuration.
+
+### Capability boundary
+
+The syscall mediator checks each operation independently of model instructions. Prompt-injection detection provides warnings and redaction but is not treated as the authorization boundary.
+
+### Credential boundary
+
+Provider and MCP secrets are encrypted at rest and decrypted only when constructing provider requests or mediated MCP connections/calls. The model does not receive stored plaintext credentials as tool arguments.
+
+### Filesystem boundary
+
+Strict sandbox mode limits native file and shell operations to the workspace. Open mode is an explicit weakening. Third-party stdio MCP server processes remain their own local-code trust boundary.
+
+### Network boundary
+
+Web tools, hosted models, remote MCP servers, and external channels send data outside the machine. “Local-first” describes ownership and default storage, not an assertion that every configured operation is local.
+
+### Process boundary
+
+The default product is one local gateway process. Anyone who can run as the same operating-system user may be able to access application files or interact with loopback services. Protect the OS account, data directory, and backups.
+
+Read [Permissions and authority](/docs/core-concepts/permissions/) and [The local-first model](/docs/security/local-first/).
+
+## Source-code map
+
+```text
+backend/src/agentos/
+├── main.py                    FastAPI composition and process lifecycle
+├── runner.py                  transport-neutral run entry point
+├── run_manager.py             HTTP/SSE task and event-buffer lifecycle
+├── pipeline.py                contact/session/run orchestration and persistence
+├── harness/
+│   ├── context.py             prompt, memory, skills, history, tool schemas
+│   ├── compaction.py          context measurement and summarization
+│   ├── loop.py                model/tool loop and run limits
+│   └── litellm_adapter.py     provider transport normalization
+├── capabilities/
+│   ├── registry.py            capability definitions
+│   ├── catalog.py             permission-filtered progressive discovery
+│   ├── builtin.py             built-in registration
+│   └── tools/                 native tool implementations
+├── syscall/
+│   ├── mediator.py            authorization, approval, execution, audit
+│   ├── approval_registry.py   in-process approval waits and remembered scopes
+│   └── elicitation_registry.py in-process user-question waits
+├── sandbox/                   macOS/Linux isolation and path validation
+├── memory/                    notebook, recall, facts, episodic summaries
+├── knowledge/                 extraction, chunking, indexing
+├── mcp/                       clients, registry, credentials, OAuth, bindings
+├── channels/                  platform adapters and active registry
+├── scheduler.py               heartbeat task management
+├── models/                    SQLAlchemy durable domain records
+├── db_backends/               SQLite and Postgres implementations
+└── api/                       FastAPI resource adapters
+
+frontend/src/
+├── pages/                     dashboard feature screens
+├── components/                conversation and settings UI
+└── lib/api.ts                 REST/SSE client contracts
+
+frontend/src-tauri/src/
+├── lib.rs                     desktop host commands and application lifecycle
+└── gateway.rs                 packaged gateway supervision and rotating log
+```
+
+## Current architectural limits
+
+The present architecture intentionally optimizes for a local, single-operator product:
+
+- Run tasks and reconnect buffers are in memory.
+- Session locks do not coordinate across gateway processes.
+- Approvals and elicitations cannot resume their original coroutine after process restart.
+- Heartbeats are fixed intervals, not durable cron or event jobs.
+- Missed heartbeat intervals are not replayed.
+- Background sub-agents are temporary and in memory.
+- SQLite permits one writer even with WAL.
+- MCP and channel registries are process-local.
+- The desktop package currently targets macOS ARM64.
+- FastAPI remains the current adapter around the execution modules; a separately packaged CaberCore library has not been extracted.
+
+A production multi-node service would need durable queueing, worker leases, distributed locks, persisted event streams, resumable human-in-the-loop state, and scheduler ownership. Those are not implied by the current Postgres option.
+
+## Design rules for contributors
+
+When extending CaberOS:
+
+1. Normalize new ingress into `InboundMessage` instead of creating a separate agent loop.
+2. Enter execution through `run_agent()`.
+3. Register model-reachable operations as capabilities.
+4. Route every capability invocation through the syscall mediator.
+5. Resolve subjects and credentials outside model-controlled arguments.
+6. Keep transport concerns in adapters and domain behavior in services/core modules.
+7. Persist run accounting for success, denial, failure, and cancellation.
+8. Keep large capability and skill surfaces progressively disclosed.
+9. Treat process-local registries as caches/runtime coordination, not durable truth.
+10. Document what remains local and what can cross an external boundary.
+
+This keeps new clients, channels, providers, and tools on the same behavioral and security path instead of creating privileged side doors.

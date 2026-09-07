@@ -1,0 +1,470 @@
+---
+import MarketingLayout from "../layouts/MarketingLayout.astro";
+import Icon from "../components/Icon.astro";
+import { downloadUrl, releaseTag, releaseUrl } from "../release";
+---
+
+<MarketingLayout
+  title={`Download CaberOS ${releaseTag}`}
+  description={`Download CaberOS ${releaseTag} for macOS Apple Silicon and follow the first-launch guide.`}
+>
+  <section class="download-hero">
+    <div class="container download-hero-grid">
+      <div>
+        <p class="eyebrow"><span class="eyebrow-line"></span>Get CaberOS</p>
+        <h1>Start with a machine you control.</h1>
+        <p class="download-lead">CaberOS runs on your Mac, keeps your agent workspace close, and gives you a clear boundary around every action.</p>
+      </div>
+      <div class="release-card">
+        <div class="release-card-head">
+          <div>
+            <span class="card-kicker mono">CURRENT RELEASE</span>
+            <h2>{releaseTag}</h2>
+          </div>
+          <span class="release-mark"><Icon name="download" size={23} /></span>
+        </div>
+        <p>macOS Apple Silicon · ARM64</p>
+        <a class="release-button" href={downloadUrl} aria-label={`Download CaberOS ${releaseTag} for macOS Apple Silicon`}>
+          <span class="release-button-icon"><Icon name="download" size={19} /></span>
+          <span class="release-button-copy">
+            <strong>Download CaberOS</strong>
+            <small>macOS Apple Silicon · DMG installer</small>
+          </span>
+        </a>
+        <a class="release-link" href={releaseUrl}>View release notes and artifacts <Icon name="arrow" size={15} /></a>
+      </div>
+    </div>
+  </section>
+
+  <section class="download-body">
+    <div class="container download-layout">
+      <article class="download-main">
+        <p class="eyebrow"><span class="eyebrow-line"></span>Installation</p>
+        <h2>From download to first response.</h2>
+        <div class="steps">
+          <div class="step">
+            <span class="step-number mono">01</span>
+            <div><h3>Download and open</h3><p>Download the DMG, open it, and drag <strong>CaberOS</strong> into your Applications folder.</p></div>
+          </div>
+          <div class="step">
+            <span class="step-number mono">02</span>
+            <div><h3>Launch CaberOS</h3><p>The desktop shell starts its local gateway automatically. The first launch creates the local data directory and default agents.</p></div>
+          </div>
+          <div class="step">
+            <span class="step-number mono">03</span>
+            <div><h3>Complete setup</h3><p>Sign in with the initial operator account, configure a model provider, and create or customize your first agent.</p></div>
+          </div>
+          <div class="step">
+            <span class="step-number mono">04</span>
+            <div><h3>Send a message</h3><p>Ask your agent to inspect its workspace. Approvals, tools, and the run trace appear as the work happens.</p></div>
+          </div>
+        </div>
+        <div class="download-actions">
+          <a class="text-link" href="/docs/getting-started/installation/">Read the full installation guide <Icon name="arrow" size={15} /></a>
+          <a class="text-link" href="/docs/getting-started/first-launch/">First launch checklist <Icon name="arrow" size={15} /></a>
+        </div>
+      </article>
+
+      <aside class="download-aside">
+        <div class="aside-card">
+          <span class="card-kicker mono">REQUIREMENTS</span>
+          <ul class="check-list">
+            <li>macOS 13 or newer</li>
+            <li>Apple Silicon: M1, M2, M3, or M4</li>
+            <li>200 MB of free disk space</li>
+            <li>Internet access for cloud model providers</li>
+          </ul>
+        </div>
+        <div class="aside-card note-card">
+          <span class="card-kicker mono">IMPORTANT</span>
+          <p>The release is ad-hoc signed and is not notarized by Apple. macOS may ask you to confirm that you want to open it.</p>
+          <p>Intel Macs and Windows are not supported by this build.</p>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <section class="troubleshooting-section">
+    <div class="container troubleshooting-grid">
+      <div>
+        <p class="eyebrow"><span class="eyebrow-line"></span>Troubleshooting</p>
+        <h2>If the app waits, check the gateway.</h2>
+        <p>CaberOS stores desktop gateway output in your application data directory. The bundled gateway listens only on loopback port <code>51718</code>.</p>
+      </div>
+      <div class="command-card">
+        <span class="command-label mono">HEALTH CHECK</span>
+        <pre><code>curl -i http://127.0.0.1:51718/health</code></pre>
+        <span class="command-label mono">LOG FILE</span>
+        <pre><code>tail -n 100 "$HOME/Library/Application Support/com.caberos.desktop/logs/gateway.log"</code></pre>
+        <a class="light-link" href="/docs/operations/troubleshooting/">Open troubleshooting docs <Icon name="arrow" size={15} /></a>
+      </div>
+    </div>
+  </section>
+</MarketingLayout>
+
+<style>
+  .download-hero {
+    padding: 98px 0 84px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .download-hero-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 420px;
+    align-items: center;
+    gap: 90px;
+  }
+
+  .download-hero h1 {
+    max-width: 680px;
+    margin: 0 0 23px;
+    font-size: clamp(3.1rem, 5.5vw, 5.2rem);
+    line-height: 1;
+  }
+
+  .download-lead {
+    max-width: 540px;
+    margin: 0;
+    color: var(--ink-2);
+    font-size: 17px;
+    line-height: 1.7;
+  }
+
+  .release-card {
+    padding: 27px;
+    border: 1px solid var(--line);
+    background: var(--white);
+    box-shadow: var(--shadow);
+  }
+
+  .release-card-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 20px;
+  }
+
+  .release-card h2 {
+    margin: 13px 0 0;
+    font-size: 32px;
+    font-weight: 600;
+  }
+
+  .release-card > p {
+    margin: 12px 0 23px;
+    color: var(--ink-2);
+    font-size: 12px;
+  }
+
+  .release-mark {
+    display: grid;
+    width: 47px;
+    height: 47px;
+    place-items: center;
+    border: 1px solid #d5daba;
+    border-radius: 6px;
+    background: var(--olive-soft);
+    color: var(--olive-dark);
+  }
+
+  .release-button {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    min-height: 62px;
+    padding: 9px 15px 9px 11px;
+    border: 1px solid var(--olive-dark);
+    border-radius: 5px;
+    background: var(--olive-dark);
+    color: var(--paper);
+    font-size: 13px;
+    font-weight: 600;
+    text-decoration: none;
+    transition: background 180ms ease, border-color 180ms ease, color 180ms ease;
+  }
+
+  .release-button:hover {
+    border-color: var(--ink);
+    background: var(--ink);
+    color: var(--white);
+  }
+
+  :root[data-theme="dark"] .release-button {
+    border-color: var(--olive);
+    background: var(--olive);
+    color: var(--paper);
+  }
+
+  :root[data-theme="dark"] .release-button:hover {
+    border-color: var(--olive-dark);
+    background: var(--olive-dark);
+    color: var(--paper);
+  }
+
+  .release-button-icon {
+    display: inline-flex;
+    flex: 0 0 36px;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border: 1px solid currentColor;
+    border-radius: 4px;
+  }
+
+  .release-button-copy {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 3px;
+  }
+
+  .release-button-copy strong {
+    font-size: 13px;
+    line-height: 1.1;
+  }
+
+  .release-button-copy small {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 9px;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    line-height: 1.1;
+    opacity: 0.8;
+    text-transform: uppercase;
+  }
+
+  .release-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 17px;
+    color: var(--ink-2);
+    font-size: 11px;
+  }
+
+  .release-link:hover {
+    color: var(--olive-dark);
+  }
+
+  .download-body {
+    padding: 108px 0;
+    background: var(--paper-strong);
+  }
+
+  .download-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 300px;
+    gap: 100px;
+  }
+
+  .download-main > h2,
+  .troubleshooting-grid h2 {
+    max-width: 600px;
+    margin: 0 0 44px;
+    font-size: clamp(2.4rem, 4vw, 3.8rem);
+    font-weight: 600;
+    letter-spacing: -0.045em;
+    line-height: 1.04;
+  }
+
+  .steps {
+    border-top: 1px solid var(--line);
+  }
+
+  .step {
+    display: grid;
+    grid-template-columns: 58px 1fr;
+    gap: 18px;
+    padding: 24px 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .step-number {
+    color: var(--olive);
+    font-size: 11px;
+  }
+
+  .step h3 {
+    margin: 0 0 7px;
+    font-size: 17px;
+    font-weight: 600;
+    letter-spacing: -0.025em;
+  }
+
+  .step p {
+    max-width: 560px;
+    margin: 0;
+    color: var(--ink-2);
+    font-size: 13px;
+    line-height: 1.65;
+  }
+
+  .download-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px 24px;
+    margin-top: 26px;
+  }
+
+  .download-aside {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+  }
+
+  .aside-card {
+    padding: 22px;
+    border: 1px solid var(--line);
+    background: var(--white);
+  }
+
+  .check-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin: 19px 0 0;
+    padding: 0;
+    list-style: none;
+    color: var(--ink-2);
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  .check-list li {
+    position: relative;
+    padding-left: 15px;
+  }
+
+  .check-list li::before {
+    position: absolute;
+    top: 6px;
+    left: 0;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--olive);
+    content: "";
+  }
+
+  .note-card {
+    background: var(--cream);
+  }
+
+  .note-card p {
+    margin: 16px 0 0;
+    color: var(--ink-2);
+    font-size: 12px;
+    line-height: 1.62;
+  }
+
+  .troubleshooting-section {
+    padding: 108px 0;
+    background: var(--ink);
+    color: var(--white);
+  }
+
+  .troubleshooting-grid {
+    display: grid;
+    grid-template-columns: 0.9fr 1.1fr;
+    align-items: center;
+    gap: 90px;
+  }
+
+  .troubleshooting-grid > * {
+    min-width: 0;
+  }
+
+  .troubleshooting-grid .eyebrow {
+    color: #a8c04a;
+  }
+
+  .troubleshooting-grid h2 {
+    margin-bottom: 18px;
+  }
+
+  .troubleshooting-grid > div:first-child > p:last-child {
+    max-width: 470px;
+    margin: 0;
+    color: #a5ad9d;
+    font-size: 14px;
+    line-height: 1.7;
+  }
+
+  .troubleshooting-grid code {
+    color: #d4e294;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 0.92em;
+  }
+
+  .command-card {
+    padding: 25px;
+    border: 1px solid #3c4530;
+    background: #1c2017;
+  }
+
+  .command-label {
+    display: block;
+    margin-bottom: 9px;
+    color: #9eaf6a;
+    font-size: 8px;
+    letter-spacing: 0.1em;
+  }
+
+  .command-card pre {
+    overflow-x: auto;
+    margin: 0 0 23px;
+    padding: 12px;
+    border: 1px solid #30382a;
+    background: #151811;
+  }
+
+  .command-card pre code {
+    color: #ccd6b9;
+    font-size: 10px;
+    white-space: pre;
+  }
+
+  .command-card .light-link {
+    color: #d0e18f;
+  }
+
+  @media (max-width: 900px) {
+    .download-hero-grid,
+    .download-layout,
+    .troubleshooting-grid {
+      grid-template-columns: 1fr;
+      gap: 50px;
+    }
+
+    .download-aside {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+    }
+  }
+
+  @media (max-width: 700px) {
+    .download-hero {
+      padding: 70px 0;
+    }
+
+    .download-hero h1 {
+      font-size: 3.2rem;
+    }
+
+    .download-body,
+    .troubleshooting-section {
+      padding: 76px 0;
+    }
+
+    .download-main > h2,
+    .troubleshooting-grid h2 {
+      font-size: 2.45rem;
+    }
+
+    .download-aside {
+      display: flex;
+    }
+  }
+</style>

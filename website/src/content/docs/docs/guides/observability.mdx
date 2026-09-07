@@ -1,0 +1,233 @@
+---
+title: Observability and traces
+description: Inspect health, runs, context, syscalls, usage, latency, errors, and spend.
+sidebar:
+  order: 7
+---
+
+CaberOS records each agent run so you can answer: what triggered it, which model context it received, which capabilities it requested, what was allowed or denied, how long it took, and what it cost.
+
+The dashboard separates the aggregate **Overview** from per-agent **Traces**.
+
+## Overview
+
+Open **Overview** to see recent operational health and aggregate activity for the selected time range.
+
+The page includes:
+
+- total non-test runs;
+- total provider-reported cost;
+- total input and output tokens;
+- error count and error rate;
+- average run latency;
+- runs per day;
+- cost per day;
+- top agents by cost;
+- recent runs;
+- live database, provider, agent, and active-run health.
+
+Select a top agent or recent run to continue into Traces.
+
+## System health
+
+The authenticated health view reports:
+
+| Field | Meaning |
+| --- | --- |
+| Status | Whether the health request completed successfully. |
+| Database | Whether the local database query succeeded. |
+| Providers | Number of configured model-provider records. |
+| Agents | Number of agent records. |
+| Active runs | Runs currently tracked by the in-process run manager. |
+| Timestamp | Time at which health was evaluated. |
+
+A nonzero provider or agent count does not prove that those resources are usable. Validate the selected model and inspect MCP/channel state on their dedicated screens.
+
+The desktop gateway also exposes a minimal unauthenticated process health endpoint:
+
+```bash
+curl http://127.0.0.1:51718/health
+```
+
+Expected response:
+
+```json
+{"status":"ok"}
+```
+
+Use the dashboard health view for application metrics and the minimal endpoint to determine whether the packaged gateway started at all.
+
+## Traces navigation
+
+Open **Traces** and select an agent. The agent card summarizes run count, cost, tokens, errors, and last activity for the trace period.
+
+The run table shows up to the latest 100 non-test runs for that agent, including:
+
+- status;
+- trigger;
+- cost;
+- total tokens;
+- latency;
+- start time.
+
+Select a run to open full detail.
+
+## Run detail
+
+A run is one inbound user message or heartbeat processed through the agent pipeline. Detail records:
+
+| Field | What it tells you |
+| --- | --- |
+| Run, agent, and session IDs | Which execution and conversation produced the record. |
+| Status and error | Whether the run completed, failed, stopped, or remains active. |
+| Trigger | User message or heartbeat automation. |
+| Start/completion time and latency | When execution occurred and total duration. |
+| Input/output tokens | Model usage accumulated across turns. |
+| Cost | Provider-reported or calculated run cost. |
+| Context tokens and ceiling | How much model context was used relative to the limit. |
+| Compacted | Whether context compaction affected the run. |
+| Context breakdown | Token allocation among system prompt, conversation, and tool schemas. |
+| Loaded capabilities | Full capability schemas available to the model in that run. |
+| Messages | Persisted user, assistant, thinking, heartbeat, and tool-call records. |
+| Audit records | Allowed and denied mediated capability invocations. |
+
+Use the **Timeline** view to understand execution order and **Messages** to inspect persisted content.
+
+## Diagnose capability discovery
+
+For a large MCP integration, compare:
+
+- capabilities allowed by the agent configuration;
+- loaded capabilities recorded on the run;
+- catalog search/load events shown in the conversation or trace;
+- final syscall records.
+
+A permitted tool absent from `loaded_capabilities` may be intentionally on demand. If it never loaded, review whether the model searched for an appropriate capability and whether the search metadata was clear. If it loaded successfully but execution failed, inspect the syscall denial reason and MCP server state.
+
+## Syscall audit
+
+A syscall audit record contains:
+
+- run and agent identifiers;
+- capability name;
+- allow/deny decision;
+- denial reason;
+- serialized arguments;
+- bounded result data;
+- capability latency;
+- capability-level cost field.
+
+The observability API can filter audit records by agent, capability, allow/deny status, and run. Run detail embeds records for the selected execution.
+
+Typical denial reasons include:
+
+- capability not found;
+- capability not granted;
+- not granted by the parent agent;
+- no subject binding;
+- approval rejected;
+- external-channel approval policy;
+- MCP server disabled or unavailable;
+- MCP tool filtered or unregistered;
+- execution error.
+
+A denied syscall is evidence that the boundary stopped the call, not necessarily that the whole run failed.
+
+## Spend
+
+The spend API summarizes non-test runs for 1 to 365 days and can filter by agent. It reports:
+
+- total cost;
+- run count;
+- input and output tokens;
+- breakdown by agent;
+- cost by trigger.
+
+The Overview uses similar aggregate records for its selected period and excludes test runs from KPI calculations.
+
+Cost accuracy depends on provider metadata and LiteLLM’s calculation support. Some local or custom models may report zero or incomplete cost. Use provider billing controls as the financial source of truth.
+
+## Operator audit
+
+Operator audit records track control-plane actions separately from model-requested syscalls. Entries include operator ID, action, target, and timestamp.
+
+Use syscall audit to inspect what an agent requested. Use operator audit to inspect changes made through authenticated management operations.
+
+## A diagnosis workflow
+
+### The agent returned an error
+
+1. Open **Traces** and select the agent.
+2. Open the failed run.
+3. Read the run error and final message.
+4. Check whether context or cost limits were reached.
+5. Inspect denied and failed syscalls.
+6. Check provider notifications and the gateway log if the failure occurred before a tool call.
+
+### The agent used the wrong tool
+
+1. Inspect `loaded_capabilities`.
+2. Review capability search/load events.
+3. Compare the chosen tool description with similar tools.
+4. Narrow the agent grants or improve MCP tool descriptions.
+5. Move uncommon tools to on-demand mode.
+
+### A heartbeat failed
+
+1. Filter mentally or through the API by trigger `heartbeat`.
+2. Inspect the task prompt stored in the run message.
+3. Check the heartbeat-specific cost ceiling.
+4. Review approval policy for unattended calls.
+5. Confirm required MCP servers and the provider were available.
+
+### Cost increased unexpectedly
+
+1. Change the Overview period to identify the first affected day.
+2. Check top agents by cost.
+3. Open their highest-cost runs.
+4. Compare turn counts, context tokens, model selection, and trigger.
+5. Reduce loaded schemas, compact long sessions, lower run limits, or select a more suitable model.
+
+## API filters
+
+The observability API supports operational queries beyond the current dashboard:
+
+```text
+GET /api/runs?agent_id=&status=&trigger=&is_test=&limit=&offset=
+GET /api/runs/{run_id}
+GET /api/audit?agent_id=&capability_name=&allowed=&run_id=&limit=&offset=
+GET /api/spend?agent_id=&days=
+GET /api/operator-audit?limit=&offset=
+GET /api/health
+GET /api/stats?days=
+```
+
+These routes require an authenticated operator session or desktop bearer token.
+
+## Retention and privacy
+
+Runs, messages, syscall arguments/results, token usage, cost, and operator activity are stored locally. They may contain sensitive prompts, filenames, URLs, or service data.
+
+Protect the CaberOS data directory and backups. Before sharing a trace, review all messages, tool arguments, results, citations, and errors for credentials or private content.
+
+## Troubleshooting
+
+### Overview is empty
+
+Run a non-test conversation, confirm the selected period includes it, and refresh. Test runs are excluded from aggregate KPIs.
+
+### Health data is unavailable
+
+Check `http://127.0.0.1:51718/health` and the desktop gateway log. If the minimal endpoint fails, the gateway is not ready.
+
+### A running task is missing after restart
+
+Active-run tracking is process-local. Persisted completed run records remain, but the current implementation is not a durable restartable job queue.
+
+### Cost is zero
+
+The model may be local, custom, or missing pricing metadata. Token counts can still be useful even when cost is unavailable.
+
+### Trace does not show an expected tool
+
+The model may not have selected it, the schema may not have loaded, or the request may have failed before mediation. Compare conversation streaming events, loaded capabilities, and audit records.

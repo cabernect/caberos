@@ -1,0 +1,145 @@
+---
+import "../styles/brand.css";
+import Icon from "../components/Icon.astro";
+import { releaseTag } from "../release";
+import mark from "../assets/logo-mark.svg";
+
+const {
+  title = "CaberOS — Local-first AI agents",
+  description = "An open-source operating system for personal AI agents.",
+} = Astro.props;
+const canonical = Astro.site ? new URL(Astro.url.pathname, Astro.site) : undefined;
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width" />
+    <meta name="description" content={description} />
+    <meta name="theme-color" content="#F5F5F3" />
+    <script is:inline>
+      (() => {
+        try {
+          const stored = localStorage.getItem("starlight-theme");
+          const theme = stored === "light" || stored === "dark"
+            ? stored
+            : matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+          document.documentElement.dataset.theme = theme;
+        } catch {
+          document.documentElement.dataset.theme = "light";
+        }
+      })();
+    </script>
+    <link rel="icon" type="image/svg+xml" href={mark.src} />
+    {canonical && <link rel="canonical" href={canonical} />}
+    <title>{title}</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to content</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="brand" href="/" aria-label="CaberOS home">
+          <img src={mark.src} alt="" width="27" height="27" />
+          <span>
+            CaberOS
+            <small>local-first agents</small>
+          </span>
+        </a>
+        <nav class="site-nav" aria-label="Main navigation">
+          <a href="/#product">Product</a>
+          <a href="/#security">Security</a>
+          <a href="/docs/">Docs</a>
+          <a href="https://github.com/cabernect/caberos">GitHub</a>
+          <button class="theme-toggle" data-theme-toggle type="button" aria-label="Switch to dark mode" aria-pressed="false">
+            <span class="theme-toggle-icon" data-theme-icon="sun"><Icon name="sun" size={15} /></span>
+            <span class="theme-toggle-icon" data-theme-icon="moon" hidden><Icon name="moon" size={15} /></span>
+            <span data-theme-label>Light</span>
+          </button>
+          <a class="nav-cta" href="/download/">Download</a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="main-content">
+      <slot />
+    </main>
+
+    <footer class="site-footer">
+      <div class="container">
+        <div class="site-footer-grid">
+          <div>
+            <a class="brand" href="/" aria-label="CaberOS home">
+              <img src={mark.src} alt="" width="27" height="27" />
+              <span>
+                CaberOS
+                <small>local-first agents</small>
+              </span>
+            </a>
+            <p>Give personal agents memory, tools, and room to act—without giving up control.</p>
+          </div>
+          <nav class="footer-links" aria-label="Footer navigation">
+            <a href="/docs/">Documentation</a>
+            <a href="/download/">Download</a>
+            <a href="https://github.com/cabernect/caberos/releases">Releases</a>
+            <a href="https://github.com/cabernect/caberos/blob/main/SECURITY.md">Security</a>
+            <a href="https://github.com/cabernect/caberos/blob/main/CONTRIBUTING.md">Contributing</a>
+            <a href="https://github.com/cabernect/caberos">GitHub</a>
+          </nav>
+        </div>
+        <div class="footer-bottom">
+          <span>MIT License · open source</span>
+          <span>{releaseTag} · macOS Apple Silicon</span>
+        </div>
+      </div>
+    </footer>
+
+    <script>
+      const themeToggle = document.querySelector("[data-theme-toggle]");
+      if (themeToggle instanceof HTMLButtonElement) {
+        const root = document.documentElement;
+        const getStoredTheme = () => {
+          try {
+            const stored = localStorage.getItem("starlight-theme");
+            return stored === "light" || stored === "dark" ? stored : null;
+          } catch {
+            return null;
+          }
+        };
+        const getTheme = () => root.dataset.theme === "dark" ? "dark" : "light";
+        const updateThemeToggle = () => {
+          const theme = getTheme();
+          const sun = themeToggle.querySelector('[data-theme-icon="sun"]');
+          const moon = themeToggle.querySelector('[data-theme-icon="moon"]');
+          const label = themeToggle.querySelector("[data-theme-label]");
+          if (sun instanceof HTMLElement) sun.hidden = theme !== "light";
+          if (moon instanceof HTMLElement) moon.hidden = theme !== "dark";
+          if (label instanceof HTMLElement) label.textContent = theme === "dark" ? "Dark" : "Light";
+          themeToggle.setAttribute("aria-label", theme === "dark" ? "Switch to light mode" : "Switch to dark mode");
+          themeToggle.setAttribute("aria-pressed", String(theme === "dark"));
+          document.querySelector('meta[name="theme-color"]')?.setAttribute("content", theme === "dark" ? "#151811" : "#F5F5F3");
+        };
+
+        themeToggle.addEventListener("click", () => {
+          const nextTheme = getTheme() === "dark" ? "light" : "dark";
+          root.dataset.theme = nextTheme;
+          try {
+            localStorage.setItem("starlight-theme", nextTheme);
+          } catch {
+            updateThemeToggle();
+            return;
+          }
+          updateThemeToggle();
+        });
+
+        const colorScheme = matchMedia("(prefers-color-scheme: light)");
+        colorScheme.addEventListener("change", () => {
+          if (!getStoredTheme()) {
+            root.dataset.theme = colorScheme.matches ? "light" : "dark";
+            updateThemeToggle();
+          }
+        });
+        updateThemeToggle();
+      }
+    </script>
+  </body>
+</html>

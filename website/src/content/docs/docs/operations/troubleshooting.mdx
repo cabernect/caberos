@@ -1,0 +1,42 @@
+---
+title: Troubleshooting the desktop gateway
+description: Diagnose a desktop launch that remains on the starting screen.
+---
+
+The packaged desktop application starts its gateway on loopback port `51718`. It does not use the development gateway port `8081`.
+
+## Check the health endpoint
+
+```bash
+curl -i --max-time 3 http://127.0.0.1:51718/health
+```
+
+A working gateway returns HTTP `200` and:
+
+```json
+{"status":"ok"}
+```
+
+## Inspect the gateway log
+
+```bash
+tail -n 100 "$HOME/Library/Application Support/com.caberos.desktop/logs/gateway.log"
+```
+
+The log is append-only with bounded rotated backups, so older startup attempts may appear above the latest error.
+
+## Check the process and port
+
+```bash
+pgrep -alf 'CaberOS|caberos-gateway'
+lsof -nP -iTCP:51718 -sTCP:LISTEN
+```
+
+If another process owns port `51718`, quit it or stop the conflicting development process before relaunching CaberOS.
+
+## Common launch messages
+
+- **ImportError in `gateway_entry`** — the DMG contains an outdated gateway build; download the latest release.
+- **No gateway log** — the app may not have permission to create its data directory or may be pointing at a different application identifier.
+- **Gateway exited immediately** — inspect the final traceback in `gateway.log` and include it in a bug report after removing secrets.
+- **Application is damaged** — verify the DMG source, then follow the [installation guide](/docs/getting-started/installation/) Gatekeeper step.

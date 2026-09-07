@@ -1,0 +1,332 @@
+---
+title: Approvals and sandboxing
+description: Understand capability enforcement, remembered approvals, channel policy, filesystem containment, and platform sandbox limits.
+sidebar:
+  order: 4
+---
+
+CaberOS treats model output as a request, not as authority. A tool call must pass capability authorization, any required human decision, subject and credential checks, and the active filesystem or process restrictions before it can execute.
+
+These controls answer different questions:
+
+| Control | Question |
+| --- | --- |
+| Capability grant | May this agent request this operation at all? |
+| Schema visibility | Does the model currently see the full parameters for the operation? |
+| Subject binding | On whose contact-scoped data will it operate? |
+| Approval | Must a human confirm this invocation? |
+| Sandbox mode | Which host resources can the allowed operation reach? |
+| Audit | What decision and result were recorded? |
+
+Passing one control does not bypass another.
+
+## Syscall enforcement path
+
+Every registered capability call enters the mediator:
+
+```text
+Model ToolCall
+    │
+    ├─ capability exists?
+    ├─ granted to this agent?
+    ├─ granted to parent if called by sub-agent?
+    ├─ valid session/contact subject?
+    ├─ approval required?
+    ├─ MCP server/binding/credential valid?
+    ├─ execute with workspace + sandbox mode
+    └─ write allowed or denied audit record
+```
+
+Unknown, ungranted, unbound, unavailable, rejected, and failed calls produce denied results. The model may receive that denial and continue with an authorized alternative.
+
+Read [Permissions and authority](/docs/core-concepts/permissions/) for the grant data model.
+
+## Capability defaults
+
+Built-in capability definitions carry default egress and approval metadata.
+
+| Capability group | Default behavior |
+| --- | --- |
+| Workspace file tools | Local, no approval by default |
+| Knowledge and memory tools | Local, no approval by default |
+| Skill and capability discovery | Local, no approval by default |
+| `terminal` | Egress-marked and approval-required |
+| `web_search` and `web_fetch` | Egress-marked and approval-required |
+| MCP tools | Egress and approval metadata inherited from server registration |
+
+An explicit agent grant can set its approval requirement. Review the effective agent configuration rather than assuming capability-definition defaults always apply.
+
+“Egress” is metadata indicating an operation can communicate or launch software that may communicate. It is not a network firewall.
+
+## Approval lifecycle
+
+When an interactive dashboard call requires approval:
+
+1. The mediator creates and persists an approval request.
+2. The run emits a `pending_approval` tool event.
+3. The run manager marks the run as awaiting approval and creates a notification.
+4. The model loop pauses on an in-process event.
+5. The operator reviews the capability and arguments.
+6. Approve persists the decision before waking the run.
+7. Reject returns a denied tool result to the model.
+8. No response before the configured timeout causes an automatic rejection.
+9. The final capability decision is recorded in audit.
+
+The default human-in-the-loop timeout is five minutes. It can be configured with `AGENTOS_HITL_TIMEOUT`; setting it to zero waits indefinitely and is not recommended for unattended operation.
+
+Rejecting one call does not necessarily cancel the entire run. The model can answer without the operation or request another permitted capability.
+
+## Remembered approvals
+
+An operator can remember an approval within the current session.
+
+| Scope | Match behavior | Example risk |
+| --- | --- | --- |
+| Exact | Same capability and identical arguments | Lowest expansion |
+| Same verb | Same capability and command verb | All commands beginning with that verb may pass |
+| Pattern | Wildcard pattern selected by operator | A broad wildcard can match more than intended |
+| Capability | Any arguments for the capability | Broadest; all terminal calls would pass in that session |
+
+Remembered decisions live in the process-local approval registry. They do not modify the permanent agent capability configuration and do not survive a gateway restart.
+
+Prefer exact matching. Review patterns character by character before accepting them.
+
+## External-channel policy
+
+A messaging-platform user cannot always respond to a desktop approval prompt. Each channel configuration therefore supplies a policy for approval-required calls:
+
+- `deny` returns a denied result;
+- `operator` creates a pending dashboard approval and waits;
+- `auto_approve` runs without a human response.
+
+Unknown or missing policy fails closed in the mediator. Historical channel configurations may have been migrated to preserve earlier auto-approval behavior, so inspect existing channels rather than assuming they use the newest default.
+
+Use `deny` while testing. `auto_approve` is appropriate only when the agent, capability set, upstream account, and expected message senders are all tightly constrained.
+
+## YOLO mode
+
+YOLO mode globally skips approval gates. It does not automatically:
+
+- grant an absent capability;
+- load an on-demand schema;
+- resolve a missing contact or MCP binding;
+- enable a disabled MCP server;
+- bypass a server tool filter;
+- change strict sandbox mode to open;
+- suppress audit records.
+
+YOLO mode is process-wide rather than agent-specific. Enabling it for one test affects every agent handled by that gateway.
+
+Keep it disabled outside an isolated trusted development environment.
+
+## Native file-tool containment
+
+In strict mode, `read_file`, `write_file`, and `search_files` resolve requested paths against the workspace.
+
+The path validator:
+
+1. resolves the workspace root;
+2. joins and resolves the requested path;
+3. checks containment using path semantics rather than string-prefix matching;
+4. rejects `..`, absolute escape, and symlink targets outside the root.
+
+In open mode, absolute paths are allowed and relative paths still resolve from the workspace.
+
+File-tool containment applies to CaberOS native file tools. It does not automatically constrain arbitrary third-party MCP server processes.
+
+## Terminal execution modes
+
+### Strict mode
+
+The terminal capability selects an OS-specific sandbox backend and requests network-disabled execution.
+
+### Open mode
+
+Open mode launches `/bin/sh -c` directly with the workspace as current directory. It does not use Seatbelt or Bubblewrap and therefore has the permissions of the CaberOS gateway process.
+
+Open mode should be considered full local-user command authority. Approval can help review commands but cannot make arbitrary shell execution intrinsically safe.
+
+## macOS Seatbelt behavior
+
+Strict terminal calls use `/usr/bin/sandbox-exec` with a generated profile.
+
+| Resource | Current policy |
+| --- | --- |
+| File reads | Broadly allowed, including host paths |
+| File writes | Denied globally except workspace, `/private/tmp`, `/dev/null`, and `/dev/dtracehelper` |
+| Process execution | Allowed so system and installed tools can run |
+| Process fork | Allowed |
+| Network | Denied for strict terminal calls |
+| Environment | Reduced to a small `PATH`, workspace `HOME`, and temporary directory |
+
+The important limitation is that macOS strict shell is **not read-isolated to the workspace**. A command can read many host files even though it cannot normally write outside allowed locations or open network connections.
+
+Native `read_file` remains workspace-contained; the broader read behavior applies to commands executed by `terminal`.
+
+Require approval for terminal calls and inspect commands for paths, redirections, interpreters, encoded scripts, and indirect execution.
+
+## Linux Bubblewrap behavior
+
+Strict terminal calls use Bubblewrap with:
+
+- a cleared environment;
+- minimal `PATH` and workspace `HOME`;
+- read-only `/usr`, `/bin`, `/lib`, and `/lib64` bindings;
+- a writable workspace mounted at `/workspace`;
+- a temporary in-memory `/tmp`;
+- isolated process, IPC, mount, and network namespaces through `--unshare-all`;
+- parent-death and new-session controls;
+- no shared network unless explicitly requested by code.
+
+Bubblewrap must be installed and usable by the host/container. CaberOS probes availability because a binary can exist while user namespaces or container policy prevent it from running.
+
+Do not assume macOS and Linux strict mode expose identical readable files.
+
+## Command timeout limitations
+
+Terminal execution waits for a configured duration, 30 seconds by default, and reports a timeout result when that wait expires.
+
+Do not rely on this timeout as the only process-lifecycle control. The current command wrapper does not provide a durable job supervisor or a cross-platform guarantee that every descendant process is terminated at the exact timeout boundary.
+
+Avoid commands that daemonize, fork detached processes, or start persistent services. Use explicit process controls outside the agent runtime for long-lived workloads.
+
+## Network boundaries
+
+Strict terminal calls request no network:
+
+- Seatbelt adds a network deny rule on macOS.
+- Bubblewrap leaves the network namespace unshared on Linux.
+
+This restriction does not apply to:
+
+- `web_search` or `web_fetch`, which intentionally use the gateway’s network;
+- hosted model requests;
+- MCP HTTP servers;
+- stdio MCP servers making their own network requests;
+- external channel adapters;
+- terminal commands in open mode.
+
+Capability approval and egress labels control model access to those pathways; host firewalls provide an additional independent layer.
+
+## MCP execution boundary
+
+MCP tools still pass through the syscall mediator, but the MCP server implementation is outside the native tool sandbox.
+
+For a mediated call, CaberOS verifies grants, parent authority, subject binding, server status, tool filters, approval, and credential binding. It then forwards arguments to the server.
+
+A malicious stdio server may act when launched or connected, before any model tool call. Review third-party package install scripts, executable paths, dependencies, and updates. Run high-risk servers under a separate OS account or container if stronger isolation is needed.
+
+## Sub-agent authority
+
+A sub-agent has a requested capability list and shares the parent’s workspace and sandbox mode. Every child call is also checked against the parent agent’s grants.
+
+Effective authority can narrow but not widen through delegation. Sub-agent events and audit records retain a sub-agent identifier within the parent run.
+
+This control does not create a separate OS process or separate filesystem sandbox for the sub-agent model loop.
+
+## Prompt injection and guardrails
+
+Input guardrails:
+
+- redact recognized secret formats before typed text is stored or sent to the model;
+- warn on common instruction-override patterns;
+- continue processing the message.
+
+Output guardrails:
+
+- redact recognized credential formats;
+- warn on common injected-instruction echoes;
+- detect some home paths, agent-home paths, prompt markers, and multiple internal UUIDs;
+- replace selected path leakage patterns.
+
+These checks are regular-expression heuristics. They can produce false positives and false negatives. They do not inspect every binary attachment before storage, prove whether a document is malicious, or replace capability enforcement.
+
+## Audit behavior
+
+Allowed and denied syscalls store:
+
+- run and agent;
+- sub-agent when applicable;
+- capability;
+- resolved subject when applicable;
+- arguments;
+- bounded result;
+- decision and denial reason;
+- latency and capability cost fields.
+
+Audit records can themselves contain sensitive filenames, commands, URLs, document data, or tool output. Protect the database and sanitize records before sharing them.
+
+## Safe configuration patterns
+
+### Read-only local document agent
+
+```text
+Sandbox: strict
+Capabilities: doc_list, doc_search, read_file
+Terminal: not permitted
+Web: not permitted
+MCP: not permitted
+YOLO: off
+```
+
+### Approved web research agent
+
+```text
+Sandbox: strict
+Capabilities: web_search and web_fetch on demand
+Approval: enabled for both
+Terminal: not permitted
+YOLO: off
+```
+
+### Build agent
+
+```text
+Sandbox: strict
+Capabilities: read_file, write_file, search_files, terminal
+Terminal approval: enabled
+Workspace: dedicated repository copy
+Credentials in workspace: none
+YOLO: off
+```
+
+On macOS, remember that an approved terminal command can read outside the workspace even in strict mode.
+
+## Troubleshooting security decisions
+
+### A call was denied unexpectedly
+
+Open the run trace and inspect the denial reason. Check grant, loaded schema, parent authority, contact binding, approval outcome, MCP server status, and tool filter separately.
+
+### A terminal command can read a host file on macOS
+
+This is a documented Seatbelt-profile limitation. Disable terminal for agents that must not read host files, or run CaberOS in a stronger VM/container/OS-account boundary.
+
+### Strict command cannot access the network
+
+That is expected. Use an explicit web or MCP capability with appropriate approval, or change the architecture rather than weakening shell isolation casually.
+
+### A command keeps running after a timeout
+
+Stop the relevant process at the OS level and inspect descendants. Do not use the terminal tool as a service supervisor.
+
+### An external channel call never shows approval
+
+Check the channel’s effective approval policy and global YOLO mode. Existing migrated channels may use auto-approval.
+
+### A prompt-injection warning appeared
+
+Treat the content as untrusted, inspect the source, reject consequential calls, and narrow capabilities. The warning itself does not establish malicious intent.
+
+## Operational checklist
+
+- Keep strict mode unless broad host access is essential.
+- Keep terminal disabled for agents that only need documents, memory, or APIs.
+- Require terminal and web approvals.
+- Use exact remembered approvals.
+- Review existing channel policy after upgrades.
+- Keep YOLO mode off.
+- Remove credentials from workspaces and attachments.
+- Run untrusted MCP software in an external isolation boundary.
+- Review syscall audit records and model context.
+- Use host firewall, OS permissions, and disk encryption as independent layers.
