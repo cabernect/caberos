@@ -1,0 +1,157 @@
+---
+title: Capabilities
+description: Configure built-in tools, progressive discovery, MCP tools, and delegated work.
+---
+
+A capability is a named operation an agent may request. Reading a workspace file, searching the web, recalling memory, calling an MCP tool, and starting a sub-agent all use the same capability model and pass through the same mediation boundary.
+
+Capabilities are not prompt instructions. They are executable operations with explicit grants, schemas, egress metadata, approval policy, and audit records.
+
+## Permission and visibility are separate
+
+CaberOS distinguishes:
+
+1. **Permission ceiling** — the capabilities the agent is authorized to invoke.
+2. **Schema visibility** — the capabilities whose full parameter schemas are supplied to the model in the current run.
+
+This distinction lets an agent have access to a large MCP server without sending every tool schema to the model on every request.
+
+## Capability modes
+
+Open an agent’s **Settings → Capabilities** and choose a mode for each built-in tool or MCP integration.
+
+| Mode | Use it when | Model context behavior |
+| --- | --- | --- |
+| Not permitted | The operation is outside the agent’s role. | The agent cannot search, load, or invoke it. |
+| On demand | The operation is occasional or belongs to a large tool collection. | Compact metadata is searchable; the full schema is loaded only when selected. |
+| Always | The operation is essential to most runs. | The full schema is present from the first model turn. |
+
+Built-in tools default to **Always** when an older agent has no explicit grant list. MCP tools default to **On demand** when enabled through the dashboard.
+
+## Search, then load
+
+Two catalog operations support progressive discovery:
+
+```text
+capabilities_search(query?, server?, kind?, limit?)
+capabilities_load(names)
+```
+
+`capabilities_search` searches only the capabilities permitted for that run. It returns compact names, descriptions, kinds, and MCP server information, but not full parameter schemas. Results default to 20 and are capped at 50.
+
+`capabilities_load` accepts exact names returned by search. The selected schemas become available on the next model turn and remain scoped to that run.
+
+### Example flow
+
+An agent connected to a project-management MCP server might:
+
+1. Search for “create issue.”
+2. Receive compact metadata for a few permitted tools.
+3. Load the exact issue-creation capability.
+4. Call it on a later model turn.
+5. Pause for approval if the grant or server requires confirmation.
+
+The other server schemas never need to enter model context.
+
+## What loading cannot do
+
+Loading a capability does not:
+
+- grant an operation outside the agent’s permission ceiling;
+- bypass operator approval or external-channel approval policy;
+- change subject binding;
+- inject a credential into the model context;
+- enable a disconnected or disabled MCP server;
+- bypass an MCP tool filter;
+- persist the loaded schema into another run.
+
+Each load request accepts at most 10 new capability schemas, and a run can hold at most 50 dynamically loaded schemas. Additional names are returned as rejected rather than silently expanding context without a bound.
+
+## Built-in workspace and utility tools
+
+| Capability | Purpose | Egress | Default approval |
+| --- | --- | --- | --- |
+| `read_file` | Read a complete file or an inclusive line range from the workspace. Images require a vision-capable model. | No | No |
+| `write_file` | Write content to a workspace file and return the resulting change. | No | No |
+| `search_files` | Search file contents, match names with globs, or list a directory. | No | No |
+| `terminal` | Run a command in the configured sandbox, synchronously or in the background. | Yes | Yes |
+| `read_terminal` | Read output and status from a background terminal session. | No | No |
+| `close_terminal` | Close a background terminal session and retrieve its final output. | No | No |
+| `datetime_now` | Return the current date and time, optionally for a named timezone. | No | No |
+| `agent_ask_user` | Pause a run and request free text, one choice, or multiple choices from the user. | No | No |
+
+“Default approval” is capability metadata. An explicit agent grant can configure approval behavior, and global YOLO mode can skip approval gates. Authorization checks still apply in YOLO mode.
+
+## Knowledge and web tools
+
+| Capability | Purpose | Egress | Default approval |
+| --- | --- | --- | --- |
+| `doc_list` | List metadata for shared and agent-private Knowledge Vault documents. | No | No |
+| `doc_search` | Retrieve relevant local document excerpts with source metadata. | No | No |
+| `doc_inspect` | Inspect a PDF page or an embedded DOCX image with a vision-capable model. | No | No |
+| `web_search` | Search the public web through DuckDuckGo. | Yes | Yes |
+| `web_fetch` | Fetch a URL and extract readable text from the response. | Yes | Yes |
+
+Knowledge retrieval stays local until retrieved excerpts are included in a cloud model request. Web operations contact external services and are marked as egress.
+
+## Memory tools
+
+| Capability | Scope | Purpose |
+| --- | --- | --- |
+| `memory_recall` | Contact | Find relevant stored conversation snippets. |
+| `memory_store` | Contact | Store a tagged snippet for later recall. |
+| `memory_remember_fact` | Contact | Store a structured `(entity, predicate, object)` fact. |
+| `memory_query_facts` | Contact | Query structured facts with exact optional filters. |
+| `search_history` | Contact | Search verbatim past messages for exact details. |
+| `memory_update` | Agent | Replace the agent’s living `MEMORY.md` notebook. |
+
+Contact-scoped operations resolve the contact from the session. The model does not supply a contact ID.
+
+## Skills tools
+
+Skills use a separate three-level progressive-disclosure flow:
+
+1. The initial prompt receives skill names and short descriptions.
+2. `skills_load` loads one skill’s `SKILL.md` body and lists its resources.
+3. `skills_read_resource` reads a referenced file within that skill directory.
+
+`skills_list` can refresh the lightweight menu. Resource paths are constrained to the selected skill directory.
+
+See [Skills](/docs/guides/skills/) for installation and usage.
+
+## Sub-agents
+
+`run_subagent` creates a temporary model loop for one focused task. It shares the parent’s workspace and uses the parent’s model unless an override is supplied. It can run synchronously or return a sub-agent ID for later polling with `read_subagent`.
+
+Sub-agent authority is checked against both its requested capability list and the parent agent’s grants. It cannot use a capability that the parent does not have. Default sub-agent limits are intentionally bounded, and background state is held in memory rather than as a durable job queue.
+
+Use a sub-agent to isolate context or parallelize independent investigation, not to bypass limits or permission policy.
+
+## MCP capabilities
+
+Connected MCP tools are registered as `mcp_tool` capabilities. You can grant:
+
+- individual tools, for the narrowest authority; or
+- an entire server, so newly discovered tools can be governed by one server-level mode and approval setting.
+
+A server grant is still bounded by server status and its tool filter. Credentials are resolved at execution time by CaberOS and are not part of the model-visible tool arguments.
+
+## Approval, egress, and YOLO mode
+
+An **egress** label means the operation can communicate outside CaberOS or run a command that may do so. It is a signal used when setting policy; egress does not itself grant network access through the sandbox.
+
+Enable **approval** for consequential calls that should stop for review. The approval request includes the capability and arguments. If **YOLO Mode** is enabled in agent capability settings, approval gates are skipped globally, but grant, subject, availability, and sandbox checks remain.
+
+For external channels, approval behavior is controlled by the channel policy: deny, wait for an operator, or auto-approve. Missing or unknown policy defaults to denial.
+
+## How to choose a capability set
+
+1. Start from the task, not from the available-tool list.
+2. Mark unrelated operations **Not permitted**.
+3. Keep common low-risk local operations **Always**.
+4. Put large MCP servers and occasional tools **On demand**.
+5. Require approval for egress and consequential writes.
+6. Test a representative task.
+7. Inspect loaded schemas and syscalls in [Observability](/docs/guides/observability/).
+
+For the execution checks applied after capability selection, read [Permissions and authority](/docs/core-concepts/permissions/).

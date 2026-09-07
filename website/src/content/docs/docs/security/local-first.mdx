@@ -1,0 +1,283 @@
+---
+title: Local-first and data boundaries
+description: Understand what CaberOS stores locally, what can leave the machine, and how to configure private workflows.
+sidebar:
+  order: 2
+---
+
+CaberOS is local-first: the operator owns the runtime and primary data stores. It is not a blanket claim that all configured processing remains on the machine.
+
+Whether data leaves the machine depends on the selected model endpoint, enabled capabilities, MCP servers, external channels, and software executed by the operator or agent.
+
+## Data-flow overview
+
+```text
+                           optional external destinations
+                         ┌───────────────────────────────┐
+Local CaberOS gateway ──►│ hosted model provider         │
+        │                │ remote MCP server             │
+        │                │ website fetched by web tool   │
+        │                │ Telegram / Discord / Zalo     │
+        │                │ command-selected destination  │
+        │                └───────────────────────────────┘
+        │
+        ├── SQL database
+        ├── secret.key
+        ├── agent homes / MEMORY.md
+        ├── workspaces / attachments
+        ├── Knowledge Vault files
+        ├── skills
+        ├── backups
+        └── gateway logs
+```
+
+The gateway does not require a CaberOS-hosted cloud relay for model requests. Hosted traffic goes from the local gateway to the endpoint you configured.
+
+## Stored locally
+
+| Data | Default storage | Encryption by CaberOS |
+| --- | --- | --- |
+| Agent identity and versioned configuration | SQL database | No full-row encryption |
+| Operator password | SQL database | Bcrypt hash |
+| Operator session | SQL database | Raw token is hashed; metadata is plaintext |
+| Provider API key | SQL database | Fernet |
+| MCP API keys and OAuth tokens | SQL database | Fernet |
+| Channel bot tokens | SQL database | Fernet |
+| Channel webhook secrets | SQL database | Plaintext field |
+| Contacts, sessions, messages, runs | SQL database | No |
+| Audit records, token use, spend | SQL database | No |
+| Recall snippets and structured facts | SQL database and FTS | No |
+| `MEMORY.md` | Agent-home filesystem | No |
+| Workspace files and attachments | Workspace filesystem | No |
+| Knowledge documents | Knowledge filesystem | No |
+| Knowledge chunks and citations | SQL database and FTS | No |
+| System and agent skills | Skills/workspace filesystem | No |
+| Gateway logs | Application log directory | No |
+| Full export archive | User-selected destination | ZIP is not encrypted |
+| Local restore points | Application backup directory | No archive-level encryption |
+
+Use operating-system permissions and full-disk encryption to protect local plaintext data. Credential encryption alone does not encrypt conversations, documents, or workspaces.
+
+## What a hosted model receives
+
+A hosted model request can include:
+
+- CaberOS base operating rules;
+- agent soul, persona, and task;
+- agent-wide `MEMORY.md`;
+- skill names and descriptions;
+- an explicitly selected or model-loaded skill body;
+- selected contact-scoped facts and recall snippets;
+- bounded previous-session summaries;
+- recent conversation messages;
+- the current user message;
+- visible capability schemas;
+- retrieved Knowledge Vault excerpts;
+- file or image content returned through an authorized read;
+- fetched web content;
+- MCP and native tool results needed for the next turn.
+
+Attachments are not inserted into the initial model request automatically. The initial prompt contains metadata and a local path or URL reference. Once the agent reads an attachment through a tool, that tool result may be included in the next hosted model call.
+
+Input guardrails redact recognized secret patterns from typed user text before storage and inference. They are heuristic and should not be used as a safe way to paste credentials.
+
+## Local model workflows
+
+A model request can remain local when the provider base URL points to a loopback or otherwise trusted local service, such as Ollama or LM Studio.
+
+A local model does not make the entire workflow local if the agent also:
+
+- searches or fetches the web;
+- calls a remote MCP server;
+- sends a message through an external channel;
+- runs a command that communicates externally in open mode;
+- uses a locally installed MCP server that contacts its own remote API.
+
+To build a mostly offline workflow:
+
+1. use a loopback model endpoint;
+2. disable web capabilities;
+3. avoid remote MCP servers and external channels;
+4. keep terminal in strict mode with network denied;
+5. inspect locally installed MCP code and disable servers that use external APIs;
+6. verify network behavior with operating-system or network monitoring.
+
+## Knowledge Vault data flow
+
+Knowledge source files and indexes are local. `doc_search` selects bounded excerpts from Shared Knowledge and the active agent’s private scope.
+
+With a hosted model:
+
+1. document extraction and search occur locally;
+2. selected excerpts become tool results;
+3. those results are sent to the hosted model on a later turn;
+4. source metadata can be associated with the final response.
+
+`doc_inspect` can similarly provide selected PDF pages or DOCX images to a vision-capable model. Do not assume that uploading a document to a local Vault prevents retrieved content from reaching the configured model provider.
+
+## Memory data flow
+
+Memory has different scopes:
+
+- `MEMORY.md` is agent-wide and automatically enters every run for that agent.
+- Recall snippets and facts are contact- and agent-scoped.
+- Previous-session summaries are selected by relevance.
+- Exact message history is retrieved only through its capability.
+
+A hosted provider receives memory included in context. Keep secrets out of all memory layers and avoid putting one contact’s private data in agent-wide `MEMORY.md`.
+
+Automatic memory extraction uses the configured model. If that model is hosted, the bounded recent conversation and existing memory supplied to the extraction request leave the machine.
+
+## MCP data flow
+
+MCP servers have two relevant boundaries:
+
+### Local stdio server
+
+CaberOS launches a local process and exchanges MCP protocol messages through standard input/output. The process can independently contact external services and runs with the local user’s process privileges unless the server implements its own restrictions.
+
+The CaberOS terminal sandbox does not automatically contain a third-party stdio MCP server.
+
+### HTTP server
+
+Tool arguments, configured headers, credentials, and server responses travel to and from the configured HTTP endpoint.
+
+CaberOS mediates whether the model may invoke the tool and injects credentials outside model arguments. The MCP server still receives the tool inputs and any injected authorization material required to do its job.
+
+Use least-privilege credentials and review the server’s own privacy and retention policy.
+
+## Web-tool data flow
+
+`web_search` sends the query to the configured search implementation. `web_fetch` contacts the supplied URL and returns extracted text.
+
+External hosts can observe:
+
+- source IP and request timing;
+- requested URLs and query parameters;
+- normal HTTP headers;
+- any data encoded in the URL.
+
+Do not place secrets in search queries or URL parameters. A URL attachment is not fetched until an authorized tool requests it.
+
+## External channel data flow
+
+Telegram, Discord, Zalo OA, and Zalo Bot receive and retain messages according to their own platforms.
+
+An inbound message is stored locally as a CaberOS contact, session, run, and message. The resulting reply is sent back through the same platform. If the agent uses a hosted model, the inbound platform text and selected context may also be sent to that provider.
+
+Channel bot tokens are encrypted locally; webhook secrets are stored in a plaintext database field and are not returned by the normal API.
+
+## Shell and filesystem data flow
+
+Native file tools operate on local paths. In strict mode, path resolution for `read_file`, `write_file`, and search operations is constrained to the workspace.
+
+Terminal behavior differs by platform:
+
+- Linux Bubblewrap strict mode hides most host data, binds the workspace, and unshares networking.
+- macOS Seatbelt strict mode denies network and restricts writes, but permits broad host reads so system executables and libraries can function.
+- Open mode runs shell commands without the platform sandbox wrapper and allows native file tools to resolve absolute host paths.
+
+A command can copy local information into its output, which may then be sent to a hosted model as a tool result. Approval helps the operator inspect the command but is not automatic data-loss prevention.
+
+## Logs, traces, and telemetry
+
+CaberOS records local operational data for observability:
+
+- messages and thinking content;
+- tool names, arguments, and results;
+- allow/deny decisions;
+- model errors;
+- tokens, cost, and latency;
+- source URLs and document metadata;
+- operator management actions.
+
+The application does not require CaberOS-hosted telemetry to operate. Third-party model, MCP, channel, update, package, or web services may still log their requests.
+
+Desktop gateway logs are rotated and bounded, but they are plaintext. Review them before sharing.
+
+## Backups and migration
+
+Full export is designed for portable restore, so it includes both:
+
+- encrypted credential records in `agentos.db`; and
+- the `secret.key` needed to decrypt them.
+
+It also includes agent homes and workspaces. The ZIP is not encrypted. Treat a full export as highly sensitive.
+
+Import validates archive structure, path traversal, total expanded size, file count, database integrity, and required schema before modification. Replace and merge imports create a local restore point first.
+
+Local restore points are stored under the application data directory. The backup service keeps the latest five restore-point directories by default. They contain the database, secret key, agent homes, and workspaces.
+
+The current export and restore-point collectors do not include the Knowledge Vault source-file directory or separately installed system skills. The searchable chunk records remain in the database, but preserve the original knowledge files and custom system skills separately when they are required for disaster recovery.
+
+Read [Authentication and credentials](/docs/security/authentication-and-credentials/) and [Backups and restore](/docs/operations/backups/).
+
+## Deletion boundaries
+
+Deleting an item locally does not necessarily delete copies held by:
+
+- a hosted model provider;
+- an MCP service;
+- a messaging platform;
+- a fetched website’s access logs;
+- an external backup service;
+- an earlier CaberOS backup or export.
+
+Likewise, deleting an encrypted credential from CaberOS does not revoke it upstream. Revoke the key or token at the provider first.
+
+Use the authenticated **Delete all data** operation only after creating any required private evidence or backup. It requires the exact confirmation phrase and reseeds the initial local configuration afterward.
+
+## Privacy configuration examples
+
+### Private document assistant
+
+```text
+Model: loopback Ollama
+Knowledge: local Shared or agent-private Vault
+Capabilities: doc_list, doc_search, doc_inspect as needed
+Web: disabled
+MCP: disabled
+Channels: dashboard only
+Sandbox: strict
+```
+
+This can keep document and model traffic local, subject to the local model implementation and host security.
+
+### Hosted research assistant
+
+```text
+Model: hosted provider
+Knowledge: local Vault
+Web: approved search and fetch
+MCP: none
+Terminal: disabled
+```
+
+The provider receives selected document excerpts, fetched text, and conversation context. Search and target websites receive requests separately.
+
+### Messaging automation
+
+```text
+Ingress: Telegram or Zalo
+Model: hosted provider
+MCP: external project service
+Approval policy: operator or deny
+```
+
+The messaging platform, model provider, and MCP service each receive different parts of the workflow. There is no meaningful “data never leaves” claim for this configuration.
+
+## Operator privacy checklist
+
+- Identify every configured external endpoint.
+- Review provider retention and training settings.
+- Keep secrets out of prompts, memory, skills, and documents.
+- Use agent-private Knowledge scopes when content is not intended for every agent.
+- Keep external service credentials least-privilege.
+- Disable unused web, MCP, and channel capabilities.
+- Use strict sandbox mode and understand platform read behavior.
+- Inspect model context, loaded tools, and syscall traces.
+- Encrypt backup destinations.
+- Revoke upstream credentials after any suspected disclosure.
+- Protect the OS account and enable full-disk encryption.
+
+Local-first means the operator chooses and can inspect the boundaries. It does not eliminate them.

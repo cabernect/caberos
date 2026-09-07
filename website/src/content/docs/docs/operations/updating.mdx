@@ -1,0 +1,22 @@
+---
+title: Updating CaberOS
+description: Install a newer desktop build while preserving local data.
+---
+
+CaberOS desktop releases include signed updater artifacts for Apple Silicon. The updater checks the configured release endpoint and verifies the artifact before installation.
+
+## Update from Settings
+
+1. Open **Settings**.
+2. Open the **About** section.
+3. Choose **Check for Updates**.
+4. Review the version and release notes.
+5. Choose the explicit restart action after the download completes.
+
+The desktop shell stops the bundled gateway before restarting the application. Your application data directory remains separate from the application bundle.
+
+## Manual update
+
+You can also download a newer DMG from [GitHub Releases](https://github.com/cabernect/caberos/releases), quit CaberOS, and replace the application in `/Applications`.
+
+Before a major migration, create a backup and verify that the database and secret key are included in the expected application data directory.

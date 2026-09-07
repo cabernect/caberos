@@ -1,0 +1,175 @@
+---
+title: Permissions and authority
+description: Understand grants, approvals, subjects, credentials, sandboxing, and audit decisions.
+---
+
+CaberOS treats every model-requested action as a proposal. Before an operation executes, the syscall mediator evaluates the request against the agent configuration and runtime policy.
+
+This boundary is the reason a prompt instruction is not equivalent to authority: even if a model is persuaded to request an action, CaberOS still decides whether that request is permitted.
+
+## The mediation sequence
+
+For each capability call, CaberOS:
+
+1. Resolves the capability by its registered name.
+2. Checks the agent’s capability grant.
+3. If the call comes from a sub-agent, intersects it with the parent agent’s grants.
+4. Resolves the subject from the session when the capability is subject-scoped.
+5. Evaluates approval policy.
+6. Resolves MCP bindings and injects credentials when required.
+7. Executes the operation with the configured workspace and sandbox mode.
+8. Writes an allowed or denied audit record with timing and result metadata.
+
+A failure at any policy step produces a denied result. The model receives that result and can explain it or choose an authorized alternative.
+
+## Authorization and approval are different
+
+- **Authorization** answers: “May this agent use this capability at all?”
+- **Approval** answers: “Must an operator confirm this particular invocation?”
+- **Schema visibility** answers: “Does the model currently have the parameter schema needed to request it?”
+
+All applicable checks must pass. An approval cannot grant a capability that is not authorized, and loading a schema cannot bypass an approval.
+
+### Example
+
+Suppose an agent requests:
+
+```text
+terminal({ command: "npm test" })
+```
+
+The outcome depends on separate settings:
+
+- If `terminal` is **Not permitted**, the call is denied without becoming executable.
+- If `terminal` is permitted but not loaded, the agent must discover and load it first when using on-demand mode.
+- If it is permitted and requires approval, the run pauses for a decision.
+- If approved, the command still runs under the configured sandbox and workspace rules.
+- The final allow or deny decision is recorded in the syscall log.
+
+## Capability grants
+
+A grant stores:
+
+- the capability name;
+- whether it is enabled;
+- its subject scope;
+- whether approval is required;
+- whether its full schema is always loaded.
+
+MCP authority can be granted one tool at a time or at server level. A server grant covers tools discovered from that server, but disabled servers and server tool filters remain effective.
+
+When an agent has no explicit capability list, CaberOS keeps backward-compatible access to built-in capabilities but does not automatically grant MCP tools. New configurations should use explicit grants so authority is easy to review.
+
+## Subject binding
+
+Memory capabilities can be subject-scoped. CaberOS obtains the contact from the current session and injects its internal identifier after the model has made the request.
+
+The model does not receive a parameter such as `contact_id` that it can change to target someone else. If no valid session/contact binding exists, the call is denied.
+
+Subject binding is especially important for external channels, where different platform users can reach the same configured agent.
+
+## Approvals
+
+For dashboard conversations, an approval request pauses the run and shows:
+
+- the capability name;
+- the requested arguments;
+- the run and agent;
+- actions to approve or reject.
+
+Rejecting the request returns a denied tool result; it does not necessarily cancel the entire run. The model may continue without that action.
+
+### Remembering an approval
+
+An approval can optionally be remembered for the current session. Available matching scopes are:
+
+| Scope | What is remembered |
+| --- | --- |
+| Exact | The same capability with the same arguments. |
+| Same verb | The same capability and command verb, with other arguments allowed to differ. |
+| Pattern | Calls matching a supplied wildcard pattern. |
+| Capability | Any arguments for that capability in the session. |
+
+Use the narrowest scope that fits the immediate workflow. Remembered approvals are session-scoped runtime state; they do not modify the agent’s permanent capability grant.
+
+## External-channel approval policy
+
+A Telegram, Discord, or Zalo conversation cannot always stop and display an inline desktop prompt. CaberOS therefore applies a configured channel policy when an approved capability is requested:
+
+- **Deny** rejects calls that would require approval.
+- **Operator** creates a pending request for the dashboard operator and waits.
+- **Auto-approve** allows the call to continue without a prompt.
+
+Unknown or missing policy defaults to denial. A channel policy does not authorize a capability absent from the agent configuration.
+
+## YOLO mode
+
+The Capabilities screen includes a global **YOLO Mode** switch. When enabled, CaberOS skips approval gates and executes permitted calls immediately.
+
+YOLO mode does **not** bypass:
+
+- capability grants;
+- parent/sub-agent authority intersection;
+- subject resolution;
+- MCP server availability or tool filters;
+- credential lookup;
+- sandbox path checks;
+- audit recording.
+
+Because it removes the operator confirmation layer for all agents, keep it disabled for normal use.
+
+## Credential custody
+
+Provider keys and MCP credentials are encrypted in the local secret store. Normal provider and MCP API responses report whether a credential exists rather than returning its plaintext value.
+
+For MCP calls, CaberOS resolves the server and binding, retrieves the credential, and injects it through the configured environment variable or HTTP header at execution time. The model-facing capability arguments do not contain the stored secret.
+
+Encryption at rest protects against casual database disclosure, but a process running as the same local user may still access application data. Protect the operating-system account and backups accordingly.
+
+## Sandbox and filesystem scope
+
+Capability permission and filesystem containment solve different problems:
+
+- A grant controls whether the model may request `read_file`, `write_file`, or `terminal`.
+- **Strict** sandbox mode confines those operations to the workspace.
+- **Open** mode allows broader filesystem paths.
+- Terminal approval controls whether a particular command may start.
+
+Prefer **Strict** mode. Open mode deliberately weakens host-filesystem containment and should be treated as a high-trust configuration.
+
+Shell network behavior also depends on the active platform sandbox. Egress metadata and approvals do not create a network connection by themselves.
+
+## Sub-agent narrowing
+
+A temporary sub-agent has its own requested capability list, but each call is also checked against the parent configuration. Effective authority is the intersection: a child cannot widen the parent’s grants.
+
+Sub-agent tool calls are associated with the parent run and tagged with the sub-agent ID so they remain visible in streaming output and audit records.
+
+## Audit records
+
+Every mediated success or denial records operational metadata including:
+
+- run and agent ID;
+- sub-agent ID when applicable;
+- capability name;
+- resolved subject when applicable;
+- allowed or denied status;
+- denial reason;
+- arguments and bounded result data;
+- latency and capability cost fields;
+- timestamp.
+
+Inspect these records in **Observability → Syscall Log** or inside run detail. A denied record is often the fastest way to distinguish missing permission, approval rejection, unavailable MCP state, and execution failure.
+
+## Recommended policy
+
+1. Use explicit capability grants.
+2. Keep large integrations on demand.
+3. Require approval for egress and consequential writes.
+4. Keep strict sandbox mode.
+5. Use exact or pattern-scoped remembered approvals instead of capability-wide approval where possible.
+6. Set external channels to deny until their workflows are tested.
+7. Keep YOLO mode off.
+8. Review denied calls and unexpected successes in the syscall log.
+
+Permissions constrain what can execute; they do not prove that an allowed action is correct. Continue to review model output and external-service permissions for consequential workflows.

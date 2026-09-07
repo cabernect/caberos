@@ -1,0 +1,1632 @@
+---
+import MarketingLayout from "../layouts/MarketingLayout.astro";
+import Icon from "../components/Icon.astro";
+import { releaseTag, releaseUrl } from "../release";
+
+const repositoryUrl = "https://github.com/cabernect/caberos";
+
+const features = [
+  {
+    icon: "shield",
+    kicker: "Control",
+    title: "Permissioned by design",
+    description: "Every consequential capability call crosses one mediation boundary. Approve, deny, remember, and audit it on your terms.",
+  },
+  {
+    icon: "layers",
+    kicker: "Context",
+    title: "Memory that belongs to you",
+    description: "Combine working memory, durable notes, knowledge, and skills without turning every prompt into a data dump.",
+  },
+  {
+    icon: "spark",
+    kicker: "Agents",
+    title: "Agents are configurations",
+    description: "Shape identity, model, task, limits, and capabilities as versioned data you can duplicate, export, and roll back.",
+  },
+  {
+    icon: "plug",
+    kicker: "Integrations",
+    title: "Connect through MCP",
+    description: "Bring your tools and services through stdio or HTTP MCP servers, with encrypted credentials and OAuth recovery.",
+  },
+  {
+    icon: "activity",
+    kicker: "Visibility",
+    title: "See what happened",
+    description: "Follow runs, tool calls, approvals, costs, failures, and heartbeat activity from one observability surface.",
+  },
+  {
+    icon: "terminal",
+    kicker: "Workspace",
+    title: "A place to operate",
+    description: "Agents can work with files and shell commands inside a mediated, sandboxed workspace instead of an opaque chat box.",
+  },
+] as const;
+
+const principles = [
+  ["01", "Local-first", "Your configuration, memory, credentials, workspaces, and audit history live on your machine."],
+  ["02", "One boundary", "Tools, approvals, credentials, subjects, and egress are handled at the syscall layer."],
+  ["03", "Progressive", "Search the capability catalog first. Load full schemas only when a run needs them."],
+  ["04", "Open source", "Inspect the runtime, run it locally, and keep your agent system close to the data it serves."],
+];
+---
+
+<MarketingLayout
+  title="CaberOS — Your agents. Your machine. Your rules."
+  description="CaberOS is an open-source, local-first operating system for personal AI agents with memory, tools, permissions, and observability."
+>
+  <div class="announcement container">
+    <span class="announcement-mark" aria-hidden="true"></span>
+    <span>{releaseTag} is available for macOS Apple Silicon</span>
+    <a href={releaseUrl}>View release <Icon name="arrow" size={15} /></a>
+  </div>
+
+  <section class="hero" aria-labelledby="hero-title">
+    <div class="container hero-grid">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="eyebrow-line"></span>Local-first agent runtime</p>
+        <h1 id="hero-title">Give your agents <span>room to act.</span></h1>
+        <p class="hero-lead">
+          CaberOS is an open-source operating system for personal AI agents. Give them memory, tools, integrations, and workspaces—while keeping every meaningful action visible and permissioned.
+        </p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="/download/">
+            Download {releaseTag}
+            <Icon name="download" size={17} />
+          </a>
+          <a class="button button-secondary" href="/docs/">
+            Read the docs
+            <Icon name="arrow" size={17} />
+          </a>
+        </div>
+        <div class="hero-facts" aria-label="Product facts">
+          <span><i class="fact-dot"></i>macOS ARM64</span>
+          <span><i class="fact-dot"></i>Open source</span>
+          <span><i class="fact-dot"></i>No Python required</span>
+        </div>
+      </div>
+
+      <div class="hero-product" aria-label="CaberOS product preview">
+        <div class="product-window actual-product-window">
+          <img src="/images/product/agents.png" alt="CaberOS agent dashboard showing configured agents and workspace navigation" />
+        </div>
+        <p class="product-caption"><span class="caption-line"></span>Real CaberOS interface: agents, workspace, and configuration at a glance.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="principles-section" aria-label="CaberOS principles">
+    <div class="container principle-grid">
+      {principles.map(([number, title, description]) => (
+        <article class="principle">
+          <span class="principle-number mono">{number}</span>
+          <h2>{title}</h2>
+          <p>{description}</p>
+        </article>
+      ))}
+    </div>
+  </section>
+
+  <section class="section product-section" id="product" aria-labelledby="product-title">
+    <div class="container">
+      <div class="section-intro">
+        <p class="eyebrow"><span class="eyebrow-line"></span>Why an agent OS?</p>
+        <h2 id="product-title">Models can think.<br /><span>CaberOS gives them a place to operate.</span></h2>
+        <p>
+          A chat window is not an operating environment. CaberOS owns the layer around the model: identity, permissions, memory, workspaces, integrations, and the record of what happened.
+        </p>
+      </div>
+
+      <div class="architecture-card">
+        <div class="architecture-copy">
+          <span class="card-kicker mono">THE EXECUTION PATH</span>
+          <h3>Every action has a boundary.</h3>
+          <p>Agents can reason freely, but actions cross an explicit boundary where CaberOS resolves the subject, checks authority, injects credentials, gates approval, and records the result.</p>
+          <a class="text-link" href="/docs/core-concepts/permissions/">Understand the permission model <Icon name="arrow" size={15} /></a>
+        </div>
+        <div class="architecture-flow" aria-label="Agent execution path">
+          <div class="flow-node"><span>01</span><b>Model</b><small>reasons about the task</small></div>
+          <div class="flow-connector"><i></i><i></i><i></i></div>
+          <div class="flow-node emphasized"><span>02</span><b>Syscall layer</b><small>checks and mediates</small></div>
+          <div class="flow-connector"><i></i><i></i><i></i></div>
+          <div class="flow-node"><span>03</span><b>Your resources</b><small>workspace · memory · tools</small></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section features-section" aria-labelledby="features-title">
+    <div class="container">
+      <div class="section-heading-row">
+        <div>
+          <p class="eyebrow"><span class="eyebrow-line"></span>Built for actual work</p>
+          <h2 id="features-title">The pieces around the prompt matter.</h2>
+        </div>
+        <p class="section-side-copy">Start with one agent. Add context and capability as your work demands it—without giving the whole system away at once.</p>
+      </div>
+      <div class="feature-grid">
+        {features.map((feature) => (
+          <article class="feature-card">
+            <div class="feature-icon"><Icon name={feature.icon} size={22} /></div>
+            <span class="card-kicker mono">{feature.kicker}</span>
+            <h3>{feature.title}</h3>
+            <p>{feature.description}</p>
+          </article>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <section class="section progressive-section" aria-labelledby="progressive-title">
+    <div class="container split-grid">
+      <div class="split-copy">
+        <p class="eyebrow"><span class="eyebrow-line"></span>Progressive disclosure</p>
+        <h2 id="progressive-title">More tools should not mean more noise.</h2>
+        <p>
+          Large MCP servers can expose hundreds of tools. CaberOS separates the permission ceiling from schema visibility, so agents can discover what is allowed without paying the full context cost on every turn.
+        </p>
+        <a class="text-link" href="/docs/core-concepts/capabilities/">Explore capabilities <Icon name="arrow" size={15} /></a>
+      </div>
+      <div class="context-card" aria-label="Capability visibility example">
+        <div class="context-head"><span class="card-kicker mono">CAPABILITY CATALOG</span><span class="context-count mono">03 / 128 visible</span></div>
+        <div class="context-row always"><span class="visibility-marker"></span><div><b>read_file</b><small>workspace inspection</small></div><em>always</em></div>
+        <div class="context-row on-demand"><span class="visibility-marker"></span><div><b>notion.search</b><small>search connected pages</small></div><em>on demand</em></div>
+        <div class="context-row on-demand"><span class="visibility-marker"></span><div><b>github.create_issue</b><small>write to repository</small></div><em>on demand</em></div>
+        <div class="context-row denied"><span class="visibility-marker"></span><div><b>shell.open_network</b><small>not granted to this agent</small></div><em>not permitted</em></div>
+        <div class="context-footer"><span class="context-bar"><i></i></span><span class="mono">schemas loaded only when needed</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section security-section" id="security" aria-labelledby="security-title">
+    <div class="container">
+      <div class="security-card">
+        <div class="security-heading">
+          <div class="feature-icon dark-icon"><Icon name="shield" size={24} /></div>
+          <p class="eyebrow light-eyebrow"><span class="eyebrow-line"></span>A clear local-first model</p>
+          <h2 id="security-title">Control starts with knowing what leaves the machine.</h2>
+          <p>Local-first does not mean pretending cloud providers are local. CaberOS makes the boundary explicit.</p>
+        </div>
+        <div class="security-columns">
+          <div>
+            <span class="security-label mono">STAYS HERE</span>
+            <ul>
+              <li>Agent configuration and identity</li>
+              <li>Memory and knowledge documents</li>
+              <li>Credentials and workspace files</li>
+              <li>Run history and audit records</li>
+            </ul>
+          </div>
+          <div>
+            <span class="security-label mono">FOLLOWS YOUR CONFIGURATION</span>
+            <ul>
+              <li>Prompts sent to your chosen model provider</li>
+              <li>Requests sent to connected MCP services</li>
+              <li>Messages delivered through enabled channels</li>
+            </ul>
+          </div>
+        </div>
+        <a class="light-link" href="/docs/security/local-first/">Read the security model <Icon name="arrow" size={15} /></a>
+      </div>
+    </div>
+  </section>
+
+  <section class="section gallery-section" aria-labelledby="gallery-title">
+    <div class="container">
+      <div class="section-intro compact-intro">
+        <p class="eyebrow"><span class="eyebrow-line"></span>Inside the dashboard</p>
+        <h2 id="gallery-title">A calm surface for a complex system.</h2>
+      </div>
+      <div class="gallery-grid">
+        <figure class="gallery-feature">
+          <div class="image-frame"><img src="/images/product/chat.png" alt="CaberOS conversation view showing an agent response and tool activity" loading="lazy" /></div>
+          <figcaption><b>Conversation</b><span>Stream responses, thinking, tools, approvals, and elicitation in context.</span></figcaption>
+        </figure>
+        <figure>
+          <div class="image-frame"><img src="/images/product/providers.png" alt="CaberOS providers and model settings screen" loading="lazy" /></div>
+          <figcaption><b>Providers and models</b><span>Connect the model transport your agent should use.</span></figcaption>
+        </figure>
+        <figure>
+          <div class="image-frame"><img src="/images/product/observability.png" alt="CaberOS observability dashboard" loading="lazy" /></div>
+          <figcaption><b>Observability</b><span>Inspect runs, audit records, health, and spend.</span></figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <section class="closing-section">
+    <div class="container closing-card">
+      <span class="closing-mark"><Icon name="spark" size={25} /></span>
+      <p class="eyebrow"><span class="eyebrow-line"></span>Start with one deliberate agent</p>
+      <h2>Build an agent you can actually inspect.</h2>
+      <p>Download CaberOS for Apple Silicon, or read the guide before you begin.</p>
+      <div class="hero-actions centered-actions">
+        <a class="button button-primary" href="/download/">Download {releaseTag} <Icon name="download" size={17} /></a>
+        <a class="button button-secondary" href={repositoryUrl}>View on GitHub <Icon name="github" size={17} /></a>
+      </div>
+    </div>
+  </section>
+</MarketingLayout>
+
+<style>
+  .announcement {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding-top: 26px;
+    color: var(--ink-2);
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 10px;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }
+
+  .announcement-mark,
+  .fact-dot,
+  .window-live i,
+  .mock-pulse,
+  .audit-status i,
+  .event-dot,
+  .mock-cursor {
+    display: inline-block;
+    border-radius: 999px;
+  }
+
+  .announcement-mark {
+    width: 7px;
+    height: 7px;
+    background: var(--olive);
+  }
+
+  .announcement a,
+  .text-link,
+  .light-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--olive-dark);
+    font-weight: 600;
+    text-transform: none;
+    transition: color 180ms ease;
+  }
+
+  .announcement a:hover,
+  .text-link:hover,
+  .light-link:hover {
+    color: var(--olive);
+  }
+
+  .hero {
+    padding: 86px 0 92px;
+  }
+
+  .hero-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 0.83fr) minmax(520px, 1.17fr);
+    align-items: center;
+    gap: 70px;
+  }
+
+  .eyebrow {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin: 0 0 22px;
+    color: var(--olive-dark);
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+  }
+
+  .eyebrow-line {
+    display: inline-block;
+    width: 24px;
+    height: 1px;
+    background: var(--olive);
+  }
+
+  h1,
+  h2,
+  h3,
+  p {
+    margin-top: 0;
+  }
+
+  h1,
+  h2,
+  h3 {
+    letter-spacing: -0.045em;
+  }
+
+  h1 {
+    max-width: 620px;
+    margin-bottom: 25px;
+    font-size: clamp(3.4rem, 5.8vw, 5.7rem);
+    font-weight: 600;
+    line-height: 0.98;
+  }
+
+  h1 span,
+  .section-intro h2 span {
+    color: var(--olive);
+  }
+
+  .hero-lead {
+    max-width: 540px;
+    margin-bottom: 31px;
+    color: var(--ink-2);
+    font-size: 17px;
+    line-height: 1.72;
+  }
+
+  .hero-actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
+    min-height: 44px;
+    padding: 0 17px;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    font-size: 13px;
+    font-weight: 600;
+    transition: background 180ms ease, border-color 180ms ease, color 180ms ease;
+  }
+
+  .button-primary {
+    background: var(--ink);
+    color: var(--white);
+  }
+
+  .button-primary:hover {
+    background: var(--olive-dark);
+  }
+
+  .button-secondary {
+    border-color: var(--line);
+    background: var(--white);
+    color: var(--ink);
+  }
+
+  .button-secondary:hover {
+    border-color: var(--olive);
+    color: var(--olive-dark);
+  }
+
+  .hero-facts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 15px;
+    margin-top: 25px;
+    color: var(--ink-3);
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 10px;
+  }
+
+  .hero-facts span {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .fact-dot {
+    width: 5px;
+    height: 5px;
+    background: var(--olive);
+  }
+
+  .product-window {
+    overflow: hidden;
+    border: 1px solid #2d3024;
+    border-radius: 9px;
+    background: #171914;
+    box-shadow: var(--shadow);
+    transform: rotate(1.1deg);
+  }
+
+  .actual-product-window {
+    max-height: 330px;
+    background: var(--white);
+  }
+
+  .actual-product-window img {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+
+  .window-topbar {
+    display: flex;
+    align-items: center;
+    min-height: 38px;
+    padding: 0 13px;
+    border-bottom: 1px solid #303329;
+    color: #8f9784;
+    font-size: 9px;
+  }
+
+  .window-controls {
+    display: flex;
+    gap: 5px;
+    margin-right: 13px;
+  }
+
+  .window-controls i {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #484c3f;
+  }
+
+  .window-title {
+    color: #b1b9a4;
+    font-size: 9px;
+  }
+
+  .window-live {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-left: auto;
+    color: #9fac84;
+    font-size: 8px;
+  }
+
+  .window-live i {
+    width: 5px;
+    height: 5px;
+    background: #9ab846;
+  }
+
+  .window-body {
+    display: grid;
+    grid-template-columns: 126px minmax(0, 1fr) 142px;
+    min-height: 360px;
+  }
+
+  .mock-sidebar,
+  .mock-audit {
+    background: #1d2019;
+  }
+
+  .mock-sidebar {
+    padding: 19px 10px;
+    border-right: 1px solid #303329;
+  }
+
+  .mock-label,
+  .mock-overline,
+  .card-kicker,
+  .security-label {
+    color: #7d866f;
+    font-size: 8px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+  }
+
+  .mock-label-spaced {
+    margin-top: 26px;
+  }
+
+  .mock-agent {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-top: 11px;
+    padding: 7px 6px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: #aeb6a3;
+    font-size: 9px;
+  }
+
+  .mock-agent.active {
+    border-color: #3a4523;
+    background: #27301d;
+  }
+
+  .mock-avatar {
+    display: grid;
+    flex: none;
+    width: 20px;
+    height: 20px;
+    place-items: center;
+    border-radius: 5px;
+    background: #8aa52f;
+    color: #18200f;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 9px;
+    font-weight: 700;
+  }
+
+  .mock-avatar.muted {
+    background: #3c4438;
+    color: #acb3a4;
+  }
+
+  .mock-agent b,
+  .mock-agent small {
+    display: block;
+  }
+
+  .mock-agent b {
+    color: #d0d6c8;
+    font-size: 8px;
+    font-weight: 600;
+  }
+
+  .mock-agent small {
+    margin-top: 2px;
+    color: #6d7765;
+    font-size: 7px;
+  }
+
+  .mock-pulse {
+    width: 5px;
+    height: 5px;
+    margin-left: auto;
+    background: #a8c04a;
+  }
+
+  .mock-nav {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 7px;
+    color: #76806f;
+    font-size: 8px;
+  }
+
+  .mock-nav span {
+    width: 5px;
+    height: 5px;
+    border: 1px solid #66705a;
+    border-radius: 1px;
+  }
+
+  .mock-nav.active-nav {
+    color: #cad2bd;
+  }
+
+  .mock-nav.active-nav span {
+    border-color: #a8c04a;
+    background: #a8c04a;
+  }
+
+  .mock-sidebar-bottom {
+    margin-top: 60px;
+    padding: 9px 7px;
+    border-top: 1px solid #303329;
+    color: #606a58;
+    font-size: 8px;
+  }
+
+  .mock-chat {
+    min-width: 0;
+    background: #24271f;
+  }
+
+  .mock-chat-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 19px 18px 14px;
+    border-bottom: 1px solid #303329;
+  }
+
+  .mock-chat-head b {
+    display: block;
+    margin-top: 6px;
+    color: #dfe5d8;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+
+  .mock-chip {
+    padding: 5px 7px;
+    border: 1px solid #48523a;
+    border-radius: 3px;
+    color: #acbd78;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 7px;
+  }
+
+  .mock-messages {
+    padding: 17px 18px;
+  }
+
+  .mock-message {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 15px;
+    color: #aeb7a7;
+    font-size: 9px;
+    line-height: 1.55;
+  }
+
+  .mock-message p {
+    margin: 0;
+  }
+
+  .user-message {
+    max-width: 81%;
+    margin-left: auto;
+    padding: 9px 10px;
+    border: 1px solid #3c4535;
+    border-radius: 5px 5px 1px 5px;
+    background: #30372a;
+    color: #d5dccb;
+  }
+
+  .assistant-message {
+    color: #b8c1b2;
+  }
+
+  .message-mark {
+    display: grid;
+    flex: none;
+    width: 17px;
+    height: 17px;
+    place-items: center;
+    border-radius: 4px;
+    background: #8aa52f;
+    color: #1a2110;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 8px;
+    font-weight: 700;
+  }
+
+  .mock-tool {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-top: 9px;
+    padding: 7px 8px;
+    border: 1px solid #3b4535;
+    border-radius: 4px;
+    background: #292e25;
+  }
+
+  .tool-icon {
+    display: grid;
+    width: 18px;
+    height: 18px;
+    place-items: center;
+    border-radius: 3px;
+    background: #39482a;
+    color: #a8c04a;
+  }
+
+  .mock-tool b,
+  .mock-tool small {
+    display: block;
+  }
+
+  .mock-tool b {
+    color: #cbd7b1;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 8px;
+    font-weight: 500;
+  }
+
+  .mock-tool small {
+    margin-top: 2px;
+    color: #76816c;
+    font-size: 7px;
+  }
+
+  .mock-tool em {
+    margin-left: auto;
+    color: #9eb35d;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 7px;
+    font-style: normal;
+  }
+
+  .mock-cursor {
+    width: 2px;
+    height: 10px;
+    margin-left: 2px;
+    vertical-align: middle;
+    background: #a8c04a;
+  }
+
+  .mock-input {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin: 0 15px 14px;
+    padding: 9px 9px 9px 11px;
+    border: 1px solid #49513f;
+    border-radius: 4px;
+    color: #687367;
+    font-size: 8px;
+  }
+
+  .mock-send {
+    display: grid;
+    width: 19px;
+    height: 19px;
+    place-items: center;
+    border-radius: 3px;
+    background: #8aa52f;
+    color: #1b2112;
+  }
+
+  .mock-audit {
+    padding: 19px 12px;
+    border-left: 1px solid #303329;
+  }
+
+  .audit-status {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin: 15px 0 20px;
+    color: #bdd477;
+    font-size: 8px;
+  }
+
+  .audit-status i {
+    width: 6px;
+    height: 6px;
+    background: #a8c04a;
+  }
+
+  .audit-status small {
+    margin-left: auto;
+    color: #687365;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 7px;
+  }
+
+  .audit-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 5px;
+    padding: 7px 0;
+    border-bottom: 1px solid #303329;
+    color: #76806e;
+    font-size: 7px;
+  }
+
+  .audit-row b {
+    color: #c4cdbb;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 7px;
+    font-weight: 500;
+  }
+
+  .green-text {
+    color: #a7c06a !important;
+  }
+
+  .audit-rule {
+    height: 1px;
+    margin: 21px 0 13px;
+    background: #303329;
+  }
+
+  .audit-event {
+    display: flex;
+    gap: 7px;
+    margin: 11px 0;
+  }
+
+  .event-dot {
+    flex: none;
+    width: 5px;
+    height: 5px;
+    margin-top: 3px;
+    background: #656d5c;
+  }
+
+  .event-dot.olive {
+    background: #a8c04a;
+  }
+
+  .audit-event b,
+  .audit-event small {
+    display: block;
+  }
+
+  .audit-event b {
+    color: #b8c3af;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 7px;
+    font-weight: 500;
+  }
+
+  .audit-event small {
+    margin-top: 3px;
+    color: #697466;
+    font-size: 7px;
+  }
+
+  .product-caption {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 9px;
+    margin: 17px 5px 0;
+    color: var(--ink-3);
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 9px;
+  }
+
+  .caption-line {
+    display: inline-block;
+    width: 30px;
+    height: 1px;
+    background: var(--line);
+  }
+
+  .principles-section {
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    background: rgba(255, 255, 255, 0.42);
+  }
+
+  .principle-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+  }
+
+  .principle {
+    min-height: 184px;
+    padding: 27px 27px 25px 0;
+    border-right: 1px solid var(--line);
+  }
+
+  .principle + .principle {
+    padding-left: 27px;
+  }
+
+  .principle:last-child {
+    border-right: 0;
+  }
+
+  .principle-number {
+    color: var(--olive);
+    font-size: 10px;
+  }
+
+  .principle h2 {
+    margin: 25px 0 8px;
+    font-size: 18px;
+    font-weight: 600;
+  }
+
+  .principle p {
+    max-width: 230px;
+    margin-bottom: 0;
+    color: var(--ink-2);
+    font-size: 12px;
+    line-height: 1.62;
+  }
+
+  .section {
+    padding: 116px 0;
+  }
+
+  .section-intro {
+    max-width: 720px;
+  }
+
+  .section-intro h2,
+  .split-copy h2,
+  .section-heading-row h2,
+  .security-heading h2,
+  .closing-card h2 {
+    margin-bottom: 21px;
+    font-size: clamp(2.3rem, 4vw, 4rem);
+    font-weight: 600;
+    line-height: 1.03;
+  }
+
+  .section-intro > p:last-child,
+  .split-copy > p,
+  .section-side-copy {
+    color: var(--ink-2);
+    font-size: 16px;
+    line-height: 1.72;
+  }
+
+  .architecture-card {
+    display: grid;
+    grid-template-columns: 0.75fr 1.25fr;
+    gap: 50px;
+    align-items: center;
+    margin-top: 64px;
+    padding: 38px;
+    border: 1px solid var(--line);
+    background: var(--white);
+  }
+
+  .architecture-copy h3 {
+    margin: 17px 0 12px;
+    font-size: 25px;
+    font-weight: 600;
+  }
+
+  .architecture-copy p {
+    margin-bottom: 20px;
+    color: var(--ink-2);
+    font-size: 13px;
+    line-height: 1.7;
+  }
+
+  .text-link {
+    font-size: 12px;
+  }
+
+  .architecture-flow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    min-height: 215px;
+    padding: 24px 12px;
+    background: var(--paper);
+  }
+
+  .flow-node {
+    min-width: 119px;
+    padding: 16px 13px;
+    border: 1px solid var(--line);
+    background: var(--white);
+  }
+
+  .flow-node.emphasized {
+    border-color: var(--olive);
+    box-shadow: 0 0 0 4px var(--olive-soft);
+  }
+
+  .flow-node span,
+  .flow-node b,
+  .flow-node small {
+    display: block;
+  }
+
+  .flow-node span {
+    margin-bottom: 25px;
+    color: var(--olive);
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 9px;
+  }
+
+  .flow-node b {
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .flow-node small {
+    margin-top: 5px;
+    color: var(--ink-3);
+    font-size: 9px;
+    line-height: 1.4;
+  }
+
+  .flow-connector {
+    display: flex;
+    gap: 3px;
+  }
+
+  .flow-connector i {
+    width: 4px;
+    height: 1px;
+    background: var(--olive);
+  }
+
+  .features-section {
+    background: var(--paper-strong);
+  }
+
+  .section-heading-row {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 50px;
+    margin-bottom: 48px;
+  }
+
+  .section-heading-row h2 {
+    max-width: 610px;
+    margin-bottom: 0;
+  }
+
+  .section-side-copy {
+    max-width: 310px;
+    margin-bottom: 0;
+    font-size: 13px;
+  }
+
+  .feature-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1px;
+    border: 1px solid var(--line);
+    background: var(--line);
+  }
+
+  .feature-card {
+    min-height: 270px;
+    padding: 26px 25px;
+    background: var(--white);
+  }
+
+  .feature-icon {
+    display: grid;
+    width: 44px;
+    height: 44px;
+    margin-bottom: 29px;
+    place-items: center;
+    border: 1px solid #d5daba;
+    border-radius: 6px;
+    background: var(--olive-soft);
+    color: var(--olive-dark);
+  }
+
+  .feature-card h3 {
+    margin: 12px 0 9px;
+    font-size: 19px;
+    font-weight: 600;
+  }
+
+  .feature-card p {
+    max-width: 290px;
+    margin-bottom: 0;
+    color: var(--ink-2);
+    font-size: 13px;
+    line-height: 1.65;
+  }
+
+  .progressive-section {
+    background: var(--paper);
+  }
+
+  .split-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 0.8fr) minmax(430px, 1.2fr);
+    align-items: center;
+    gap: 90px;
+  }
+
+  .split-copy h2 {
+    max-width: 470px;
+  }
+
+  .split-copy > p {
+    max-width: 500px;
+    margin-bottom: 22px;
+  }
+
+  .context-card {
+    padding: 25px;
+    border: 1px solid var(--line);
+    background: var(--white);
+    box-shadow: var(--shadow);
+  }
+
+  .context-head,
+  .context-row,
+  .context-footer {
+    display: flex;
+    align-items: center;
+  }
+
+  .context-head {
+    justify-content: space-between;
+    padding-bottom: 18px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .context-count {
+    color: var(--ink-3);
+    font-size: 9px;
+  }
+
+  .context-row {
+    gap: 12px;
+    padding: 16px 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .visibility-marker {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--ink-3);
+  }
+
+  .context-row.always .visibility-marker {
+    background: var(--olive);
+  }
+
+  .context-row.on-demand .visibility-marker {
+    border: 1px solid var(--amber);
+    background: transparent;
+  }
+
+  .context-row.denied .visibility-marker {
+    background: var(--line);
+  }
+
+  .context-row div {
+    flex: 1;
+  }
+
+  .context-row b,
+  .context-row small {
+    display: block;
+  }
+
+  .context-row b {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 11px;
+    font-weight: 500;
+  }
+
+  .context-row small {
+    margin-top: 4px;
+    color: var(--ink-3);
+    font-size: 11px;
+  }
+
+  .context-row em {
+    padding: 5px 7px;
+    border-radius: 3px;
+    background: var(--paper);
+    color: var(--ink-2);
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 8px;
+    font-style: normal;
+  }
+
+  .context-row.always em {
+    background: var(--olive-soft);
+    color: var(--olive-dark);
+  }
+
+  .context-row.on-demand em {
+    background: #fff7e8;
+    color: #a45f00;
+  }
+
+  .context-footer {
+    gap: 11px;
+    padding-top: 19px;
+    color: var(--ink-3);
+    font-size: 8px;
+  }
+
+  .context-bar {
+    display: block;
+    width: 80px;
+    height: 4px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: var(--paper-strong);
+  }
+
+  .context-bar i {
+    display: block;
+    width: 27%;
+    height: 100%;
+    background: var(--olive);
+  }
+
+  .security-section {
+    padding-top: 0;
+    background: var(--paper);
+  }
+
+  .security-card {
+    display: grid;
+    grid-template-columns: 0.92fr 1.08fr;
+    gap: 60px;
+    padding: 55px 60px 48px;
+    background: var(--ink);
+    color: var(--white);
+  }
+
+  :root[data-theme="dark"] .security-card {
+    background: #10140d;
+    color: #f5f5f3;
+  }
+
+  .dark-icon {
+    border-color: #4a552e;
+    background: #29321c;
+    color: #b0c95b;
+  }
+
+  .light-eyebrow {
+    color: #a8c04a;
+  }
+
+  .security-heading h2 {
+    max-width: 490px;
+    font-size: clamp(2.1rem, 3.4vw, 3.4rem);
+  }
+
+  .security-heading > p:last-child {
+    max-width: 420px;
+    margin-bottom: 0;
+    color: #a5ad9d;
+    font-size: 14px;
+    line-height: 1.7;
+  }
+
+  .security-columns {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 32px;
+    padding-top: 27px;
+  }
+
+  .security-label {
+    color: #9eaf6a;
+  }
+
+  .security-columns ul {
+    margin: 17px 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .security-columns li {
+    position: relative;
+    padding: 0 0 12px 16px;
+    color: #d1d7c9;
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  .security-columns li::before {
+    position: absolute;
+    top: 7px;
+    left: 0;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: #a8c04a;
+    content: "";
+  }
+
+  .security-columns > div:last-child li::before {
+    background: #d8a14d;
+  }
+
+  .light-link {
+    grid-column: 2;
+    justify-self: start;
+    margin-top: -4px;
+    color: #d0e18f;
+    font-size: 12px;
+  }
+
+  .gallery-section {
+    background: var(--paper-strong);
+  }
+
+  .compact-intro {
+    max-width: 600px;
+    margin-bottom: 48px;
+  }
+
+  .gallery-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+    max-width: 900px;
+    gap: 18px;
+  }
+
+  .gallery-feature {
+    grid-column: 1 / -1;
+  }
+
+  .gallery-grid figure {
+    margin: 0;
+  }
+
+  .image-frame {
+    overflow: hidden;
+    border: 1px solid var(--line);
+    background: var(--white);
+  }
+
+  .image-frame img {
+    display: block;
+    width: 100%;
+    height: auto;
+    transition: transform 400ms ease;
+  }
+
+  .gallery-grid figure:hover img {
+    transform: scale(1.015);
+  }
+
+  .gallery-grid figcaption {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding-top: 14px;
+  }
+
+  .gallery-grid figcaption b {
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .gallery-grid figcaption span {
+    color: var(--ink-2);
+    font-size: 11px;
+    line-height: 1.5;
+  }
+
+  .closing-section {
+    padding: 0 0 116px;
+    background: var(--paper-strong);
+  }
+
+  .closing-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 74px 24px 80px;
+    border-top: 1px solid var(--line);
+    text-align: center;
+  }
+
+  .closing-mark {
+    display: grid;
+    width: 52px;
+    height: 52px;
+    margin-bottom: 27px;
+    place-items: center;
+    border: 1px solid #d5daba;
+    border-radius: 8px;
+    background: var(--olive-soft);
+    color: var(--olive-dark);
+  }
+
+  .closing-card .eyebrow {
+    margin-bottom: 20px;
+  }
+
+  .closing-card h2 {
+    max-width: 650px;
+    margin-bottom: 14px;
+  }
+
+  .closing-card > p:not(.eyebrow) {
+    margin-bottom: 26px;
+    color: var(--ink-2);
+    font-size: 15px;
+  }
+
+  .centered-actions {
+    justify-content: center;
+  }
+
+  @media (max-width: 1080px) {
+    .hero-grid {
+      grid-template-columns: 1fr;
+      gap: 60px;
+    }
+
+    .hero-copy {
+      max-width: 680px;
+    }
+
+    .hero-product {
+      max-width: 780px;
+    }
+
+    .product-caption {
+      justify-content: flex-start;
+    }
+  }
+
+  @media (max-width: 900px) {
+    .architecture-card,
+    .security-card,
+    .split-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .architecture-flow {
+      min-height: 0;
+    }
+
+    .security-card {
+      gap: 30px;
+      padding: 42px 36px;
+    }
+
+    .light-link {
+      grid-column: 1;
+    }
+  }
+
+  @media (max-width: 700px) {
+    .announcement {
+      justify-content: flex-start;
+      padding-top: 20px;
+      font-size: 8px;
+    }
+
+    .announcement a {
+      margin-left: auto;
+    }
+
+    .hero {
+      padding: 64px 0 72px;
+    }
+
+    h1 {
+      font-size: clamp(3rem, 14vw, 4.5rem);
+    }
+
+    .hero-lead {
+      font-size: 15px;
+    }
+
+    .window-body {
+      grid-template-columns: 88px minmax(0, 1fr);
+    }
+
+    .mock-audit {
+      display: none;
+    }
+
+    .mock-sidebar {
+      padding-inline: 7px;
+    }
+
+    .mock-agent {
+      padding-inline: 3px;
+    }
+
+    .mock-agent span:not(.mock-avatar),
+    .mock-nav,
+    .mock-label-spaced,
+    .mock-sidebar-bottom {
+      display: none;
+    }
+
+    .mock-agent {
+      justify-content: center;
+    }
+
+    .mock-pulse {
+      display: none;
+    }
+
+    .principle-grid {
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .principle,
+    .principle + .principle {
+      min-height: 170px;
+      padding: 21px 15px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .principle:nth-child(2) {
+      border-right: 0;
+    }
+
+    .principle:nth-child(3),
+    .principle:nth-child(4) {
+      border-bottom: 0;
+    }
+
+    .principle h2 {
+      margin-top: 19px;
+      font-size: 16px;
+    }
+
+    .principle p {
+      font-size: 11px;
+    }
+
+    .section {
+      padding: 78px 0;
+    }
+
+    .section-intro h2,
+    .split-copy h2,
+    .section-heading-row h2,
+    .security-heading h2,
+    .closing-card h2 {
+      font-size: 2.45rem;
+    }
+
+    .architecture-card {
+      margin-top: 38px;
+      padding: 24px;
+    }
+
+    .architecture-flow {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .flow-node {
+      min-width: 0;
+    }
+
+    .flow-node span {
+      margin-bottom: 12px;
+    }
+
+    .flow-connector {
+      justify-content: center;
+      transform: rotate(90deg);
+    }
+
+    .section-heading-row {
+      display: block;
+      margin-bottom: 32px;
+    }
+
+    .section-side-copy {
+      margin-top: 18px;
+    }
+
+    .feature-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .feature-card {
+      min-height: 0;
+    }
+
+    .split-grid {
+      gap: 42px;
+    }
+
+    .context-card {
+      padding: 17px;
+    }
+
+    .security-card {
+      padding: 30px 23px;
+    }
+
+    .security-columns {
+      grid-template-columns: 1fr;
+      gap: 22px;
+    }
+
+    .gallery-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .closing-section {
+      padding-bottom: 78px;
+    }
+
+    .closing-card {
+      padding: 58px 10px 62px;
+    }
+  }
+</style>

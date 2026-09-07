@@ -1,0 +1,248 @@
+---
+title: MCP servers
+description: Connect stdio and HTTP MCP servers, protect credentials, and grant tools to agents.
+sidebar:
+  order: 5
+---
+
+CaberOS acts as a Model Context Protocol client. An MCP server supplies tool implementations and schemas; CaberOS owns local server configuration, process or HTTP connectivity, credential custody, agent bindings, approval policy, progressive capability discovery, and audit.
+
+Connecting a server does not automatically authorize every agent to use it.
+
+## MCP lifecycle
+
+A working integration passes through four separate states:
+
+1. **Configured** — CaberOS has a server record with a transport and connection details.
+2. **Authenticated** — required API-key or OAuth credentials exist.
+3. **Connected** — CaberOS can initialize the MCP client and discover tools.
+4. **Granted** — an agent is permitted to discover or invoke selected tools or the server.
+
+When troubleshooting, identify which stage failed rather than changing all settings at once.
+
+## Add a server manually
+
+1. Open **MCP Servers**.
+2. Select **Add MCP Server**.
+3. Enter a unique display name.
+4. Choose **stdio** or **HTTP**.
+5. Enter the command and arguments or remote URL.
+6. Add an environment template if the server expects a credential.
+7. Save the server.
+8. Configure credentials or OAuth.
+9. Connect or reconnect the server.
+10. Expand the server card and inspect discovered tools.
+
+## Transport choices
+
+### stdio
+
+CaberOS starts a local child process and exchanges MCP messages through standard input and output.
+
+Configure:
+
+- **Command** — executable such as `uvx`, `npx`, or a local binary.
+- **Arguments** — command arguments in order.
+- **Environment template** — environment variables CaberOS should construct at runtime.
+
+The command must already be installed and available to the gateway process. The desktop app may have a different `PATH` from an interactive terminal, so prefer absolute executable paths when discovery fails only in the packaged app.
+
+### HTTP
+
+CaberOS connects to the configured server URL. Use this for an MCP service already running locally or remotely.
+
+The URL must be reachable by the gateway. For a remote server, connection metadata and tool calls leave the machine, and the remote service applies its own retention and security policy.
+
+## Import JSON configuration
+
+The add form accepts CaberOS server JSON and common Claude Desktop-style `mcpServers` configuration.
+
+CaberOS-style example:
+
+```json
+{
+  "name": "project-tools",
+  "transport": "stdio",
+  "command": "uvx",
+  "args": ["project-mcp"],
+  "env_template": {
+    "PROJECT_API_KEY": "{{credential_value}}"
+  }
+}
+```
+
+HTTP example:
+
+```json
+{
+  "name": "remote-tools",
+  "transport": "http",
+  "url": "https://mcp.example.com",
+  "enabled": true
+}
+```
+
+Review imported commands and environment variables before saving. Configuration from an untrusted source can start local software or send requests to an unexpected host.
+
+## Catalog installation
+
+The MCP catalog provides curated configuration templates grouped by category. Installing a catalog entry creates a local server configuration; it does not necessarily install the underlying executable, create a vendor account, or finish authentication.
+
+After installation, inspect the generated command, arguments, URL, auth type, and environment template, then complete credentials and connect.
+
+## API-key credentials
+
+For a server with API-key authentication:
+
+1. Open its credential form.
+2. Store the required secret.
+3. Confirm that the card reports credentials present.
+4. Reconnect the server.
+
+Credentials are encrypted in CaberOS’s local secret store. Normal API responses expose `has_credentials` rather than the plaintext secret.
+
+An environment template maps the stored value into what a stdio process expects:
+
+```json
+{
+  "PROJECT_API_KEY": "{{credential_value}}"
+}
+```
+
+HTTP servers can receive credentials through their configured request headers. CaberOS resolves and injects secrets at execution time; they are not model-visible tool arguments.
+
+## OAuth
+
+For an OAuth-capable catalog or server entry:
+
+1. Select **Connect OAuth**.
+2. CaberOS starts a local authorization state and opens the provider URL.
+3. Sign in to the external provider and approve the requested scopes.
+4. The provider redirects to the CaberOS loopback callback.
+5. CaberOS exchanges the authorization code and stores tokens encrypted.
+6. The MCP card reconnects and discovers tools.
+
+The desktop callback uses the local gateway at:
+
+```text
+http://localhost:51718/api/mcp/oauth/callback
+```
+
+The OAuth attempt times out if authorization is not completed within the UI’s waiting period. Start it again rather than reusing an expired authorization page.
+
+When a provider rotates a refresh token, CaberOS stores the replacement. If refresh fails or reauthorization is required, the notification center links back to the recovery action.
+
+## Tool discovery
+
+On connection, CaberOS asks the server for its tool list and registers each tool as a capability. The server card shows:
+
+- connection and error state;
+- transport;
+- tool count;
+- authentication state;
+- each tool’s name and description;
+- parameter schema;
+- egress, subject, and approval metadata.
+
+Discovery updates the capability registry but does not grant the tools to an agent.
+
+A server tool filter can restrict which discovered tool names are registered or executable. This remains effective even when the agent has a server-level grant.
+
+## Grant tools to an agent
+
+Open **Agent Settings → Capabilities**. MCP tools are grouped by server.
+
+You can grant:
+
+- **Individual tools** — best when the agent needs only a few operations.
+- **The entire server** — useful for a cohesive server whose tool set may evolve.
+
+Then choose:
+
+- **Not permitted**;
+- **Permitted on demand**;
+- **Always available**.
+
+For large MCP servers, use on-demand mode. The agent searches compact metadata and loads only the selected schemas for that run, reducing model context usage.
+
+A server grant does not override a disabled server, failed connection, missing credential, or tool filter.
+
+## Approval policy
+
+Each MCP server and agent grant can require operator approval. Egress tools are treated conservatively when a server-level grant is first enabled.
+
+If approval is required, the invocation pauses at the normal syscall boundary. The operator reviews the MCP capability and arguments before CaberOS forwards it to the server.
+
+Disabling approval does not make an ungranted tool available. Global YOLO mode can skip approvals, but all other authority and availability checks still apply.
+
+## Capability naming
+
+CaberOS maps each discovered MCP tool to a stable capability name associated with its server. Use the exact name shown in the capability list or returned by `capabilities_search` when loading tools programmatically.
+
+Do not rely only on a vendor’s raw tool name when multiple servers may expose similarly named operations.
+
+## Disable, reconnect, or remove
+
+- **Disable** keeps the configuration but makes its MCP tools unavailable.
+- **Reconnect** restarts the connection and refreshes discovery.
+- **Remove** disconnects the server, unregisters its tools, deletes stored credentials for that server, and removes the server record.
+
+Removing a server can leave older agent configurations referring to capabilities that are no longer registered. Review affected agent capability lists afterward.
+
+## Security model
+
+CaberOS reduces credential exposure, but an MCP server remains code or a service with its own authority.
+
+Before connecting a server:
+
+1. Verify its publisher and source.
+2. Review the command, URL, requested OAuth scopes, and tool descriptions.
+3. Use a least-privilege service account or token.
+4. Apply server-side restrictions when available.
+5. Grant only needed tools to each agent.
+6. Keep consequential tools on approval.
+7. Inspect calls in the syscall log.
+
+A local stdio server runs as a local process. CaberOS capability policy controls when the model may call it; it is not a complete sandbox for arbitrary third-party server code.
+
+## Troubleshooting
+
+### Server does not connect
+
+Check the displayed connection error. For stdio, verify the executable path and arguments from the gateway environment. For HTTP, verify the URL, TLS, authentication, and network reachability.
+
+### Server connects but shows no tools
+
+Confirm the server implements MCP tool discovery, does not require another authentication step, and is not filtering out every tool. Reconnect after fixing configuration.
+
+### Tools appear but the agent cannot use them
+
+Grant the individual tool or server in **Agent Settings → Capabilities**. If it is on demand, confirm that the run searched and loaded the schema.
+
+### Tool call is denied
+
+Open the run’s syscall record. Common reasons include missing grant, parent-agent narrowing, disabled server, tool filtering, missing subject binding, and rejected approval.
+
+### OAuth does not return to CaberOS
+
+Confirm the provider allows the exact loopback redirect URI and that the desktop gateway is running on port `51718`. Restart the authorization flow if it expired.
+
+### OAuth worked and later stopped
+
+Open Notifications and the MCP server card. The refresh token may be expired or revoked; reconnect OAuth to replace it.
+
+### Packaged desktop cannot find a stdio command
+
+Desktop processes may not inherit your shell initialization. Configure an absolute command path or install the executable where the app’s gateway can resolve it.
+
+## Verify an integration
+
+After setup:
+
+1. Confirm the server is connected and lists tools.
+2. Grant one read-only tool to a test agent on demand.
+3. Ask the agent to perform a narrow test.
+4. Confirm capability search and load events.
+5. Review the approval request, if enabled.
+6. Inspect the completed syscall and result.
+7. Expand authority only after the minimal workflow succeeds.

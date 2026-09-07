@@ -1,0 +1,48 @@
+---
+title: Contributing
+description: Set up CaberOS locally and run the project checks.
+---
+
+## Setup
+
+```bash
+git clone https://github.com/cabernect/caberos.git
+cd caberos
+./scripts/install.sh
+```
+
+Use Python 3.12, `uv`, Node 22, npm, and either macOS’s sandbox support or Linux bubblewrap for sandboxed operations.
+
+## Backend checks
+
+```bash
+cd backend
+uv run pytest -v
+uv run ruff check src/ tests/
+uv run ruff format --check src/ tests/
+```
+
+## Frontend checks
+
+```bash
+cd frontend
+npm ci
+npm run lint
+npm run build
+npm run test
+```
+
+## Desktop build
+
+The desktop build targets macOS Apple Silicon:
+
+```bash
+cd frontend
+npm run desktop:build
+```
+
+The build bundles the PyInstaller gateway and the React frontend. Release builds additionally require the Tauri signing secrets configured in GitHub Actions.
+
+## Changes
+
+Implement end to end when a feature crosses the gateway, harness, syscall, storage, or frontend boundaries. Add behavioral tests at the public seam, keep security-sensitive failures generic to API clients, and include the relevant verification commands in the pull request.

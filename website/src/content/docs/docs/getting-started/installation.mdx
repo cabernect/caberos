@@ -1,0 +1,46 @@
+---
+title: Installation
+description: Install CaberOS v0.1.7 on macOS Apple Silicon.
+sidebar:
+  order: 1
+---
+
+## Supported platform
+
+The desktop release currently supports **macOS 13 or newer on Apple Silicon**: M1, M2, M3, or M4. Intel Macs and Windows are not supported by this build.
+
+## Download the desktop app
+
+1. Open the [v0.1.7 release](https://github.com/cabernect/caberos/releases/tag/v0.1.7).
+2. Download `CaberOS_0.1.7_arm64.dmg`.
+3. Open the DMG and drag **CaberOS** to **Applications**.
+4. Launch CaberOS from Applications.
+
+The application bundles its FastAPI gateway and does not require Python, Node, or `uv`.
+
+## Gatekeeper message
+
+The release is ad-hoc signed and is not notarized by Apple. If macOS says the application cannot be opened or is damaged, first verify that the DMG came from the official release, then run:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/CaberOS.app
+```
+
+Launch CaberOS again after removing the quarantine attribute.
+
+## Local development instead
+
+For development builds, use the repository setup:
+
+```bash
+git clone https://github.com/cabernect/caberos.git
+cd caberos
+./scripts/install.sh
+./scripts/dev.sh
+```
+
+Then open `http://localhost:5173`. Development uses the gateway on port `8081`; the packaged desktop application uses port `51718`.
+
+## Next step
+
+Continue with [First launch](/docs/getting-started/first-launch/).

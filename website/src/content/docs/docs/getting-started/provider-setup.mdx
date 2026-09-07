@@ -1,0 +1,198 @@
+---
+title: Configure models and providers
+description: Add model providers, discover or register models, validate access, and choose safe defaults.
+sidebar:
+  order: 3
+---
+
+CaberOS stores model-provider connections separately from agents. A provider record contains transport details and an encrypted credential; any number of agents can reference that provider while selecting their own model and limits.
+
+You need at least one usable provider and model before a normal agent run can start.
+
+## Provider fields
+
+| Field | Purpose |
+| --- | --- |
+| Name | Local display name, such as “OpenAI personal” or “Local Ollama.” |
+| Type | LiteLLM provider identifier used to format model requests. |
+| API key | Secret encrypted by the local CaberOS secret store. |
+| Base URL | Optional custom or OpenAI-compatible endpoint. |
+| Organization ID | Optional provider organization selector. |
+| Extra parameters | Provider-specific transport configuration. |
+| Custom models | Manually registered model names when discovery is unavailable or incomplete. |
+
+Provider API responses never return the plaintext API key. They report whether a key is present.
+
+## Add a preset provider
+
+1. Open **Settings → Providers**.
+2. Select a provider preset.
+3. Give the connection a recognizable name.
+4. Enter an API key when required.
+5. Confirm or customize the base URL.
+6. Save the provider.
+7. Open its model list and validate the model you intend to use.
+
+The dashboard includes presets for hosted providers such as OpenAI, Anthropic, Google Gemini, OpenRouter, DeepSeek, Fireworks AI, xAI, Mistral, Azure OpenAI, AWS Bedrock, and other LiteLLM-supported services. It also includes local or compatible endpoints such as Ollama, LM Studio, and vLLM/SGLang.
+
+A preset supplies form defaults; it does not create an account or confirm that your plan can access every displayed model.
+
+## Dynamic model discovery
+
+When a provider supports discovery, CaberOS requests the available model list and normalizes metadata such as:
+
+- model ID and name;
+- vision support;
+- thinking/reasoning support;
+- available thinking effort levels;
+- input context window;
+- maximum output tokens.
+
+Discovery behavior differs by provider. OpenAI, Google-compatible endpoints, Ollama, and OpenRouter can expose dynamic lists, while some providers require manually entered names.
+
+CaberOS filters known image-generation-only models from chat selection, but provider catalogs change. Validate the selected model as a chat model before assigning it broadly.
+
+## Add a custom model
+
+Use a custom model when:
+
+- the provider does not expose discovery;
+- the provider list is incomplete;
+- a self-hosted endpoint serves a private model name;
+- you need a newly available chat model not yet in metadata.
+
+Enter the exact model identifier expected by the provider. A custom entry makes the name selectable; it does not prove that the endpoint supports it.
+
+Custom model names belong to the provider record and can be removed independently. Removing a name from the list does not necessarily remove historical run records that used it.
+
+## Validate a model
+
+CaberOS validates a selected model with a small one-token completion request.
+
+Validation checks the complete path:
+
+- provider record exists;
+- credential and endpoint are accepted;
+- model name is recognized;
+- the provider can return a completion.
+
+A validation request may incur a very small provider charge and sends a minimal request to hosted providers.
+
+Failures are classified into actionable categories:
+
+| Category | What to check |
+| --- | --- |
+| Authentication | API key, account status, organization, and provider permissions. |
+| Rate limit | Provider quota, request limits, or temporary throttling. |
+| Network | Connectivity, DNS, TLS, proxy, and base URL. |
+| Internal/unexpected | Model name, endpoint compatibility, provider response, and gateway logs. |
+
+Provider failures also create notifications with a path back to Settings.
+
+## Configure Ollama
+
+Ollama serves models from the local machine and does not require an API key by default.
+
+1. Install and start Ollama.
+2. Pull or create the desired model in Ollama.
+3. Add the **Ollama (Local)** preset.
+4. Use the default base URL unless Ollama listens elsewhere:
+
+```text
+http://localhost:11434
+```
+
+5. Refresh discovered models.
+6. Validate one model.
+7. Assign it to an agent.
+
+Model requests to a loopback Ollama endpoint remain local. A remote Ollama base URL sends requests to that remote host instead.
+
+## Configure an OpenAI-compatible endpoint
+
+For LM Studio, vLLM, SGLang, or another compatible service:
+
+1. Select its preset or create an `openai` provider.
+2. Set the service’s `/v1` base URL.
+3. Enter a key if that service requires one.
+4. Add the exact custom model name if discovery is unavailable.
+5. Validate the model.
+
+“OpenAI-compatible” implementations vary. Tool calling, streaming, usage accounting, vision, and reasoning parameters may not all be supported even when basic chat works.
+
+## Assign a model to an agent
+
+1. Open **Agents**.
+2. Open the agent’s settings.
+3. Under **General**, choose the provider.
+4. Search for or enter the default model.
+5. If supported, set default thinking behavior and effort.
+6. Save the agent.
+
+A conversation can override this model for one message. Per-message overrides do not update the agent configuration.
+
+## Context and output metadata
+
+When available, CaberOS uses provider metadata to display and enforce model limits. The agent can also set a max-context override.
+
+If metadata is missing, CaberOS falls back to transport metadata and then an internal context-window fallback. Set a conservative explicit context limit for an unknown custom endpoint rather than assuming its advertised maximum.
+
+The max-context setting limits input context. Provider output limits and the agent’s run-turn/cost limits are separate controls.
+
+## Thinking models
+
+Models that advertise reasoning support expose:
+
+- an agent-level default toggle;
+- an effort selector using provider-supported values;
+- per-message overrides in the conversation composer.
+
+Reasoning controls are provider-specific. A provider may ignore unsupported values or reject the request. Validate the exact model and effort setting used by the agent.
+
+## Edit or rotate a key
+
+Open the provider editor and enter a replacement key. CaberOS re-encrypts the new value. Leaving the key field blank keeps the stored key.
+
+After rotation, validate the model and run a small agent request. Existing encrypted credentials are not displayed for copying.
+
+## Delete a provider
+
+Deleting a provider also clears the provider and model fields from every active agent configuration that references it. CaberOS saves those agents as new versions so they do not retain dangling provider IDs.
+
+Those agents cannot run until another provider and model are assigned. Historical runs and usage records remain available.
+
+## Local-first boundary
+
+For a hosted provider, CaberOS sends the system prompt, selected conversation context, retrieved memory or document excerpts, attachment content the agent explicitly reads, and tool results needed for the next turn to that provider.
+
+CaberOS does not operate a cloud relay for these requests, but the configured provider receives them. Review that provider’s retention, training, regional, and data-processing terms.
+
+With a loopback local model, model traffic can remain on the machine. MCP, web, and external-channel operations can still send data elsewhere independently.
+
+## Troubleshooting
+
+### No models appear
+
+The provider may not support dynamic discovery. Add a custom model name, then validate it. Also check the API key and base URL.
+
+### Validation reports authentication failure
+
+Replace the key, verify account/project access, and check any required organization setting.
+
+### Validation reports network failure
+
+Confirm the endpoint from the gateway process. For local endpoints, make sure the model server is running before CaberOS starts the request.
+
+### A model appears but tool use fails
+
+Basic completion validation does not prove tool-calling support. Test a simple capability call and inspect the provider response in the trace.
+
+### Vision or thinking controls are missing
+
+The provider metadata may not advertise support for that model. You can still test a custom model, but CaberOS cannot safely assume unsupported metadata.
+
+### An agent stopped working after provider deletion
+
+Reassign a provider and model in the agent’s General settings. Provider deletion intentionally clears affected agent model configurations.
+
+After validation, continue with [Create your first agent](/docs/getting-started/first-agent/).

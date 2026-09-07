@@ -1,0 +1,119 @@
+---
+title: CaberOS documentation
+description: Install, configure, secure, and operate local-first personal AI agents.
+template: splash
+---
+
+CaberOS is an open-source, local-first operating system for personal AI agents. It supplies the harness around the model: identity, context, tools, memory, permissions, workspaces, integrations, automation, and an audit trail.
+
+The model proposes actions. CaberOS decides what can execute and records the result.
+
+## First-use path
+
+1. [Install CaberOS](/docs/getting-started/installation/) on macOS Apple Silicon.
+2. [Complete first launch](/docs/getting-started/first-launch/) and change the default password.
+3. [Configure and validate a model provider](/docs/getting-started/provider-setup/).
+4. [Create and test a focused agent](/docs/getting-started/first-agent/).
+5. Inspect its first run in [Observability and traces](/docs/guides/observability/).
+
+## Product features
+
+### Conversations and model controls
+
+Use multiple sessions, stream active runs, change the model per message, enable supported thinking controls, attach local files and URLs, answer agent clarifying questions, approve consequential calls, and inspect citations.
+
+[Use conversations and attachments →](/docs/guides/conversations/)
+
+### Configurable agents
+
+An agent is a versioned configuration containing its soul, persona, task, model, capability ceiling, limits, sandbox mode, workspace, memory, skills, channels, and heartbeat. Configuration can be duplicated or exported as YAML without bundling credentials and local data.
+
+[Understand agents →](/docs/core-concepts/agents/)
+
+### Progressive capability discovery
+
+Keep essential tool schemas always available while leaving large or occasional capability surfaces searchable on demand. Search returns compact metadata; loading a schema affects only the current run and never widens authority.
+
+[Configure capabilities →](/docs/core-concepts/capabilities/)
+
+### Permissioned execution
+
+Every capability call crosses one syscall mediator for grant checks, parent/child narrowing, subject binding, approvals, credential injection, sandbox execution, and audit. Authorization, approval, and schema visibility remain separate decisions.
+
+[Understand permissions →](/docs/core-concepts/permissions/)
+
+### Layered memory
+
+Combine current session context, an agent-wide `MEMORY.md`, contact-scoped recall snippets, structured facts, exact history search, episodic summaries, and best-effort automatic durable-memory extraction.
+
+[Choose a memory layer →](/docs/core-concepts/memory/)
+
+### Knowledge Vault
+
+Upload Markdown, text, PDF, DOCX, and XLSX files into Shared Knowledge or an agent-private scope. CaberOS extracts local, citation-aware chunks and sends only retrieved excerpts or inspected visual content to the selected model.
+
+[Use the Knowledge Vault →](/docs/guides/knowledge-vault/)
+
+### Skills
+
+Install reusable `SKILL.md` workflows and optional resources. Agents initially see only skill names and descriptions, then load a body or resource when needed. Skills guide behavior but do not grant tools.
+
+[Install and use skills →](/docs/guides/skills/)
+
+### MCP integrations
+
+Connect stdio or HTTP MCP servers, import common JSON configuration, store API-key or OAuth credentials encrypted, discover tools, and grant individual tools or an entire server to an agent.
+
+[Connect an MCP server →](/docs/guides/mcp/)
+
+### External channels
+
+Route Telegram, Discord, Zalo OA, and Zalo Bot text messages through the same agent pipeline. Choose polling for supported local bots or deploy a protected HTTPS webhook, then define how approval-requiring calls behave.
+
+[Configure external channels →](/docs/guides/channels/)
+
+### Heartbeat automation
+
+Run a self-contained agent prompt on a fixed interval with a heartbeat-specific cost ceiling and consecutive-failure alerts. Heartbeats use the same permissions, memory, model harness, audit, and spend tracking as interactive runs.
+
+[Configure the scheduler →](/docs/guides/scheduler/)
+
+### Observability and spend
+
+Review aggregate runs, tokens, errors, latency, and cost. Drill into an agent trace to inspect status, trigger, messages, context breakdown, compaction, loaded capability schemas, and allowed or denied syscalls.
+
+[Inspect observability and traces →](/docs/guides/observability/)
+
+## Feature boundaries
+
+| Feature | What CaberOS owns | Important boundary |
+| --- | --- | --- |
+| Model providers | Local configuration, encrypted keys, model discovery, request transport | Hosted providers receive prompts and selected context. |
+| Workspaces | Attachment storage and file/shell working directory | Open sandbox mode deliberately allows broader filesystem paths. |
+| MCP | Configuration, credentials, grants, connection, audit | Third-party MCP code and services have their own trust boundary. |
+| Channels | Contact/session mapping and agent pipeline | Messaging platforms store and transmit platform messages. |
+| Scheduler | In-process fixed-interval heartbeats | It runs only while the local gateway and machine are active. |
+| Spend | Per-run token and calculated/provider cost records | Provider billing remains the financial source of truth. |
+| Backups | Local export and backup operations | Backups may contain sensitive history and encrypted secrets. |
+
+## Local-first, precisely
+
+CaberOS stores agent configuration, credentials, memory, knowledge documents, workspaces, sessions, audit records, and spend history locally.
+
+Data can leave the machine when you configure a hosted model, call a remote MCP service, use web tools, or enable an external messaging channel. CaberOS makes those paths explicit; it does not claim that every model workflow is fully local.
+
+[Review the local-first boundary →](/docs/security/local-first/)
+
+## Current platform scope
+
+The current desktop release is distributed for **macOS ARM64 (Apple Silicon)**. The Tauri application supervises a packaged local gateway at `127.0.0.1:51718`. Docker deployment is also available for development or self-hosted operation.
+
+CaberOS does not currently provide a product CLI/TUI, durable distributed job queue, implemented cron scheduling, or event-trigger scheduler.
+
+## For contributors
+
+CaberOS is headless at its core. FastAPI is the current REST/SSE gateway adapter; the React dashboard and Tauri shell are clients of the same agent pipeline and policy systems.
+
+- [Architecture overview](/docs/development/architecture/)
+- [Contributing](/docs/development/contributing/)
+- [Security and sandboxing](/docs/security/approvals-and-sandbox/)

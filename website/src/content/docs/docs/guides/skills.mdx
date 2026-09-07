@@ -1,0 +1,187 @@
+---
+title: Skills
+description: Install reusable instructions and load them progressively during agent runs.
+sidebar:
+  order: 3
+---
+
+A skill is a directory of reusable Markdown instructions and optional resource files. Skills teach an agent how to perform a workflow; they are not executable plugins and do not grant capabilities.
+
+Examples include a release checklist, a report-writing format, a debugging procedure, or organization-specific terminology.
+
+## Why skills use progressive disclosure
+
+Injecting every installed skill into every prompt would consume context even when most skills are irrelevant. CaberOS uses three levels:
+
+1. **Menu** — the system prompt contains skill names and short descriptions.
+2. **Skill body** — the agent calls `skills_load` only after selecting a relevant skill.
+3. **Resources** — the agent calls `skills_read_resource` for individual referenced files.
+
+A slash command can explicitly load one skill body into a run without waiting for the model to choose it.
+
+## Skill locations
+
+CaberOS combines:
+
+- **System skills**, installed by the operator and available to every agent.
+- **Agent skills**, stored inside one agent’s workspace and visible only to that agent.
+
+If both locations contain the same skill name, the first discovered definition is used according to the loader’s precedence. Keep names unique to avoid ambiguity.
+
+## Skill structure
+
+A skill directory must contain `SKILL.md`:
+
+```text
+release-checklist/
+├── SKILL.md
+├── checklist.md
+├── references/
+│   └── release-policy.md
+└── assets/
+    └── report-template.txt
+```
+
+`SKILL.md` starts with YAML frontmatter:
+
+```markdown
+---
+name: release-checklist
+description: Verify a release, summarize failures, and prepare release notes.
+license: MIT
+compatibility: CaberOS
+---
+
+# Release checklist
+
+1. Load `checklist.md`.
+2. Inspect the project version.
+3. Run only the checks requested by the operator.
+4. Report failed checks before proposing a release.
+```
+
+The name should use lowercase letters, numbers, and single hyphens. Use a concise description because it is included in the lightweight skill menu used for selection.
+
+Common optional resource directories are `scripts/`, `references/`, and `assets/`. CaberOS lists these files; it does not execute them merely because they are present.
+
+## Install a system skill
+
+1. Package `SKILL.md` and its resources as a `.zip` file.
+2. Open **Skills**.
+3. Select **Import .zip**.
+4. Choose the archive.
+5. Confirm that the new card shows its name, description, source, and resource count.
+
+The archive may contain `SKILL.md` at its root or inside one top-level directory. Import rejects invalid archives, missing names, invalid names, and an existing system skill with the same name. Archive paths are constrained to the new skill directory during extraction.
+
+Delete the existing skill before importing a replacement with the same name. Deleting a system skill removes its directory and cannot be undone without a backup or source archive.
+
+## Use a skill from chat
+
+Type a slash followed by the skill name and your task:
+
+```text
+/release-checklist review the current release candidate
+```
+
+The composer autocompletes installed skills. CaberOS sends the task as the user message and injects the selected skill body as the active skill for that run.
+
+A slash command loads only `SKILL.md`. If the instructions reference a resource, the agent must use `skills_read_resource` to load it.
+
+The built-in `/compact` command appears in the same autocomplete menu but compacts conversation context rather than loading a skill.
+
+## Let the agent select a skill
+
+When no slash command is supplied, the agent sees only names and descriptions. It can:
+
+1. call `skills_list` to refresh the available menu;
+2. call `skills_load(name)` for a relevant workflow;
+3. read referenced resources as needed;
+4. follow the loaded instructions using its existing capabilities.
+
+Choose distinctive descriptions. Two vague descriptions such as “helps with projects” make correct selection harder.
+
+## Agent-specific skills
+
+An agent with workspace write permission can create a skill under its workspace `skills/` directory. Agent settings list system skills and skills available to that agent.
+
+Use an agent-specific skill when:
+
+- the workflow is experimental;
+- the instructions apply to one agent only;
+- resources belong to that agent’s workspace.
+
+The operator API can promote an agent skill to the system level. Promotion copies the directory and fails if a system skill with that name already exists.
+
+## Skills do not grant tools
+
+A skill may instruct an agent to run a command, fetch a page, or call an MCP service. That request still needs:
+
+- the corresponding capability grant;
+- schema availability for an on-demand capability;
+- any required approval;
+- subject and credential resolution;
+- sandbox permission.
+
+The optional `allowed-tools` frontmatter value can be read as metadata, but the agent’s CaberOS capability configuration remains the enforcement boundary.
+
+## Trust and review
+
+Skills are prompt content. A malicious or careless skill can persuade a model to request harmful but otherwise permitted actions.
+
+Before installation:
+
+1. Read `SKILL.md`.
+2. Inspect every resource and script.
+3. Check whether it asks for secrets, egress, broad filesystem paths, or destructive actions.
+4. Confirm that the target agent has a narrow capability set and strict sandbox mode.
+5. Keep approval enabled for consequential operations.
+
+Installing a skill does not execute its scripts, but an agent with `terminal` permission could execute a referenced script later.
+
+## Writing effective skills
+
+- Give the skill one clear job.
+- Put selection criteria in the description.
+- Make steps explicit and ordered.
+- State expected inputs and outputs.
+- State stop conditions and when to ask the user.
+- Reference resource files by their paths.
+- Keep large examples in resources rather than `SKILL.md`.
+- Do not duplicate platform permission rules that CaberOS already enforces.
+
+### Example description
+
+Too vague:
+
+```text
+Helps with releases.
+```
+
+Better:
+
+```text
+Validate a CaberOS release candidate, run project checks, and draft release notes from completed changes.
+```
+
+## Troubleshooting
+
+### Skill does not appear
+
+Confirm the archive contains a readable `SKILL.md`, the frontmatter has a name, and the directory is in the system or active agent skill location. Refresh the page after import.
+
+### Import says the skill exists
+
+Delete the current system skill or change the new skill name. Import does not overwrite existing skills.
+
+### The agent ignores the workflow
+
+Invoke it explicitly with `/skill-name`, make the instructions more specific, and verify that the required capabilities are permitted.
+
+### A resource cannot be read
+
+Use a path shown by `skills_load`. Resource reads are constrained to the skill directory and cannot traverse to arbitrary workspace paths.
+
+### The skill asks for a tool but the call is denied
+
+The skill is guidance, not authority. Update the agent capability grant only if the workflow genuinely requires that operation.
