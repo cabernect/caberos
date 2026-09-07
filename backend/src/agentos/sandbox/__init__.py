@@ -1,6 +1,13 @@
 """Sandbox package."""
 
-from .base import SandboxBackend, ShellResult, get_backend
+from .base import SandboxBackend, SandboxProbe, ShellResult, get_backend, probe
 from .workspace import WorkspaceManager
 
-__all__ = ["SandboxBackend", "ShellResult", "get_backend", "WorkspaceManager"]
+__all__ = [
+    "SandboxBackend",
+    "SandboxProbe",
+    "ShellResult",
+    "get_backend",
+    "probe",
+    "WorkspaceManager",
+]

@@ -37,7 +37,11 @@ TEST_AGENT_CONFIG = AgentConfig(
     persona="Direct and concise.",
     task="Execute commands and report results.",
     capabilities=[
-        CapabilityGrant(name="shell_run", require_approval=False),  # auto-approve for smoke test
+        # Must match a registered capability name. The shell capability is
+        # `terminal` (`shell_run` is its implementation function, not its
+        # registered name), so granting "shell_run" silently denied every
+        # shell call and the smoke test still reported success.
+        CapabilityGrant(name="terminal", require_approval=False),  # auto-approve for smoke test
     ],
 )
 
@@ -64,7 +68,8 @@ async def run_smoke(agent_id: str, message: str) -> None:
         ScriptedResponse(
             tool_calls=[{
                 "id": "call_1",
-                "name": "shell_run",
+                # Registered capability name, not the implementation function.
+                "name": "terminal",
                 "args": {"command": message},
             }],
         ),

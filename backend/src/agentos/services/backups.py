@@ -138,7 +138,7 @@ def list_backups() -> list[dict]:
         manifest = {}
         if manifest_path.exists():
             try:
-                manifest = json.loads(manifest_path.read_text())
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 pass
         backups.append(
@@ -183,7 +183,7 @@ def restore_backup(backup_name: str) -> dict:
     if not manifest_path.exists():
         raise FileNotFoundError("Backup manifest not found")
 
-    manifest = json.loads(manifest_path.read_text())
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
     # Restore DB
     src_db = backup_dir / "agentos.db"

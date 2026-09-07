@@ -5,10 +5,23 @@ In open sandbox mode, runs directly without the sandbox wrapper.
 """
 
 import asyncio
+import sys
 import time
 from typing import Any
 
 from ...sandbox import get_backend
+from ...sandbox.base import terminate_process
+
+
+def _open_mode_shell(command: str) -> list[str]:
+    """Argv for running a command unsandboxed, per platform.
+
+    Open mode deliberately bypasses the sandbox, so the only platform concern
+    here is which shell actually exists: Windows has no /bin/sh.
+    """
+    if sys.platform == "win32":
+        return ["cmd.exe", "/c", command]
+    return ["/bin/sh", "-c", command]
 
 
 async def shell_run(
@@ -22,9 +35,7 @@ async def shell_run(
         start = time.monotonic()
         try:
             proc = await asyncio.create_subprocess_exec(
-                "/bin/sh",
-                "-c",
-                args["command"],
+                *_open_mode_shell(args["command"]),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=workspace_path,
@@ -38,6 +49,7 @@ async def shell_run(
                 "duration_ms": elapsed,
             }
         except TimeoutError:
+            await terminate_process(proc)
             elapsed = int((time.monotonic() - start) * 1000)
             return {
                 "stdout": "",
@@ -46,8 +58,9 @@ async def shell_run(
                 "duration_ms": elapsed,
             }
 
-    # Strict mode — use sandbox backend
-    backend = get_backend()
+    # Strict mode — use sandbox backend. Resolving it can probe the platform
+    # (WSL2 on Windows), which is blocking, so keep it off the event loop.
+    backend = await asyncio.to_thread(get_backend)
     result = await backend.run_command(
         workspace_path=workspace_path,
         command=args["command"],

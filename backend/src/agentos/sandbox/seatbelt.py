@@ -5,7 +5,7 @@ import shutil
 import time
 from pathlib import Path
 
-from .base import SandboxBackend, ShellResult
+from .base import SandboxBackend, ShellResult, terminate_process
 
 
 def _build_profile(workspace: str, allow_network: bool) -> str:
@@ -44,6 +44,8 @@ def _build_profile(workspace: str, allow_network: bool) -> str:
 class SeatbeltBackend(SandboxBackend):
     """macOS sandbox-exec backend — zero install, built into macOS."""
 
+    kind = "seatbelt"
+
     def is_available(self) -> bool:
         return shutil.which("sandbox-exec") is not None
 
@@ -76,6 +78,7 @@ class SeatbeltBackend(SandboxBackend):
                 duration_ms=elapsed,
             )
         except TimeoutError:
+            await terminate_process(proc)
             elapsed = int((time.monotonic() - start) * 1000)
             return ShellResult(
                 stdout="",

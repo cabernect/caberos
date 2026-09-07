@@ -1,8 +1,53 @@
 """Fernet secret store for encrypting API keys and connector tokens."""
 
+import getpass
+import logging
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 from cryptography.fernet import Fernet
 
 from .config import settings
+
+logger = logging.getLogger(__name__)
+
+
+def _restrict_to_current_user(key_path: Path) -> None:
+    """Make the key file readable only by the user who owns it.
+
+    chmod(0o600) is a no-op for access control on Windows — it only toggles the
+    read-only attribute, leaving the key readable by every other local account.
+    Since this key decrypts every stored provider API key and MCP credential,
+    Windows needs a real ACL: drop inherited permissions, grant the current
+    user only.
+    """
+    if sys.platform != "win32":
+        key_path.chmod(0o600)
+        return
+
+    user = os.environ.get("USERNAME") or getpass.getuser()
+    try:
+        result = subprocess.run(
+            ["icacls", str(key_path), "/inheritance:r", "/grant:r", f"{user}:F"],
+            capture_output=True,
+            timeout=15,
+        )
+        if result.returncode != 0:
+            logger.warning(
+                "Could not restrict permissions on the secret key at %s. "
+                "It may be readable by other users on this machine. icacls said: %s",
+                key_path,
+                result.stderr.decode("utf-8", errors="replace").strip(),
+            )
+    except Exception as exc:  # pragma: no cover — depends on host tooling
+        logger.warning(
+            "Could not restrict permissions on the secret key at %s: %s. "
+            "It may be readable by other users on this machine.",
+            key_path,
+            exc,
+        )
 
 
 def _get_or_create_key() -> bytes:
@@ -12,13 +57,13 @@ def _get_or_create_key() -> bytes:
     if key_path.exists():
         # Ensure secure permissions on existing key files
         try:
-            key_path.chmod(0o600)
+            _restrict_to_current_user(key_path)
         except (OSError, PermissionError):
             pass  # best-effort — may not have permission on some systems
         return key_path.read_bytes()
     key = Fernet.generate_key()
     key_path.write_bytes(key)
-    key_path.chmod(0o600)
+    _restrict_to_current_user(key_path)
     return key
 
 

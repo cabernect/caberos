@@ -11,6 +11,89 @@ use std::os::unix::process::CommandExt;
 
 use tauri::{AppHandle, Manager};
 
+/// Windows process-tree termination.
+///
+/// On Unix the gateway runs in its own process group and a single negative-PID
+/// SIGKILL takes the whole tree down. Windows has no process groups in that
+/// sense: `Child::kill()` terminates only the direct child, leaving anything it
+/// spawned alive. Because the gateway binds a fixed port, one surviving
+/// grandchild makes the *next* launch hang on "Connecting to CaberOS" with
+/// nothing in the log naming the cause.
+///
+/// A Job Object with KILL_ON_JOB_CLOSE fixes that, and unlike an explicit kill
+/// it also covers the case where the app is force-killed from Task Manager —
+/// closing the handle is done by the kernel, not by our exit path.
+#[cfg(windows)]
+mod win_job {
+    use std::ffi::c_void;
+
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    use windows::Win32::System::Threading::{
+        OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
+    };
+
+    /// Owns a job object that kills its members when the handle closes.
+    pub struct JobObject(HANDLE);
+
+    // The handle is only ever touched behind the GatewayProcess mutex.
+    unsafe impl Send for JobObject {}
+    unsafe impl Sync for JobObject {}
+
+    impl JobObject {
+        /// Create a kill-on-close job and put `pid` in it.
+        pub fn assign(pid: u32) -> Result<Self, String> {
+            unsafe {
+                let job = CreateJobObjectW(None, None)
+                    .map_err(|error| format!("could not create job object: {error}"))?;
+
+                let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                if let Err(error) = SetInformationJobObject(
+                    job,
+                    JobObjectExtendedLimitInformation,
+                    &info as *const _ as *const c_void,
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                ) {
+                    let _ = CloseHandle(job);
+                    return Err(format!("could not configure job object: {error}"));
+                }
+
+                let process = match OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, false, pid) {
+                    Ok(handle) => handle,
+                    Err(error) => {
+                        let _ = CloseHandle(job);
+                        return Err(format!("could not open gateway process: {error}"));
+                    }
+                };
+
+                let assigned = AssignProcessToJobObject(job, process);
+                let _ = CloseHandle(process);
+
+                if let Err(error) = assigned {
+                    let _ = CloseHandle(job);
+                    return Err(format!("could not assign gateway to job object: {error}"));
+                }
+
+                Ok(Self(job))
+            }
+        }
+    }
+
+    impl Drop for JobObject {
+        fn drop(&mut self) {
+            // Closing the last handle terminates every process in the job.
+            unsafe {
+                let _ = CloseHandle(self.0);
+            }
+        }
+    }
+}
+
 pub const GATEWAY_PORT: u16 = 51718;
 const DEFAULT_LOG_MAX_BYTES: u64 = 10 * 1024 * 1024;
 const DEFAULT_LOG_BACKUP_COUNT: usize = 3;
@@ -110,6 +193,9 @@ fn forward_output<R: Read + Send + 'static>(mut reader: R, log: Arc<Mutex<Rotati
 pub struct GatewayProcess {
     child: Mutex<Option<Child>>,
     port: Mutex<Option<u16>>,
+    /// Held for the lifetime of the gateway; dropping it kills the process tree.
+    #[cfg(windows)]
+    job: Mutex<Option<win_job::JobObject>>,
 }
 
 impl Drop for GatewayProcess {
@@ -123,6 +209,8 @@ impl GatewayProcess {
         Self {
             child: Mutex::new(None),
             port: Mutex::new(None),
+            #[cfg(windows)]
+            job: Mutex::new(None),
         }
     }
 
@@ -198,6 +286,27 @@ impl GatewayProcess {
             )
         })?;
 
+        // Put the gateway in a kill-on-close job immediately, so the window in
+        // which a spawned grandchild could escape supervision is as small as
+        // possible. A failure here is logged, not fatal: losing tree-cleanup is
+        // much better than refusing to launch the app.
+        #[cfg(windows)]
+        {
+            match win_job::JobObject::assign(child.id()) {
+                Ok(job) => {
+                    if let Ok(mut slot) = self.job.lock() {
+                        *slot = Some(job);
+                    }
+                }
+                Err(error) => {
+                    log::warn!(
+                        "CaberOS gateway is not under job-object supervision ({error}); \
+                         a crash may leave a process holding port {port}"
+                    );
+                }
+            }
+        }
+
         if let Some(status) = child
             .try_wait()
             .map_err(|error| format!("could not inspect CaberOS gateway process: {error}"))?
@@ -245,6 +354,13 @@ impl GatewayProcess {
             let _ = child.kill();
             let _ = child.wait();
         }
+
+        // Dropping the job handle terminates anything the gateway spawned that
+        // survived the direct kill above.
+        #[cfg(windows)]
+        if let Ok(mut job) = self.job.lock() {
+            *job = None;
+        }
         if let Ok(mut port) = self.port.lock() {
             *port = None;
         }
@@ -260,6 +376,11 @@ fn gateway_executable(app: &AppHandle) -> Result<Option<PathBuf>, String> {
         .path()
         .resource_dir()
         .map_err(|error| format!("could not resolve CaberOS resource directory: {error}"))?;
+    // PyInstaller --onedir names the *directory* after --name, but on Windows
+    // the executable inside it carries a .exe suffix. Those two names differ,
+    // so they cannot be the same string: joining the .exe name to itself finds
+    // the binary on macOS and never finds it on Windows.
+    let dir_name = "caberos-gateway";
     let file_name = if cfg!(windows) {
         "caberos-gateway.exe"
     } else {
@@ -269,7 +390,7 @@ fn gateway_executable(app: &AppHandle) -> Result<Option<PathBuf>, String> {
         resource_dir
             .join("resources")
             .join("gateway")
-            .join(file_name)
+            .join(dir_name)
             .join(file_name),
         resource_dir
             .join("resources")

@@ -37,6 +37,12 @@ sed -i.bak "s/^version = \".*\"/version = \"$VERSION\"/" backend/pyproject.toml
 rm -f backend/pyproject.toml.bak
 echo "  ✓ backend/pyproject.toml"
 
+# backend/src/agentos/__init__.py — the gateway reports this over /health and the
+# desktop shell compares against it to detect a stale bundled gateway.
+sed -i.bak "s/^__version__ = \".*\"/__version__ = \"$VERSION\"/" backend/src/agentos/__init__.py
+rm -f backend/src/agentos/__init__.py.bak
+echo "  ✓ backend/src/agentos/__init__.py"
+
 # 2. frontend/package.json
 sed -i.bak "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" frontend/package.json
 rm -f frontend/package.json.bak
