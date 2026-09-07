@@ -6,12 +6,37 @@
 // beforeBuildCommand) working on every platform.
 
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
+const rootDir = dirname(scriptsDir);
 
 const isWindows = process.platform === "win32";
+
+// Tauri's beforeBuildCommand runs this script, so a release that has already
+// built and smoke-tested a gateway would otherwise ship a different, untested
+// binary. Setting CABEROS_SKIP_GATEWAY_BUILD keeps the verified one.
+if (process.env.CABEROS_SKIP_GATEWAY_BUILD) {
+  const gateway = join(
+    rootDir,
+    "frontend",
+    "src-tauri",
+    "resources",
+    "gateway",
+    "caberos-gateway",
+    isWindows ? "caberos-gateway.exe" : "caberos-gateway",
+  );
+  if (!existsSync(gateway)) {
+    console.error(
+      `[build-gateway] CABEROS_SKIP_GATEWAY_BUILD is set but no gateway exists at ${gateway}`,
+    );
+    process.exit(1);
+  }
+  console.log(`[build-gateway] reusing existing gateway at ${gateway}`);
+  process.exit(0);
+}
 const [command, args] = isWindows
   ? [
       "powershell",

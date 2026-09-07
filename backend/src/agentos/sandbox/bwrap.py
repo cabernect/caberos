@@ -5,7 +5,19 @@ import shutil
 import time
 from pathlib import Path
 
-from .base import SandboxBackend, ShellResult
+from .base import SandboxBackend, ShellResult, terminate_process
+
+# get_backend() builds a fresh backend for every shell call, so an
+# instance-local probe result would be thrown away immediately and the probe
+# would spawn a subprocess on every command. The cache lives on the module.
+_probe_cache: bool | None = None
+
+
+def reset_probe_cache() -> None:
+    """Forget the bwrap probe result so the next check runs it again."""
+    global _probe_cache
+    _probe_cache = None
+
 
 # The workspace is always mounted at this path inside the sandbox, regardless of
 # where it lives on the host. Keeps the agent's view of its workspace stable.
@@ -105,6 +117,7 @@ async def run_sandboxed(
             duration_ms=elapsed,
         )
     except TimeoutError:
+        await terminate_process(proc)
         elapsed = int((time.monotonic() - start) * 1000)
         return ShellResult(
             stdout="",
@@ -119,13 +132,12 @@ class BwrapBackend(SandboxBackend):
 
     kind = "bwrap"
 
-    _probe_cache: bool | None = None
-
     def is_available(self) -> bool:
-        if self._probe_cache is not None:
-            return self._probe_cache
+        global _probe_cache
+        if _probe_cache is not None:
+            return _probe_cache
         if shutil.which("bwrap") is None:
-            self._probe_cache = False
+            _probe_cache = False
             return False
         # Probe: bwrap may be installed but fail in containers (e.g. GitHub
         # Actions) because loopback can't be created. Run a trivial command.
@@ -137,10 +149,10 @@ class BwrapBackend(SandboxBackend):
                 capture_output=True,
                 timeout=5,
             )
-            self._probe_cache = result.returncode == 0
+            _probe_cache = result.returncode == 0
         except Exception:
-            self._probe_cache = False
-        return self._probe_cache
+            _probe_cache = False
+        return _probe_cache
 
     def unavailable_reason(self) -> str | None:
         if self.is_available():

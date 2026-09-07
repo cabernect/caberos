@@ -52,7 +52,7 @@ export function Observability() {
 
   const handleLogout = async () => {
     try {
-      await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+      await api.logout();
     } catch {}
     window.location.assign("/login");
   };

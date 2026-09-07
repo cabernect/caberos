@@ -28,22 +28,34 @@ from .bwrap import build_bwrap_args, build_probe_args, run_sandboxed
 # Linux probe.
 _PROBE_TIMEOUT = 30
 
+# get_backend() builds a fresh WslBwrapBackend for every strict shell call, so
+# an instance-local result would be discarded immediately and each command
+# would pay for another WSL probe — up to _PROBE_TIMEOUT seconds. The cache
+# lives on the module and is cleared through reset_probe_cache().
+_probe_cache: bool | None = None
+_probe_reason: str | None = None
+
+
+def reset_probe_cache() -> None:
+    """Forget the WSL probe result so the next check runs it again."""
+    global _probe_cache, _probe_reason
+    _probe_cache = None
+    _probe_reason = None
+
 
 class WslBwrapBackend(SandboxBackend):
     """Run sandboxed commands through bubblewrap inside WSL2."""
 
     kind = "wsl-bwrap"
 
-    _probe_cache: bool | None = None
-    _reason: str | None = None
-
     def is_available(self) -> bool:
-        if self._probe_cache is not None:
-            return self._probe_cache
+        global _probe_cache, _probe_reason
+        if _probe_cache is not None:
+            return _probe_cache
 
         if shutil.which("wsl.exe") is None:
-            self._probe_cache = False
-            self._reason = "WSL2 is not installed. Install it with: wsl --install"
+            _probe_cache = False
+            _probe_reason = "WSL2 is not installed. Install it with: wsl --install"
             return False
 
         # Run the same trivial bwrap probe the Linux backend uses. This single
@@ -56,21 +68,21 @@ class WslBwrapBackend(SandboxBackend):
                 capture_output=True,
                 timeout=_PROBE_TIMEOUT,
             )
-            self._probe_cache = result.returncode == 0
-            if not self._probe_cache:
-                self._reason = (
+            _probe_cache = result.returncode == 0
+            if not _probe_cache:
+                _probe_reason = (
                     "WSL2 is installed but bubblewrap is not usable inside it. "
                     "Install it in your distribution with: wsl -e sudo apt install bubblewrap"
                 )
         except Exception:
-            self._probe_cache = False
-            self._reason = "WSL2 did not respond to the sandbox probe."
-        return self._probe_cache
+            _probe_cache = False
+            _probe_reason = "WSL2 did not respond to the sandbox probe."
+        return _probe_cache
 
     def unavailable_reason(self) -> str | None:
         if self.is_available():
             return None
-        return self._reason
+        return _probe_reason
 
     async def _to_wsl_path(self, windows_path: str) -> str | None:
         """Translate a Windows path to its WSL equivalent, or None on failure."""

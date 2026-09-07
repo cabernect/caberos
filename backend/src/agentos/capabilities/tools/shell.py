@@ -10,6 +10,7 @@ import time
 from typing import Any
 
 from ...sandbox import get_backend
+from ...sandbox.base import terminate_process
 
 
 def _open_mode_shell(command: str) -> list[str]:
@@ -48,6 +49,7 @@ async def shell_run(
                 "duration_ms": elapsed,
             }
         except TimeoutError:
+            await terminate_process(proc)
             elapsed = int((time.monotonic() - start) * 1000)
             return {
                 "stdout": "",
@@ -56,8 +58,9 @@ async def shell_run(
                 "duration_ms": elapsed,
             }
 
-    # Strict mode — use sandbox backend
-    backend = get_backend()
+    # Strict mode — use sandbox backend. Resolving it can probe the platform
+    # (WSL2 on Windows), which is blocking, so keep it off the event loop.
+    backend = await asyncio.to_thread(get_backend)
     result = await backend.run_command(
         workspace_path=workspace_path,
         command=args["command"],
