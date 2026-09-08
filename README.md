@@ -6,6 +6,7 @@
 
 <p align="center">
   <a href="../../releases/latest">Download (macOS ARM64)</a> ·
+  <a href="https://caberos.cabernect.workers.dev">Website</a> ·
   <a href="#features">Features</a> ·
   <a href="#quick-start">Quick Start</a> ·
   <a href="#architecture">Architecture</a> ·
@@ -180,7 +181,9 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-Pushing a `v*.*.*` tag triggers the [release workflow](.github/workflows/release.yml) which builds the .dmg and creates a GitHub Release automatically. Tags with a `-` suffix (e.g., `v0.1.0-beta`) are marked as prerelease.
+Pushing a `v*.*.*` tag triggers the [release workflow](.github/workflows/release.yml) which builds the .dmg, creates a GitHub Release, and deploys the website to Cloudflare automatically. Tags with a `-` suffix (e.g., `v0.1.0-beta`) are marked as prerelease.
+
+The website can also be deployed manually from the Actions tab → "Deploy website" → Run workflow (see [deploy-website.yml](.github/workflows/deploy-website.yml)).
 
 ## Architecture
 
@@ -399,6 +402,21 @@ The Docker setup runs the full stack: backend (Python + uv + bwrap) and frontend
 
 Data persists in the `caberos-data` named volume (SQLite DB, secret key, workspaces, agent homes). To use Postgres instead, uncomment the `db` service and `AGENTOS_DATABASE_URL` in `docker-compose.yml`.
 
+## Website
+
+The public website is built with [Astro](https://astro.build) + [Starlight](https://starlight.astro.build).
+
+- **Bilingual** — English and Vietnamese (`/vi/`) with full documentation in both languages
+- **Animations** — scroll-triggered reveals, staggered hero entrance, and hover transitions
+- **Deploy** — automatic on release tag via the release workflow, or manual via the "Deploy website" workflow in GitHub Actions
+
+```bash
+cd website
+npm install
+npm run dev      # Local dev server
+npm run build    # Production build → dist/
+```
+
 ## Project structure
 
 ```
@@ -416,7 +434,7 @@ foundation-agentos/
 │   │   ├── harness/          # Agent loop (custom harness + LiteLLM)
 │   │   ├── defaults/         # Default agent YAMLs (caber, agent-builder)
 │   │   └── ...
-│   ├── tests/                # 348 tests
+│   ├── tests/                # 460 tests
 │   ├── Dockerfile
 │   └── pyproject.toml
 ├── frontend/
@@ -428,6 +446,15 @@ foundation-agentos/
 │   ├── src-tauri/            # Tauri 2 desktop shell (Rust)
 │   ├── Dockerfile
 │   ├── nginx.conf
+│   └── package.json
+├── website/                  # Public website (Astro + Starlight)
+│   ├── src/
+│   │   ├── pages/            # Landing, download, vi/ (Vietnamese)
+│   │   ├── content/docs/     # EN + VI documentation
+│   │   ├── styles/           # Brand CSS (light/dark tokens)
+│   │   └── ...
+│   ├── scripts/              # Locale checker
+│   ├── wrangler.toml         # Cloudflare Workers config
 │   └── package.json
 ├── skills/                   # 16 system-level skills
 ├── scripts/                  # dev, install, docker, build-gateway, build-dmg, desktop-dev
@@ -443,7 +470,7 @@ foundation-agentos/
 
 ## Testing
 
-### Backend (348 tests)
+### Backend (460 tests)
 
 ```bash
 cd backend && uv run pytest -v
@@ -455,10 +482,13 @@ uv run pytest tests/test_auth.py -v
 uv run pytest --cov=src/agentos --cov-report=term-missing
 ```
 
-### Frontend
+### Frontend (19 tests)
 
 ```bash
 cd frontend
+
+# Unit tests
+npm run test
 
 # Type-check + build
 npm run build
@@ -496,6 +526,13 @@ Use the Playwright MCP server for real-browser testing. See `AGENTS.md` for deta
 - [x] Observability + spend
 - [x] Tauri desktop app
 - [x] Docker support
+- [x] Progressive capability discovery (v0.1.7)
+- [x] Stable HITL with same-turn approval batching (v0.1.8)
+- [x] SQLite contention retry and persistence resilience (v0.1.8)
+- [x] MCP OAuth refresh and auto-reconnect (v0.1.8)
+- [x] Dashboard theme support (light/dark/system) (v0.1.8)
+- [x] Vietnamese website and documentation (v0.1.8)
+- [x] Public website with scroll animations (v0.1.8)
 
 ### v0.2 (planned)
 
@@ -503,7 +540,7 @@ Use the Playwright MCP server for real-browser testing. See `AGENTS.md` for deta
 - [ ] CaberCore extraction (headless runtime, separate from FastAPI)
 - [ ] Cron/event triggers for scheduler
 - [ ] More MCP catalog entries
-- [ ] More tools intergartion and variation
+- [ ] More tools integration and variation
 - [ ] Knowledge Vault integration
 
 ### v0.5+
@@ -579,4 +616,4 @@ rm -f data/agentos.db-wal data/agentos.db-shm
 
 ## License
 
-[MIT](LICENSE) — © 2025 HoangPH25
+[MIT](LICENSE) — © 2025–2026 HoangPH25
