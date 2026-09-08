@@ -13,14 +13,16 @@ BACKEND_VERSION=$(grep '^version = ' backend/pyproject.toml | head -1 | sed 's/v
 PACKAGE_VERSION=$(python3 -c "import json; print(json.load(open('frontend/package.json'))['version'])")
 CARGO_VERSION=$(grep '^version = ' frontend/src-tauri/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
 TAURI_VERSION=$(python3 -c "import json; print(json.load(open('frontend/src-tauri/tauri.conf.json'))['version'])")
+WEBSITE_VERSION=$(python3 -c "import json; print(json.load(open('website/package.json'))['version'])")
 
 echo "  backend/pyproject.toml:       $BACKEND_VERSION"
 echo "  frontend/package.json:        $PACKAGE_VERSION"
 echo "  frontend/src-tauri/Cargo.toml: $CARGO_VERSION"
 echo "  frontend/src-tauri/tauri.conf: $TAURI_VERSION"
+echo "  website/package.json:          $WEBSITE_VERSION"
 
 # Check if they all agree
-VERSIONS="$BACKEND_VERSION $PACKAGE_VERSION $CARGO_VERSION $TAURI_VERSION"
+VERSIONS="$BACKEND_VERSION $PACKAGE_VERSION $CARGO_VERSION $TAURI_VERSION $WEBSITE_VERSION"
 UNIQUE=$(echo "$VERSIONS" | tr ' ' '\n' | sort -u | wc -l | tr -d ' ')
 
 if [ "$UNIQUE" -ne 1 ]; then
