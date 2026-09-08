@@ -1,0 +1,48 @@
+name: Deploy website
+
+# Manually deploy the CaberOS website to Cloudflare.
+# Triggers from the Actions tab — no tag or branch push required.
+#
+# Usage:
+#   Go to Actions → "Deploy website" → Run workflow
+#
+# Required secrets (set once in GitHub repo settings → Secrets and variables → Actions):
+#   CLOUDFLARE_API_TOKEN — Cloudflare API token with Workers Deploy permissions
+#   CLOUDFLARE_ACCOUNT_ID — Cloudflare account ID
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-website:
+    name: Deploy website to Cloudflare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install website dependencies
+        working-directory: website
+        run: npm ci
+
+      - name: Build website
+        working-directory: website
+        run: npm run build
+
+      - name: Deploy to Cloudflare
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: website
+          command: deploy

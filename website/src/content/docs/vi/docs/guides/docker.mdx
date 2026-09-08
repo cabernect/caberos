@@ -1,0 +1,115 @@
+---
+title: Triển khai Docker
+description: Chạy toàn bộ CaberOS stack trong Docker trên mọi nền tảng.
+sidebar:
+  order: 1
+---
+
+Docker là cách dễ nhất để chạy CaberOS trên Linux, macOS, hoặc Windows (qua WSL2). Compose stack bao gồm backend (Python + uv + bubblewrap) và frontend (nginx reverse proxy), với dữ liệu lưu trong named volume.
+
+## Yêu cầu
+
+- Docker 24+ với Compose v2
+- 1 GB RAM trống
+
+## Bắt đầu nhanh
+
+```bash
+git clone https://github.com/cabernect/caberos.git
+cd caberos
+./scripts/docker.sh up
+```
+
+Mở `http://localhost:8080` và đăng nhập với `admin` / `admin`.
+
+## Cấu hình
+
+Sao chép file môi trường mẫu và điều chỉnh:
+
+```bash
+cp .env.docker.example .env.docker
+```
+
+| Biến | Mặc định | Mô tả |
+| --- | --- | --- |
+| `CABEROS_PORT` | `8080` | Port host cho web UI |
+| `AGENTOS_YOLO_MODE` | `false` | Bỏ qua tất cả approval gate (hữu ích cho headless) |
+| `AGENTOS_LOG_LEVEL` | `info` | Mức log: `critical`, `error`, `warning`, `info`, hoặc `debug` |
+| `AGENTOS_LOG_ACCESS` | `true` | Ghi log HTTP access |
+
+## Lệnh
+
+```bash
+./scripts/docker.sh up        # Build và khởi động
+./scripts/docker.sh down      # Dừng và xóa container
+./scripts/docker.sh logs      # Xem log
+./scripts/docker.sh rebuild   # Build lại không cache
+```
+
+Hoặc dùng Docker Compose trực tiếp:
+
+```bash
+docker compose up --build -d
+docker compose logs -f
+docker compose down
+```
+
+## Chi tiết container
+
+| Service | Image | Port | Ghi chú |
+| --- | --- | --- | --- |
+| Backend | `python:3.12-slim` + uv | 8081 (nội bộ) | Bubblewrap cần `SYS_ADMIN` capability |
+| Frontend | `nginx:alpine` | 80 → host `:8080` | Reverse-proxy `/api` và `/health` tới backend |
+
+Backend container dùng `cap_add: SYS_ADMIN` để bubblewrap có thể tạo user namespace cho shell sandboxing. Nếu Docker của bạn chặn capability này, thay bằng `privileged: true` trong `docker-compose.yml`.
+
+## Lưu trữ dữ liệu
+
+Dữ liệu ứng dụng lưu trong named volume `caberos-data`, bao gồm SQLite database, secret key, workspaces, và agent homes.
+
+```bash
+# Kiểm tra volume
+docker volume inspect caberos-data
+
+# Sao lưu volume
+docker run --rm -v caberos-data:/data -v $(pwd):/backup alpine tar czf /backup/caberos-data.tar.gz /data
+
+# Khôi phục volume
+docker run --rm -v caberos-data:/data -v $(pwd):/backup alpine tar xzf /backup/caberos-data.tar.gz -C /
+```
+
+## Dùng Postgres thay cho SQLite
+
+Bỏ comment service `db` và `AGENTOS_DATABASE_URL` trong `docker-compose.yml`:
+
+```yaml
+db:
+  image: postgres:16-alpine
+  environment:
+    POSTGRES_DB: caberos
+    POSTGRES_USER: caberos
+    POSTGRES_PASSWORD: caberos
+  volumes:
+    - caberos-pg:/var/lib/postgresql/data
+```
+
+Set database URL trong backend environment:
+
+```yaml
+environment:
+  - AGENTOS_DATABASE_URL=postgresql+asyncpg://caberos:caberos@db:5432/caberos
+```
+
+## Khắc phục sự cố
+
+### bwrap lỗi
+
+Bubblewrap cần `SYS_ADMIN` capability. Compose file đã set `cap_add: SYS_ADMIN`. Nếu Docker của bạn chặn, dùng `privileged: true` thay thế.
+
+### Port đã được sử dụng
+
+Đổi `CABEROS_PORT` trong `.env.docker` hoặc truyền trực tiếp:
+
+```bash
+CABEROS_PORT=3000 ./scripts/docker.sh up
+```

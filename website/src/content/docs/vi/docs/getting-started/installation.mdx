@@ -1,34 +1,48 @@
 ---
 title: Cài đặt
-description: Cài đặt CaberOS trên macOS Apple Silicon.
+description: Cài CaberOS trên macOS, Linux, hoặc Docker.
 sidebar:
   order: 1
 ---
 
-## Nền tảng được hỗ trợ
+CaberOS chạy trên macOS, Linux, và Windows (qua WSL2). Chọn tùy chọn phù hợp với nền tảng của bạn.
 
-Bản desktop hiện hỗ trợ **macOS 13 trở lên trên Apple Silicon**: M1, M2, M3 hoặc M4. Bản build này chưa hỗ trợ Mac Intel và Windows.
+## Tùy chọn 1: Desktop app (dễ nhất, macOS Apple Silicon)
 
-## Tải desktop app
+Desktop release hiện hỗ trợ **macOS 13 trở lên trên Apple Silicon**: M1, M2, M3, hoặc M4. App đi kèm FastAPI gateway và không cần Python, Node, hoặc `uv`.
 
-1. Mở [bản phát hành CaberOS](https://github.com/cabernect/caberos/releases).
-2. Tải file `CaberOS_0.1.8_arm64.dmg` tương ứng với release hiện tại.
+1. Mở [bản phát hành mới nhất](https://github.com/cabernect/caberos/releases/latest).
+2. Tải `CaberOS_<phiên bản>_arm64.dmg`.
 3. Mở DMG và kéo **CaberOS** vào **Applications**.
-4. Khởi chạy CaberOS từ Applications.
+4. Khởi động CaberOS từ Applications.
 
-Ứng dụng đã gói FastAPI gateway và không cần Python, Node hoặc `uv`.
+### Thông báo Gatekeeper
 
-## Thông báo Gatekeeper
-
-Bản phát hành được ký ad-hoc và chưa được Apple notarize. Nếu macOS báo ứng dụng không thể mở hoặc bị hỏng, hãy xác nhận DMG đến từ release chính thức rồi chạy:
+Bản phát hành được ad-hoc signed và không được Apple notarize. Nếu macOS báo ứng dụng không thể mở hoặc bị hỏng, trước tiên xác minh DMG từ bản phát hành chính thức, sau đó chạy:
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/CaberOS.app
 ```
 
-Khởi chạy lại CaberOS sau khi xóa quarantine attribute.
+Khởi động lại CaberOS sau khi xóa thuộc tính quarantine.
 
-## Development local
+## Tùy chọn 2: Docker (mọi nền tảng)
+
+Docker là cách dễ nhất để chạy CaberOS trên Linux, macOS, hoặc Windows (qua WSL2).
+
+```bash
+git clone https://github.com/cabernect/caberos.git
+cd caberos
+./scripts/docker.sh up
+```
+
+Mở `http://localhost:8080` và đăng nhập với `admin` / `admin`.
+
+Xem [hướng dẫn triển khai Docker](/vi/docs/guides/docker/) cho cấu hình, lưu trữ dữ liệu, và cài đặt Postgres.
+
+## Tùy chọn 3: Phát triển local
+
+Cho development build trên macOS, Linux, hoặc WSL2:
 
 ```bash
 git clone https://github.com/cabernect/caberos.git
@@ -37,8 +51,17 @@ cd caberos
 ./scripts/dev.sh
 ```
 
-Sau đó mở `http://localhost:5173`. Development dùng gateway port `8081`; desktop app đóng gói dùng port `51718`.
+Mở `http://localhost:5173`. Xem [Phát triển local](/vi/docs/development/local-development/) cho yêu cầu và quy trình đầy đủ.
+
+## Tóm tắt hỗ trợ nền tảng
+
+| Nền tảng | Desktop app | Docker | Local dev |
+| --- | --- | --- | --- |
+| macOS Apple Silicon | Có | Có | Có |
+| macOS Intel | Chưa | Có | Có |
+| Linux | Chưa | Có | Có |
+| Windows (WSL2) | Chưa | Có | Có |
 
 ## Bước tiếp theo
 
-Tiếp tục với [Lần khởi chạy đầu tiên](/vi/docs/getting-started/first-launch/).
+Tiếp tục với [Khởi động lần đầu](/vi/docs/getting-started/first-launch/).

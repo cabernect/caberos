@@ -15,10 +15,13 @@ name: Release
 #   4. Create a DMG
 #   5. Generate the updater manifest (latest.json)
 #   6. Create a GitHub release with the DMG + updater artifacts attached
+#   7. Build and deploy the website to Cloudflare (deploy-website job)
 #
 # Required secrets (set once in GitHub repo settings → Secrets and variables → Actions):
 #   TAURI_SIGNING_PRIVATE_KEY — Ed25519 private key for signing updates
 #   TAURI_SIGNING_PRIVATE_KEY_PASSWORD — password for the private key (empty string if none)
+#   CLOUDFLARE_API_TOKEN — Cloudflare API token with Workers Deploy permissions
+#   CLOUDFLARE_ACCOUNT_ID — Cloudflare account ID
 #
 # Platform: macOS ARM64 (Apple Silicon) only for now.
 
@@ -267,3 +270,33 @@ jobs:
             latest.json
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
+
+  deploy-website:
+    name: Deploy website to Cloudflare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install website dependencies
+        working-directory: website
+        run: npm ci
+
+      - name: Build website
+        working-directory: website
+        run: npm run build
+
+      - name: Deploy to Cloudflare
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: website
+          command: deploy

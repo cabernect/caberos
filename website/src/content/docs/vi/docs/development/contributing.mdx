@@ -1,19 +1,15 @@
 ---
 title: Đóng góp
-description: Setup CaberOS local và chạy project check.
+description: Cài đặt CaberOS local và chạy các kiểm tra của dự án.
 ---
 
-## Setup
+Chào mừng đóng góp. CaberOS được phát triển end-to-end: tính năng vượt qua gateway, harness, syscall, storage, hoặc frontend được triển khai như vertical slice.
 
-```bash
-git clone https://github.com/cabernect/caberos.git
-cd caberos
-./scripts/install.sh
-```
+## Cài đặt
 
-Dùng Python 3.12, `uv`, Node 22, npm và macOS sandbox hoặc Linux Bubblewrap cho operation có sandbox.
+Xem [Phát triển local](/vi/docs/development/local-development/) cho yêu cầu, cài đặt, và chạy dev server.
 
-## Backend checks
+## Kiểm tra backend
 
 ```bash
 cd backend
@@ -22,7 +18,7 @@ uv run ruff check src/ tests/
 uv run ruff format --check src/ tests/
 ```
 
-## Frontend checks
+## Kiểm tra frontend
 
 ```bash
 cd frontend
@@ -32,17 +28,27 @@ npm run build
 npm run test
 ```
 
-## Desktop build
-
-Desktop build target macOS Apple Silicon:
+## Build desktop (chỉ macOS)
 
 ```bash
 cd frontend
 npm run desktop:build
 ```
 
-Build gói PyInstaller gateway và React frontend. Release build cần Tauri signing secret trong GitHub Actions.
+Build đóng gói PyInstaller gateway và React frontend. Release build cần Tauri signing secrets cấu hình trong GitHub Actions.
 
-## Thay đổi code
+## Build website
 
-Implement end-to-end khi feature đi qua gateway, harness, syscall, storage hoặc frontend boundary. Thêm behavioral test ở public seam, giữ lỗi security-sensitive generic với API client và đưa command verify liên quan vào pull request.
+```bash
+cd website
+npm install
+npm run build
+```
+
+## Hướng dẫn
+
+- Triển khai tính năng end-to-end khi vượt qua gateway, harness, syscall, storage, hoặc frontend.
+- Thêm behavioral test tại public seam.
+- Giữ security-sensitive failure generic cho API client.
+- Bao gồm lệnh kiểm tra liên quan trong pull request.
+- Tuân theo code style và pattern hiện có — kiểm tra file lân cận trước khi giới thiệu abstraction mới.

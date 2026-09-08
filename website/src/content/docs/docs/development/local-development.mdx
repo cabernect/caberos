@@ -1,0 +1,155 @@
+---
+title: Local development
+description: Set up CaberOS for local development on macOS, Linux, or WSL2.
+sidebar:
+  order: 2
+---
+
+CaberOS can be developed locally on macOS (Apple Silicon or Intel), Linux, or Windows via WSL2. The backend uses Python 3.12 with `uv`, and the frontend uses Node 22 with npm.
+
+## Prerequisites
+
+| Requirement | macOS | Linux | Windows |
+| --- | --- | --- | --- |
+| Python 3.12 | via `uv` | via `uv` | via `uv` in WSL2 |
+| [uv](https://docs.astral.sh/uv/) | Required | Required | Required |
+| Node 22+ | Required | Required | Required |
+| npm | Required | Required | Required |
+| Sandbox | `sandbox-exec` (built in) | `bubblewrap` (`apt install bubblewrap`) | `bubblewrap` in WSL2 |
+
+### Install uv
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+### Install bubblewrap (Linux only)
+
+```bash
+# Debian/Ubuntu
+sudo apt install bubblewrap
+
+# Fedora
+sudo dnf install bubblewrap
+
+# Arch
+sudo pacman -S bubblewrap
+```
+
+## Setup
+
+```bash
+git clone https://github.com/cabernect/caberos.git
+cd caberos
+./scripts/install.sh
+```
+
+The install script checks dependencies, installs backend and frontend packages, creates data directories, and seeds the database with the default operator and two agents.
+
+## Running the dev servers
+
+```bash
+./scripts/dev.sh
+```
+
+This starts:
+
+- Backend on `http://localhost:8081` (with auto-reload)
+- Frontend on `http://localhost:5173` (Vite dev server, proxies `/api` to backend)
+
+Open `http://localhost:5173` in your browser. Default login: `admin` / `admin`.
+
+## Backend development
+
+```bash
+cd backend
+
+# Run tests
+uv run pytest -v
+
+# Run a specific test module
+uv run pytest tests/test_harness.py -v
+
+# Lint
+uv run ruff check src/ tests/
+uv run ruff format --check src/ tests/
+
+# Format code
+uv run ruff format src/ tests/
+
+# Smoke test (end-to-end, no real LLM)
+uv run python ../scripts/smoke.py test-agent "echo hello"
+
+# Seed the database
+uv run python -m agentos.seed
+```
+
+## Frontend development
+
+```bash
+cd frontend
+
+# Install dependencies
+npm install
+
+# Run unit tests
+npm run test
+
+# Lint
+npm run lint
+
+# Type-check and build
+npm run build
+
+# Dev server (hot reload)
+npm run dev
+```
+
+## Desktop development (macOS only)
+
+The Tauri desktop app wraps the React frontend and a packaged Python gateway. Desktop development requires macOS with Xcode command-line tools.
+
+```bash
+cd frontend
+
+# Dev mode (hot reload, uses local backend)
+npm run desktop:dev
+
+# Production build
+npm run desktop:build
+
+# Launch the built app
+open src-tauri/target/release/bundle/macos/CaberOS.app
+```
+
+## Project structure
+
+```
+foundation-agentos/
+├── backend/          # FastAPI gateway + agent harness (Python 3.12)
+├── frontend/         # React 19 dashboard + Tauri 2 desktop shell
+├── website/          # Public website (Astro + Starlight)
+├── skills/           # System-level skills
+├── scripts/          # dev, install, docker, build helpers
+├── sandbox/          # Sandbox profiles (seatbelt, bwrap)
+├── docs/             # Specification and implementation plans
+└── docker-compose.yml
+```
+
+## Environment variables
+
+All backend settings use the `AGENTOS_` prefix. Key variables for development:
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `AGENTOS_CONTROL_PLANE_HOST` | `127.0.0.1` | API server bind host |
+| `AGENTOS_CONTROL_PLANE_PORT` | `8081` | API server port |
+| `AGENTOS_DB_PATH` | `data/agentos.db` | SQLite database path |
+| `AGENTOS_YOLO_MODE` | `false` | Skip approval gates |
+| `AGENTOS_RELOAD` | `false` | Enable auto-reload (set by `dev.sh`) |
+
+See `backend/src/agentos/config.py` for the full list.
+
+## Next step
+
+Read the [Architecture overview](/docs/development/architecture/) to understand the system topology and execution pipeline.

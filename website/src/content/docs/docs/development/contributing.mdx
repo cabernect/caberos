@@ -3,15 +3,11 @@ title: Contributing
 description: Set up CaberOS locally and run the project checks.
 ---
 
+Contributions are welcome. CaberOS is developed end-to-end: features that cross the gateway, harness, syscall, storage, or frontend boundaries are implemented as vertical slices.
+
 ## Setup
 
-```bash
-git clone https://github.com/cabernect/caberos.git
-cd caberos
-./scripts/install.sh
-```
-
-Use Python 3.12, `uv`, Node 22, npm, and either macOS’s sandbox support or Linux bubblewrap for sandboxed operations.
+See [Local development](/docs/development/local-development/) for prerequisites, setup, and running the dev servers.
 
 ## Backend checks
 
@@ -32,9 +28,7 @@ npm run build
 npm run test
 ```
 
-## Desktop build
-
-The desktop build targets macOS Apple Silicon:
+## Desktop build (macOS only)
 
 ```bash
 cd frontend
@@ -43,6 +37,18 @@ npm run desktop:build
 
 The build bundles the PyInstaller gateway and the React frontend. Release builds additionally require the Tauri signing secrets configured in GitHub Actions.
 
-## Changes
+## Website build
 
-Implement end to end when a feature crosses the gateway, harness, syscall, storage, or frontend boundaries. Add behavioral tests at the public seam, keep security-sensitive failures generic to API clients, and include the relevant verification commands in the pull request.
+```bash
+cd website
+npm install
+npm run build
+```
+
+## Guidelines
+
+- Implement features end to end when they cross the gateway, harness, syscall, storage, or frontend boundaries.
+- Add behavioral tests at the public seam.
+- Keep security-sensitive failures generic to API clients.
+- Include the relevant verification commands in the pull request.
+- Follow existing code style and patterns — check neighboring files before introducing new abstractions.
