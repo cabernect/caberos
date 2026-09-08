@@ -2,9 +2,12 @@
 
 import pytest
 import yaml
+from sqlalchemy.exc import OperationalError
 
 from agentos.agent_service import (
     create_agent,
+    disable_agent,
+    enable_agent,
     export_agent,
     get_active_config,
     import_agent,
@@ -13,6 +16,7 @@ from agentos.agent_service import (
     save_agent,
 )
 from agentos.config_schema import AgentConfig, CapabilityGrant, ModelConfig
+from agentos.models.agent import Agent
 
 
 def test_config_validation():
@@ -68,6 +72,65 @@ async def test_create_and_get_agent(db):
     assert retrieved.soul == "Test soul."
     assert len(retrieved.capabilities) == 1
     assert retrieved.capabilities[0].name == "terminal"
+
+
+@pytest.mark.asyncio
+async def test_save_agent_retries_a_locked_commit(db, monkeypatch):
+    config = AgentConfig(
+        id="cfg-lock-retry",
+        name="Before",
+        model=ModelConfig(provider_id="test", name="scripted"),
+    )
+    await create_agent(db, config)
+    config.name = "After"
+    monkeypatch.setattr("agentos.db.settings.db_lock_retry_delay", 0)
+    original_commit = db.commit
+    attempts = 0
+
+    async def flaky_commit():
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OperationalError("UPDATE agent_versions", {}, RuntimeError("database is locked"))
+        await original_commit()
+
+    monkeypatch.setattr(db, "commit", flaky_commit)
+    await save_agent(db, config)
+
+    assert attempts == 2
+    retrieved = await get_active_config(db, config.id)
+    assert retrieved is not None
+    assert retrieved.name == "After"
+
+
+@pytest.mark.asyncio
+async def test_enable_disable_agent_retries_locked_commit(db, monkeypatch):
+    config = AgentConfig(
+        id="cfg-enable-lock-retry",
+        name="Toggle",
+        model=ModelConfig(provider_id="test", name="scripted"),
+    )
+    await create_agent(db, config)
+    monkeypatch.setattr("agentos.db.settings.db_lock_retry_delay", 0)
+    original_commit = db.commit
+    attempts = 0
+
+    async def flaky_commit():
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OperationalError("UPDATE agents", {}, RuntimeError("database is locked"))
+        await original_commit()
+
+    monkeypatch.setattr(db, "commit", flaky_commit)
+    await disable_agent(db, config.id)
+    assert attempts == 2
+
+    await enable_agent(db, config.id)
+    assert attempts == 3
+    agent = await db.get(Agent, config.id)
+    assert agent is not None
+    assert agent.enabled is True
 
 
 @pytest.mark.asyncio

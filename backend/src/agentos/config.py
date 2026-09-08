@@ -58,6 +58,10 @@ class Settings(BaseSettings):
 
     model_request_timeout: int = 120
     model_stream_idle_timeout: int = 30
+    mcp_connection_timeout: float = 30.0
+
+    db_lock_retries: int = 2
+    db_lock_retry_delay: float = 0.1
 
     # HITL timeout — how long (seconds) to wait for human approval/elicitation
     # before auto-rejecting. 0 = wait forever (not recommended for production).

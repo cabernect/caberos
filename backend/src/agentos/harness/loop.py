@@ -46,6 +46,49 @@ class RunResult:
 EventEmitter = Callable[[str, dict[str, Any]], Any] | None
 
 
+class ApprovalBatch:
+    """Barrier for all calls emitted by one model turn."""
+
+    def __init__(self, call_ids: list[str]) -> None:
+        self.id = str(uuid.uuid4())
+        self.call_ids = tuple(call_ids)
+        self._pending = set(call_ids)
+        self._event = asyncio.Event()
+        self._lock = asyncio.Lock()
+
+    @property
+    def size(self) -> int:
+        return len(self.call_ids)
+
+    @property
+    def pending_count(self) -> int:
+        return len(self._pending)
+
+    async def arrive(self, call_id: str, approved: bool) -> bool:
+        async with self._lock:
+            self._pending.discard(call_id)
+            if not self._pending:
+                self._event.set()
+        await self._event.wait()
+        return approved
+
+
+def _approval_batch_for(
+    agent_config: AgentConfig,
+    session: Any,
+    calls: list[ToolCall],
+) -> ApprovalBatch | None:
+    """Create one barrier for the calls emitted in a model turn.
+
+    The barrier includes calls that will be denied by the syscall layer as well
+    as calls that require approval. Each call must reach a terminal decision
+    before any approved call from the same turn can execute.
+    """
+    if len(calls) < 2:
+        return None
+    return ApprovalBatch([call.id for call in calls])
+
+
 class Harness:
     """The agent execution loop."""
 
@@ -416,9 +459,9 @@ class Harness:
                             },
                         )
 
-                # Dispatch all tool calls concurrently.
-                # Independent tools (read_file, web_search, run_subagent, etc.)
-                # run in parallel via asyncio.gather.
+                # Dispatch all tool calls concurrently within this reasoning step.
+                approval_batch = _approval_batch_for(agent_config, session, calls)
+
                 async def _mediate_one(call: ToolCall) -> SyscallResult:
                     return await syscall_handler.mediate(
                         call=call,
@@ -427,6 +470,7 @@ class Harness:
                         run_id=run_id,
                         event_emitter=event_emitter,
                         capability_catalog=capability_catalog,
+                        approval_batch=approval_batch,
                     )
 
                 syscall_results = await asyncio.gather(*[_mediate_one(c) for c in calls])
@@ -445,6 +489,10 @@ class Harness:
                                 "args": call.args,
                                 "status": status,
                                 "result": syscall_result.output,
+                                "approval_batch_id": approval_batch.id if approval_batch else None,
+                                "approval_batch_size": approval_batch.size
+                                if approval_batch
+                                else None,
                             },
                         )
 

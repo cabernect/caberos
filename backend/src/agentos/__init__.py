@@ -1,3 +1,8 @@
 """CaberOS — local-first AI Agent Operating System."""
 
-__version__ = "0.1.5"
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("agentos")
+except PackageNotFoundError:
+    __version__ = "unknown"

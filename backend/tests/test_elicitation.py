@@ -5,6 +5,7 @@ import json
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 
 from agentos.api.approvals import ApproveRequest, approve
 from agentos.config_schema import AgentConfig, CapabilityGrant, ModelConfig
@@ -322,7 +323,7 @@ async def test_elicitation_writes_audit_record(db, workspace, agent_config):
 
 
 @pytest.mark.asyncio
-async def test_approval_persists_before_unblocking_mediator(db):
+async def test_approval_persists_before_unblocking_mediator(db, monkeypatch):
     """Operator approval commits before waking a waiting run on SQLite."""
     from types import SimpleNamespace
 
@@ -367,7 +368,20 @@ async def test_approval_persists_before_unblocking_mediator(db):
         )
     )
     await db.commit()
+    monkeypatch.setattr("agentos.db.settings.db_lock_retry_delay", 0)
+    original_commit = db.commit
+    attempts = 0
 
+    async def flaky_commit():
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OperationalError(
+                "UPDATE approval_requests", {}, RuntimeError("database is locked")
+            )
+        await original_commit()
+
+    monkeypatch.setattr(db, "commit", flaky_commit)
     pending = approval_registry.register(approval_id)
     try:
         result = await approve(
@@ -378,6 +392,7 @@ async def test_approval_persists_before_unblocking_mediator(db):
         )
 
         assert result == {"status": "approved"}
+        assert attempts == 2
         assert pending.decision == "approved"
         refreshed = await db.get(ApprovalRequest, approval_id)
         assert refreshed is not None

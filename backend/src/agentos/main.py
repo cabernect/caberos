@@ -17,8 +17,10 @@ if "SSL_CERT_FILE" not in os.environ:
 
         os.environ["SSL_CERT_FILE"] = certifi.where()
 
-from fastapi import FastAPI  # noqa: E402
+from fastapi import FastAPI, Request  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from fastapi.responses import JSONResponse  # noqa: E402
+from sqlalchemy.exc import OperationalError  # noqa: E402
 
 from .api import (  # noqa: E402
     agent_files,
@@ -39,7 +41,7 @@ from .api import (  # noqa: E402
 )
 from .auth import router as auth_router  # noqa: E402
 from .capabilities.builtin import register_builtin_capabilities  # noqa: E402
-from .db import init_db  # noqa: E402
+from .db import init_db, is_database_locked  # noqa: E402
 from .logging_config import configure_logging  # noqa: E402
 
 configure_logging()
@@ -102,18 +104,22 @@ async def lifespan(app: FastAPI):
     # Without this, the contact lock would block future runs for that contact.
     from sqlalchemy import update
 
-    from .db import async_session_factory, engine
+    from .db import async_session_factory, engine, retry_locked_transaction
     from .models.run import Run
 
     async with async_session_factory() as db:
-        result = await db.execute(
-            update(Run)
-            .where(Run.status == "running")
-            .values(status="failed", error="Server restarted — run was interrupted")
-        )
-        if result.rowcount > 0:
-            print(f"[startup] Cleaned up {result.rowcount} stuck run(s)")
-        await db.commit()
+
+        async def _reconcile_runs() -> None:
+            result = await db.execute(
+                update(Run)
+                .where(Run.status == "running")
+                .values(status="failed", error="Server restarted — run was interrupted")
+            )
+            if result.rowcount > 0:
+                print(f"[startup] Cleaned up {result.rowcount} stuck run(s)")
+            await db.commit()
+
+        await retry_locked_transaction(_reconcile_runs, db, "startup_reconcile_runs")
 
     # Clean up expired auth sessions from previous runs
     from .auth import cleanup_expired_sessions
@@ -195,12 +201,42 @@ async def lifespan(app: FastAPI):
         _sweeper_task.cancel()
 
 
+def _get_app_version() -> str:
+    """Get the application version from package metadata."""
+    try:
+        from importlib.metadata import version
+
+        return version("agentos")
+    except Exception:
+        return "unknown"
+
+
 app = FastAPI(
     title="CaberOS",
     description="Local-first AI Agent Operating System",
-    version="0.1.5",
+    version=_get_app_version(),
     lifespan=lifespan,
 )
+
+
+@app.exception_handler(OperationalError)
+async def handle_database_operational_error(_request: Request, error: OperationalError):
+    if is_database_locked(error):
+        return JSONResponse(
+            status_code=503,
+            headers={"Retry-After": "1", "X-Error-Code": "database_busy"},
+            content={
+                "detail": {
+                    "code": "database_busy",
+                    "message": "The database is busy. Nothing was saved; please retry.",
+                }
+            },
+        )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "A database operation failed."},
+    )
+
 
 # CORS — allow the Vite dev server (localhost:5173) to call the API
 app.add_middleware(
@@ -238,16 +274,6 @@ app.include_router(data.router)
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
-
-
-def _get_app_version() -> str:
-    """Get the application version from package metadata."""
-    try:
-        from importlib.metadata import version
-
-        return version("agentos")
-    except Exception:
-        return "0.1.5"
 
 
 @app.get("/api/version")

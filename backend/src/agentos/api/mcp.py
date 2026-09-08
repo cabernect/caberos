@@ -458,8 +458,10 @@ async def oauth_status(
         return {"status": "none"}
     if flow.error:
         return {"status": "error", "error": flow.error}
-    if flow.completed:
+    if flow.ready:
         return {"status": "completed"}
+    if flow.completed:
+        return {"status": "connecting"}
     return {"status": "pending", "authorize_url": flow.authorize_url}
 
 

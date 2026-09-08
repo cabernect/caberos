@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import require_operator
-from ..db import get_db
+from ..db import get_db, retry_locked_transaction
 from ..models.approval import ApprovalRequest
 from ..models.operator import Operator
 from ..models.run import Run
@@ -93,22 +93,25 @@ async def approve(
     except ValueError:
         scope = RememberScope.EXACT
 
-    result = await db.execute(select(ApprovalRequest).where(ApprovalRequest.id == approval_id))
-    approval = result.scalar_one_or_none()
-    if approval is None:
-        raise HTTPException(status_code=404, detail="Approval not found")
-    if approval.status != "pending":
-        raise HTTPException(status_code=400, detail=f"Approval already {approval.status}")
+    async def _approve_once() -> None:
+        result = await db.execute(select(ApprovalRequest).where(ApprovalRequest.id == approval_id))
+        approval = result.scalar_one_or_none()
+        if approval is None:
+            raise HTTPException(status_code=404, detail="Approval not found")
+        if approval.status != "pending":
+            raise HTTPException(status_code=400, detail=f"Approval already {approval.status}")
 
-    # Persist before resolving the in-process event. Otherwise the mediator
-    # can wake up and write the same row while this request still holds a
-    # SQLite read transaction, producing "database is locked".
-    approval.status = "approved"
-    approval.decided_by = operator.id
-    from datetime import UTC, datetime
+        # Persist before resolving the in-process event. Otherwise the mediator
+        # can wake up and write the same row while this request still holds a
+        # SQLite read transaction, producing "database is locked".
+        approval.status = "approved"
+        approval.decided_by = operator.id
+        from datetime import UTC, datetime
 
-    approval.decided_at = datetime.now(UTC)
-    await db.commit()
+        approval.decided_at = datetime.now(UTC)
+        await db.commit()
+
+    await retry_locked_transaction(_approve_once, db, f"approve:{approval_id}")
 
     # Resolve the asyncio.Event — unblocks the mediator. Persisting first also
     # handles approvals for detached runs with no in-memory event.
@@ -131,21 +134,25 @@ async def reject(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Reject a pending approval. The run continues with a denied result."""
-    result = await db.execute(select(ApprovalRequest).where(ApprovalRequest.id == approval_id))
-    approval = result.scalar_one_or_none()
-    if approval is None:
-        raise HTTPException(status_code=404, detail="Approval not found")
-    if approval.status != "pending":
-        raise HTTPException(status_code=400, detail=f"Approval already {approval.status}")
 
-    # Persist before resolving the in-process event for the same reason as
-    # approval: the mediator must not race this request on the SQLite row.
-    approval.status = "rejected"
-    approval.decided_by = operator.id
-    from datetime import UTC, datetime
+    async def _reject_once() -> None:
+        result = await db.execute(select(ApprovalRequest).where(ApprovalRequest.id == approval_id))
+        approval = result.scalar_one_or_none()
+        if approval is None:
+            raise HTTPException(status_code=404, detail="Approval not found")
+        if approval.status != "pending":
+            raise HTTPException(status_code=400, detail=f"Approval already {approval.status}")
 
-    approval.decided_at = datetime.now(UTC)
-    await db.commit()
+        # Persist before resolving the in-process event for the same reason as
+        # approval: the mediator must not race this request on the SQLite row.
+        approval.status = "rejected"
+        approval.decided_by = operator.id
+        from datetime import UTC, datetime
+
+        approval.decided_at = datetime.now(UTC)
+        await db.commit()
+
+    await retry_locked_transaction(_reject_once, db, f"reject:{approval_id}")
     approval_registry.resolve(approval_id, "rejected", operator.id)
 
     return {"status": "rejected"}

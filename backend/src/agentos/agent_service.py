@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config_schema import AgentConfig
+from .db import retry_locked_transaction
 from .models.agent import Agent, AgentVersion
 
 
@@ -21,23 +22,27 @@ def _json_to_config(json_str: str) -> AgentConfig:
 
 async def create_agent(db: AsyncSession, config: AgentConfig) -> Agent:
     """Create a new agent with its first version."""
-    agent = Agent(id=config.id, name=config.name, enabled=True)
-    db.add(agent)
-    await db.flush()
 
-    version = AgentVersion(
-        agent_id=config.id,
-        version_number=1,
-        config=_config_to_json(config),
-        is_active=True,
-    )
-    db.add(version)
-    await db.flush()
+    async def _create_once() -> Agent:
+        agent = Agent(id=config.id, name=config.name, enabled=True)
+        db.add(agent)
+        await db.flush()
 
-    agent.active_version_id = version.id
-    await db.flush()
-    await db.commit()
-    return agent
+        version = AgentVersion(
+            agent_id=config.id,
+            version_number=1,
+            config=_config_to_json(config),
+            is_active=True,
+        )
+        db.add(version)
+        await db.flush()
+
+        agent.active_version_id = version.id
+        await db.flush()
+        await db.commit()
+        return agent
+
+    return await retry_locked_transaction(_create_once, db, "create_agent")
 
 
 async def get_agent(db: AsyncSession, agent_id: str) -> Agent | None:
@@ -66,38 +71,42 @@ async def list_agents(db: AsyncSession) -> list[Agent]:
 
 async def save_agent(db: AsyncSession, config: AgentConfig) -> AgentVersion:
     """Save a new version of an agent's config. Advances the active pointer."""
-    agent = await get_agent(db, config.id)
-    if agent is None:
-        raise ValueError(f"Agent {config.id} not found")
 
-    # Get the current max version number
-    result = await db.execute(
-        select(AgentVersion)
-        .where(AgentVersion.agent_id == config.id)
-        .order_by(AgentVersion.version_number.desc())
-    )
-    versions = result.scalars().all()
-    next_num = (versions[0].version_number + 1) if versions else 1
+    async def _save_once() -> AgentVersion:
+        agent = await get_agent(db, config.id)
+        if agent is None:
+            raise ValueError(f"Agent {config.id} not found")
 
-    # Deactivate old active version
-    for v in versions:
-        if v.is_active:
-            v.is_active = False
+        # Get the current max version number
+        result = await db.execute(
+            select(AgentVersion)
+            .where(AgentVersion.agent_id == config.id)
+            .order_by(AgentVersion.version_number.desc())
+        )
+        versions = result.scalars().all()
+        next_num = (versions[0].version_number + 1) if versions else 1
 
-    # Create new version
-    version = AgentVersion(
-        agent_id=config.id,
-        version_number=next_num,
-        config=_config_to_json(config),
-        is_active=True,
-    )
-    db.add(version)
-    await db.flush()
+        # Deactivate old active version
+        for version_row in versions:
+            if version_row.is_active:
+                version_row.is_active = False
 
-    agent.active_version_id = version.id
-    agent.name = config.name
-    await db.commit()
-    return version
+        # Create new version
+        version = AgentVersion(
+            agent_id=config.id,
+            version_number=next_num,
+            config=_config_to_json(config),
+            is_active=True,
+        )
+        db.add(version)
+        await db.flush()
+
+        agent.active_version_id = version.id
+        agent.name = config.name
+        await db.commit()
+        return version
+
+    return await retry_locked_transaction(_save_once, db, "save_agent")
 
 
 async def list_versions(db: AsyncSession, agent_id: str) -> list[AgentVersion]:
@@ -121,11 +130,14 @@ async def rollback_to(db: AsyncSession, agent_id: str, version_id: str) -> Agent
 
 
 async def disable_agent(db: AsyncSession, agent_id: str) -> None:
-    agent = await get_agent(db, agent_id)
-    if agent is None:
-        raise ValueError(f"Agent {agent_id} not found")
-    agent.enabled = False
-    await db.commit()
+    async def _disable_once() -> None:
+        agent = await get_agent(db, agent_id)
+        if agent is None:
+            raise ValueError(f"Agent {agent_id} not found")
+        agent.enabled = False
+        await db.commit()
+
+    await retry_locked_transaction(_disable_once, db, f"disable_agent:{agent_id}")
 
 
 async def export_agent(db: AsyncSession, agent_id: str) -> str:
@@ -159,8 +171,12 @@ async def duplicate_agent(db: AsyncSession, agent_id: str, new_id: str, new_name
 
 async def enable_agent(db: AsyncSession, agent_id: str) -> None:
     """Re-enable a disabled agent."""
-    agent = await get_agent(db, agent_id)
-    if agent is None:
-        raise ValueError(f"Agent {agent_id} not found")
-    agent.enabled = True
-    await db.commit()
+
+    async def _enable_once() -> None:
+        agent = await get_agent(db, agent_id)
+        if agent is None:
+            raise ValueError(f"Agent {agent_id} not found")
+        agent.enabled = True
+        await db.commit()
+
+    await retry_locked_transaction(_enable_once, db, f"enable_agent:{agent_id}")

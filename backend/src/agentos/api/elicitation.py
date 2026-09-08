@@ -6,6 +6,7 @@ which sets the asyncio.Event in the elicitation registry, unblocking the run.
 """
 
 import json
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -13,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import require_operator
-from ..db import get_db
+from ..db import get_db, retry_locked_transaction
 from ..models.elicitation import ElicitationRequest
 from ..models.operator import Operator
 from ..syscall.elicitation_registry import elicitation_registry
@@ -76,7 +77,19 @@ async def respond_to_elicitation(
             detail=f"Elicitation already {elicitation.status}",
         )
 
-    # Resolve the asyncio.Event — this unblocks the mediator
+    async def _persist_response() -> None:
+        elicitation.status = "answered"
+        elicitation.response = body.response
+        elicitation.responded_by = operator.id
+        elicitation.responded_at = datetime.now(UTC)
+        await db.commit()
+
+    await retry_locked_transaction(
+        _persist_response,
+        db,
+        f"respond_elicitation:{elicitation_id}",
+    )
+
     resolved = elicitation_registry.resolve(elicitation_id, body.response, operator.id)
     if not resolved:
         raise HTTPException(

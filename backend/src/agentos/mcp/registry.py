@@ -19,13 +19,11 @@ appropriate client.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from typing import Any
 
 from sqlalchemy import delete, select
-from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..capabilities.registry import CapabilityDef
@@ -49,29 +47,40 @@ _connect_errors: dict[str, str] = {}
 _notification_errors: dict[str, str] = {}
 
 
-async def _notify_oauth_reauth(server: McpServer, error: str) -> None:
-    if "OAuth" not in error or _notification_errors.get(server.id) == error:
+async def _notify_connection_failure(server: McpServer, error: str) -> None:
+    if _notification_errors.get(server.id) == error:
         return
     from ..notifications import create_notification
+
+    is_oauth_failure = "oauth" in error.lower()
+    if is_oauth_failure:
+        notification_type = "oauth_reauth_required"
+        title = f"Reconnect {server.name}"
+    else:
+        notification_type = "mcp_connection_failed"
+        title = f"MCP connection failed: {server.name}"
+    message = (
+        "The OAuth refresh token is no longer valid. "
+        "Re-authorize this MCP server to restore access."
+        if is_oauth_failure
+        else f"{error} Check the MCP server and reconnect from the dashboard."
+    )
 
     try:
         async with async_session_factory() as db:
             await create_notification(
                 db,
-                notification_type="oauth_reauth_required",
+                notification_type=notification_type,
                 severity="error",
-                title=f"Reconnect {server.name}",
-                message=(
-                    "The OAuth refresh token is no longer valid. "
-                    "Re-authorize this MCP server to restore access."
-                ),
+                title=title,
+                message=message,
                 action_path="/mcps",
                 entity_id=server.id,
             )
             await db.commit()
             _notification_errors[server.id] = error
     except Exception:
-        log.exception("Failed to persist OAuth re-authentication notification")
+        log.exception("Failed to persist MCP connection failure notification")
 
 
 def _namespace(server_name: str, tool_name: str) -> str:
@@ -103,7 +112,8 @@ async def connect_server(server: McpServer) -> bool:
         env_template = json.loads(server.env_template) if server.env_template else {}
         headers = json.loads(server.headers) if server.headers else {}
         oauth_config = json.loads(server.oauth_config) if server.oauth_config else None
-        _connect_timeout = 30.0  # default; shortened for OAuth auto-reconnect
+        _connect_timeout = settings.mcp_connection_timeout
+        oauth_reauth_required = False
 
         # Fetch stored credential and render templates
         env: dict[str, str] = {}
@@ -159,6 +169,8 @@ async def connect_server(server: McpServer) -> bool:
                 # instead of crashing with "No redirect handler provided".
                 # The user will need to re-authenticate via the dashboard.
                 async def _noop_redirect_handler(url: str):
+                    nonlocal oauth_reauth_required
+                    oauth_reauth_required = True
                     log.warning(
                         "MCP server '%s' OAuth token expired and refresh failed. "
                         "Re-authenticate via the dashboard.",
@@ -169,6 +181,8 @@ async def connect_server(server: McpServer) -> bool:
                     return None
 
                 async def _noop_callback_handler():
+                    nonlocal oauth_reauth_required
+                    oauth_reauth_required = True
                     log.warning(
                         "MCP server '%s' OAuth callback requested during reconnect. "
                         "Re-authenticate via the dashboard.",
@@ -189,10 +203,6 @@ async def connect_server(server: McpServer) -> bool:
                     redirect_handler=_noop_redirect_handler,
                     callback_handler=_noop_callback_handler,
                 )
-                # Short timeout for auto-reconnect — if refresh fails and
-                # full re-auth is needed, fail fast instead of hanging 35s.
-                # The user can re-auth via the dashboard.
-                _connect_timeout = 10.0
             else:
                 # No OAuth token — the user needs to go through the OAuth flow
                 log.info(
@@ -212,7 +222,15 @@ async def connect_server(server: McpServer) -> bool:
             auth=auth,
             timeout=_connect_timeout,
         )
-        await client.connect()
+        try:
+            await client.connect()
+        except TimeoutError:
+            if oauth_reauth_required:
+                raise ConnectionError(
+                    f"MCP server '{server.name}' OAuth re-authentication required "
+                    "— use the dashboard"
+                )
+            raise
         _clients[server.id] = client
 
         # Discover and register tools
@@ -223,7 +241,7 @@ async def connect_server(server: McpServer) -> bool:
 
     except ConnectionError as e:
         _connect_errors[server.id] = str(e)
-        await _notify_oauth_reauth(server, str(e))
+        await _notify_connection_failure(server, str(e))
         log.warning("Failed to connect to MCP server '%s': %s", server.name, e)
         # Clean up partial connection
         if server.id in _clients:
@@ -235,7 +253,7 @@ async def connect_server(server: McpServer) -> bool:
         return False
     except Exception as e:
         _connect_errors[server.id] = str(e)
-        await _notify_oauth_reauth(server, str(e))
+        await _notify_connection_failure(server, str(e))
         log.exception("Failed to connect to MCP server '%s'", server.name)
         # Clean up partial connection
         if server.id in _clients:
@@ -256,61 +274,49 @@ async def _discover_tools(server: McpServer, client: McpClient) -> None:
     if tool_filter:
         tools = [t for t in tools if t["name"] in tool_filter]
 
-    # Retry the DB write a few times in case SQLite is locked by another
-    # request handler. The write itself is fast (delete + insert), but
-    # SQLite only allows one writer at a time.
-    for attempt in range(3):
-        try:
-            async with async_session_factory() as db:
-                # Clear old tool registrations for this server
-                await db.execute(delete(McpTool).where(McpTool.mcp_server_id == server.id))
+    from ..db import retry_locked_transaction
 
-                for tool in tools:
-                    cap_name = _namespace(server.name, tool["name"])
-                    schema_json = json.dumps(tool["inputSchema"])
+    async with async_session_factory() as db:
 
-                    # Store in DB
-                    mcp_tool = McpTool(
+        async def _persist_tools() -> None:
+            await db.execute(delete(McpTool).where(McpTool.mcp_server_id == server.id))
+
+            for tool in tools:
+                cap_name = _namespace(server.name, tool["name"])
+                schema_json = json.dumps(tool["inputSchema"])
+                db.add(
+                    McpTool(
                         mcp_server_id=server.id,
                         tool_name=tool["name"],
                         capability_name=cap_name,
                         parameters_schema=schema_json,
                         description=tool["description"],
-                        egress=True,  # MCP tools are external by default
+                        egress=True,
                         require_approval=server.require_approval,
                         subject_scoped=True,
                     )
-                    db.add(mcp_tool)
-
-                    # Register in the capability registry
-                    cap_registry.register(
-                        CapabilityDef(
-                            name=cap_name,
-                            kind="mcp_tool",
-                            description=tool["description"],
-                            parameters_schema=tool["inputSchema"],
-                            egress=True,
-                            require_approval=server.require_approval,
-                            subject_scoped=True,
-                            execute=None,
-                        )
-                    )
-
-                    # Track in the tool map
-                    _tool_map[cap_name] = (server.id, tool["name"])
-
-                await db.commit()
-            break  # success
-        except OperationalError as e:
-            if "locked" in str(e) and attempt < 2:
-                log.debug(
-                    "MCP _discover_tools retry %d for '%s' (db locked)",
-                    attempt + 1,
-                    server.name,
                 )
-                await asyncio.sleep(0.5 * (attempt + 1))
-            else:
-                raise
+                cap_registry.register(
+                    CapabilityDef(
+                        name=cap_name,
+                        kind="mcp_tool",
+                        description=tool["description"],
+                        parameters_schema=tool["inputSchema"],
+                        egress=True,
+                        require_approval=server.require_approval,
+                        subject_scoped=True,
+                        execute=None,
+                    )
+                )
+                _tool_map[cap_name] = (server.id, tool["name"])
+
+            await db.commit()
+
+        await retry_locked_transaction(
+            _persist_tools,
+            db,
+            f"discover_mcp_tools:{server.id}",
+        )
 
     # Discovery registers metadata but does not modify agent permission grants.
     # Agents can grant the server or selected tools from the dashboard.
