@@ -1,0 +1,101 @@
+---
+title: Tạo và kiểm tra agent đầu tiên
+description: Cấu hình agent tập trung, cấp capability tối thiểu và kiểm tra run đầu tiên.
+sidebar:
+  order: 4
+---
+
+Hướng dẫn này tạo một agent nhỏ, dễ review trước khi thêm integration hoặc automation. Trước hết cần [provider và model đã được kiểm tra](/vi/docs/getting-started/provider-setup/).
+
+## 1. Tạo agent
+
+1. Mở **Agents**.
+2. Chọn **New Agent**.
+3. Nhập name và ID ổn định.
+4. Chọn provider và model đã cấu hình.
+5. Tạo agent rồi mở Settings.
+
+Agent là một configuration record được version hóa. Nó không phải process và chỉ chạy khi được kích hoạt bởi message, channel hoặc heartbeat.
+
+## 2. Định nghĩa identity hẹp
+
+Dùng ba trường identity cho ba mục đích khác nhau:
+
+```text
+Soul
+Be accurate and cautious. Prefer reversible actions. State uncertainty.
+
+Persona
+Be concise and explain any requested tool use.
+
+Task
+Help inspect and organize files in the assigned workspace. Do not access
+external services or run shell commands unless the operator asks.
+```
+
+- **Soul** nên ổn định giữa các task.
+- **Persona** điều khiển cách trình bày, không điều khiển authority.
+- **Task** định nghĩa workflow agent sở hữu.
+
+Không đặt API key hoặc password trong các trường này. Chúng được đưa vào model context và lưu trong version history.
+
+## 3. Chọn model mặc định
+
+Trong **General**:
+
+1. Chọn provider.
+2. Tìm hoặc nhập model.
+3. Nếu model hỗ trợ thinking, chọn trạng thái và effort mặc định.
+4. Save.
+
+Conversation composer có thể override model hoặc thinking cho một message riêng.
+
+## 4. Đặt giới hạn và sandbox
+
+Cho lần test đầu tiên, nên giữ:
+
+- **Sandbox mode:** Strict — chỉ workspace.
+- **Max turns:** đủ thấp để dừng loop ngoài ý muốn.
+- **Max cost:** phù hợp với một test ngắn.
+- **Session idle timeout:** đủ lâu cho cuộc hội thoại setup.
+- **Max context tokens:** automatic trừ khi metadata provider sai.
+
+Open mode cho phép path rộng hơn và không cần cho workflow đầu tiên.
+
+## 5. Cấp capability tối thiểu
+
+Mở **Capabilities** và bắt đầu với:
+
+| Capability | Mode gợi ý | Lý do |
+| --- | --- | --- |
+| `read_file` | Always | Đọc file workspace đã biết. |
+| `search_files` | Always | Liệt kê workspace và tìm file. |
+| `write_file` | Chưa cho phép | Chỉ thêm sau khi hành vi read-only ổn định. |
+| `terminal` | Chưa cho phép | Tránh shell trong test đầu tiên. |
+| `datetime_now` | On demand hoặc Always | Hữu ích cho summary có timestamp. |
+| Memory, web, MCP và sub-agent | Chưa cho phép | Thêm từng workflow một. |
+
+Giữ **YOLO Mode** tắt để các call cần approval vẫn hiển thị.
+
+## 6. Gửi message đầu tiên
+
+Yêu cầu agent tìm và tóm tắt một file text không nhạy cảm trong workspace mà không tạo hoặc sửa file. Một run thành công phải hiển thị model output, tool activity, assistant response, token/cost/context và completed run trong Traces.
+
+## 7. Mở trace
+
+Trong **Traces**, chọn agent và run mới nhất. Xác nhận status completed, trigger là user message, capability đã load đúng mode, chỉ syscall mong đợi được allow và không có egress ngoài ý muốn.
+
+Nếu agent thử capability chưa được phép, denied audit record cho thấy boundary đã hoạt động. Hãy thu hẹp Task thay vì tự động cấp thêm tool.
+
+## 8. Thêm từng tính năng
+
+Sau khi read-only test ổn định, chọn một workflow tiếp theo:
+
+- [Conversations và attachment](/vi/docs/guides/conversations/);
+- [Knowledge Vault](/vi/docs/guides/knowledge-vault/);
+- [Skills](/vi/docs/guides/skills/);
+- [MCP server](/vi/docs/guides/mcp/);
+- [External channel](/vi/docs/guides/channels/);
+- [Scheduler và heartbeat](/vi/docs/guides/scheduler/).
+
+Với mỗi bổ sung, cấp capability nhỏ nhất, test một hành động đại diện và review trace.

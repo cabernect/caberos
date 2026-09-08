@@ -1,0 +1,101 @@
+---
+title: Approval và sandbox
+description: Hiểu capability enforcement, remembered approval, channel policy, filesystem containment và giới hạn sandbox.
+sidebar:
+  order: 4
+---
+
+CaberOS xem model output là request, không phải authority. Tool call phải pass capability authorization, human decision nếu cần, subject/credential check và filesystem/process restriction trước khi execute.
+
+| Control | Câu hỏi |
+| --- | --- |
+| Capability grant | Agent có được request operation này không? |
+| Schema visibility | Model có thấy full parameter schema không? |
+| Subject binding | Operation tác động data của contact nào? |
+| Approval | Human có phải xác nhận invocation không? |
+| Sandbox mode | Operation được chạm resource nào trên host? |
+| Audit | Decision/result nào được ghi lại? |
+
+Pass một control không bypass control khác.
+
+## Syscall enforcement
+
+```text
+Model ToolCall
+  → capability tồn tại?
+  → agent được grant?
+  → parent grant nếu sub-agent?
+  → session/contact subject hợp lệ?
+  → cần approval?
+  → MCP server/binding/credential hợp lệ?
+  → execute với workspace + sandbox
+  → ghi audit allow/deny
+```
+
+Unknown, ungranted, unbound, unavailable, rejected hoặc failed call tạo denied result. Model có thể tiếp tục bằng alternative được phép.
+
+## Capability default
+
+Workspace file, knowledge/memory, skill discovery mặc định local và không approval. `terminal`, `web_search`, `web_fetch` là egress và cần approval. MCP metadata kế thừa từ server registration. Explicit agent grant có thể override approval; hãy review effective config.
+
+## Approval lifecycle
+
+1. Mediator tạo và persist approval request.
+2. Run emit `pending_approval`.
+3. Run manager báo awaiting approval và tạo notification.
+4. Model loop chờ event.
+5. Operator review capability và args.
+6. Approve persist decision trước khi wake run.
+7. Reject trả denied tool result.
+8. Timeout tự reject.
+9. Audit ghi decision cuối.
+
+Timeout mặc định năm phút, chỉnh bằng `AGENTOS_HITL_TIMEOUT`. Reject một call không nhất thiết cancel cả run. Nhiều approval trong một model turn được gom thành action batch: chờ mọi decision rồi mới chạy approved call.
+
+## Remembered approval
+
+| Scope | Match | Rủi ro |
+| --- | --- | --- |
+| Exact | Capability và args giống hệt | Mở rộng thấp nhất |
+| Same verb | Capability và command verb | Mọi command cùng verb có thể pass |
+| Pattern | Wildcard do operator chọn | Wildcard rộng có thể match quá nhiều |
+| Capability | Mọi args của capability | Rộng nhất |
+
+Decision nằm trong process-local registry, không sửa permanent config và mất khi gateway restart. Ưu tiên Exact.
+
+## Channel policy và YOLO
+
+Channel policy gồm `deny`, `operator`, `auto_approve`; thiếu/unknown fail closed thành deny. YOLO bỏ approval gate process-wide nhưng không grant capability, load schema, resolve subject, enable MCP, bỏ tool filter, đổi Strict thành Open hay tắt audit.
+
+Giữ YOLO tắt ngoài development trusted.
+
+## Native file containment
+
+Strict mode resolve `read_file`, `write_file`, `search_files` trong workspace, reject `..`, absolute escape và symlink ra ngoài. Open mode cho absolute host path. Third-party MCP process không tự bị native file containment giới hạn.
+
+## Terminal sandbox
+
+Strict terminal dùng OS backend và request network-disabled. Open mode chạy `/bin/sh -c` trực tiếp với quyền gateway process; đây là full local-user command authority. Approval chỉ giúp review, không làm arbitrary shell intrinsically safe.
+
+macOS Seatbelt strict hạn chế write/network nhưng cho phép broad host read để system executable chạy. Linux Bubblewrap dùng environment tối thiểu, workspace writable, tmp memory và namespace isolation; cần host support.
+
+## Network boundary
+
+Strict terminal không network, nhưng `web_search`, `web_fetch`, hosted model, MCP HTTP, stdio MCP tự gọi network, channel và Open mode vẫn có thể giao tiếp ngoài. Egress/approval là policy layer; host firewall là layer độc lập.
+
+## MCP, sub-agent và audit
+
+MCP vẫn qua mediator nhưng third-party server nằm ngoài native sandbox. Mediator check grant, parent, subject, server/filter, approval và credential rồi forward args. Sub-agent authority chỉ có thể hẹp hơn parent và không tạo OS process/sandbox riêng.
+
+Allowed/denied syscall lưu run, agent, sub-agent, capability, subject, args, result, decision, denial reason, latency và cost. Bảo vệ audit vì có thể chứa filename, command, URL hoặc output nhạy cảm.
+
+## Checklist
+
+- Giữ Strict.
+- Tắt terminal cho agent chỉ cần document/API.
+- Require approval cho terminal và web.
+- Dùng remembered approval scope hẹp.
+- Review channel policy sau upgrade.
+- Tắt YOLO.
+- Không để credential trong workspace/attachment.
+- Chạy MCP untrusted trong boundary bên ngoài.

@@ -1,0 +1,120 @@
+---
+title: Agents
+description: Hiểu identity, model, giới hạn, workspace và vòng đời cấu hình của agent.
+---
+
+Trong CaberOS, agent là một cấu hình khai báo, không phải plugin hay process chạy lâu dài. CaberOS cung cấp execution harness; cấu hình agent chọn identity, model, authority, giới hạn, workspace, memory và automation mà harness sử dụng.
+
+Tách biệt này cho phép thay đổi agent mà không cần viết hoặc deploy code, đồng thời tạo nơi ổn định để CaberOS áp dụng quyền hạn và ghi lại hoạt động.
+
+## Agent gồm những gì
+
+| Khu vực | Mục đích |
+| --- | --- |
+| Name và ID | Nhận diện agent trong dashboard và API. |
+| Soul | Giá trị, nguyên tắc và ranh giới hành vi bền vững. |
+| Persona | Giọng điệu, phong cách giao tiếp và cách trình bày. |
+| Task | Mission, trách nhiệm và hướng dẫn theo task. |
+| Provider và model | Chọn model transport và model mặc định. |
+| Thinking defaults | Bật reasoning control và chọn effort. |
+| Capabilities | Xác định tập operation tối đa agent được gọi. |
+| Limits | Giới hạn turn, cost, context và thời gian session. |
+| Sandbox mode | Chọn workspace-only hoặc filesystem mở cho file/shell. |
+| Heartbeat | Tùy chọn chạy prompt theo interval cố định. |
+| Memory và skills | Cung cấp context bền vững và hướng dẫn quy trình tái sử dụng. |
+
+## Identity: soul, persona và task
+
+CaberOS giữ identity trong ba trường độc lập:
+
+- **Soul** mô tả giá trị và ranh giới ổn định. Ví dụ: “Ưu tiên hành động có thể hoàn tác. Không gửi message nếu chưa xác nhận.”
+- **Persona** mô tả cách agent giao tiếp. Ví dụ: “Trả lời ngắn gọn, trực tiếp và dùng checklist cho công việc vận hành.”
+- **Task** mô tả công việc. Ví dụ: “Phân loại project note, tìm quyết định chưa giải quyết và chuẩn bị summary hằng ngày.”
+
+Các trường này có trong system context của mọi run và được lưu cùng agent config. Đặt hướng dẫn hành vi bền vững ở đây; đặt user fact và ghi chú thay đổi trong [memory](/vi/docs/core-concepts/memory/).
+
+```text
+Soul
+Be accurate, state uncertainty, and prefer changes that can be reviewed.
+
+Persona
+Write concise answers. Explain tool calls before consequential actions.
+
+Task
+Help maintain this project: inspect files, answer implementation questions,
+and prepare changes only when explicitly requested.
+```
+
+Task hẹp thường giúp chọn capability dự đoán được hơn instruction rộng như “làm mọi thứ giúp tôi”.
+
+## Provider, model và thinking
+
+Mỗi agent chọn một provider đã cấu hình và một model mặc định. Provider giữ connection detail và credential; agent chỉ lưu provider reference và model name.
+
+Model selector trong conversation có thể override model cho một message mà không thay đổi agent vĩnh viễn. Model hỗ trợ reasoning có thể cung cấp thinking toggle và effort theo message.
+
+Agent thiếu provider hoặc model vẫn có thể configure, duplicate, import và inspect, nhưng không thể bắt đầu normal model run. Xem [Cấu hình provider](/vi/docs/getting-started/provider-setup/).
+
+## Limits
+
+Trong **Settings → General → Limits & Sandbox**:
+
+| Limit | Hành vi |
+| --- | --- |
+| Max turns per run | Dừng model/tool loop vô hạn. |
+| Max cost per run | Dừng khi provider cost đạt ceiling. |
+| Session idle timeout | Xác định khi conversation không còn tự resume. |
+| Max context tokens | Override context window của model; để trống để dùng metadata. |
+
+Cost limit là guardrail runtime, không phải hóa đơn tuyệt đối. Kiểm tra usage trong [Observability](/vi/docs/guides/observability/).
+
+## Sandbox và workspace
+
+Mỗi agent có workspace cho attachment và file làm việc:
+
+- **Strict — workspace only** giới hạn file path và shell trong workspace; đây là mặc định khuyến nghị.
+- **Open — full filesystem access** cho phép host path rộng hơn; chỉ dùng khi task thực sự cần và grant đáng tin cậy.
+
+Đổi sandbox không cấp capability. Agent vẫn cần file hoặc terminal capability và approval policy vẫn áp dụng. Workspace file không phải identity hoặc durable memory.
+
+## Capability ceiling
+
+Tab **Capabilities** định nghĩa operation agent được dùng:
+
+| Mode | Discover metadata | Load schema | Invoke |
+| --- | --- | --- | --- |
+| Not permitted | Không | Không | Không |
+| On demand | Có | Có, trong run | Có sau policy check |
+| Always | Có | Có từ model turn đầu | Có sau policy check |
+
+Approval là cấu hình riêng. Loading schema không cấp authority và không bypass [syscall mediator](/vi/docs/core-concepts/permissions/).
+
+## Session, run và agent
+
+- **Agent** là reusable configuration.
+- **Session** là conversation giữa một contact và một agent.
+- **Run** bắt đầu từ một inbound message hoặc heartbeat và kết thúc bằng một outcome; nó ghi model turn, token, cost, tool call và status.
+
+Một agent có thể có nhiều session. Các session khác nhau có thể chạy độc lập; trong một session, message vẫn theo đúng thứ tự conversation.
+
+## Vòng đời cấu hình
+
+- **Save** tạo active configuration version mới.
+- **Disable** ngăn agent được dùng cho tới khi enable lại.
+- **Duplicate** tạo agent riêng từ cấu hình hiện tại.
+- **Export YAML** tạo bản portable của configuration.
+- **Import YAML** validate và import configuration.
+
+Backend có version-list, version-detail và rollback. Rollback kích hoạt một config cũ thành version hiện tại. `MEMORY.md`, workspace, knowledge document, credential và history không nằm trong YAML export.
+
+## Trình tự setup khuyến nghị
+
+1. Cấu hình và validate provider.
+2. Giao task hẹp và identity rõ.
+3. Giữ sandbox **Strict**.
+4. Chỉ bật capability cần cho workflow đầu tiên.
+5. Dùng **On demand** cho tool collection lớn hoặc ít dùng.
+6. Đặt giới hạn turn và cost bảo thủ.
+7. Chạy một task nhỏ.
+8. Kiểm tra run, capability đã load và syscall trong Observability.
+9. Chỉ thêm memory, skill, MCP, channel hoặc heartbeat khi workflow cơ bản ổn định.

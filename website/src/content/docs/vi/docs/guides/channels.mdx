@@ -1,0 +1,116 @@
+---
+title: External channel
+description: Kết nối Telegram, Discord, Zalo OA và Zalo Bot với agent.
+sidebar:
+  order: 6
+---
+
+External channel cho phép người dùng tiếp cận agent CaberOS qua messaging platform. Adapter normalize message, resolve contact/session, chạy agent rồi format và gửi reply theo giới hạn platform.
+
+Channel thay đổi transport, không thay đổi authority. Capability, memory scope, approval policy, model limit, audit và spend tracking vẫn áp dụng như dashboard.
+
+## Platform hỗ trợ
+
+| Platform | Inbound | Output | Giới hạn | Typing indicator |
+| --- | --- | --- | --- | --- |
+| Telegram | Polling hoặc webhook | Markdown | 4.096 ký tự/message | Có |
+| Discord | Webhook | Markdown | 2.000 ký tự/message | Không |
+| Zalo OA | Webhook | Plain text | Không có hard limit cho customer-service message | Không |
+| Zalo Bot Platform | Polling hoặc webhook | Markdown | 2.000 ký tự/message | Có |
+
+Reply dài được chia gần newline hoặc word boundary. Plain-text channel bỏ Markdown cơ bản. Chỉ payload text được hỗ trợ mới tạo run.
+
+## Trước khi kết nối
+
+1. Cấu hình và test agent trong dashboard chat.
+2. Cấp capability tối thiểu.
+3. Chọn cách xử lý call cần approval ngoài dashboard.
+4. Đặt turn/cost limit bảo thủ.
+5. Tạo bot hoặc application riêng.
+6. Dùng platform token least privilege.
+
+Không expose agent chưa test và có quyền quá rộng qua public bot.
+
+## Thêm channel
+
+1. Mở **Channels**.
+2. Chọn **New Channel**.
+3. Chọn platform.
+4. Bind một agent enabled.
+5. Nhập bot token.
+6. Chọn polling hoặc webhook nếu hỗ trợ.
+7. Webhook mode cần webhook secret.
+8. Save.
+9. Nhập platform chat ID và gửi test message.
+10. Gửi text thật và inspect run.
+
+Bot token được mã hóa. API chỉ báo token có tồn tại. Một platform-agent combination chỉ có một config.
+
+## Polling và webhook
+
+**Polling** phù hợp máy local không có public URL; hiện có cho Telegram và Zalo Bot Platform. Chuyển sang polling sẽ xóa webhook hiện có vì hai mode loại trừ nhau.
+
+**Webhook** cần HTTPS endpoint ổn định. URL có dạng:
+
+```text
+https://your-host/api/channels/{platform}/webhook?agent_id={agent_id}
+```
+
+Webhook route không dùng operator session; hãy cấu hình secret và không expose toàn gateway ra Internet. Dùng reverse proxy hoặc tunnel hẹp và network control phù hợp.
+
+## Telegram
+
+Tạo bot bằng BotFather, thêm Telegram channel, bind agent và chọn Polling cho local hoặc Webhook cho HTTPS public. Webhook cần đăng ký URL và secret với Telegram. Adapter gửi typing indicator và chia reply trên 4.096 ký tự.
+
+## Discord
+
+Tạo application/bot trong Discord developer portal, bật message-content intent, thêm bot vào server hoặc DM, rồi thêm Discord channel ở webhook mode. Discord polling hiện không được hỗ trợ bởi dashboard; reply chia ở 2.000 ký tự.
+
+## Zalo OA
+
+Tạo/chọn Zalo Official Account, lấy access token, thêm **Zalo OA** channel ở webhook mode, cấu hình HTTPS webhook và secret rồi gửi customer-service text. Zalo OA không có polling API; output là plain text.
+
+## Zalo Bot Platform
+
+Tạo bot trong Zalo Bot Manager, thêm token, tạo **Zalo Bot** channel, chọn polling cho local hoặc webhook cho public và test bằng destination chat ID. Adapter hỗ trợ typing indicator và Markdown 2.000 ký tự.
+
+## Contact và session mapping
+
+CaberOS resolve contact theo platform, bot/agent binding và external user ID. Hai người nhắn cùng bot không tự động share recall snippet hoặc fact. Model không thể chọn contact ID khác trong memory call.
+
+## Approval policy
+
+| Policy | Hành vi |
+| --- | --- |
+| `deny` | Reject capability call; mặc định. |
+| `operator` | Tạo dashboard approval và chờ operator. |
+| `auto_approve` | Tiếp tục không cần interactive confirmation. |
+
+Policy thiếu/không rõ fail closed thành deny. Policy chỉ ảnh hưởng call đã được grant nhưng cần approval. Khi test channel mới, dùng `deny` trước.
+
+## Test delivery
+
+Nút **Test** nhận chat ID và gửi fixed test message qua adapter. Nó kiểm tra outbound token, destination và reachability, nhưng không kiểm tra inbound, session mapping, model, grant, approval hay toàn pipeline. Sau outbound test, gửi inbound message thật và inspect run.
+
+## Enable, edit, remove
+
+- **Disable** dừng nhận/gửi traffic nhưng giữ config.
+- **Edit** thay token hoặc delivery mode; để trống token để giữ secret.
+- **Remove** xóa config và stop polling task/registry entry.
+
+Đổi mode hoặc token sẽ reload adapter; conversation record local vẫn giữ.
+
+## Checklist bảo mật
+
+- Dùng webhook secret cho public webhook.
+- Giữ gateway/operator API ở loopback hoặc sau authentication.
+- Hạn chế bot membership và platform scope.
+- Bind channel với agent hẹp.
+- Giữ policy `deny` lúc đầu.
+- Review external-channel run và denied syscall.
+- Rotate token nếu xuất hiện trong log/chat/screenshot.
+- Nhớ rằng platform lưu và xử lý message/reply theo policy riêng.
+
+## Troubleshooting
+
+Outbound fail: kiểm tra token, chat ID, permission, TLS/network và channel enabled. Outbound được nhưng inbound không: kiểm tra gateway, competing webhook, public URL, HTTPS, agent ID và secret. Discord/Zalo OA polling không chạy vì các adapter hiện dùng webhook. Webhook 401 nghĩa secret không match. Message bị bỏ qua nếu payload không phải text hỗ trợ. Agent không dùng tool thì inspect syscall; channel không thêm capability. Reply dài bị chia là hành vi bình thường.

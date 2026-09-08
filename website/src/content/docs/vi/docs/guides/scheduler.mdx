@@ -1,0 +1,83 @@
+---
+title: Scheduler và heartbeat
+description: Chạy agent theo interval cố định, giới hạn cost tự động và xử lý failure.
+sidebar:
+  order: 4
+---
+
+Heartbeat tự chạy agent task theo interval cố định. Nó dùng cùng model harness, capability, permission, memory, syscall audit và observability như user message.
+
+## Scheduling mode hiện tại
+
+| Mode | Status | Mục đích |
+| --- | --- | --- |
+| Heartbeat | Available | Chạy task sau mỗi interval. |
+| Cron | Coming soon | Chạy theo calendar expression. |
+| Event | Coming soon | Phản ứng webhook, file change, connector event hoặc agent signal. |
+
+Hiện chỉ heartbeat interval thực thi được.
+
+## Cấu hình heartbeat
+
+1. Mở **Scheduler → Heartbeat**.
+2. Tìm agent enabled.
+3. Nhập task prompt.
+4. Đặt interval phút.
+5. Đặt cost ceiling mỗi heartbeat.
+6. Đặt failure threshold liên tiếp.
+7. Enable heartbeat.
+8. Dùng **Run now** để test.
+
+Heartbeat config thuộc agent configuration; save tạo agent version mới.
+
+## Configuration fields
+
+| Field | Hành vi |
+| --- | --- |
+| Enabled | Start/stop periodic task sau khi scheduler sync. |
+| Task prompt | Inbound instruction mỗi run; prompt trống ngăn schedule. |
+| Interval | Delay giữa run; runtime tối thiểu một phút. |
+| Max cost per heartbeat | Thay per-run cost ceiling cho heartbeat. |
+| Failure threshold | Tạo alert sau số run liên tiếp không completed. |
+
+Scheduler scan config khoảng 30 giây nên enable/disable không đổi ngay lập tức.
+
+## Prompt an toàn
+
+Heartbeat không có user message mới để suy luận intent. Hãy viết prompt tự đủ:
+
+```text
+Review the shared workspace status file. Summarize blocked items and stale
+timestamps. Do not edit files or contact external services. If the file is
+missing, report that as the result.
+```
+
+Nêu rõ inspect gì, output gì và action nào bị cấm. Tránh prompt rộng như “take care of anything important”.
+
+## Hành vi thực thi
+
+Khi interval hết hạn, CaberOS đọc config, tạo run trigger `heartbeat`, gửi prompt qua pipeline, áp dụng cost/turn/context limit, mediation mọi capability call, lưu heartbeat message và cập nhật fire/status/error/next-fire/failure.
+
+Result xuất hiện trong conversation và Observability; spend tách được heartbeat với user-message trigger.
+
+## Permission và approval
+
+Heartbeat không có authority rộng hơn agent. Not permitted vẫn unavailable, On demand cần discovery/load, MCP cần connected/bound, sandbox và audit vẫn áp dụng.
+
+Heartbeat unattended có thể pause chờ approval hoặc bị deny theo channel policy. Với read-only check, chỉ grant operation cần thiết và test bằng **Run now**.
+
+## Run now và failure tracking
+
+**Run now** chạy ngay mà không đổi prompt periodic, yêu cầu prompt không trống. Dùng để kiểm tra provider/model, capability, approval, cost/turn limit, conversation và trace.
+
+Scheduler theo dõi consecutive failure trong process memory. Completed run reset counter; failed/stopped/exception tăng counter. Gateway restart reset runtime state nhưng config vẫn lưu.
+
+## Cost và availability
+
+Heartbeat dùng `max_cost_per_heartbeat`. Provider cost có thể thiếu hoặc xấp xỉ; kết hợp provider quota/billing alert.
+
+Scheduler chạy trong local gateway và chỉ hoạt động khi máy thức, gateway chạy, agent/heartbeat enabled, prompt không trống và model/integration sẵn sàng. Đây không phải durable distributed scheduler; interval bị lỡ không tự replay.
+
+## Troubleshooting
+
+Heartbeat không start: kiểm tra agent, heartbeat, prompt, 30 giây sync và interval tối thiểu một phút. Run now invalid: agent không tồn tại hoặc prompt trống. Chờ vô hạn: tìm pending approval. Failure tăng: xem provider, denied syscall, MCP, context và cost. Cron/Event không chọn được vì chưa implement.

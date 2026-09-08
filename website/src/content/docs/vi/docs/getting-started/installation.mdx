@@ -1,0 +1,44 @@
+---
+title: Cài đặt
+description: Cài đặt CaberOS trên macOS Apple Silicon.
+sidebar:
+  order: 1
+---
+
+## Nền tảng được hỗ trợ
+
+Bản desktop hiện hỗ trợ **macOS 13 trở lên trên Apple Silicon**: M1, M2, M3 hoặc M4. Bản build này chưa hỗ trợ Mac Intel và Windows.
+
+## Tải desktop app
+
+1. Mở [bản phát hành CaberOS](https://github.com/cabernect/caberos/releases).
+2. Tải file `CaberOS_0.1.8_arm64.dmg` tương ứng với release hiện tại.
+3. Mở DMG và kéo **CaberOS** vào **Applications**.
+4. Khởi chạy CaberOS từ Applications.
+
+Ứng dụng đã gói FastAPI gateway và không cần Python, Node hoặc `uv`.
+
+## Thông báo Gatekeeper
+
+Bản phát hành được ký ad-hoc và chưa được Apple notarize. Nếu macOS báo ứng dụng không thể mở hoặc bị hỏng, hãy xác nhận DMG đến từ release chính thức rồi chạy:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/CaberOS.app
+```
+
+Khởi chạy lại CaberOS sau khi xóa quarantine attribute.
+
+## Development local
+
+```bash
+git clone https://github.com/cabernect/caberos.git
+cd caberos
+./scripts/install.sh
+./scripts/dev.sh
+```
+
+Sau đó mở `http://localhost:5173`. Development dùng gateway port `8081`; desktop app đóng gói dùng port `51718`.
+
+## Bước tiếp theo
+
+Tiếp tục với [Lần khởi chạy đầu tiên](/vi/docs/getting-started/first-launch/).

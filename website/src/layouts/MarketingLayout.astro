@@ -7,11 +7,17 @@ import mark from "../assets/logo-mark.svg";
 const {
   title = "CaberOS — Local-first AI agents",
   description = "An open-source operating system for personal AI agents.",
+  locale = "en",
 } = Astro.props;
+const localePrefix = locale === "vi" ? "/vi" : "";
+const localizedPath = (path: string) => `${localePrefix}${path}`;
 const canonical = Astro.site ? new URL(Astro.url.pathname, Astro.site) : undefined;
+const englishPath = Astro.url.pathname.replace(/^\/vi(?=\/|$)/, "") || "/";
+const englishUrl = Astro.site ? new URL(englishPath, Astro.site) : undefined;
+const vietnameseUrl = Astro.site ? new URL(`/vi${englishPath === "/" ? "/" : englishPath}`, Astro.site) : undefined;
 ---
 <!doctype html>
-<html lang="en">
+<html lang={locale}>
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width" />
@@ -32,13 +38,16 @@ const canonical = Astro.site ? new URL(Astro.url.pathname, Astro.site) : undefin
     </script>
     <link rel="icon" type="image/svg+xml" href={mark.src} />
     {canonical && <link rel="canonical" href={canonical} />}
+    {englishUrl && <link rel="alternate" hreflang="en" href={englishUrl} />}
+    {vietnameseUrl && <link rel="alternate" hreflang="vi" href={vietnameseUrl} />}
+    {englishUrl && <link rel="alternate" hreflang="x-default" href={englishUrl} />}
     <title>{title}</title>
   </head>
   <body>
     <a class="skip-link" href="#main-content">Skip to content</a>
     <header class="site-header">
       <div class="site-header-inner">
-        <a class="brand" href="/" aria-label="CaberOS home">
+        <a class="brand" href={localizedPath("/")} aria-label="CaberOS home">
           <img src={mark.src} alt="" width="27" height="27" />
           <span>
             CaberOS
@@ -46,16 +55,17 @@ const canonical = Astro.site ? new URL(Astro.url.pathname, Astro.site) : undefin
           </span>
         </a>
         <nav class="site-nav" aria-label="Main navigation">
-          <a href="/#product">Product</a>
-          <a href="/#security">Security</a>
-          <a href="/docs/">Docs</a>
+          <a href={`${localizedPath("/")}#product`}>Product</a>
+          <a href={`${localizedPath("/")}#security`}>Security</a>
+          <a href={localizedPath("/docs/")}>Docs</a>
+          <a href={locale === "vi" ? "/" : "/vi/"}>{locale === "vi" ? "English" : "Tiếng Việt"}</a>
           <a href="https://github.com/cabernect/caberos">GitHub</a>
           <button class="theme-toggle" data-theme-toggle type="button" aria-label="Switch to dark mode" aria-pressed="false">
             <span class="theme-toggle-icon" data-theme-icon="sun"><Icon name="sun" size={15} /></span>
             <span class="theme-toggle-icon" data-theme-icon="moon" hidden><Icon name="moon" size={15} /></span>
             <span data-theme-label>Light</span>
           </button>
-          <a class="nav-cta" href="/download/">Download</a>
+          <a class="nav-cta" href={localizedPath("/download/")}>{locale === "vi" ? "Tải xuống" : "Download"}</a>
         </nav>
       </div>
     </header>
@@ -68,18 +78,18 @@ const canonical = Astro.site ? new URL(Astro.url.pathname, Astro.site) : undefin
       <div class="container">
         <div class="site-footer-grid">
           <div>
-            <a class="brand" href="/" aria-label="CaberOS home">
+            <a class="brand" href={localizedPath("/")} aria-label="CaberOS home">
               <img src={mark.src} alt="" width="27" height="27" />
               <span>
                 CaberOS
                 <small>local-first agents</small>
               </span>
             </a>
-            <p>Give personal agents memory, tools, and room to act—without giving up control.</p>
+            <p>{locale === "vi" ? "Trao cho agent cá nhân bộ nhớ, công cụ và không gian hành động mà không từ bỏ quyền kiểm soát." : "Give personal agents memory, tools, and room to act—without giving up control."}</p>
           </div>
           <nav class="footer-links" aria-label="Footer navigation">
-            <a href="/docs/">Documentation</a>
-            <a href="/download/">Download</a>
+            <a href={localizedPath("/docs/")}>{locale === "vi" ? "Tài liệu" : "Documentation"}</a>
+            <a href={localizedPath("/download/")}>{locale === "vi" ? "Tải xuống" : "Download"}</a>
             <a href="https://github.com/cabernect/caberos/releases">Releases</a>
             <a href="https://github.com/cabernect/caberos/blob/main/SECURITY.md">Security</a>
             <a href="https://github.com/cabernect/caberos/blob/main/CONTRIBUTING.md">Contributing</a>

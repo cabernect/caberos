@@ -1,0 +1,22 @@
+---
+title: Cập nhật CaberOS
+description: Cài desktop build mới mà vẫn giữ local data.
+---
+
+Desktop release CaberOS có updater artifact cho Apple Silicon. Updater kiểm tra release endpoint và verify artifact trước khi cài.
+
+## Update từ Settings
+
+1. Mở **Settings**.
+2. Mở **About**.
+3. Chọn **Check for Updates**.
+4. Review version và release notes.
+5. Sau khi download xong, chọn restart action rõ ràng.
+
+Desktop shell stop bundled gateway trước khi restart. Application data directory nằm tách khỏi application bundle.
+
+## Manual update
+
+Bạn cũng có thể tải DMG mới từ [GitHub Releases](https://github.com/cabernect/caberos/releases), quit CaberOS và replace application trong `/Applications`.
+
+Trước major migration, tạo backup và xác nhận database cùng secret key nằm trong application data directory đúng.

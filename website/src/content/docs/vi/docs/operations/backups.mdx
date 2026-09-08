@@ -1,0 +1,23 @@
+---
+title: Backup và restore
+description: Bảo vệ và di chuyển agent, memory, credential và workspace của CaberOS.
+---
+
+Dùng data control trong **Settings** để export CaberOS backup. Backup có thể gồm agent config, provider, MCP setting, channel, session, memory, credential mã hóa và workspace file.
+
+## Trước khi chuyển máy
+
+1. Tạo export từ instance nguồn.
+2. Lưu archive ở nơi riêng tư.
+3. Cài CaberOS trên máy đích.
+4. Tạo hoặc xác nhận operator account đích.
+5. Import archive bằng merge mode nếu muốn giữ data hiện có.
+6. Verify agent, provider, workspace và memory.
+
+## Restore point
+
+Tạo restore point trước migration hoặc replacement import rủi ro. Sau restore, xác nhận backup đúng và chạy database integrity check.
+
+Credential vẫn mã hóa trong archive. Secret key ở máy đích phải decrypt được; nếu không, nhập lại credential bị ảnh hưởng.
+
+Không upload backup public. Archive có thể chứa conversation, workspace file và encrypted secret.

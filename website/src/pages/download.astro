@@ -2,36 +2,41 @@
 import MarketingLayout from "../layouts/MarketingLayout.astro";
 import Icon from "../components/Icon.astro";
 import { downloadUrl, releaseTag, releaseUrl } from "../release";
+
+const { locale = "en" } = Astro.props;
+const isVietnamese = locale === "vi";
+const localizedPath = (path: string) => `${isVietnamese ? "/vi" : ""}${path}`;
 ---
 
 <MarketingLayout
-  title={`Download CaberOS ${releaseTag}`}
-  description={`Download CaberOS ${releaseTag} for macOS Apple Silicon and follow the first-launch guide.`}
+  locale={locale}
+  title={`${isVietnamese ? "Tải CaberOS" : "Download CaberOS"} ${releaseTag}`}
+  description={isVietnamese ? `Tải CaberOS ${releaseTag} cho macOS Apple Silicon và làm theo hướng dẫn khởi chạy lần đầu.` : `Download CaberOS ${releaseTag} for macOS Apple Silicon and follow the first-launch guide.`}
 >
   <section class="download-hero">
     <div class="container download-hero-grid">
       <div>
-        <p class="eyebrow"><span class="eyebrow-line"></span>Get CaberOS</p>
-        <h1>Start with a machine you control.</h1>
-        <p class="download-lead">CaberOS runs on your Mac, keeps your agent workspace close, and gives you a clear boundary around every action.</p>
+        <p class="eyebrow"><span class="eyebrow-line"></span>{isVietnamese ? "Tải CaberOS" : "Get CaberOS"}</p>
+        <h1>{isVietnamese ? "Bắt đầu với một cỗ máy bạn kiểm soát." : "Start with a machine you control."}</h1>
+        <p class="download-lead">{isVietnamese ? "CaberOS chạy trên máy Mac, giữ workspace của agent ở gần bạn và tạo ranh giới rõ ràng quanh mọi hành động." : "CaberOS runs on your Mac, keeps your agent workspace close, and gives you a clear boundary around every action."}</p>
       </div>
       <div class="release-card">
         <div class="release-card-head">
           <div>
-            <span class="card-kicker mono">CURRENT RELEASE</span>
+            <span class="card-kicker mono">{isVietnamese ? "BẢN PHÁT HÀNH HIỆN TẠI" : "CURRENT RELEASE"}</span>
             <h2>{releaseTag}</h2>
           </div>
           <span class="release-mark"><Icon name="download" size={23} /></span>
         </div>
         <p>macOS Apple Silicon · ARM64</p>
-        <a class="release-button" href={downloadUrl} aria-label={`Download CaberOS ${releaseTag} for macOS Apple Silicon`}>
+        <a class="release-button" href={downloadUrl} aria-label={`${isVietnamese ? "Tải CaberOS" : "Download CaberOS"} ${releaseTag} for macOS Apple Silicon`}>
           <span class="release-button-icon"><Icon name="download" size={19} /></span>
           <span class="release-button-copy">
-            <strong>Download CaberOS</strong>
+            <strong>{isVietnamese ? "Tải CaberOS" : "Download CaberOS"}</strong>
             <small>macOS Apple Silicon · DMG installer</small>
           </span>
         </a>
-        <a class="release-link" href={releaseUrl}>View release notes and artifacts <Icon name="arrow" size={15} /></a>
+        <a class="release-link" href={releaseUrl}>{isVietnamese ? "Xem ghi chú và artifact" : "View release notes and artifacts"} <Icon name="arrow" size={15} /></a>
       </div>
     </div>
   </section>
@@ -39,46 +44,34 @@ import { downloadUrl, releaseTag, releaseUrl } from "../release";
   <section class="download-body">
     <div class="container download-layout">
       <article class="download-main">
-        <p class="eyebrow"><span class="eyebrow-line"></span>Installation</p>
-        <h2>From download to first response.</h2>
+        <p class="eyebrow"><span class="eyebrow-line"></span>{isVietnamese ? "Cài đặt" : "Installation"}</p>
+        <h2>{isVietnamese ? "Từ tải xuống đến phản hồi đầu tiên." : "From download to first response."}</h2>
         <div class="steps">
-          <div class="step">
-            <span class="step-number mono">01</span>
-            <div><h3>Download and open</h3><p>Download the DMG, open it, and drag <strong>CaberOS</strong> into your Applications folder.</p></div>
-          </div>
-          <div class="step">
-            <span class="step-number mono">02</span>
-            <div><h3>Launch CaberOS</h3><p>The desktop shell starts its local gateway automatically. The first launch creates the local data directory and default agents.</p></div>
-          </div>
-          <div class="step">
-            <span class="step-number mono">03</span>
-            <div><h3>Complete setup</h3><p>Sign in with the initial operator account, configure a model provider, and create or customize your first agent.</p></div>
-          </div>
-          <div class="step">
-            <span class="step-number mono">04</span>
-            <div><h3>Send a message</h3><p>Ask your agent to inspect its workspace. Approvals, tools, and the run trace appear as the work happens.</p></div>
-          </div>
+          <div class="step"><span class="step-number mono">01</span><div><h3>{isVietnamese ? "Tải xuống và mở" : "Download and open"}</h3><p>{isVietnamese ? "Tải DMG, mở file và kéo " : "Download the DMG, open it, and drag "}<strong>CaberOS</strong>{isVietnamese ? " vào thư mục Applications." : " into your Applications folder."}</p></div></div>
+          <div class="step"><span class="step-number mono">02</span><div><h3>{isVietnamese ? "Khởi chạy CaberOS" : "Launch CaberOS"}</h3><p>{isVietnamese ? "Desktop shell tự động khởi động local gateway. Lần chạy đầu tiên tạo thư mục dữ liệu và agent mặc định." : "The desktop shell starts its local gateway automatically. The first launch creates the local data directory and default agents."}</p></div></div>
+          <div class="step"><span class="step-number mono">03</span><div><h3>{isVietnamese ? "Hoàn tất thiết lập" : "Complete setup"}</h3><p>{isVietnamese ? "Đăng nhập bằng tài khoản operator ban đầu, cấu hình model provider và tạo hoặc tùy chỉnh agent đầu tiên." : "Sign in with the initial operator account, configure a model provider, and create or customize your first agent."}</p></div></div>
+          <div class="step"><span class="step-number mono">04</span><div><h3>{isVietnamese ? "Gửi một message" : "Send a message"}</h3><p>{isVietnamese ? "Yêu cầu agent kiểm tra workspace. Approval, tool và run trace sẽ xuất hiện khi công việc diễn ra." : "Ask your agent to inspect its workspace. Approvals, tools, and the run trace appear as the work happens."}</p></div></div>
         </div>
         <div class="download-actions">
-          <a class="text-link" href="/docs/getting-started/installation/">Read the full installation guide <Icon name="arrow" size={15} /></a>
-          <a class="text-link" href="/docs/getting-started/first-launch/">First launch checklist <Icon name="arrow" size={15} /></a>
+          <a class="text-link" href={localizedPath("/docs/getting-started/installation/")}>{isVietnamese ? "Đọc hướng dẫn cài đặt" : "Read the full installation guide"} <Icon name="arrow" size={15} /></a>
+          <a class="text-link" href={localizedPath("/docs/getting-started/first-launch/")}>{isVietnamese ? "Checklist khởi chạy lần đầu" : "First launch checklist"} <Icon name="arrow" size={15} /></a>
         </div>
       </article>
 
       <aside class="download-aside">
         <div class="aside-card">
-          <span class="card-kicker mono">REQUIREMENTS</span>
+          <span class="card-kicker mono">{isVietnamese ? "YÊU CẦU" : "REQUIREMENTS"}</span>
           <ul class="check-list">
-            <li>macOS 13 or newer</li>
-            <li>Apple Silicon: M1, M2, M3, or M4</li>
-            <li>200 MB of free disk space</li>
-            <li>Internet access for cloud model providers</li>
+            <li>{isVietnamese ? "macOS 13 trở lên" : "macOS 13 or newer"}</li>
+            <li>{isVietnamese ? "Apple Silicon: M1, M2, M3 hoặc M4" : "Apple Silicon: M1, M2, M3, or M4"}</li>
+            <li>{isVietnamese ? "200 MB dung lượng trống" : "200 MB of free disk space"}</li>
+            <li>{isVietnamese ? "Có Internet nếu dùng cloud model provider" : "Internet access for cloud model providers"}</li>
           </ul>
         </div>
         <div class="aside-card note-card">
-          <span class="card-kicker mono">IMPORTANT</span>
-          <p>The release is ad-hoc signed and is not notarized by Apple. macOS may ask you to confirm that you want to open it.</p>
-          <p>Intel Macs and Windows are not supported by this build.</p>
+          <span class="card-kicker mono">{isVietnamese ? "LƯU Ý" : "IMPORTANT"}</span>
+          <p>{isVietnamese ? "Bản phát hành được ký ad-hoc và chưa được Apple notarize. macOS có thể yêu cầu bạn xác nhận muốn mở ứng dụng." : "The release is ad-hoc signed and is not notarized by Apple. macOS may ask you to confirm that you want to open it."}</p>
+          <p>{isVietnamese ? "Mac Intel và Windows chưa được hỗ trợ trong bản build này." : "Intel Macs and Windows are not supported by this build."}</p>
         </div>
       </aside>
     </div>
@@ -87,16 +80,16 @@ import { downloadUrl, releaseTag, releaseUrl } from "../release";
   <section class="troubleshooting-section">
     <div class="container troubleshooting-grid">
       <div>
-        <p class="eyebrow"><span class="eyebrow-line"></span>Troubleshooting</p>
-        <h2>If the app waits, check the gateway.</h2>
-        <p>CaberOS stores desktop gateway output in your application data directory. The bundled gateway listens only on loopback port <code>51718</code>.</p>
+        <p class="eyebrow"><span class="eyebrow-line"></span>{isVietnamese ? "Xử lý sự cố" : "Troubleshooting"}</p>
+        <h2>{isVietnamese ? "Nếu ứng dụng chờ, hãy kiểm tra gateway." : "If the app waits, check the gateway."}</h2>
+        <p>{isVietnamese ? "CaberOS lưu output của desktop gateway trong thư mục dữ liệu ứng dụng. Gateway chỉ lắng nghe trên loopback port " : "CaberOS stores desktop gateway output in your application data directory. The bundled gateway listens only on loopback port "}<code>51718</code>.</p>
       </div>
       <div class="command-card">
-        <span class="command-label mono">HEALTH CHECK</span>
+        <span class="command-label mono">{isVietnamese ? "KIỂM TRA SỨC KHỎE" : "HEALTH CHECK"}</span>
         <pre><code>curl -i http://127.0.0.1:51718/health</code></pre>
-        <span class="command-label mono">LOG FILE</span>
+        <span class="command-label mono">{isVietnamese ? "FILE LOG" : "LOG FILE"}</span>
         <pre><code>tail -n 100 "$HOME/Library/Application Support/com.caberos.desktop/logs/gateway.log"</code></pre>
-        <a class="light-link" href="/docs/operations/troubleshooting/">Open troubleshooting docs <Icon name="arrow" size={15} /></a>
+        <a class="light-link" href={localizedPath("/docs/operations/troubleshooting/")}>{isVietnamese ? "Mở tài liệu xử lý sự cố" : "Open troubleshooting docs"} <Icon name="arrow" size={15} /></a>
       </div>
     </div>
   </section>

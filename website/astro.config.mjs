@@ -10,6 +10,11 @@ export default defineConfig({
     starlight({
       title: "CaberOS",
       description: "Documentation for the local-first operating system for personal AI agents.",
+      defaultLocale: "root",
+      locales: {
+        root: { label: "English", lang: "en" },
+        vi: { label: "Tiếng Việt", lang: "vi" },
+      },
       logo: {
         src: "./src/assets/logo-mark.svg",
         alt: "CaberOS",

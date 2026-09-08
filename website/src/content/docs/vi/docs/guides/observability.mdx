@@ -1,0 +1,92 @@
+---
+title: Observability và trace
+description: Inspect health, run, context, syscall, usage, latency, error và spend.
+sidebar:
+  order: 7
+---
+
+CaberOS ghi lại mỗi run để bạn biết trigger, model context, capability request, quyết định allow/deny, thời gian và cost. Dashboard tách **Overview** tổng hợp khỏi **Traces** theo agent.
+
+## Overview
+
+Mở **Overview** để xem health và activity trong khoảng thời gian chọn: non-test run, provider cost, input/output token, error rate, latency trung bình, run/cost theo ngày, top agent, recent run và health của database/provider/agent/active run.
+
+Chọn top agent hoặc recent run để vào Traces.
+
+## System health
+
+Health view có:
+
+| Field | Ý nghĩa |
+| --- | --- |
+| Status | Health request có hoàn tất không. |
+| Database | Local database query có thành công không. |
+| Providers | Số provider record đã cấu hình. |
+| Agents | Số agent record. |
+| Active runs | Run đang được process-local RunManager theo dõi. |
+| Timestamp | Thời điểm health được đánh giá. |
+
+Provider/agent count khác zero không chứng minh resource usable; hãy validate model và inspect MCP/channel state.
+
+Desktop gateway có endpoint không cần auth:
+
+```bash
+curl http://127.0.0.1:51718/health
+```
+
+```json
+{"status":"ok"}
+```
+
+## Traces
+
+Mở **Traces**, chọn agent. Agent card tóm tắt run count, cost, token, error và last activity. Run table hiển thị tối đa 100 non-test run gần nhất với status, trigger, cost, token, latency và start time.
+
+## Run detail
+
+Run là một inbound user message hoặc heartbeat qua pipeline. Detail gồm run/agent/session ID, status/error, trigger, thời gian, token, cost, context token/ceiling, compaction, context breakdown, capability đã load, message và audit record.
+
+Dùng **Timeline** để hiểu execution order và **Messages** để inspect content đã persist.
+
+## Chẩn đoán capability discovery
+
+Với MCP integration lớn, so sánh capability được grant, `loaded_capabilities`, event search/load và syscall cuối. Tool permitted nhưng không loaded có thể đang On demand; kiểm tra model có search đúng không. Loaded nhưng execution fail thì xem denial reason và MCP state.
+
+## Syscall audit
+
+Audit record có run/agent, capability, allow/deny, denial reason, serialized args, bounded result, latency và cost field. API có thể filter theo agent, capability, decision và run. Denied syscall cho biết boundary đã chặn call, không nhất thiết cả run fail.
+
+Denial thường gặp: capability not found/not granted, parent grant thiếu, no subject binding, approval rejected, channel policy, MCP disabled/unavailable/filtered và execution error.
+
+## Spend
+
+Spend API tổng hợp non-test run từ 1–365 ngày và filter theo agent: total cost, run count, token, breakdown by agent và cost by trigger. Cost phụ thuộc provider metadata và LiteLLM; model local/custom có thể báo zero. Provider billing là source of truth tài chính.
+
+## Operator audit
+
+Operator audit ghi control-plane action riêng với operator ID, action, target và timestamp. Syscall audit cho agent request; operator audit cho thay đổi authenticated management.
+
+## Quy trình chẩn đoán
+
+- Error: mở failed run, đọc error/message, kiểm tra limit, syscall, notification và gateway log.
+- Sai tool: xem `loaded_capabilities`, search/load event, mô tả tool và grant; chuyển tool ít dùng sang On demand.
+- Heartbeat fail: lọc trigger `heartbeat`, kiểm tra prompt, cost ceiling, approval policy, provider và MCP.
+- Cost tăng: tìm ngày đầu tiên, top agent, run tốn nhất, turn/context/model/trigger rồi giảm schema, compact session hoặc hạ limit.
+
+## API filter
+
+```text
+GET /api/runs?agent_id=&status=&trigger=&is_test=&limit=&offset=
+GET /api/runs/{run_id}
+GET /api/audit?agent_id=&capability_name=&allowed=&run_id=&limit=&offset=
+GET /api/spend?agent_id=&days=
+GET /api/operator-audit?limit=&offset=
+GET /api/health
+GET /api/stats?days=
+```
+
+Các route cần authenticated operator session hoặc desktop bearer token.
+
+## Retention và privacy
+
+Run, message, syscall args/result, token, cost và operator activity lưu local nhưng có thể chứa prompt, filename, URL hoặc service data. Bảo vệ data directory và backup; review trace trước khi chia sẻ.

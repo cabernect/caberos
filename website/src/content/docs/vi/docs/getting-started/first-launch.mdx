@@ -1,0 +1,61 @@
+---
+title: Lần khởi chạy đầu tiên
+description: Hoàn tất thiết lập CaberOS và nhận phản hồi đầu tiên.
+sidebar:
+  order: 2
+---
+
+CaberOS tạo thư mục dữ liệu local lần đầu gateway khởi động. Desktop shell chờ local health endpoint trước khi hiển thị dashboard.
+
+## 1. Đăng nhập
+
+Tài khoản operator ban đầu:
+
+```text
+username: admin
+password: admin
+```
+
+Hãy đổi mật khẩu ngay trong khu vực account hoặc settings.
+
+## 2. Làm theo setup guide
+
+Setup guide kiểm tra bạn có:
+
+- ít nhất một model provider;
+- provider API key hoặc kết nối tới local model;
+- một agent đã chọn provider và model.
+
+Bạn có thể import backup hoặc tài liệu knowledge ban đầu trong onboarding, hoặc làm sau.
+
+## 3. Gửi message đầu tiên
+
+Mở agent **Caber** và yêu cầu agent kiểm tra workspace. Một run thành công sẽ hiển thị:
+
+- user message;
+- model response streaming;
+- thinking hoặc tool activity;
+- approval prompt khi cần;
+- run hoàn tất trong trace view.
+
+## 4. Kiểm tra health
+
+Health view của dashboard báo cáo database, provider, agent, run đang hoạt động, MCP server và channel. Có thể kiểm tra desktop gateway không cần authentication:
+
+```bash
+curl http://127.0.0.1:51718/health
+```
+
+Kết quả mong đợi:
+
+```json
+{"status":"ok"}
+```
+
+## Dữ liệu nằm ở đâu
+
+```text
+~/Library/Application Support/com.caberos.desktop/
+```
+
+Xem [Vị trí dữ liệu](/vi/docs/operations/data-locations/) để biết layout đầy đủ.

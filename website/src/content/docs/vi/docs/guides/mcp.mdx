@@ -1,0 +1,85 @@
+---
+title: MCP server
+description: Kết nối MCP server stdio và HTTP, bảo vệ credential và cấp tool cho agent.
+sidebar:
+  order: 5
+---
+
+CaberOS là MCP client. MCP server cung cấp implementation và schema của tool; CaberOS sở hữu local server config, process hoặc HTTP connectivity, credential custody, agent binding, approval policy, progressive discovery và audit.
+
+Kết nối server không tự động authorize mọi agent.
+
+## Vòng đời MCP
+
+Một integration hoạt động đi qua bốn trạng thái:
+
+1. **Configured** — có server record, transport và connection detail.
+2. **Authenticated** — credential API key hoặc OAuth cần thiết đã tồn tại.
+3. **Connected** — CaberOS initialize client và discover tool được.
+4. **Granted** — agent được phép discover hoặc invoke tool/server.
+
+Khi xử lý lỗi, hãy xác định stage nào hỏng thay vì đổi mọi setting cùng lúc.
+
+## Thêm server thủ công
+
+1. Mở **MCP Servers**.
+2. Chọn **Add MCP Server**.
+3. Nhập display name duy nhất.
+4. Chọn **stdio** hoặc **HTTP**.
+5. Nhập command/argument hoặc remote URL.
+6. Thêm environment template nếu server cần credential.
+7. Save server.
+8. Cấu hình credential hoặc OAuth.
+9. Connect hoặc reconnect server.
+10. Mở server card và kiểm tra tool đã discover.
+
+## Transport
+
+### stdio
+
+CaberOS khởi động local child process và trao đổi MCP message qua stdin/stdout. Command phải có sẵn trong environment của gateway. Desktop app có thể có `PATH` khác terminal; khi discovery chỉ lỗi trong app đóng gói, ưu tiên absolute executable path.
+
+### HTTP
+
+CaberOS kết nối tới server URL. Với remote server, connection metadata và tool call rời máy; remote service áp dụng retention và security policy riêng.
+
+## Credential API key và OAuth
+
+Credential API key được lưu trong local secret store đã mã hóa. API chỉ trả `has_credentials`, không trả plaintext.
+
+OAuth flow mở authorization state local, nhận callback loopback, đổi code và lưu token mã hóa. Desktop callback là:
+
+```text
+http://localhost:51718/api/mcp/oauth/callback
+```
+
+Nếu refresh token hết hạn hoặc bị revoke, mở Notifications và khởi động lại OAuth recovery.
+
+## Discovery và cấp quyền
+
+Khi kết nối, CaberOS hỏi tool list, đăng ký từng tool thành `mcp_tool` capability và hiển thị schema, egress, subject cùng approval metadata. Discovery không cấp grant cho agent.
+
+Trong **Agent Settings → Capabilities**, cấp individual tool cho least privilege hoặc cả server cho integration cohesive. Server grant không override server disabled, connection failure, missing credential hoặc tool filter.
+
+Với MCP server lớn, chọn **On demand** để agent search metadata gọn rồi load đúng schema cần cho run.
+
+## Security
+
+Trước khi connect:
+
+1. Xác minh publisher và source.
+2. Review command, URL, OAuth scope và tool description.
+3. Dùng service account hoặc token least privilege.
+4. Cấp chỉ tool cần thiết cho từng agent.
+5. Giữ tool consequential ở approval.
+6. Kiểm tra call trong syscall log.
+
+Local stdio server chạy như local process. Capability policy kiểm soát khi model được gọi server; đây không phải sandbox hoàn chỉnh cho code bên thứ ba.
+
+## Xử lý sự cố
+
+- Server không connect: kiểm tra executable path, argument, URL, TLS, auth và network.
+- Có server nhưng không có tool: kiểm tra tool discovery, auth step và tool filter.
+- Tool xuất hiện nhưng agent không dùng được: cấp individual tool/server; nếu On demand, xác nhận run đã search và load schema.
+- Tool call bị deny: mở syscall record để xem missing grant, disabled server, filter, subject binding hoặc rejected approval.
+- Desktop không tìm thấy stdio command: dùng absolute path hoặc cài executable trong environment gateway nhìn thấy.

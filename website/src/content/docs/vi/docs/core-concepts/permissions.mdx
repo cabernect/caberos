@@ -1,0 +1,69 @@
+---
+title: Permissions và authority
+description: Hiểu grant, approval, subject, credential, sandbox và audit decision.
+---
+
+CaberOS xem mọi action do model yêu cầu là một proposal. Trước khi operation chạy, syscall mediator đối chiếu request với agent config và runtime policy.
+
+Đây là lý do prompt instruction không tương đương authority: dù model bị thuyết phục yêu cầu một hành động, CaberOS vẫn quyết định request đó có được phép hay không.
+
+## Chuỗi mediation
+
+Với mỗi capability call, CaberOS:
+
+1. Resolve capability theo registered name.
+2. Kiểm tra capability grant của agent.
+3. Nếu là sub-agent, giao với grant của parent.
+4. Resolve subject từ session nếu capability có subject scope.
+5. Đánh giá approval policy.
+6. Resolve MCP binding và inject credential khi cần.
+7. Chạy operation với workspace và sandbox mode đã cấu hình.
+8. Ghi audit record allow hoặc deny cùng timing và result metadata.
+
+Failure ở bất kỳ policy step nào đều tạo denied result. Model nhận result đó và có thể giải thích hoặc chọn alternative được phép.
+
+## Authorization và approval khác nhau
+
+- **Authorization:** agent có được dùng capability này không?
+- **Approval:** invocation cụ thể này có cần operator xác nhận không?
+- **Schema visibility:** model hiện có parameter schema để yêu cầu operation không?
+
+Tất cả check áp dụng phải pass. Approval không thể cấp capability chưa được authorize và loading schema không thể bypass approval.
+
+## Subject binding
+
+Memory capability có thể gắn với subject. CaberOS lấy contact từ session và inject internal identifier sau khi model request. Model không nhận `contact_id` để tự đổi mục tiêu. Nếu không có session/contact binding hợp lệ, call bị deny.
+
+## Approval
+
+Trong dashboard conversation, approval request hiển thị capability name, arguments, run/agent và nút approve hoặc reject. Reject trả về denied tool result; không nhất thiết hủy cả run.
+
+Một approval có thể được nhớ trong session với scope **Exact**, **Same verb**, **Pattern** hoặc **Capability**. Dùng scope hẹp nhất; remembered approval là runtime state của session và không sửa permanent grant.
+
+Khi một model turn phát ra nhiều call cần approval, chúng được gom thành một action batch. Mọi quyết định phải được thu thập trước khi các call được approve chạy; các call được approve vẫn có thể chạy song song.
+
+## Channel policy và YOLO mode
+
+External channel dùng policy **Deny**, **Operator** hoặc **Auto-approve**. Policy thiếu hoặc không rõ mặc định là deny.
+
+**YOLO Mode** bỏ qua approval gate cho call đã được phép, nhưng không bypass grant, subject resolution, MCP availability, credential lookup, sandbox hoặc audit. Nên giữ YOLO tắt.
+
+## Credential và sandbox
+
+Provider key và MCP credential được mã hóa trong local secret store. Credential được resolve rồi inject lúc thực thi, không xuất hiện trong model-visible arguments.
+
+Grant và filesystem containment là hai lớp khác nhau: Strict sandbox giới hạn operation trong workspace; Open mode cho phép path rộng hơn và nên được xem là high-trust configuration.
+
+## Audit records
+
+Mọi success hoặc denial được mediation ghi lại với run/agent ID, capability, subject, allow/deny, denial reason, arguments, result giới hạn, latency và timestamp. Xem trong **Observability → Syscall Log** hoặc run detail.
+
+## Policy khuyến nghị
+
+1. Dùng explicit capability grants.
+2. Giữ integration lớn ở On demand.
+3. Yêu cầu approval cho egress và consequential write.
+4. Dùng Strict sandbox.
+5. Giữ channel policy là deny cho tới khi workflow được kiểm tra.
+6. Giữ YOLO mode tắt.
+7. Review denied call và unexpected success trong syscall log.
