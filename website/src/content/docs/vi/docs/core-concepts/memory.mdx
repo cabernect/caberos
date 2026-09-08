@@ -1,0 +1,115 @@
+---
+title: Memory và knowledge
+description: Hiểu session context, MEMORY.md, recall theo contact, fact và document.
+---
+
+CaberOS dùng nhiều memory layer có giới hạn. Mỗi layer có lifetime và security scope khác nhau, nên agent không cần toàn bộ conversation archive hoặc document library trong mọi model request.
+
+Memory và Knowledge Vault liên quan nhưng không giống nhau:
+
+- **Memory** lưu context hội thoại, preference, decision và structured fact.
+- **Knowledge** index document do operator cung cấp và retrieve excerpt kèm source location.
+
+## Các memory layer
+
+| Layer | Scope | Tự load | Phù hợp cho |
+| --- | --- | --- | --- |
+| Current session | Một contact và agent | Recent message liên quan | Conversation và tool result hiện tại. |
+| `MEMORY.md` | Một agent | Có trong mọi run | Instruction, convention và fact ổn định. |
+| Working snippets | Một run và contact | Chỉ khi recall/consolidate | Ghi chú trong một task. |
+| Recall snippets | Một contact và agent | Bounded, theo query | Preference hoặc context cũ. |
+| Knowledge graph | Một contact và agent | Chọn fact giới hạn | Quan hệ chính xác, có cấu trúc. |
+| Episodic summaries | Session trước | Summary theo topic | Điều đã xảy ra trước đó. |
+| Raw history | Một contact và agent | Không | Quote, error hoặc value chính xác. |
+| Knowledge Vault | Shared hoặc một agent | Không | Document qua `doc_search`. |
+
+## Session context
+
+Session là conversation giữa contact và agent. Recent message và tool result tạo working context cho các run tiếp theo.
+
+Khi context lớn, CaberOS compact nội dung cũ nhưng bảo vệ phần đầu và phần cuối gần nhất. Gõ `/compact` để compact thủ công. Compaction thay đổi context cho model sau đó nhưng không xóa message đã lưu.
+
+## `MEMORY.md`
+
+Mỗi agent có notebook tại:
+
+```text
+~/agentos/agents/{agent_id}/MEMORY.md
+```
+
+Có thể sửa trong **Agent Settings → Memory** hoặc dùng `memory_update` nếu agent được cấp quyền.
+
+`MEMORY.md` là agent-scoped, được load trong mọi run, nằm ngoài workspace, không thuộc config version và không tự động có trong YAML export. Vì luôn được load, hãy giữ file ngắn.
+
+```markdown
+# Operating notes
+
+- Use ISO 8601 dates in reports.
+- Ask before publishing or sending external messages.
+
+## Project conventions
+
+- The release branch is `main`.
+- Draft notes belong under `notes/drafts/`.
+```
+
+Đừng dùng `MEMORY.md` làm document archive. Tài liệu tham khảo lớn nên đặt trong [Knowledge Vault](/vi/docs/guides/knowledge-vault/).
+
+## Snippet theo contact
+
+`memory_store` lưu text snippet có label và tag tùy chọn. `memory_recall` tìm snippet phù hợp cho contact và agent hiện tại. CaberOS lấy contact từ session; model không cung cấp contact ID.
+
+SQLite dùng FTS5 keyword search; Postgres dùng full-text search. Embedding recall không phải mặc định hiện tại.
+
+## Structured facts
+
+Knowledge graph lưu fact dưới dạng ba string:
+
+```text
+(entity, predicate, object)
+```
+
+Ví dụ:
+
+```text
+(user, prefers, concise status updates)
+(project-caberos, release_branch, main)
+(user, timezone, Asia/Ho_Chi_Minh)
+```
+
+Dùng `memory_remember_fact` để ghi và `memory_query_facts` để query theo entity, predicate, object. Fact là contact-scoped và không tự động được xác minh chỉ vì agent đã lưu; hãy review fact quan trọng.
+
+## Exact history search
+
+`search_history` tìm verbatim message cũ cho phrase và detail chính xác như error, version, config value, name hoặc quote. Nó khác `memory_recall`, vốn tìm stored snippet thay vì toàn bộ archive.
+
+## Automatic memory extraction
+
+Sau run, CaberOS có thể dùng model để tìm thông tin bền vững trong một phần bounded của conversation và working-memory notes. Nó ưu tiên preference, project context, decision và constraint; loại one-off result và file content tạm thời.
+
+Item mới được deduplicate vào section `## Auto-extracted` trong `MEMORY.md`, sau đó working entry theo run được clear. Đây là best-effort và statement do model tạo có thể cần sửa.
+
+## Episodic context
+
+CaberOS có thể đưa summary ngắn của session trước có liên quan vào context. Summary được giới hạn để conversation cũ không lấn át request mới; dùng `search_history` khi cần wording chính xác.
+
+## Knowledge Vault
+
+Knowledge Vault có **Shared Knowledge** và **agent-private knowledge**. Agent dùng `doc_list`, `doc_search` và `doc_inspect` cho visual source. Kết quả giữ metadata như heading, PDF page, spreadsheet sheet và source location để hiển thị citation.
+
+Document không được đưa vào mọi prompt; chỉ excerpt hoặc visual content được retrieve mới được gửi tới model đã chọn. Nếu model hosted, content đó rời máy trong model request.
+
+## Chọn layer phù hợp
+
+| Thông tin | Layer |
+| --- | --- |
+| “Luôn trả lời bằng bullet ngắn.” | `MEMORY.md` |
+| “User thích dark mode.” | Structured fact hoặc recall snippet |
+| “Build fail với XYZ-204.” | Raw history; snippet nếu sẽ lặp lại |
+| Product manual hoặc project specification | Knowledge Vault |
+| Ghi chú chỉ cần trong một task | Working snippet hoặc workspace file |
+| Conversation hiện tại | Session context |
+
+## Review và xóa
+
+Sửa `MEMORY.md` trong Memory settings, inspect/remove document trong Knowledge Vault, dùng memory API để inspect triple hoặc clear scope. Xóa conversation xóa message và run data theo database operation local. Đưa data directory vào backup nếu cần giữ memory và history.

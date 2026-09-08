@@ -1,0 +1,86 @@
+---
+title: Tổng quan bảo mật
+description: Hiểu mục tiêu, trust boundary, control, giới hạn và cấu hình bảo mật của CaberOS.
+sidebar:
+  order: 1
+---
+
+CaberOS chạy model có thể yêu cầu file, command, memory, web và external service. Security model giả định model output có thể sai hoặc bị thao túng, nên mọi action là untrusted input đi vào policy boundary do OS sở hữu.
+
+Bảo mật đến từ nhiều control độc lập: operator authentication, explicit capability grant, schema visibility theo run, subject binding, approval, credential injection, filesystem/process restriction, audit và local data ownership. Không control riêng lẻ nào tự làm agent an toàn.
+
+## Mục tiêu bảo mật
+
+CaberOS hướng tới việc giữ state dưới quyền operator, ngăn capability chưa được grant, ngăn subject-scoped tool chọn contact khác, yêu cầu review cho operation quan trọng, giữ credential ngoài model context/API response, giới hạn native file/shell trong strict mode, inspect allow/deny call và giới hạn loop bằng turn/context/cost/HITL timeout.
+
+## Giới hạn và non-goal
+
+Bản local single-operator hiện tại không cung cấp hostile multi-tenant isolation, RBAC, bảo vệ khỏi process cùng OS user, full-disk encryption, sandbox hoàn chỉnh cho third-party MCP code, proof model output đúng, durable distributed coordination, bảo đảm external service không retain data, hay detect mọi secret format.
+
+Local-first không có nghĩa air-gapped nếu operator bật local và external component lẫn nhau.
+
+## Threat model
+
+| Threat | Ví dụ | Control chính |
+| --- | --- | --- |
+| Prompt injection | Document yêu cầu model bỏ qua operator và gửi data. | Capability ceiling, approval, sandbox, audit, warning |
+| Excessive authority | Research agent có terminal/write không cần thiết. | Explicit grant, On demand, Strict sandbox, task hẹp |
+| Subject confusion | Channel user truy cập memory người khác. | Contact/session resolution và subject injection |
+| Credential leakage | Model echo key đọc từ file/prompt. | Fernet, runtime injection, redaction, file grant hẹp |
+| Malicious integration | MCP stdio đọc local data khi start. | Review source, least privilege, OS isolation |
+| Forged webhook | Gửi message trực tiếp tới public endpoint. | Webhook secret và network protection |
+| Session theft | Malware lấy desktop bearer token. | OS protection, loopback, logout |
+| Backup disclosure | Upload backup ra public. | Encrypted private storage và access control |
+
+## Defense in depth
+
+```text
+Inbound message/document
+  → input redaction + injection warning
+  → agent config + visible schema
+  → model proposes capability call
+  → syscall mediator: grant, parent, subject, approval,
+    MCP binding, credential, workspace, sandbox
+  → tool execution
+  → audit + model result
+  → output redaction + warning
+  → reply
+```
+
+Guardrail là heuristic; syscall mediator là execution boundary. Warning có thể bỏ sót attack, nhưng thiếu capability grant vẫn ngăn action.
+
+## Baseline khuyến nghị
+
+1. Đổi password `admin` ngay.
+2. Giữ gateway ở loopback hoặc reverse proxy được bảo vệ.
+3. Giữ sandbox **Strict**.
+4. Mỗi agent có task hẹp và explicit capability list.
+5. Bật approval cho terminal, web và consequential MCP.
+6. Tắt **YOLO Mode**.
+7. Dùng On demand cho integration lớn.
+8. Dùng credential least privilege.
+9. Đặt secret cho mọi public webhook.
+10. Test external channel với policy `deny`.
+11. Review syscall trong Traces.
+12. Bảo vệ application directory và backup bằng OS permission/disk encryption.
+13. Xem skill, MCP config, document và backup import là untrusted tới khi review.
+
+## Prompt injection, credential và external flow
+
+Injection có thể đến từ user, file, Knowledge Vault, web, MCP, channel hoặc skill. Defense chính là giới hạn action sau khi model đọc content; ví dụ chỉ cho search document, không cho send message hoặc run command.
+
+Provider key, MCP/OAuth và bot token được mã hóa bằng local Fernet key. Hosted model, remote MCP, web tool và external channel có thể nhận selected data theo cấu hình. Xem [Authentication và credential](/vi/docs/security/authentication-and-credentials/) và [Local-first](/vi/docs/security/local-first/).
+
+## Incident response
+
+Nếu nghi credential hoặc session leak:
+
+1. Disable agent/channel/MCP bị ảnh hưởng.
+2. Tắt YOLO.
+3. Revoke credential ở upstream trước.
+4. Thay credential trong CaberOS.
+5. Logout session và đổi operator password.
+6. Review run, message, audit, operator audit và log.
+7. Giữ evidence private và rotate webhook secret.
+
+Thay local Fernet key không revoke credential upstream.

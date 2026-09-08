@@ -1,0 +1,125 @@
+---
+title: Skills
+description: Cài instruction tái sử dụng và load dần trong agent run.
+sidebar:
+  order: 3
+---
+
+Skill là một directory chứa Markdown instruction và resource file tùy chọn. Skill dạy agent một workflow; nó không phải executable plugin và không cấp capability.
+
+Ví dụ: release checklist, report format, debugging procedure hoặc terminology của tổ chức.
+
+## Vì sao skill dùng progressive disclosure
+
+Inject mọi skill vào mọi prompt sẽ tốn context dù phần lớn không liên quan. CaberOS có ba level:
+
+1. **Menu** — system prompt chỉ chứa name và description ngắn.
+2. **Skill body** — agent gọi `skills_load` sau khi chọn skill.
+3. **Resource** — agent gọi `skills_read_resource` cho từng file được tham chiếu.
+
+Slash command có thể load trực tiếp một skill body.
+
+## Skill location
+
+CaberOS kết hợp:
+
+- **System skills**: operator cài, mọi agent có thể thấy.
+- **Agent skills**: nằm trong workspace một agent, chỉ agent đó thấy.
+
+Nếu hai nơi có cùng skill name, definition được discover trước theo loader precedence. Nên đặt name unique.
+
+## Cấu trúc skill
+
+Directory phải có `SKILL.md`:
+
+```text
+release-checklist/
+├── SKILL.md
+├── checklist.md
+├── references/
+│   └── release-policy.md
+└── assets/
+    └── report-template.txt
+```
+
+`SKILL.md` bắt đầu bằng frontmatter:
+
+```markdown
+---
+name: release-checklist
+description: Verify a release, summarize failures, and prepare release notes.
+license: MIT
+compatibility: CaberOS
+---
+
+# Release checklist
+
+1. Load `checklist.md`.
+2. Inspect the project version.
+3. Run only the checks requested by the operator.
+4. Report failed checks before proposing a release.
+```
+
+Name dùng lowercase, number và single hyphen. Description nên ngắn vì xuất hiện trong lightweight menu. CaberOS list resource nhưng không tự execute script chỉ vì file tồn tại.
+
+## Cài system skill
+
+1. Đóng gói `SKILL.md` và resource thành `.zip`.
+2. Mở **Skills**.
+3. Chọn **Import .zip**.
+4. Chọn archive.
+5. Xác nhận card có name, description, source và resource count.
+
+Import kiểm tra archive path, name và duplicate system skill. Xóa system skill là không thể undo nếu không có backup/source archive.
+
+## Dùng skill từ chat
+
+```text
+/release-checklist review the current release candidate
+```
+
+Composer autocomplete skill. CaberOS gửi task như user message và inject skill body cho run. Slash command chỉ load `SKILL.md`; resource phải đọc qua `skills_read_resource`. `/compact` compact context thay vì load skill.
+
+## Để agent tự chọn
+
+Không có slash command, agent chỉ thấy name/description. Nó có thể gọi `skills_list`, `skills_load(name)`, đọc resource cần thiết và làm theo instruction với capability hiện có.
+
+## Agent-specific skill
+
+Agent có workspace write permission có thể tạo skill trong `skills/` của workspace. Dùng khi workflow experimental, chỉ áp dụng cho một agent hoặc resource thuộc workspace riêng. Operator API có thể promote skill lên system level nhưng fail nếu name đã tồn tại.
+
+## Skill không cấp tool
+
+Skill có thể hướng dẫn gọi command, fetch page hoặc MCP service nhưng request vẫn cần capability grant, schema availability, approval, subject/credential resolution và sandbox permission. `allowed-tools` frontmatter chỉ là metadata; CaberOS capability config vẫn là enforcement boundary.
+
+## Trust và review
+
+Skill là prompt content. Trước khi cài:
+
+1. Đọc `SKILL.md`.
+2. Inspect mọi resource/script.
+3. Kiểm tra yêu cầu secret, egress, filesystem rộng hoặc destructive action.
+4. Xác nhận agent có grant hẹp và sandbox Strict.
+5. Giữ approval cho operation quan trọng.
+
+Install không execute script, nhưng agent có terminal có thể execute script được tham chiếu sau đó.
+
+## Viết skill hiệu quả
+
+Cho skill một job rõ, ghi selection criteria, bước có thứ tự, input/output, stop condition và lúc hỏi user. Giữ example lớn trong resource và không lặp lại permission rule mà CaberOS đã enforce.
+
+Description quá mơ hồ:
+
+```text
+Helps with releases.
+```
+
+Description tốt:
+
+```text
+Validate a CaberOS release candidate, run project checks, and draft release notes from completed changes.
+```
+
+## Troubleshooting
+
+Skill không xuất hiện: kiểm tra archive có `SKILL.md`, frontmatter có name và location đúng; refresh page. Skill đã tồn tại: xóa skill cũ hoặc đổi name. Agent ignore workflow: gọi `/skill-name`, làm instruction cụ thể và kiểm tra capability. Resource không đọc được: dùng path từ `skills_load`; path bị giới hạn trong skill directory. Tool bị deny: skill là guidance, không phải authority.

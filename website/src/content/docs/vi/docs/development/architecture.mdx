@@ -1,0 +1,111 @@
+---
+title: Kiến trúc
+description: Hiểu process topology, execution pipeline, capability mediation, storage, concurrency và integration boundary của CaberOS.
+---
+
+CaberOS là headless, local-first agent runtime với browser và desktop client. Thiết kế trung tâm là **model reasoning cộng OS-owned harness**. User cấu hình model, identity, capability, limit, memory, workspace, channel và schedule; CaberOS quyết định cách chạy cấu hình đó.
+
+FastAPI là gateway/API adapter hiện tại, không phải domain core của product. Reusable execution path bắt đầu ở `run_agent()` rồi đi qua pipeline, harness, capability catalog và syscall mediator.
+
+## System topology
+
+```text
+Browser dashboard / Tauri / External channels / Heartbeat
+                         │
+                         ▼
+FastAPI gateway: auth · REST · SSE · lifecycle · health
+                         │
+                         ▼
+run_agent() → Pipeline → Harness/model loop → Capability catalog → Syscall mediator
+                         │
+             providers · native tools · MCP · sub-agents
+                         │
+SQL database · workspaces · agent homes · Knowledge Vault · skills · logs
+```
+
+## Trách nhiệm theo layer
+
+| Layer | Sở hữu | Không sở hữu |
+| --- | --- | --- |
+| Client | Interaction, navigation, UI state, render event | Authority hoặc tool execution |
+| Gateway | Authentication, API contract, HTTP lifecycle, SSE | Model policy hoặc direct resource access |
+| Runner | Transport-neutral entry point và dependency wiring | HTTP session hoặc UI |
+| Pipeline | Contact/session, persistence, guardrail, workspace, accounting | Model protocol detail |
+| Harness | Context, model turn, compaction, token/cost, tool loop | Final tool authorization |
+| Capability catalog | Permission-filtered metadata và schema visibility | Execution authority ngoài grant |
+| Syscall mediator | Grant, subject, approval, credential, execution, audit | Model reasoning |
+| Storage | Config, conversation, memory, knowledge, audit, credential | Durable distributed queue |
+
+## Deployment
+
+Desktop app gói Tauri host, React WebView và Python gateway tại `127.0.0.1:51718`. Tauri truyền các path database, secret, workspace, knowledge, agent-home và skill; log stdout/stderr được rotate.
+
+Development tách Vite `:5173` proxy tới FastAPI `:8081`. Docker tách backend/frontend, Nginx proxy API/health và tắt buffering cho SSE. Execution architecture giống nhau; chỉ process supervision, address và storage path khác.
+
+## Domain model
+
+Agent là config khai báo có version; Provider là model connection có credential mã hóa; Contact là caller identity; Session là conversation; Run là một message/heartbeat qua loop; Message là record user/assistant/thinking/tool; Capability là operation có schema/egress/approval; Approval/Elicitation là HITL request; Audit là quyết định mediated; MCP server/tool và Channel config là integration boundary.
+
+Security boundary theo session: session thuộc một contact và agent. Subject-scoped operation lấy subject từ session, không từ model argument.
+
+## Ingress và run lifecycle
+
+Mọi entry point được normalize thành `InboundMessage` với channel, agent ID, external user ID, text, message ID, test flag, model override, session, attachment và forced skill. Dashboard, channel và scheduler đều dùng runner/pipeline chung.
+
+Run flow:
+
+```text
+POST message
+  → RunManager task
+  → resolve contact/session + persist pending run
+  → input guardrails + attachments + workspace
+  → per-session lock
+  → context + capability catalog + compaction
+  → model turn → syscall mediator → tool result
+  → output guardrails + persistence + accounting
+  → SSE completion + background title/memory
+```
+
+Pipeline commit sớm trước model call để SQLite không giữ write lock trong thời gian model chạy. Session lock ngăn hai turn trong cùng conversation interleave; session khác có thể chạy đồng thời.
+
+## Context và compaction
+
+Harness tạo system prompt theo thứ tự: base rules, soul, persona, task, `MEMORY.md`, skill menu, graph fact, session summary, recall snippet, forced skill và model capability note. Recent message cùng user message được append; attachment chỉ là reference cho tới khi tool đọc.
+
+Compaction bảo vệ system prompt, giữ head/tail, có thể prune tool result lớn, lưu summary trên session và báo context breakdown. Nó thay đổi context model nhưng không xóa persisted message.
+
+## Model loop và progressive discovery
+
+Mỗi iteration refresh catalog, xác định schema visible, tính token, gọi model, xử lý tool call, emit event, mediation các call độc lập song song, append result theo original order rồi tiếp tục hoặc trả final answer.
+
+Permission ceiling thuộc agent config. **Always** visible ngay; **On demand** search metadata rồi load schema cho turn sau; **Not permitted** không có trong search hoặc authority. Loading schema không đổi config/grant.
+
+## Syscall mediation
+
+Mọi operation model gọi đều qua `SyscallHandler.mediate()`:
+
+```text
+ToolCall
+ → resolve capability
+ → check grant và parent grant
+ → resolve contact subject
+ → apply approval/channel policy
+ → elicitation hoặc MCP credential binding
+ → execute với workspace/sandbox
+ → persist allow/deny audit
+```
+
+Authorization, schema visibility, approval, subject, credential và sandbox là control độc lập. Approval batch của một model turn chờ mọi decision trước khi approved call chạy; approved call vẫn có thể chạy song song.
+
+## Persistence và storage
+
+SQLite mặc định dùng aiosqlite, WAL, foreign key, busy timeout, FTS5 và schema patch idempotent. WAL cho concurrent reader nhưng chỉ một writer; transaction ngắn và commit trước model call giúp giảm contention. Postgres có thể chọn qua `AGENTOS_DATABASE_URL` nhưng không biến in-process run manager/scheduler/approval/channel registry thành distributed system.
+
+| Data | Durable store | Scope |
+| --- | --- | --- |
+| Agent/version | SQL database | Local installation |
+| Provider/key | SQL + local Fernet key | Local installation |
+| Contact/session/run/message | SQL database | Contact/agent/run |
+| Approval/elicitation/audit/spend | SQL database | Run/operator |
+| MCP server/tool/credential | SQL + Fernet key | Server/contact |
+| Memory/fact | SQL + FTS | Contact/agent |

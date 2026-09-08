@@ -1,0 +1,63 @@
+---
+title: Tài liệu CaberOS
+description: Cài đặt, cấu hình, bảo mật và vận hành agent AI cá nhân local-first.
+template: splash
+---
+
+CaberOS là hệ điều hành mã nguồn mở, local-first cho agent AI cá nhân. Nó cung cấp harness xung quanh model: identity, context, công cụ, bộ nhớ, quyền hạn, workspace, tích hợp, tự động hóa và audit trail.
+
+Model đề xuất hành động. CaberOS quyết định hành động nào được chạy và ghi lại kết quả.
+
+## Lộ trình sử dụng lần đầu
+
+1. [Cài đặt CaberOS](/vi/docs/getting-started/installation/) trên macOS Apple Silicon.
+2. [Hoàn tất lần khởi chạy đầu tiên](/vi/docs/getting-started/first-launch/) và đổi mật khẩu mặc định.
+3. [Cấu hình và kiểm tra model provider](/vi/docs/getting-started/provider-setup/).
+4. [Tạo và kiểm tra agent đầu tiên](/vi/docs/getting-started/first-agent/).
+5. Xem lượt chạy đầu tiên trong [Observability và trace](/vi/docs/guides/observability/).
+
+## Các khái niệm quan trọng
+
+### Agent có thể cấu hình
+
+Agent là một cấu hình được version hóa, gồm soul, persona, task, model, capability ceiling, giới hạn, sandbox, workspace, bộ nhớ, skill, channel và heartbeat. Có thể duplicate hoặc export cấu hình dưới dạng YAML mà không gói credential hay dữ liệu local.
+
+[Hiểu về agent →](/vi/docs/core-concepts/agents/)
+
+### Progressive capability discovery
+
+Giữ schema của công cụ thiết yếu luôn sẵn sàng, còn các capability lớn hoặc ít dùng thì tìm kiếm theo yêu cầu. Tìm kiếm trả về metadata gọn; việc load schema chỉ ảnh hưởng run hiện tại và không mở rộng quyền hạn.
+
+[Cấu hình capability →](/vi/docs/core-concepts/capabilities/)
+
+### Thực thi có quyền hạn
+
+Mọi capability call đều đi qua một syscall mediator để kiểm tra grant, thu hẹp quyền của parent/child, subject binding, approval, credential injection, sandbox và audit. Authorization, approval và schema visibility là các quyết định riêng biệt.
+
+[Hiểu quyền hạn →](/vi/docs/core-concepts/permissions/)
+
+### Tích hợp MCP
+
+Kết nối MCP server qua stdio hoặc HTTP, lưu credential API key/OAuth được mã hóa, khám phá tool và cấp quyền cho từng tool hoặc cả server.
+
+[Kết nối MCP server →](/vi/docs/guides/mcp/)
+
+### Observability và spend
+
+Xem run, token, lỗi, độ trễ và chi phí. Mở trace để kiểm tra status, trigger, message, context breakdown, schema đã load và syscall được cho phép hoặc bị từ chối.
+
+[Xem observability và trace →](/vi/docs/guides/observability/)
+
+## Local-first, một cách chính xác
+
+CaberOS lưu agent config, credential, memory, tài liệu knowledge, workspace, session, audit record và spend history trên máy local.
+
+Dữ liệu có thể rời máy khi bạn cấu hình cloud model, gọi remote MCP service, dùng web tool hoặc bật external messaging channel. CaberOS làm rõ các đường đi này; nó không tuyên bố mọi workflow đều hoàn toàn local.
+
+[Xem ranh giới local-first →](/vi/docs/security/local-first/)
+
+## Phạm vi hiện tại
+
+Bản desktop hiện tại dành cho **macOS ARM64 (Apple Silicon)**. Ứng dụng Tauri quản lý local gateway tại `127.0.0.1:51718`. Docker cũng có thể dùng cho development hoặc self-hosting.
+
+CaberOS hiện chưa có product CLI/TUI, distributed job queue bền vững, cron scheduling đã triển khai hoặc event-trigger scheduler.

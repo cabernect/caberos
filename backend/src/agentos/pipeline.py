@@ -505,6 +505,11 @@ class Pipeline:
                                             "args": payload.get("args", {}),
                                             "status": status,
                                             "result": payload.get("result"),
+                                            "approval_id": payload.get("approval_id"),
+                                            "approval_batch_id": payload.get("approval_batch_id"),
+                                            "approval_batch_size": payload.get(
+                                                "approval_batch_size"
+                                            ),
                                         }
                                     ),
                                     seq=_msg_seq,

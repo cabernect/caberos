@@ -1,0 +1,141 @@
+---
+title: Cấu hình model và provider
+description: Thêm provider, khám phá hoặc đăng ký model, validate quyền truy cập và chọn mặc định an toàn.
+sidebar:
+  order: 3
+---
+
+CaberOS lưu model-provider connection riêng với agent. Provider record chứa transport detail và credential được mã hóa; nhiều agent có thể dùng provider đó nhưng chọn model và limit riêng.
+
+Cần ít nhất một provider và model usable trước khi normal agent run bắt đầu.
+
+## Provider fields
+
+| Field | Mục đích |
+| --- | --- |
+| Name | Tên local dễ nhận biết, như “OpenAI personal” hoặc “Local Ollama”. |
+| Type | LiteLLM provider identifier dùng để format model request. |
+| API key | Secret được local secret store mã hóa. |
+| Base URL | Endpoint custom hoặc OpenAI-compatible tùy chọn. |
+| Organization ID | Provider organization selector tùy chọn. |
+| Extra parameters | Transport config theo provider. |
+| Custom models | Model name đăng ký thủ công khi discovery thiếu. |
+
+API response không trả plaintext API key; chỉ báo key có tồn tại.
+
+## Thêm provider preset
+
+1. Mở **Settings → Providers**.
+2. Chọn provider preset.
+3. Đặt tên connection dễ nhận biết.
+4. Nhập API key nếu cần.
+5. Xác nhận hoặc sửa base URL.
+6. Save provider.
+7. Mở model list và validate model sẽ dùng.
+
+Dashboard có preset cho OpenAI, Anthropic, Google Gemini, OpenRouter, DeepSeek, Fireworks AI, xAI, Mistral, Azure OpenAI, AWS Bedrock và các dịch vụ LiteLLM khác; cũng có Ollama, LM Studio và vLLM/SGLang.
+
+Preset chỉ cung cấp form default; nó không tạo account hoặc xác nhận plan của bạn có quyền dùng mọi model.
+
+## Dynamic model discovery
+
+Khi provider hỗ trợ discovery, CaberOS lấy model list và normalize:
+
+- model ID và name;
+- vision support;
+- thinking/reasoning support;
+- effort level;
+- input context window;
+- maximum output tokens.
+
+Provider có hành vi khác nhau. OpenAI, Google-compatible endpoint, Ollama và OpenRouter có thể expose list động; provider khác có thể cần nhập model thủ công. CaberOS lọc model chỉ dùng cho image generation khỏi chat selection, nhưng catalog thay đổi nên hãy validate model chat trước khi gán rộng.
+
+## Thêm custom model
+
+Dùng custom model khi provider không có discovery, list thiếu, endpoint self-hosted dùng tên private hoặc model mới chưa có metadata. Nhập exact identifier provider yêu cầu. Custom entry chỉ làm name selectable, không chứng minh endpoint hỗ trợ model.
+
+Custom model thuộc provider record và có thể xóa riêng. Xóa name không xóa run history đã dùng model đó.
+
+## Validate model
+
+CaberOS validate model bằng request completion nhỏ một token. Nó kiểm tra provider, credential, endpoint, model name và khả năng trả completion. Request có thể tạo phí rất nhỏ và gửi request tối thiểu tới hosted provider.
+
+| Category | Kiểm tra |
+| --- | --- |
+| Authentication | API key, account, organization và permission. |
+| Rate limit | Quota, request limit hoặc throttling tạm thời. |
+| Network | Connectivity, DNS, TLS, proxy và base URL. |
+| Internal/unexpected | Model name, endpoint compatibility, response và gateway log. |
+
+Provider failure tạo notification dẫn về Settings.
+
+## Cấu hình Ollama
+
+Ollama chạy model trên máy local và mặc định không cần API key:
+
+1. Cài và khởi động Ollama.
+2. Pull hoặc tạo model.
+3. Thêm preset **Ollama (Local)**.
+4. Dùng base URL mặc định nếu Ollama không listen nơi khác:
+
+```text
+http://localhost:11434
+```
+
+5. Refresh model discovery.
+6. Validate một model.
+7. Gán model cho agent.
+
+Request tới loopback Ollama vẫn local; remote Ollama URL sẽ gửi request tới host đó.
+
+## OpenAI-compatible endpoint
+
+Với LM Studio, vLLM, SGLang hoặc service tương thích:
+
+1. Chọn preset hoặc tạo provider `openai`.
+2. Đặt base URL `/v1`.
+3. Nhập key nếu cần.
+4. Thêm exact custom model nếu discovery thiếu.
+5. Validate model.
+
+“OpenAI-compatible” không đảm bảo tool calling, streaming, usage accounting, vision hoặc reasoning parameter đều được hỗ trợ.
+
+## Gán model cho agent
+
+1. Mở **Agents**.
+2. Mở settings của agent.
+3. Trong **General**, chọn provider.
+4. Search hoặc nhập default model.
+5. Nếu hỗ trợ, chọn thinking default và effort.
+6. Save agent.
+
+Conversation có thể override model cho một message; override không sửa agent configuration.
+
+## Context, output và thinking
+
+CaberOS dùng provider metadata để hiển thị và enforce model limit khi có. Nếu thiếu metadata, nó fallback qua transport metadata rồi context-window fallback nội bộ. Với endpoint custom chưa rõ, đặt explicit limit bảo thủ.
+
+Model hỗ trợ reasoning có agent-level toggle, effort selector và per-message override. Provider có thể ignore hoặc reject value không hỗ trợ; hãy validate đúng model và effort.
+
+## Edit hoặc rotate key
+
+Mở provider editor và nhập key mới. CaberOS mã hóa lại giá trị; để trống giữ key cũ. Sau rotation, validate model và chạy request nhỏ. Credential đã mã hóa không được hiển thị để copy.
+
+## Xóa provider
+
+Xóa provider cũng clear provider/model fields khỏi active agent config đang tham chiếu và lưu agent thành version mới. Agent không thể chạy tới khi gán provider/model khác; run history và usage vẫn giữ.
+
+## Ranh giới local-first
+
+Hosted provider nhận system prompt, selected context, memory/document excerpt, attachment content agent đã đọc và tool result cần cho turn tiếp theo. Với local model loopback, traffic có thể ở lại máy; MCP, web và channel vẫn có thể gửi data ra ngoài.
+
+## Troubleshooting
+
+- **Không có model:** thêm custom model, kiểm tra key và base URL.
+- **Authentication failure:** thay key, kiểm tra account/project và organization.
+- **Network failure:** xác nhận endpoint từ gateway process và local server đang chạy.
+- **Tool use fail:** completion validation không chứng minh tool-calling; test capability và xem trace.
+- **Thiếu vision/thinking:** metadata provider có thể không advertise support.
+- **Agent hỏng sau khi xóa provider:** gán provider và model mới trong General settings.
+
+Sau validation, tiếp tục với [Tạo agent đầu tiên](/vi/docs/getting-started/first-agent/).

@@ -3,100 +3,90 @@ import MarketingLayout from "../layouts/MarketingLayout.astro";
 import Icon from "../components/Icon.astro";
 import { releaseTag, releaseUrl } from "../release";
 
+const { locale = "en" } = Astro.props;
+const isVietnamese = locale === "vi";
+const localizedPath = (path: string) => `${isVietnamese ? "/vi" : ""}${path}`;
 const repositoryUrl = "https://github.com/cabernect/caberos";
 
-const features = [
-  {
-    icon: "shield",
-    kicker: "Control",
-    title: "Permissioned by design",
-    description: "Every consequential capability call crosses one mediation boundary. Approve, deny, remember, and audit it on your terms.",
-  },
-  {
-    icon: "layers",
-    kicker: "Context",
-    title: "Memory that belongs to you",
-    description: "Combine working memory, durable notes, knowledge, and skills without turning every prompt into a data dump.",
-  },
-  {
-    icon: "spark",
-    kicker: "Agents",
-    title: "Agents are configurations",
-    description: "Shape identity, model, task, limits, and capabilities as versioned data you can duplicate, export, and roll back.",
-  },
-  {
-    icon: "plug",
-    kicker: "Integrations",
-    title: "Connect through MCP",
-    description: "Bring your tools and services through stdio or HTTP MCP servers, with encrypted credentials and OAuth recovery.",
-  },
-  {
-    icon: "activity",
-    kicker: "Visibility",
-    title: "See what happened",
-    description: "Follow runs, tool calls, approvals, costs, failures, and heartbeat activity from one observability surface.",
-  },
-  {
-    icon: "terminal",
-    kicker: "Workspace",
-    title: "A place to operate",
-    description: "Agents can work with files and shell commands inside a mediated, sandboxed workspace instead of an opaque chat box.",
-  },
-] as const;
+const features = isVietnamese
+  ? [
+      { icon: "shield", kicker: "Kiểm soát", title: "Thiết kế với quyền hạn", description: "Mọi capability call quan trọng đều đi qua một ranh giới trung gian để bạn phê duyệt, từ chối và kiểm tra." },
+      { icon: "layers", kicker: "Bối cảnh", title: "Bộ nhớ thuộc về bạn", description: "Kết hợp bộ nhớ làm việc, ghi chú lâu dài, tri thức và skill mà không đưa toàn bộ dữ liệu vào mỗi prompt." },
+      { icon: "spark", kicker: "Agent", title: "Agent là cấu hình", description: "Định hình identity, model, task, giới hạn và capability dưới dạng dữ liệu có version để duplicate, export và rollback." },
+      { icon: "plug", kicker: "Tích hợp", title: "Kết nối qua MCP", description: "Đưa công cụ và dịch vụ vào qua MCP stdio hoặc HTTP, với credential được mã hóa và hỗ trợ OAuth recovery." },
+      { icon: "activity", kicker: "Quan sát", title: "Biết điều gì đã xảy ra", description: "Theo dõi run, tool call, approval, chi phí, lỗi và heartbeat trong một giao diện observability." },
+      { icon: "terminal", kicker: "Workspace", title: "Một nơi để vận hành", description: "Agent làm việc với file và shell command trong workspace có mediation và sandbox thay vì một hộp chat khó kiểm tra." },
+    ] as const
+  : [
+      { icon: "shield", kicker: "Control", title: "Permissioned by design", description: "Every consequential capability call crosses one mediation boundary. Approve, deny, remember, and audit it on your terms." },
+      { icon: "layers", kicker: "Context", title: "Memory that belongs to you", description: "Combine working memory, durable notes, knowledge, and skills without turning every prompt into a data dump." },
+      { icon: "spark", kicker: "Agents", title: "Agents are configurations", description: "Shape identity, model, task, limits, and capabilities as versioned data you can duplicate, export, and roll back." },
+      { icon: "plug", kicker: "Integrations", title: "Connect through MCP", description: "Bring your tools and services through stdio or HTTP MCP servers, with encrypted credentials and OAuth recovery." },
+      { icon: "activity", kicker: "Visibility", title: "See what happened", description: "Follow runs, tool calls, approvals, costs, failures, and heartbeat activity from one observability surface." },
+      { icon: "terminal", kicker: "Workspace", title: "A place to operate", description: "Agents can work with files and shell commands inside a mediated, sandboxed workspace instead of an opaque chat box." },
+    ] as const;
 
-const principles = [
-  ["01", "Local-first", "Your configuration, memory, credentials, workspaces, and audit history live on your machine."],
-  ["02", "One boundary", "Tools, approvals, credentials, subjects, and egress are handled at the syscall layer."],
-  ["03", "Progressive", "Search the capability catalog first. Load full schemas only when a run needs them."],
-  ["04", "Open source", "Inspect the runtime, run it locally, and keep your agent system close to the data it serves."],
-];
+const principles = isVietnamese
+  ? [
+      ["01", "Local-first", "Cấu hình, bộ nhớ, credential, workspace và lịch sử audit của bạn nằm trên máy local."],
+      ["02", "Một ranh giới", "Tool, approval, credential, subject và egress được xử lý tại syscall layer."],
+      ["03", "Progressive", "Tìm capability catalog trước. Chỉ load full schema khi run thực sự cần."],
+      ["04", "Mã nguồn mở", "Kiểm tra runtime, chạy local và giữ hệ thống agent gần dữ liệu mà nó phục vụ."],
+    ]
+  : [
+      ["01", "Local-first", "Your configuration, memory, credentials, workspaces, and audit history live on your machine."],
+      ["02", "One boundary", "Tools, approvals, credentials, subjects, and egress are handled at the syscall layer."],
+      ["03", "Progressive", "Search the capability catalog first. Load full schemas only when a run needs them."],
+      ["04", "Open source", "Inspect the runtime, run it locally, and keep your agent system close to the data it serves."],
+    ];
 ---
 
 <MarketingLayout
-  title="CaberOS — Your agents. Your machine. Your rules."
-  description="CaberOS is an open-source, local-first operating system for personal AI agents with memory, tools, permissions, and observability."
+  locale={locale}
+  title={isVietnamese ? "CaberOS — Agent của bạn. Máy của bạn. Luật của bạn." : "CaberOS — Your agents. Your machine. Your rules."}
+  description={isVietnamese ? "CaberOS là hệ điều hành mã nguồn mở, local-first cho agent AI cá nhân, với bộ nhớ, công cụ, quyền hạn và khả năng quan sát." : "CaberOS is an open-source, local-first operating system for personal AI agents with memory, tools, permissions, and observability."}
 >
   <div class="announcement container">
     <span class="announcement-mark" aria-hidden="true"></span>
-    <span>{releaseTag} is available for macOS Apple Silicon</span>
-    <a href={releaseUrl}>View release <Icon name="arrow" size={15} /></a>
+    <span>{isVietnamese ? `${releaseTag} đã có cho macOS Apple Silicon` : `${releaseTag} is available for macOS Apple Silicon`}</span>
+    <a href={releaseUrl}>{isVietnamese ? "Xem bản phát hành" : "View release"} <Icon name="arrow" size={15} /></a>
   </div>
 
   <section class="hero" aria-labelledby="hero-title">
     <div class="container hero-grid">
       <div class="hero-copy">
-        <p class="eyebrow"><span class="eyebrow-line"></span>Local-first agent runtime</p>
-        <h1 id="hero-title">Give your agents <span>room to act.</span></h1>
+        <p class="eyebrow"><span class="eyebrow-line"></span>{isVietnamese ? "Runtime agent local-first" : "Local-first agent runtime"}</p>
+        <h1 id="hero-title">{isVietnamese ? "Trao cho agent " : "Give your agents "}<span>{isVietnamese ? "không gian hành động." : "room to act."}</span></h1>
         <p class="hero-lead">
-          CaberOS is an open-source operating system for personal AI agents. Give them memory, tools, integrations, and workspaces—while keeping every meaningful action visible and permissioned.
+          {isVietnamese ? "CaberOS là hệ điều hành mã nguồn mở cho agent AI cá nhân. Cung cấp bộ nhớ, công cụ, tích hợp và workspace, đồng thời giữ mọi hành động quan trọng minh bạch và được cấp quyền." : "CaberOS is an open-source operating system for personal AI agents. Give them memory, tools, integrations, and workspaces—while keeping every meaningful action visible and permissioned."}
         </p>
         <div class="hero-actions">
-          <a class="button button-primary" href="/download/">
-            Download {releaseTag}
+          <a class="button button-primary" href={localizedPath("/download/")}>
+            {isVietnamese ? "Tải" : "Download"} {releaseTag}
             <Icon name="download" size={17} />
           </a>
-          <a class="button button-secondary" href="/docs/">
-            Read the docs
+          <a class="button button-secondary" href={localizedPath("/docs/")}>
+            {isVietnamese ? "Đọc tài liệu" : "Read the docs"}
             <Icon name="arrow" size={17} />
           </a>
         </div>
-        <div class="hero-facts" aria-label="Product facts">
+        <div class="hero-facts" aria-label={isVietnamese ? "Thông tin sản phẩm" : "Product facts"}>
           <span><i class="fact-dot"></i>macOS ARM64</span>
-          <span><i class="fact-dot"></i>Open source</span>
-          <span><i class="fact-dot"></i>No Python required</span>
+          <span><i class="fact-dot"></i>{isVietnamese ? "Mã nguồn mở" : "Open source"}</span>
+          <span><i class="fact-dot"></i>{isVietnamese ? "Không cần cài Python" : "No Python required"}</span>
         </div>
       </div>
 
-      <div class="hero-product" aria-label="CaberOS product preview">
+      <div class="hero-product" aria-label={isVietnamese ? "Ảnh xem trước sản phẩm CaberOS" : "CaberOS product preview"}>
         <div class="product-window actual-product-window">
-          <img src="/images/product/agents.png" alt="CaberOS agent dashboard showing configured agents and workspace navigation" />
+          <img src="/images/product/agents.png" alt={isVietnamese ? "Dashboard CaberOS hiển thị agent, workspace và điều hướng cấu hình" : "CaberOS agent dashboard showing configured agents and workspace navigation"} />
         </div>
-        <p class="product-caption"><span class="caption-line"></span>Real CaberOS interface: agents, workspace, and configuration at a glance.</p>
+        <p class="product-caption"><span class="caption-line"></span>{isVietnamese ? "Giao diện CaberOS thực tế: agent, workspace và cấu hình trong một khung nhìn." : "Real CaberOS interface: agents, workspace, and configuration at a glance."}</p>
       </div>
     </div>
   </section>
 
-  <section class="principles-section" aria-label="CaberOS principles">
+  <section class="principles-section" aria-label={isVietnamese ? "Nguyên tắc CaberOS" : "CaberOS principles"}>
     <div class="container principle-grid">
       {principles.map(([number, title, description]) => (
         <article class="principle">
@@ -111,26 +101,26 @@ const principles = [
   <section class="section product-section" id="product" aria-labelledby="product-title">
     <div class="container">
       <div class="section-intro">
-        <p class="eyebrow"><span class="eyebrow-line"></span>Why an agent OS?</p>
-        <h2 id="product-title">Models can think.<br /><span>CaberOS gives them a place to operate.</span></h2>
+        <p class="eyebrow"><span class="eyebrow-line"></span>{isVietnamese ? "Vì sao cần agent OS?" : "Why an agent OS?"}</p>
+        <h2 id="product-title">{isVietnamese ? "Model có thể suy nghĩ." : "Models can think."}<br /><span>{isVietnamese ? "CaberOS cho agent một nơi để vận hành." : "CaberOS gives them a place to operate."}</span></h2>
         <p>
-          A chat window is not an operating environment. CaberOS owns the layer around the model: identity, permissions, memory, workspaces, integrations, and the record of what happened.
+          {isVietnamese ? "Một cửa sổ chat không phải môi trường vận hành. CaberOS sở hữu lớp xung quanh model: identity, quyền hạn, bộ nhớ, workspace, tích hợp và lịch sử hoạt động." : "A chat window is not an operating environment. CaberOS owns the layer around the model: identity, permissions, memory, workspaces, integrations, and the record of what happened."}
         </p>
       </div>
 
       <div class="architecture-card">
         <div class="architecture-copy">
-          <span class="card-kicker mono">THE EXECUTION PATH</span>
-          <h3>Every action has a boundary.</h3>
-          <p>Agents can reason freely, but actions cross an explicit boundary where CaberOS resolves the subject, checks authority, injects credentials, gates approval, and records the result.</p>
-          <a class="text-link" href="/docs/core-concepts/permissions/">Understand the permission model <Icon name="arrow" size={15} /></a>
+          <span class="card-kicker mono">{isVietnamese ? "LUỒNG THỰC THI" : "THE EXECUTION PATH"}</span>
+          <h3>{isVietnamese ? "Mọi hành động đều có ranh giới." : "Every action has a boundary."}</h3>
+          <p>{isVietnamese ? "Agent có thể tự do suy luận, nhưng hành động đi qua ranh giới rõ ràng nơi CaberOS resolve subject, kiểm tra authority, inject credential, xử lý approval và ghi lại kết quả." : "Agents can reason freely, but actions cross an explicit boundary where CaberOS resolves the subject, checks authority, injects credentials, gates approval, and records the result."}</p>
+          <a class="text-link" href={localizedPath("/docs/core-concepts/permissions/")}>{isVietnamese ? "Hiểu mô hình quyền hạn" : "Understand the permission model"} <Icon name="arrow" size={15} /></a>
         </div>
-        <div class="architecture-flow" aria-label="Agent execution path">
-          <div class="flow-node"><span>01</span><b>Model</b><small>reasons about the task</small></div>
+        <div class="architecture-flow" aria-label={isVietnamese ? "Luồng thực thi agent" : "Agent execution path"}>
+          <div class="flow-node"><span>01</span><b>{isVietnamese ? "Model" : "Model"}</b><small>{isVietnamese ? "suy luận về task" : "reasons about the task"}</small></div>
           <div class="flow-connector"><i></i><i></i><i></i></div>
-          <div class="flow-node emphasized"><span>02</span><b>Syscall layer</b><small>checks and mediates</small></div>
+          <div class="flow-node emphasized"><span>02</span><b>Syscall layer</b><small>{isVietnamese ? "kiểm tra và mediation" : "checks and mediates"}</small></div>
           <div class="flow-connector"><i></i><i></i><i></i></div>
-          <div class="flow-node"><span>03</span><b>Your resources</b><small>workspace · memory · tools</small></div>
+          <div class="flow-node"><span>03</span><b>{isVietnamese ? "Tài nguyên của bạn" : "Your resources"}</b><small>{isVietnamese ? "workspace · memory · tool" : "workspace · memory · tools"}</small></div>
         </div>
       </div>
     </div>
@@ -140,10 +130,10 @@ const principles = [
     <div class="container">
       <div class="section-heading-row">
         <div>
-          <p class="eyebrow"><span class="eyebrow-line"></span>Built for actual work</p>
-          <h2 id="features-title">The pieces around the prompt matter.</h2>
+          <p class="eyebrow"><span class="eyebrow-line"></span>{isVietnamese ? "Được xây dựng cho công việc thật" : "Built for actual work"}</p>
+          <h2 id="features-title">{isVietnamese ? "Những lớp xung quanh prompt cũng quan trọng." : "The pieces around the prompt matter."}</h2>
         </div>
-        <p class="section-side-copy">Start with one agent. Add context and capability as your work demands it—without giving the whole system away at once.</p>
+        <p class="section-side-copy">{isVietnamese ? "Bắt đầu với một agent. Thêm context và capability theo nhu cầu công việc mà không mở toàn bộ hệ thống cùng lúc." : "Start with one agent. Add context and capability as your work demands it—without giving the whole system away at once."}</p>
       </div>
       <div class="feature-grid">
         {features.map((feature) => (
@@ -161,20 +151,20 @@ const principles = [
   <section class="section progressive-section" aria-labelledby="progressive-title">
     <div class="container split-grid">
       <div class="split-copy">
-        <p class="eyebrow"><span class="eyebrow-line"></span>Progressive disclosure</p>
-        <h2 id="progressive-title">More tools should not mean more noise.</h2>
+        <p class="eyebrow"><span class="eyebrow-line"></span>{isVietnamese ? "Progressive disclosure" : "Progressive disclosure"}</p>
+        <h2 id="progressive-title">{isVietnamese ? "Nhiều tool hơn không có nghĩa là nhiều nhiễu hơn." : "More tools should not mean more noise."}</h2>
         <p>
-          Large MCP servers can expose hundreds of tools. CaberOS separates the permission ceiling from schema visibility, so agents can discover what is allowed without paying the full context cost on every turn.
+          {isVietnamese ? "MCP server lớn có thể cung cấp hàng trăm tool. CaberOS tách permission ceiling khỏi schema visibility để agent khám phá điều được phép mà không phải trả toàn bộ context cost trong mỗi turn." : "Large MCP servers can expose hundreds of tools. CaberOS separates the permission ceiling from schema visibility, so agents can discover what is allowed without paying the full context cost on every turn."}
         </p>
-        <a class="text-link" href="/docs/core-concepts/capabilities/">Explore capabilities <Icon name="arrow" size={15} /></a>
+        <a class="text-link" href={localizedPath("/docs/core-concepts/capabilities/")}>{isVietnamese ? "Khám phá capability" : "Explore capabilities"} <Icon name="arrow" size={15} /></a>
       </div>
-      <div class="context-card" aria-label="Capability visibility example">
-        <div class="context-head"><span class="card-kicker mono">CAPABILITY CATALOG</span><span class="context-count mono">03 / 128 visible</span></div>
-        <div class="context-row always"><span class="visibility-marker"></span><div><b>read_file</b><small>workspace inspection</small></div><em>always</em></div>
-        <div class="context-row on-demand"><span class="visibility-marker"></span><div><b>notion.search</b><small>search connected pages</small></div><em>on demand</em></div>
-        <div class="context-row on-demand"><span class="visibility-marker"></span><div><b>github.create_issue</b><small>write to repository</small></div><em>on demand</em></div>
-        <div class="context-row denied"><span class="visibility-marker"></span><div><b>shell.open_network</b><small>not granted to this agent</small></div><em>not permitted</em></div>
-        <div class="context-footer"><span class="context-bar"><i></i></span><span class="mono">schemas loaded only when needed</span></div>
+      <div class="context-card" aria-label={isVietnamese ? "Ví dụ về visibility của capability" : "Capability visibility example"}>
+        <div class="context-head"><span class="card-kicker mono">CAPABILITY CATALOG</span><span class="context-count mono">03 / 128 {isVietnamese ? "hiển thị" : "visible"}</span></div>
+        <div class="context-row always"><span class="visibility-marker"></span><div><b>read_file</b><small>{isVietnamese ? "kiểm tra workspace" : "workspace inspection"}</small></div><em>always</em></div>
+        <div class="context-row on-demand"><span class="visibility-marker"></span><div><b>notion.search</b><small>{isVietnamese ? "tìm trang đã kết nối" : "search connected pages"}</small></div><em>on demand</em></div>
+        <div class="context-row on-demand"><span class="visibility-marker"></span><div><b>github.create_issue</b><small>{isVietnamese ? "ghi vào repository" : "write to repository"}</small></div><em>on demand</em></div>
+        <div class="context-row denied"><span class="visibility-marker"></span><div><b>shell.open_network</b><small>{isVietnamese ? "agent này chưa được cấp quyền" : "not granted to this agent"}</small></div><em>{isVietnamese ? "không được phép" : "not permitted"}</em></div>
+        <div class="context-footer"><span class="context-bar"><i></i></span><span class="mono">{isVietnamese ? "chỉ load schema khi cần" : "schemas loaded only when needed"}</span></div>
       </div>
     </div>
   </section>
@@ -184,30 +174,30 @@ const principles = [
       <div class="security-card">
         <div class="security-heading">
           <div class="feature-icon dark-icon"><Icon name="shield" size={24} /></div>
-          <p class="eyebrow light-eyebrow"><span class="eyebrow-line"></span>A clear local-first model</p>
-          <h2 id="security-title">Control starts with knowing what leaves the machine.</h2>
-          <p>Local-first does not mean pretending cloud providers are local. CaberOS makes the boundary explicit.</p>
+          <p class="eyebrow light-eyebrow"><span class="eyebrow-line"></span>{isVietnamese ? "Mô hình local-first rõ ràng" : "A clear local-first model"}</p>
+          <h2 id="security-title">{isVietnamese ? "Quyền kiểm soát bắt đầu từ việc biết dữ liệu nào rời khỏi máy." : "Control starts with knowing what leaves the machine."}</h2>
+          <p>{isVietnamese ? "Local-first không có nghĩa là giả vờ cloud provider đang chạy local. CaberOS làm rõ ranh giới này." : "Local-first does not mean pretending cloud providers are local. CaberOS makes the boundary explicit."}</p>
         </div>
         <div class="security-columns">
           <div>
-            <span class="security-label mono">STAYS HERE</span>
+            <span class="security-label mono">{isVietnamese ? "Ở LẠI TRÊN MÁY" : "STAYS HERE"}</span>
             <ul>
-              <li>Agent configuration and identity</li>
-              <li>Memory and knowledge documents</li>
-              <li>Credentials and workspace files</li>
-              <li>Run history and audit records</li>
+              <li>{isVietnamese ? "Agent config và identity" : "Agent configuration and identity"}</li>
+              <li>{isVietnamese ? "Memory và tài liệu knowledge" : "Memory and knowledge documents"}</li>
+              <li>{isVietnamese ? "Credential và file workspace" : "Credentials and workspace files"}</li>
+              <li>{isVietnamese ? "Lịch sử run và audit record" : "Run history and audit records"}</li>
             </ul>
           </div>
           <div>
-            <span class="security-label mono">FOLLOWS YOUR CONFIGURATION</span>
+            <span class="security-label mono">{isVietnamese ? "THEO CẤU HÌNH CỦA BẠN" : "FOLLOWS YOUR CONFIGURATION"}</span>
             <ul>
-              <li>Prompts sent to your chosen model provider</li>
-              <li>Requests sent to connected MCP services</li>
-              <li>Messages delivered through enabled channels</li>
+              <li>{isVietnamese ? "Prompt gửi tới model provider đã chọn" : "Prompts sent to your chosen model provider"}</li>
+              <li>{isVietnamese ? "Request gửi tới MCP service đã kết nối" : "Requests sent to connected MCP services"}</li>
+              <li>{isVietnamese ? "Message gửi qua channel đã bật" : "Messages delivered through enabled channels"}</li>
             </ul>
           </div>
         </div>
-        <a class="light-link" href="/docs/security/local-first/">Read the security model <Icon name="arrow" size={15} /></a>
+        <a class="light-link" href={localizedPath("/docs/security/local-first/")}>{isVietnamese ? "Đọc mô hình bảo mật" : "Read the security model"} <Icon name="arrow" size={15} /></a>
       </div>
     </div>
   </section>
@@ -215,21 +205,21 @@ const principles = [
   <section class="section gallery-section" aria-labelledby="gallery-title">
     <div class="container">
       <div class="section-intro compact-intro">
-        <p class="eyebrow"><span class="eyebrow-line"></span>Inside the dashboard</p>
-        <h2 id="gallery-title">A calm surface for a complex system.</h2>
+        <p class="eyebrow"><span class="eyebrow-line"></span>{isVietnamese ? "Bên trong dashboard" : "Inside the dashboard"}</p>
+        <h2 id="gallery-title">{isVietnamese ? "Một giao diện bình tĩnh cho một hệ thống phức tạp." : "A calm surface for a complex system."}</h2>
       </div>
       <div class="gallery-grid">
         <figure class="gallery-feature">
-          <div class="image-frame"><img src="/images/product/chat.png" alt="CaberOS conversation view showing an agent response and tool activity" loading="lazy" /></div>
-          <figcaption><b>Conversation</b><span>Stream responses, thinking, tools, approvals, and elicitation in context.</span></figcaption>
+          <div class="image-frame"><img src="/images/product/chat.png" alt={isVietnamese ? "Giao diện conversation CaberOS hiển thị phản hồi agent và hoạt động tool" : "CaberOS conversation view showing an agent response and tool activity"} loading="lazy" /></div>
+          <figcaption><b>{isVietnamese ? "Conversation" : "Conversation"}</b><span>{isVietnamese ? "Stream response, thinking, tool, approval và elicitation trong đúng ngữ cảnh." : "Stream responses, thinking, tools, approvals, and elicitation in context."}</span></figcaption>
         </figure>
         <figure>
-          <div class="image-frame"><img src="/images/product/providers.png" alt="CaberOS providers and model settings screen" loading="lazy" /></div>
-          <figcaption><b>Providers and models</b><span>Connect the model transport your agent should use.</span></figcaption>
+          <div class="image-frame"><img src="/images/product/providers.png" alt={isVietnamese ? "Màn hình provider và model settings của CaberOS" : "CaberOS providers and model settings screen"} loading="lazy" /></div>
+          <figcaption><b>{isVietnamese ? "Provider và model" : "Providers and models"}</b><span>{isVietnamese ? "Kết nối model transport mà agent của bạn sẽ sử dụng." : "Connect the model transport your agent should use."}</span></figcaption>
         </figure>
         <figure>
-          <div class="image-frame"><img src="/images/product/observability.png" alt="CaberOS observability dashboard" loading="lazy" /></div>
-          <figcaption><b>Observability</b><span>Inspect runs, audit records, health, and spend.</span></figcaption>
+          <div class="image-frame"><img src="/images/product/observability.png" alt={isVietnamese ? "Dashboard observability của CaberOS" : "CaberOS observability dashboard"} loading="lazy" /></div>
+          <figcaption><b>Observability</b><span>{isVietnamese ? "Kiểm tra run, audit record, health và spend." : "Inspect runs, audit records, health, and spend."}</span></figcaption>
         </figure>
       </div>
     </div>
@@ -238,12 +228,12 @@ const principles = [
   <section class="closing-section">
     <div class="container closing-card">
       <span class="closing-mark"><Icon name="spark" size={25} /></span>
-      <p class="eyebrow"><span class="eyebrow-line"></span>Start with one deliberate agent</p>
-      <h2>Build an agent you can actually inspect.</h2>
-      <p>Download CaberOS for Apple Silicon, or read the guide before you begin.</p>
+      <p class="eyebrow"><span class="eyebrow-line"></span>{isVietnamese ? "Bắt đầu với một agent có chủ đích" : "Start with one deliberate agent"}</p>
+      <h2>{isVietnamese ? "Xây dựng agent mà bạn thực sự có thể kiểm tra." : "Build an agent you can actually inspect."}</h2>
+      <p>{isVietnamese ? "Tải CaberOS cho Apple Silicon hoặc đọc hướng dẫn trước khi bắt đầu." : "Download CaberOS for Apple Silicon, or read the guide before you begin."}</p>
       <div class="hero-actions centered-actions">
-        <a class="button button-primary" href="/download/">Download {releaseTag} <Icon name="download" size={17} /></a>
-        <a class="button button-secondary" href={repositoryUrl}>View on GitHub <Icon name="github" size={17} /></a>
+        <a class="button button-primary" href={localizedPath("/download/")}>{isVietnamese ? "Tải" : "Download"} {releaseTag} <Icon name="download" size={17} /></a>
+        <a class="button button-secondary" href={repositoryUrl}>{isVietnamese ? "Xem trên GitHub" : "View on GitHub"} <Icon name="github" size={17} /></a>
       </div>
     </div>
   </section>

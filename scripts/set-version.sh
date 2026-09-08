@@ -72,6 +72,24 @@ sed -i.bak "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" frontend/src-tauri
 rm -f frontend/src-tauri/tauri.conf.json.bak
 echo "  ✓ frontend/src-tauri/tauri.conf.json"
 
+sed -i.bak "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" website/package.json
+rm -f website/package.json.bak
+if [ -f website/package-lock.json ]; then
+  python3 -c "
+import json
+with open('website/package-lock.json', 'r') as f:
+    lock = json.load(f)
+if 'version' in lock:
+    lock['version'] = '$VERSION'
+if 'packages' in lock and '' in lock['packages']:
+    lock['packages']['']['version'] = '$VERSION'
+with open('website/package-lock.json', 'w') as f:
+    json.dump(lock, f, indent=2)
+    f.write('\\n')
+"
+fi
+echo "  ✓ website/package.json"
+
 echo ""
 echo "All manifests updated to $VERSION"
 echo "Run ./scripts/check-version.sh to verify consistency."

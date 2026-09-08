@@ -1,10 +1,13 @@
 """Tests for the real syscall layer (ticket 03 — D10, D11)."""
 
+import asyncio
+
 import pytest
 
 from agentos.capabilities.builtin import register_builtin_capabilities
 from agentos.capabilities.registry import registry
 from agentos.config_schema import AgentConfig, CapabilityGrant, ModelConfig
+from agentos.harness.loop import ApprovalBatch
 from agentos.syscall.mediator import SyscallHandler
 from agentos.syscall.protocol import ToolCall
 
@@ -30,7 +33,7 @@ def _make_session(contact_id: str):
     """Make a simple session-like object."""
     from types import SimpleNamespace
 
-    return SimpleNamespace(contact_id=contact_id, id="test-session-id")
+    return SimpleNamespace(contact_id=contact_id, id="test-session-id", channel=None)
 
 
 class TestSyscallHandler:
@@ -176,6 +179,87 @@ class TestSyscallHandler:
         names = [e["name"] for e in result.output["entries"]]
         assert "a.txt" in names
         assert "b.txt" in names
+
+    async def test_web_search_without_approval_does_not_gate(self, db, workspace, monkeypatch):
+        approval_calls = []
+
+        async def fake_web_search(**kwargs):
+            return {"query": kwargs["args"]["query"], "results": []}
+
+        async def unexpected_approval(**kwargs):
+            approval_calls.append(kwargs)
+            return True
+
+        capability = registry.get("web_search")
+        assert capability is not None
+        monkeypatch.setattr(capability, "execute", fake_web_search)
+
+        handler = SyscallHandler(db=db, workspace_path=workspace)
+        monkeypatch.setattr(handler, "_await_approval", unexpected_approval)
+        agent_config = AgentConfig(
+            id="test-agent",
+            name="Test Agent",
+            model=ModelConfig(provider_id="test-provider", name="test-model"),
+            capabilities=[CapabilityGrant(name="web_search", require_approval=False)],
+        )
+
+        result = await handler.mediate(
+            call=ToolCall(id="1", name="web_search", args={"query": "CaberOS"}),
+            session=_make_session("contact-1"),
+            agent_config=agent_config,
+            run_id="run-web-search-no-approval",
+        )
+
+        assert result.allowed is True
+        assert result.output == {"query": "CaberOS", "results": []}
+        assert approval_calls == []
+
+    async def test_approval_batch_waits_before_mixed_calls_execute(
+        self, db, workspace, monkeypatch
+    ):
+        handler = SyscallHandler(db=db, workspace_path=workspace)
+        agent_config = AgentConfig(
+            id="test-agent",
+            name="Test Agent",
+            model=ModelConfig(provider_id="test-provider", name="test-model"),
+            capabilities=[CapabilityGrant(name="terminal", require_approval=True)],
+        )
+        session = _make_session("contact-1")
+        executed: list[str] = []
+
+        async def fake_approval(*, call, **kwargs):
+            return call.id != "deny"
+
+        async def fake_execute(**kwargs):
+            executed.append(kwargs["args"]["command"])
+            return {"stdout": kwargs["args"]["command"]}
+
+        monkeypatch.setattr(handler, "_await_approval", fake_approval)
+        monkeypatch.setattr(registry.get("terminal"), "execute", fake_execute)
+        batch = ApprovalBatch(["deny", "allow"])
+
+        results = await asyncio.wait_for(
+            asyncio.gather(
+                handler.mediate(
+                    call=ToolCall(id="deny", name="terminal", args={"command": "denied"}),
+                    session=session,
+                    agent_config=agent_config,
+                    run_id="run-batch",
+                    approval_batch=batch,
+                ),
+                handler.mediate(
+                    call=ToolCall(id="allow", name="terminal", args={"command": "allowed"}),
+                    session=session,
+                    agent_config=agent_config,
+                    run_id="run-batch",
+                    approval_batch=batch,
+                ),
+            ),
+            timeout=1,
+        )
+
+        assert [result.allowed for result in results] == [False, True]
+        assert executed == ["allowed"]
 
     async def test_audit_record_written(self, db, workspace):
         from sqlalchemy import select

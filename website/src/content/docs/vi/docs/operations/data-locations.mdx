@@ -1,0 +1,23 @@
+---
+title: Vị trí dữ liệu
+description: Tìm database local, credential, workspace và gateway log.
+---
+
+Desktop application lưu data tại:
+
+```text
+~/Library/Application Support/com.caberos.desktop/
+```
+
+| Data | Location |
+| --- | --- |
+| SQLite database | `agentos.db` |
+| Encryption key | `secret.key` |
+| Gateway logs | `logs/gateway.log` và backup rotation |
+| Agent home | `agents/` |
+| Workspace | `workspaces/` |
+| Knowledge document | `knowledge/` |
+
+Secret key bảo vệ provider và connector credential được mã hóa. Hãy xem toàn bộ application data directory là private và backup an toàn.
+
+Development local lấy path từ `AGENTOS_*` environment variable và mặc định dùng layout `backend/data/` trong repository.

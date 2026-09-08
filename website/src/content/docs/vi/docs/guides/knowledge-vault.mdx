@@ -1,0 +1,93 @@
+---
+title: Knowledge Vault
+description: Upload, phân scope, index, search, inspect và cite document tham khảo local.
+sidebar:
+  order: 2
+---
+
+Knowledge Vault biến document tham khảo local thành excerpt có thể search và citation. Document nằm trong CaberOS storage và chỉ retrieve khi user, operator hoặc agent được phép search.
+
+Dùng Vault cho manual, project note, specification, report và spreadsheet. Dùng [memory](/vi/docs/core-concepts/memory/) cho preference, decision và conversational continuity.
+
+## Knowledge scope
+
+Mở **Knowledge Vault** để thấy:
+
+- **Shared Knowledge**: mọi agent có document capability đều có thể search.
+- **Agent-private scope**: document chỉ hiển thị cho document tool của agent đó.
+
+Mỗi card báo document count và indexed-chunk count. Chọn scope để upload, xem status, re-index, xóa hoặc preview retrieval. Scope là retrieval boundary, không phải external access-control; local operator vẫn quản lý được mọi scope.
+
+## Format hỗ trợ
+
+| Format | Extraction |
+| --- | --- |
+| Markdown (`.md`, `.markdown`) | Paragraph và heading path. |
+| Text (`.txt`) | Plain-text paragraph. |
+| PDF (`.pdf`) | Text theo page và PDF outline nếu có. |
+| Word (`.docx`) | Paragraph, heading, table và embedded-image reference. |
+| Excel (`.xlsx`) | Worksheet, sheet name và cell range. |
+
+Giới hạn upload **25 MB/document**. Image-only OCR chưa được hỗ trợ; scanned PDF có thể index ít text hoặc không có useful text nếu thiếu text layer.
+
+## Upload và index
+
+1. Mở **Knowledge Vault**.
+2. Chọn **Shared Knowledge** hoặc agent.
+3. Drop file hoặc dùng file picker.
+4. Chờ status thành **indexed**.
+5. Review chunk và structure count.
+6. Dùng **Retrieval preview** với query thực tế.
+
+File nhận storage name nội bộ nhưng giữ display/source name. CaberOS lưu content hash để nhận diện content đã ingest.
+
+## Index ghi lại gì
+
+Index tạo local chunk và giữ heading path, PDF page, spreadsheet sheet, table/image identifier, source range/location và original source path. Dashboard hiển thị status, size, chunk, section, page, table và image. Extraction fail sẽ hiện error.
+
+## Preview retrieval
+
+Query tốt dùng term user thật sẽ hỏi. Nếu excerpt mong đợi không xuất hiện:
+
+1. Kiểm tra document indexed, không pending/failed.
+2. Thử keyword đặc trưng trong source.
+3. Kiểm tra file có text extract được.
+4. Re-index.
+5. Chuyển document tới đúng Shared hoặc agent-private scope.
+
+Search nhận tối đa 1.000 query character và 20 excerpt; agent tool mặc định ít hơn để giữ context nhỏ.
+
+## Cấp quyền cho agent
+
+Agent cần `doc_list`, `doc_search` và `doc_inspect` cho PDF page hoặc DOCX image với vision model. Cấu hình trong **Agent Settings → Capabilities**; dùng **Always** khi retrieval là trung tâm, **On demand** khi thỉnh thoảng.
+
+`doc_search` kết hợp Shared Knowledge với private scope của agent hiện tại, không search private scope agent khác.
+
+## Hỏi có grounding
+
+```text
+Search the Knowledge Vault for the release rollback procedure.
+Summarize the steps and cite the source page or section.
+```
+
+Agent nên gọi `doc_search` trước khi trả lời. Retrieved excerpt có source metadata và conversation gắn source với response. Retrieval không đảm bảo factual correctness; hãy verify claim quan trọng.
+
+## Visual content và workspace file
+
+`doc_inspect` trả image content của PDF page hoặc embedded DOCX image cho model có vision. Dùng `doc_search` để tìm document/page trước.
+
+API có thể copy file từ workspace vào Shared Knowledge rồi index. Bản copy trong Vault độc lập với file workspace; workspace sửa sau đó cần import/replacement lại.
+
+## Re-index và delete
+
+Re-index dùng khi extraction rule đổi, chunk thiếu hoặc cần rebuild metadata. Nó đọc file đã lưu trong Vault, không fetch external source.
+
+Delete xóa Vault file, database record và indexed chunk nhưng không xóa original workspace file. Đây là hành động không thể hoàn tác nếu không có backup.
+
+## Local-first và cloud model
+
+Storage/index đều local. Nếu agent dùng hosted model, excerpt từ `doc_search` hoặc visual content từ `doc_inspect` trở thành một phần provider request. Dùng local endpoint như Ollama nếu muốn giữ retrieved content trên máy. Xem [local-first](/vi/docs/security/local-first/).
+
+## Troubleshooting
+
+Unsupported format: convert sang Markdown, text, PDF có text layer, DOCX hoặc XLSX. Upload rejected: kiểm tra filename, extension và 25 MB limit. PDF empty: có thể là image scan không có text layer. Agent không thấy document: kiểm tra indexed, `doc_search` grant và retrieval preview. Private document của agent khác không thấy được vì scope isolation.

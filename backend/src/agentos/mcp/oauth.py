@@ -60,6 +60,7 @@ class OAuthFlowState:
         self.callback_future: asyncio.Future[tuple[str, str | None]] = asyncio.Future()
         self.error: str | None = None
         self.completed: bool = False
+        self.ready: bool = False
 
     def set_authorize_url(self, url: str) -> None:
         self.authorize_url = url
@@ -340,6 +341,22 @@ async def start_oauth_flow(server: McpServer) -> str:
     )
 
 
+async def _connect_after_oauth(server_id: str) -> None:
+    from sqlalchemy import select
+
+    from . import registry as mcp_registry
+
+    async with async_session_factory() as db:
+        server = await db.scalar(select(McpServer).where(McpServer.id == server_id))
+    if server is None:
+        raise ConnectionError("MCP server was removed during OAuth authorization")
+
+    connected = await mcp_registry.connect_server(server)
+    if not connected:
+        error = mcp_registry.get_connect_error(server_id)
+        raise ConnectionError(error or "MCP server connection failed after OAuth authorization")
+
+
 async def _run_oauth_flow(server_id: str, server_url: str, auth, flow: OAuthFlowState) -> None:
     """Run the OAuth flow in the background.
 
@@ -379,7 +396,9 @@ async def _run_oauth_flow(server_id: str, server_url: str, auth, flow: OAuthFlow
         if not flow.completed:
             flow.completed = True
 
-        log.info("OAuth flow completed for server %s", server_id)
+        await _connect_after_oauth(server_id)
+        flow.ready = True
+        log.info("OAuth flow completed and MCP server connected for %s", server_id)
 
     except Exception as e:
         log.exception("OAuth flow failed for server %s", server_id)

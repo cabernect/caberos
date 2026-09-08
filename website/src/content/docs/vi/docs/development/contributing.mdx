@@ -1,0 +1,48 @@
+---
+title: Đóng góp
+description: Setup CaberOS local và chạy project check.
+---
+
+## Setup
+
+```bash
+git clone https://github.com/cabernect/caberos.git
+cd caberos
+./scripts/install.sh
+```
+
+Dùng Python 3.12, `uv`, Node 22, npm và macOS sandbox hoặc Linux Bubblewrap cho operation có sandbox.
+
+## Backend checks
+
+```bash
+cd backend
+uv run pytest -v
+uv run ruff check src/ tests/
+uv run ruff format --check src/ tests/
+```
+
+## Frontend checks
+
+```bash
+cd frontend
+npm ci
+npm run lint
+npm run build
+npm run test
+```
+
+## Desktop build
+
+Desktop build target macOS Apple Silicon:
+
+```bash
+cd frontend
+npm run desktop:build
+```
+
+Build gói PyInstaller gateway và React frontend. Release build cần Tauri signing secret trong GitHub Actions.
+
+## Thay đổi code
+
+Implement end-to-end khi feature đi qua gateway, harness, syscall, storage hoặc frontend boundary. Thêm behavioral test ở public seam, giữ lỗi security-sensitive generic với API client và đưa command verify liên quan vào pull request.

@@ -201,6 +201,8 @@ export interface SessionInfo {
   message_count: number;
   channel?: string | null;
   external_user_id?: string | null;
+  active_run_id?: string | null;
+  active_run_status?: string | null;
 }
 
 // SSE event payloads
@@ -223,6 +225,8 @@ export interface ToolCallEvent {
   status: "pending" | "pending_approval" | "running" | "complete" | "denied";
   result?: unknown;
   approval_id?: string;
+  approval_batch_id?: string;
+  approval_batch_size?: number;
 }
 
 export interface TurnCompleteEvent {

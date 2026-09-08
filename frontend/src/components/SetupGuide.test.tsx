@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   dismissSetupGuide,
   getSetupGuidePhase,
+  resetSetupGuideState,
   setSetupGuidePhase,
   shouldShowSetupGuide,
 } from "./setupGuideState";
@@ -26,5 +27,16 @@ describe("setup guide state", () => {
     dismissSetupGuide();
     expect(shouldShowSetupGuide(false)).toBe(false);
     expect(shouldShowSetupGuide(true)).toBe(false);
+  });
+
+  it("resets guidance after deleting all data", () => {
+    setSetupGuidePhase(3);
+    dismissSetupGuide();
+
+    resetSetupGuideState();
+
+    expect(getSetupGuidePhase()).toBe(0);
+    expect(shouldShowSetupGuide(false)).toBe(true);
+    expect(localStorage.getItem("caberos_setup_guide_agent")).toBeNull();
   });
 });

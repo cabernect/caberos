@@ -5,6 +5,32 @@ All notable changes to CaberOS are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.8] - Unreleased
+
+### Added
+
+- Approval batches for multiple tool calls emitted in one model turn, with decisions collected before approved calls execute
+- Vietnamese (`vi`) public website and documentation routes with locale navigation, canonical URLs, and `hreflang` metadata
+
+### Changed
+
+- SQLite control-plane writes retry complete transactions after rollback with bounded exponential backoff
+- Exhausted database contention returns a retryable `503 database_busy` response with `Retry-After`
+- Website and documentation keep English as the default locale while providing Vietnamese content for every documentation route
+
+### Fixed
+
+- Preserve strict reason → act → observe → repeat execution boundaries while retaining same-turn tool concurrency
+- Persist elicitation responses before waking the waiting agent run
+- Make capability-save failures visible and restore server-confirmed state after a failed write
+- Persist MCP connection failure notifications and startup reconciliation safely during transient database contention
+- Honor a configurable MCP connection timeout and surface expired OAuth refresh tokens as explicit re-authentication failures instead of generic timeouts
+- Automatically connect and discover MCP tools after successful OAuth authorization
+
+### Security
+
+- Approval and denial decisions remain persisted before in-process waiters are released
+
 ## [0.1.6] - Released
 
 ### Added

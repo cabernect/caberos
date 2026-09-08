@@ -1,14 +1,79 @@
 """Test database CRUD operations."""
 
+import json
+
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 
+from agentos.db import is_database_locked, retry_locked_transaction
+from agentos.main import handle_database_operational_error
 from agentos.models.agent import Agent, AgentVersion
 from agentos.models.capability import Capability
 from agentos.models.contact import Contact
 from agentos.models.operator import Operator
 from agentos.models.run import Message, Run
 from agentos.models.session import Session
+
+
+def _locked_error() -> OperationalError:
+    return OperationalError("UPDATE agents", {}, RuntimeError("database is locked"))
+
+
+def test_is_database_locked_detects_wrapped_sqlite_error():
+    assert is_database_locked(_locked_error()) is True
+    assert (
+        is_database_locked(OperationalError("UPDATE agents", {}, RuntimeError("syntax error")))
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_database_lock_handler_returns_retryable_error():
+    response = await handle_database_operational_error(None, _locked_error())
+
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "1"
+    assert response.headers["x-error-code"] == "database_busy"
+    assert json.loads(response.body) == {
+        "detail": {
+            "code": "database_busy",
+            "message": "The database is busy. Nothing was saved; please retry.",
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_retry_locked_transaction_replays_operation_after_rollback(db, monkeypatch):
+    monkeypatch.setattr("agentos.db.settings.db_lock_retries", 2)
+    monkeypatch.setattr("agentos.db.settings.db_lock_retry_delay", 0)
+    attempts = 0
+
+    async def operation():
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise _locked_error()
+        return "saved"
+
+    assert await retry_locked_transaction(operation, db, "test_write") == "saved"
+    assert attempts == 3
+
+
+@pytest.mark.asyncio
+async def test_retry_locked_transaction_raises_after_retry_budget(db, monkeypatch):
+    monkeypatch.setattr("agentos.db.settings.db_lock_retries", 2)
+    monkeypatch.setattr("agentos.db.settings.db_lock_retry_delay", 0)
+    attempts = 0
+
+    async def operation():
+        nonlocal attempts
+        attempts += 1
+        raise _locked_error()
+
+    with pytest.raises(OperationalError):
+        await retry_locked_transaction(operation, db, "test_write")
+    assert attempts == 3
 
 
 @pytest.mark.asyncio

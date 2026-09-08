@@ -72,13 +72,19 @@ class SyscallHandler:
         event_emitter: Any = None,
         parent_config: AgentConfig | None = None,
         capability_catalog: Any = None,
+        approval_batch: Any = None,
     ) -> SyscallResult:
         start = time.monotonic()
         self._event_emitter = event_emitter
 
+        async def _arrive(approved: bool) -> None:
+            if approval_batch is not None:
+                await approval_batch.arrive(call.id, approved)
+
         # 1. Resolve capability
         cap = registry.get(call.name)
         if cap is None:
+            await _arrive(False)
             return await self._deny(
                 run_id, call, agent_config, "capability not found", start, sub_agent_id
             )
@@ -96,6 +102,7 @@ class SyscallHandler:
             and parent_config is not None
             and not is_capability_granted(parent_config, call.name, server_id=server_id)
         ):
+            await _arrive(False)
             return await self._deny(
                 run_id,
                 call,
@@ -105,6 +112,7 @@ class SyscallHandler:
                 sub_agent_id,
             )
         if not is_capability_granted(agent_config, call.name, server_id=server_id):
+            await _arrive(False)
             return await self._deny(run_id, call, agent_config, "not granted", start, sub_agent_id)
 
         # 3. Resolve subject (D10 — for subject-scoped capabilities)
@@ -117,6 +125,7 @@ class SyscallHandler:
                 )
             contact = result.scalar_one_or_none()
             if contact is None:
+                await _arrive(False)
                 return await self._deny(
                     run_id, call, agent_config, "no subject binding", start, sub_agent_id
                 )
@@ -150,6 +159,7 @@ class SyscallHandler:
                 if policy == "auto_approve":
                     pass  # Execute without waiting
                 elif policy == "deny":
+                    await _arrive(False)
                     return await self._deny(
                         run_id,
                         call,
@@ -166,8 +176,10 @@ class SyscallHandler:
                         agent_config=agent_config,
                         session_id=session.id,
                         event_emitter=event_emitter,
+                        approval_batch=approval_batch,
                     )
                     if not approval_result:
+                        await _arrive(False)
                         return await self._deny(
                             run_id,
                             call,
@@ -178,6 +190,7 @@ class SyscallHandler:
                         )
                 else:
                     # Unknown or missing policy — default to deny for safety
+                    await _arrive(False)
                     return await self._deny(
                         run_id,
                         call,
@@ -198,9 +211,11 @@ class SyscallHandler:
                     agent_config=agent_config,
                     session_id=session.id,
                     event_emitter=event_emitter,
+                    approval_batch=approval_batch,
                 )
                 if not approval_result:
                     # Denied (or rejected by operator)
+                    await _arrive(False)
                     return await self._deny(
                         run_id,
                         call,
@@ -210,6 +225,8 @@ class SyscallHandler:
                         sub_agent_id,
                     )
                 # Approved — continue to execution
+
+        await _arrive(True)
 
         # 5b. Handle elicitation — agent.ask_user is intercepted here.
         # It has no execute function; the mediator pauses the run and waits
@@ -526,6 +543,7 @@ class SyscallHandler:
         agent_config: AgentConfig,
         session_id: str,
         event_emitter: Any = None,
+        approval_batch: Any = None,
     ) -> bool:
         """Create an ApprovalRequest, emit pending_approval, and block until decided.
 
@@ -545,14 +563,22 @@ class SyscallHandler:
         # when the event emitter's persistence layer triggers a flush concurrently.
         # Also commit the main session to release any pending write lock
         # so the separate session can write the approval request.
-        from ..db import async_session_factory
+        from ..db import async_session_factory, retry_locked_transaction
 
         async with self._db_lock:
             await self.db.commit()
 
         async with async_session_factory() as session:
-            session.add(approval)
-            await session.commit()
+
+            async def _persist_approval() -> None:
+                session.add(approval)
+                await session.commit()
+
+            await retry_locked_transaction(
+                _persist_approval,
+                session,
+                f"create_approval:{approval_id}",
+            )
 
         # Register the asyncio.Event so the API can resolve it
         pending = approval_registry.register(approval_id)
@@ -567,6 +593,8 @@ class SyscallHandler:
                     "args": call.args,
                     "status": "pending_approval",
                     "approval_id": approval_id,
+                    "approval_batch_id": approval_batch.id if approval_batch else None,
+                    "approval_batch_size": approval_batch.size if approval_batch else 1,
                 },
             )
             if hasattr(result_emit, "__await__"):
@@ -613,21 +641,29 @@ class SyscallHandler:
         # Update the ApprovalRequest row in a separate session
         # (the approval was created in a separate session above, so we
         # can't update it via self.db which may be mid-flush)
-        from ..db import async_session_factory
+        from ..db import async_session_factory, retry_locked_transaction
 
         async with async_session_factory() as upd_session:
-            result = await upd_session.execute(
-                select(ApprovalRequest).where(ApprovalRequest.id == approval_id)
+
+            async def _persist_timeout_decision() -> None:
+                result = await upd_session.execute(
+                    select(ApprovalRequest).where(ApprovalRequest.id == approval_id)
+                )
+                ap = result.scalar_one_or_none()
+                # The approval API persists operator decisions before waking this
+                # task. Only write here for timeout/cancellation decisions that
+                # still leave the row pending.
+                if ap and ap.status == "pending":
+                    ap.status = decision
+                    ap.decided_by = pending.decided_by
+                    ap.decided_at = datetime.now(UTC)
+                    await upd_session.commit()
+
+            await retry_locked_transaction(
+                _persist_timeout_decision,
+                upd_session,
+                f"persist_approval_decision:{approval_id}",
             )
-            ap = result.scalar_one_or_none()
-            # The approval API persists operator decisions before waking this
-            # task. Only write here for timeout/cancellation decisions that
-            # still leave the row pending.
-            if ap and ap.status == "pending":
-                ap.status = decision
-                ap.decided_by = pending.decided_by
-                ap.decided_at = datetime.now(UTC)
-                await upd_session.commit()
 
         return decision == "approved"
 
@@ -675,23 +711,31 @@ class SyscallHandler:
         )
         # Use a separate session to avoid "database is locked" errors.
         # Commit the main session first to release any pending write lock.
-        from ..db import async_session_factory
+        from ..db import async_session_factory, retry_locked_transaction
 
         async with self._db_lock:
             await self.db.commit()
 
         async with async_session_factory() as el_session:
-            el_session.add(elicitation)
-            await create_notification(
+
+            async def _persist_elicitation() -> None:
+                el_session.add(elicitation)
+                await create_notification(
+                    el_session,
+                    notification_type="elicitation_required",
+                    severity="warning",
+                    title="Agent needs your input",
+                    message=question,
+                    action_path="/agents",
+                    entity_id=run_id,
+                )
+                await el_session.commit()
+
+            await retry_locked_transaction(
+                _persist_elicitation,
                 el_session,
-                notification_type="elicitation_required",
-                severity="warning",
-                title="Agent needs your input",
-                message=question,
-                action_path="/agents",
-                entity_id=run_id,
+                f"create_elicitation:{elicitation_id}",
             )
-            await el_session.commit()
 
         # Register the asyncio.Event so the API can resolve it
         pending = elicitation_registry.register(elicitation_id)

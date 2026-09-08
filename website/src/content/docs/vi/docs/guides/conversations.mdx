@@ -1,0 +1,85 @@
+---
+title: Conversation và attachment
+description: Dùng session, streaming run, model control, file, URL, approval và clarifying question.
+sidebar:
+  order: 1
+---
+
+Conversation view của CaberOS là operational console, không chỉ là transcript. Nó stream model output, thinking, capability call, approval, sub-agent, citation, token, run status và cost.
+
+## Session và run
+
+**Session** là conversation với một agent. **Run** là công việc bắt đầu từ một message trong session. Dùng **New conversation** khi task mới không nên kế thừa history hiện tại.
+
+Run ở session khác có thể chạy độc lập. Chuyển session không cancel run; sidebar báo session đang hoạt động và client có thể reconnect event stream.
+
+## Gửi message
+
+1. Mở **Agents**.
+2. Chọn agent enabled có provider/model.
+3. Nhập message.
+4. **Enter** để gửi hoặc **Shift+Enter** để xuống dòng.
+5. Theo dõi streamed text và process step.
+
+Nút stop gửi yêu cầu cancel run đang chạy.
+
+## Chọn model theo message
+
+Input bar bắt đầu bằng provider/model mặc định của agent. Model selector override lựa chọn cho message tiếp theo mà không sửa agent config. Metadata có thể gồm vision, thinking, effort, context window và output token; hãy validate workflow quan trọng trực tiếp.
+
+## Thinking control
+
+Với model hỗ trợ reasoning, dùng thinking button để bật/tắt và chọn effort. Thinking content từ provider hiển thị trong block thu gọn; provider khác nhau có thể expose khác nhau.
+
+## Đính kèm file local
+
+Chọn file từ attachment menu hoặc kéo file vào conversation. Khi gửi:
+
+1. CaberOS lưu bytes trong workspace `attachments/`.
+2. Model nhận metadata và workspace-relative reference.
+3. Model chọn `read_file`, `search_files` hoặc tool được phép.
+4. Content chỉ được trả qua operation có mediation.
+
+Raw bytes không tự chèn vào prompt đầu và không lưu base64 trong message database. Text/JSON được gửi như text; file khác được gửi base64 rồi decode local.
+
+## Đính kèm image và URL
+
+Vision-capable model có thể gọi `read_file` để inspect image. URL attachment chỉ thêm metadata, không tự fetch; agent cần `web_fetch`. `web_fetch` là egress và thường cần approval. Không đặt secret trong query parameter hoặc URL.
+
+## Dùng skill
+
+Gõ `/` ở đầu composer, chọn skill rồi thêm task:
+
+```text
+/release-checklist prepare the v0.1.8 verification steps
+```
+
+CaberOS load body của skill vào run. `/compact` là command khác dùng để compact context. Xem [Skills](/vi/docs/guides/skills/).
+
+## Capability call và approval
+
+Tool call hiển thị capability, argument, trạng thái pending/approval/running/complete/denied, result hoặc denial. Visible request chưa có nghĩa operation được phép; kiểm tra final status và syscall record.
+
+Call cần approval sẽ pause run. Operator có thể approve một lần, approve và remember scope trong session hoặc reject. Khi một turn có nhiều approval, mọi quyết định được gom thành một action batch trước khi call được approve chạy.
+
+## Clarifying question
+
+Agent có `agent_ask_user` có thể hỏi free text, một lựa chọn hoặc nhiều lựa chọn. Câu trả lời tiếp tục cùng run, không tạo user message hoặc session mới.
+
+## Context meter và compaction
+
+Input area có thể hiển thị context token, ceiling, cached token, breakdown của system/conversation/tool, trạng thái compaction và schema đã load. Dùng `/compact` trước task dài; automatic compaction cũng có thể chạy theo threshold.
+
+Compaction thay đổi context tương lai nhưng không xóa message đã lưu.
+
+## Citation
+
+Response có source card từ Knowledge Vault hoặc web page đã fetch. Citation cho biết source gắn với run nhưng không tự xác thực cách model diễn giải source.
+
+## Troubleshooting
+
+- Send disabled: kiểm tra agent có provider/model.
+- Không mở được file: kiểm tra `read_file`, workspace path, sandbox và vision support.
+- URL không được đọc: cấp `web_fetch` và approve egress.
+- Run stuck: tìm pending approval/clarifying question hoặc mở Observability.
+- Câu trả lời thiếu detail cũ: xem context/compaction, search history hoặc đưa fact bền vững vào memory.

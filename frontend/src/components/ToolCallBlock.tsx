@@ -10,6 +10,8 @@ export interface ToolCallData {
   status: "pending" | "pending_approval" | "pending_input" | "running" | "complete" | "denied";
   result?: unknown;
   approval_id?: string;
+  approval_batch_id?: string;
+  approval_batch_size?: number;
   elicitation_id?: string;
 }
 
@@ -113,7 +115,11 @@ export function ToolCallBlock({ call, subagentStream }: ToolCallBlockProps) {
           <div className="flex items-center gap-2">
             <span className="font-mono text-[11px] text-[var(--ink-2)]">
               {approvalState === "pending" && "Requires approval"}
-              {approvalState === "approved" && "Approved — executing..."}
+              {approvalState === "approved" && (
+                call.approval_batch_size && call.approval_batch_size > 1
+                  ? "Approved — waiting for the action batch"
+                  : "Approved — executing..."
+              )}
               {approvalState === "rejected" && "Rejected"}
               {approvalState === "error" && "Error — try again"}
             </span>
@@ -136,6 +142,11 @@ export function ToolCallBlock({ call, subagentStream }: ToolCallBlockProps) {
               </div>
             )}
           </div>
+          {call.approval_batch_size && call.approval_batch_size > 1 && (
+            <div className="mt-1.5 font-mono text-[10px] text-[var(--ink-3)]">
+              This action has {call.approval_batch_size} approval requests. Nothing runs until all are decided.
+            </div>
+          )}
           {approvalState === "pending" && (
             <div className="mt-1.5">
               <label className="flex items-center gap-1.5 font-mono text-[10px] text-[var(--ink-3)]"

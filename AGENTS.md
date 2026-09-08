@@ -26,6 +26,7 @@ CaberOS is an open-source, local-first AI Agent Operating System. It hosts perso
 - **D5:** SQLAlchemy 2.0 async + aiosqlite. SQLite with WAL mode. Schema via `create_all` + incremental patches in `init_db()` (Alembic deferred to Postgres migration).
 - **D25:** Agent config lives in the DB as versioned rows (AgentVersion). YAML for import/export only.
 - **D33:** FastAPI is the current gateway/API layer. The React dashboard is one client, with Tauri and CLI as future clients using the same REST + SSE contracts. A deeper CaberCore seam is deferred until a non-HTTP entry point requires it.
+- **Execution loop invariant:** A conversation advances strictly as reason → act → observe → repeat, one reasoning step at a time. Multiple tool calls emitted in one model turn may execute concurrently within that single step, but the agent must not run separate jobs concurrently across reasoning steps.
 - **D34:** Three-layer memory: working memory (session), MEMORY.md (file in agent home dir `~/agentos/agents/{agent_id}/`), knowledge graph (SQLite triples). FTS5 default, embeddings configurable.
 - **D35:** Agent identity = `soul`, `persona`, `task` — versioned config fields on AgentConfig (in the DB). NOT workspace files. MEMORY.md is the exception (agent-managed file, not versioned).
 - **D37:** Workspaces are shared directories for working files only. Identity is in the DB, MEMORY.md is in the agent home dir — neither in the workspace.
@@ -49,7 +50,7 @@ CaberOS is an open-source, local-first AI Agent Operating System. It hosts perso
 
 Use the **Playwright MCP server** (`mcp-playwright`) to test the frontend in a real browser. Available tools include: `browser_navigate`, `browser_click`, `browser_type`, `browser_snapshot`, `browser_console_messages`, `browser_evaluate`, etc. List tools with `mcp_list_tools` before calling.
 
-To test: start both servers (backend on :8081, frontend on :5173), then use Playwright to navigate, click, type, and verify the UI.
+To test: start both servers (backend on :8081, frontend on :5173), then use Playwright to navigate, click, type, and verify the UI. Browser verification is a required completion gate before declaring application or website work finished; for website changes, exercise both the English and selected localized routes and check console errors, navigation, and metadata.
 
 ## How to implement
 
@@ -131,7 +132,7 @@ the workspace `attachments/` directory.
 
 Tickets **01–09 implemented**: smoke slice, real-model chat + SSE streaming, file ops + tool call UI, approval flow + elicitation (`agent.ask_user`), guardrails, run manager, agent management UI, providers, `run_subagent`, memory + skills (ticket 06), scheduler/heartbeat (ticket 07), MCP client infrastructure (08a), MCP credentials/OAuth (08b), external channels (08c), and observability + spend (ticket 09).
 
-**Current: v0.1.6 Early-Adopter Usability is released. Next: v0.1.7 Progressive Capability Discovery. CaberCore extraction and the CLI/TUI remain deferred.**
+**Current: v0.1.6 is released; v0.1.8 implementation is in progress for stability and Vietnamese website/docs localization. The CLI/TUI and CaberCore extraction remain deferred.**
 
 **v0.1.7 design rule:** Agent configuration defines the permission ceiling; the harness separately tracks which schemas are loaded into the current run. `capabilities_search` exposes bounded metadata for permitted tools, and `capabilities_load` makes selected schemas available on the next model turn without widening syscall authority.
 

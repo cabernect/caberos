@@ -1,0 +1,62 @@
+---
+title: Capabilities
+description: Cấu hình built-in tool, progressive discovery, MCP tool và delegated work.
+---
+
+Capability là một operation có tên mà agent có thể yêu cầu. Đọc file workspace, tìm web, gọi memory, gọi MCP tool và tạo sub-agent đều dùng cùng một capability model và đi qua cùng mediation boundary.
+
+Capability không phải prompt instruction. Đây là executable operation có grant, schema, egress metadata, approval policy và audit record rõ ràng.
+
+## Permission và visibility là hai việc khác nhau
+
+CaberOS phân biệt:
+
+1. **Permission ceiling** — các capability agent được phép gọi.
+2. **Schema visibility** — các capability có full parameter schema được đưa cho model trong run hiện tại.
+
+Nhờ vậy agent có thể có quyền tới MCP server lớn mà không phải gửi mọi tool schema trong mỗi request.
+
+## Các mode của capability
+
+Trong **Settings → Capabilities**, chọn mode cho built-in tool hoặc MCP integration:
+
+| Mode | Dùng khi | Context của model |
+| --- | --- | --- |
+| Not permitted | Operation ngoài vai trò agent. | Agent không thể search, load hoặc invoke. |
+| On demand | Operation ít dùng hoặc collection lớn. | Metadata gọn được search; full schema chỉ load khi chọn. |
+| Always | Operation thiết yếu trong hầu hết run. | Full schema có từ model turn đầu. |
+
+Built-in tool mặc định là **Always** với agent cũ không có grant list rõ ràng. MCP tool mặc định là **On demand** khi bật từ dashboard.
+
+## Search rồi load
+
+```text
+capabilities_search(query?, server?, kind?, limit?)
+capabilities_load(names)
+```
+
+`capabilities_search` chỉ tìm trong capability được phép của run và trả về name, description, kind cùng MCP server metadata gọn. `capabilities_load` nhận exact name từ kết quả search; schema được chọn có hiệu lực từ model turn tiếp theo và chỉ trong run đó.
+
+Mỗi lần load nhận tối đa 10 schema mới và một run tối đa 50 schema động. Các tên vượt giới hạn bị trả về là rejected, không âm thầm mở rộng context.
+
+## Điều load không thể làm
+
+Loading capability không thể:
+
+- cấp operation nằm ngoài permission ceiling;
+- bỏ qua operator approval hoặc channel approval policy;
+- đổi subject binding;
+- đưa credential vào model context;
+- bật MCP server đang disconnected hoặc disabled;
+- bỏ qua MCP tool filter;
+- lưu schema đã load sang run khác.
+
+## Chọn capability set
+
+1. Bắt đầu từ task, không bắt đầu từ danh sách tool.
+2. Đặt operation không liên quan là **Not permitted**.
+3. Giữ operation local ít rủi ro ở **Always**.
+4. Đặt MCP server lớn và tool ít dùng ở **On demand**.
+5. Yêu cầu approval cho egress và consequential write.
+6. Test một task đại diện.
+7. Kiểm tra schema đã load và syscall trong [Observability](/vi/docs/guides/observability/).

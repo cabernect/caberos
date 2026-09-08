@@ -1,12 +1,13 @@
 {
   "name": "caberos-website",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.8",
   "type": "module",
   "scripts": {
     "dev": "astro dev",
-    "build": "astro check && astro build",
+    "build": "npm run check:locales && astro check && astro build",
     "check": "astro check",
+    "check:locales": "node scripts/check-locales.mjs",
     "preview": "astro preview"
   },
   "engines": {

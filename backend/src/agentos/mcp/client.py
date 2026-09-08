@@ -153,7 +153,7 @@ class McpClient:
 
                 http_client = httpx2.AsyncClient(
                     base_url=self.url,
-                    timeout=30.0,
+                    timeout=self.timeout,
                     **http_kwargs,
                 )
                 result = await self._exit_stack.enter_async_context(

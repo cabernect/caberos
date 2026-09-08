@@ -34,6 +34,14 @@ def _read_package_json_version() -> str:
         return json.load(f)["version"]
 
 
+def _read_website_package_version() -> str:
+    import json
+
+    package = REPO_ROOT / "website" / "package.json"
+    with open(package) as f:
+        return json.load(f)["version"]
+
+
 def _read_cargo_version() -> str:
     cargo = REPO_ROOT / "frontend" / "src-tauri" / "Cargo.toml"
     for line in cargo.read_text().splitlines():
@@ -58,6 +66,7 @@ class TestVersionSync:
         versions = {
             "pyproject.toml": _read_pyproject_version(),
             "package.json": _read_package_json_version(),
+            "website/package.json": _read_website_package_version(),
             "Cargo.toml": _read_cargo_version(),
             "tauri.conf.json": _read_tauri_conf_version(),
         }

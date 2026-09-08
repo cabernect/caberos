@@ -1,6 +1,6 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Plus, Trash2, Save, X, RefreshCw, Check, Info, Settings, Server, Cpu, Download, Upload, HardDrive } from "lucide-react";
+import { Plus, Trash2, Save, X, RefreshCw, Check, ChevronDown, Info, Settings, Server, Cpu, Download, Upload, HardDrive } from "lucide-react";
 import { api } from "@/lib/api";
 import { useConfirm } from "@/lib/confirmHook";
 import { openUrl } from "@/lib/openUrl";
@@ -15,6 +15,9 @@ import {
 import { DashboardSidebar, type NavKey } from "@/components/DashboardSidebar";
 import { PageHeader } from "@/components/PageHeader";
 import { LogoMark } from "@/components/LogoMark";
+import type { ThemeMode } from "@/lib/theme";
+import { useTheme } from "@/lib/themeHook";
+import { resetSetupGuideState } from "@/components/setupGuideState";
 
 // Open URLs in the system browser when running inside Tauri,
 // fall back to normal browser navigation otherwise.
@@ -228,6 +231,8 @@ export function ProvidersSettings() {
 }
 
 function GeneralTab({ operator, loading }: { operator: Operator | null; loading: boolean }) {
+  const { mode, setMode, resolvedTheme } = useTheme();
+
   return (
     <div className="max-w-2xl space-y-6">
       {/* Operator profile */}
@@ -260,24 +265,20 @@ function GeneralTab({ operator, loading }: { operator: Operator | null; loading:
         </div>
       </div>
 
-      {/* Appearance */}
       <div>
         <h2 className="mb-3 text-[14px] font-semibold text-[var(--ink)]">Appearance</h2>
         <div
           className="rounded-lg border p-5"
-          style={{ borderColor: "var(--border)", background: "var(--white)" }}
+          style={{ borderColor: "var(--border)", background: "var(--card)" }}
         >
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-4">
             <div>
               <p className="text-[13px] font-medium text-[var(--ink)]">Theme</p>
-              <p className="mt-0.5 text-[12px] text-[var(--ink-3)]">Dark mode (only option for now)</p>
+              <p className="mt-0.5 text-[12px] text-[var(--ink-3)]">
+                Choose light, dark, or follow your operating-system preference. Currently using {resolvedTheme} mode.
+              </p>
             </div>
-            <span
-              className="rounded-full px-3 py-1 text-[11px] font-medium"
-              style={{ background: "var(--accent-bg)", color: "var(--accent)" }}
-            >
-              Dark
-            </span>
+            <ThemePicker mode={mode} onChange={setMode} />
           </div>
         </div>
       </div>
@@ -303,6 +304,92 @@ function GeneralTab({ operator, loading }: { operator: Operator | null; loading:
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function ThemePicker({ mode, onChange }: { mode: ThemeMode; onChange: (mode: ThemeMode) => void }) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const options: { value: ThemeMode; label: string }[] = [
+    { value: "system", label: "System" },
+    { value: "light", label: "Light" },
+    { value: "dark", label: "Dark" },
+  ];
+  const selected = options.find((option) => option.value === mode) ?? options[0];
+
+  useEffect(() => {
+    if (!open) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open]);
+
+  return (
+    <div ref={containerRef} className="relative w-[132px]">
+      <button
+        type="button"
+        role="combobox"
+        aria-label="Theme"
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        onClick={() => setOpen((value) => !value)}
+        className="flex w-full items-center justify-between gap-2 rounded-[5px] border px-3 py-2 text-left text-[12px] font-medium transition"
+        style={{
+          borderColor: open ? "var(--accent)" : "var(--border)",
+          background: "var(--surface)",
+          color: "var(--ink)",
+          cursor: "pointer",
+        }}
+      >
+        <span>{selected.label}</span>
+        <ChevronDown
+          className="h-3.5 w-3.5 text-[var(--ink-3)] transition-transform"
+          style={{ transform: open ? "rotate(180deg)" : "none" }}
+        />
+      </button>
+      {open && (
+        <div
+          role="listbox"
+          aria-label="Theme options"
+          className="absolute right-0 z-20 mt-1 w-full overflow-hidden rounded-[5px] border p-1 shadow-lg"
+          style={{ borderColor: "var(--border)", background: "var(--card)" }}
+        >
+          {options.map((option) => {
+            const selectedOption = option.value === mode;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                role="option"
+                aria-selected={selectedOption}
+                onClick={() => {
+                  onChange(option.value);
+                  setOpen(false);
+                }}
+                className="flex w-full items-center justify-between rounded-[4px] px-2.5 py-2 text-left text-[12px] transition"
+                style={{
+                  background: selectedOption ? "var(--accent-bg)" : "transparent",
+                  color: selectedOption ? "var(--accent)" : "var(--ink-2)",
+                  cursor: "pointer",
+                }}
+              >
+                {option.label}
+                {selectedOption && <Check className="h-3.5 w-3.5" />}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -466,6 +553,7 @@ function MigrationTab() {
     setBusy(true);
     try {
       await api.deleteAllData();
+      resetSetupGuideState();
       localStorage.removeItem("agentos_session_token");
       window.location.assign("/login");
     } catch (e) {

@@ -1,0 +1,132 @@
+---
+title: Local-first và ranh giới dữ liệu
+description: Hiểu CaberOS lưu gì local, dữ liệu nào có thể rời máy và cách cấu hình workflow riêng tư.
+sidebar:
+  order: 2
+---
+
+CaberOS là local-first: operator sở hữu runtime và primary data store. Đây không phải tuyên bố rằng mọi processing luôn ở trên máy.
+
+Dữ liệu rời máy hay không phụ thuộc model endpoint, capability bật, MCP server, external channel và software do operator/agent chạy.
+
+## Data-flow overview
+
+```text
+Local CaberOS gateway
+  ├─ SQL database
+  ├─ secret.key
+  ├─ agent homes / MEMORY.md
+  ├─ workspaces / attachments
+  ├─ Knowledge Vault / skills / backups / logs
+  └─ optional: hosted model, remote MCP, web, Telegram/Discord/Zalo,
+              command-selected destination
+```
+
+Gateway không cần CaberOS cloud relay; hosted traffic đi từ local gateway tới endpoint bạn cấu hình.
+
+## Lưu local
+
+| Data | Storage mặc định | CaberOS encryption |
+| --- | --- | --- |
+| Agent identity/config | SQL database | Không full-row |
+| Operator password | SQL database | Bcrypt hash |
+| Session | SQL database | Raw token hash |
+| Provider/MCP/channel token | SQL database | Fernet |
+| Webhook secret | SQL database | Plaintext field |
+| Contact/session/message/run | SQL database | Không |
+| Audit/token/spend | SQL database | Không |
+| `MEMORY.md` | Agent-home filesystem | Không |
+| Workspace/attachment/document | Filesystem | Không |
+| Knowledge chunk/citation | SQL + FTS | Không |
+| Skill | Filesystem | Không |
+| Export/restore point | User/app directory | ZIP không encrypt |
+
+Dùng OS permission và full-disk encryption để bảo vệ plaintext local.
+
+## Hosted model nhận gì
+
+Request có thể gồm base rule, soul/persona/task, `MEMORY.md`, skill menu/body, fact/recall, session summary, recent message, user message, visible schema, Knowledge Vault excerpt, file/image đã đọc, web content và tool result cần cho turn.
+
+Attachment ban đầu chỉ là metadata và path/URL; khi agent đọc, result có thể vào hosted model call sau. Input guardrail redact secret pattern nhưng là heuristic.
+
+## Local model workflow
+
+Loopback Ollama/LM Studio có thể giữ model traffic local, nhưng workflow vẫn rời máy nếu dùng web, remote MCP, external channel, command open mode hoặc local MCP tự gọi remote API.
+
+Workflow gần offline:
+
+1. loopback model;
+2. tắt web capability;
+3. tránh remote MCP/channel;
+4. Strict terminal network denied;
+5. inspect MCP code;
+6. verify bằng OS/network monitoring.
+
+## Knowledge Vault và memory flow
+
+Document extraction/search diễn ra local; excerpt từ `doc_search` hoặc image từ `doc_inspect` có thể gửi hosted model. `MEMORY.md` vào mọi run của agent; recall/fact theo contact/agent; summary chọn theo relevance; exact history chỉ khi capability gọi.
+
+Hosted provider nhận memory có trong context. Không để secret hoặc dữ liệu contact này trong agent-wide `MEMORY.md`.
+
+## MCP và web
+
+Local stdio MCP chạy process local nhưng có thể tự gọi external service. HTTP MCP gửi args, header, credential và response tới endpoint. CaberOS mediation không thay privacy/retention policy của server.
+
+`web_search` gửi query tới search implementation; `web_fetch` fetch URL. Host có thể thấy IP, timing, URL, query parameter và header. Không đặt secret trong query/URL.
+
+## External channel
+
+Telegram, Discord, Zalo OA và Zalo Bot có policy lưu/retention riêng. Inbound message lưu local thành contact/session/run/message, reply gửi lại qua platform; nếu model hosted, text và selected context cũng gửi provider.
+
+## Shell và filesystem
+
+Native file tool Strict giới hạn workspace. Linux Bubblewrap strict ẩn phần lớn host data và unshare network; macOS Seatbelt strict deny network/restrict write nhưng broad read; Open mode bỏ sandbox wrapper và cho absolute host path.
+
+Command có thể copy local data vào output rồi output được gửi hosted model. Approval là review point, không phải data-loss prevention tuyệt đối.
+
+## Logs, backup và deletion
+
+CaberOS lưu message, thinking, tool args/result, decision, error, token, cost, latency và source metadata local. Gateway log plaintext và rotate bounded. Full export chứa encrypted credential record cùng `secret.key`, agent home và workspace; ZIP không encrypt.
+
+Xóa local không xóa bản copy ở provider, MCP, messaging platform, access log hoặc backup. Xóa credential local không revoke upstream; hãy revoke key/token ở provider.
+
+## Cấu hình ví dụ
+
+### Private document assistant
+
+```text
+Model: loopback Ollama
+Knowledge: local Shared hoặc agent-private Vault
+Capabilities: doc_list, doc_search, doc_inspect nếu cần
+Web: disabled
+MCP: disabled
+Channels: dashboard only
+Sandbox: strict
+```
+
+### Hosted research assistant
+
+```text
+Model: hosted provider
+Knowledge: local Vault
+Web: approved search và fetch
+MCP: none
+Terminal: disabled
+```
+
+Provider nhận excerpt, fetched text và context; web host nhận request riêng.
+
+### Messaging automation
+
+```text
+Ingress: Telegram hoặc Zalo
+Model: hosted provider
+MCP: external project service
+Approval policy: operator hoặc deny
+```
+
+Platform, model provider và MCP service nhận các phần khác nhau của workflow; không thể tuyên bố “data never leaves”.
+
+## Privacy checklist
+
+Xác định endpoint external, review retention/training, giữ secret ngoài prompt/memory/skill/document, dùng private Knowledge scope, credential least privilege, disable web/MCP/channel không dùng, hiểu Strict sandbox, inspect context/trace, encrypt backup và revoke upstream credential sau nghi ngờ lộ.

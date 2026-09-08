@@ -1,0 +1,42 @@
+---
+title: Xử lý sự cố desktop gateway
+description: Chẩn đoán desktop launch bị kẹt ở màn hình starting.
+---
+
+Desktop app đóng gói khởi động gateway trên loopback port `51718`. Nó không dùng development gateway port `8081`.
+
+## Kiểm tra health endpoint
+
+```bash
+curl -i --max-time 3 http://127.0.0.1:51718/health
+```
+
+Gateway hoạt động trả HTTP `200` và:
+
+```json
+{"status":"ok"}
+```
+
+## Xem gateway log
+
+```bash
+tail -n 100 "$HOME/Library/Application Support/com.caberos.desktop/logs/gateway.log"
+```
+
+Log append-only với backup rotation có giới hạn; startup attempt cũ có thể nằm phía trên lỗi mới nhất.
+
+## Kiểm tra process và port
+
+```bash
+pgrep -alf 'CaberOS|caberos-gateway'
+lsof -nP -iTCP:51718 -sTCP:LISTEN
+```
+
+Nếu process khác đang giữ port `51718`, hãy đóng process đó hoặc dừng development process xung đột rồi khởi động lại CaberOS.
+
+## Một số thông báo thường gặp
+
+- **ImportError trong `gateway_entry`** — DMG chứa gateway build cũ; tải release mới nhất.
+- **Không có gateway log** — app có thể không có quyền tạo data directory hoặc dùng application identifier khác.
+- **Gateway thoát ngay** — xem traceback cuối trong `gateway.log` và xóa secret trước khi gửi bug report.
+- **Application is damaged** — xác minh nguồn DMG rồi làm theo bước Gatekeeper trong [hướng dẫn cài đặt](/vi/docs/getting-started/installation/).

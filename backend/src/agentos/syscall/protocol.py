@@ -47,4 +47,5 @@ class SyscallHandler(Protocol):
         sub_agent_id: str | None = None,
         event_emitter: Any = None,
         capability_catalog: Any = None,
+        approval_batch: Any = None,
     ) -> SyscallResult: ...

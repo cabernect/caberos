@@ -25,6 +25,7 @@ from agentos.models.mcp import (
     McpServerCredential,
     McpTool,
 )
+from agentos.models.notification import Notification
 from agentos.secret_store import decrypt, encrypt
 
 # --- MockMcpClient tests ---
@@ -668,6 +669,46 @@ async def test_oauth_callback_handles_error():
 
 
 @pytest.mark.asyncio
+async def test_oauth_completion_connects_server(db, monkeypatch):
+    """A completed OAuth flow establishes the persistent MCP client automatically."""
+    from agentos.mcp import oauth as oauth_module
+
+    server = McpServer(
+        name="oauth-connect-test",
+        transport="http",
+        url="https://example.com/mcp",
+        oauth_config=json.dumps({"scope": "read"}),
+        enabled=True,
+    )
+    db.add(server)
+    await db.commit()
+
+    class TestSessionFactory:
+        def __call__(self):
+            class TestSession:
+                async def __aenter__(self):
+                    return db
+
+                async def __aexit__(self, *args):
+                    pass
+
+            return TestSession()
+
+    connected_server_ids = []
+
+    async def fake_connect(server_arg):
+        connected_server_ids.append(server_arg.id)
+        return True
+
+    monkeypatch.setattr(oauth_module, "async_session_factory", TestSessionFactory())
+    monkeypatch.setattr(mcp_registry, "connect_server", fake_connect)
+
+    await oauth_module._connect_after_oauth(server.id)
+
+    assert connected_server_ids == [server.id]
+
+
+@pytest.mark.asyncio
 async def test_connect_server_skips_oauth_without_token(db, monkeypatch):
     """connect_server returns False for OAuth server with no stored token."""
     import json
@@ -762,3 +803,41 @@ async def test_disabled_server_tools_are_not_loaded(db, monkeypatch):
 
     assert cap_registry.get(tool.capability_name) is None
     assert tool.capability_name not in mcp_registry._tool_map
+
+
+@pytest.mark.asyncio
+async def test_mcp_timeout_creates_notification(db, monkeypatch):
+    """A timed-out MCP connection creates an operator notification."""
+    server = McpServer(name="slow-server", transport="stdio", command="slow-mcp")
+    db.add(server)
+    await db.flush()
+
+    class TimeoutClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def connect(self):
+            raise TimeoutError("MCP connection timed out after 15.0s")
+
+    class TestSessionFactory:
+        def __call__(self):
+            class TestSession:
+                async def __aenter__(self):
+                    return db
+
+                async def __aexit__(self, *args):
+                    pass
+
+            return TestSession()
+
+    monkeypatch.setattr(mcp_registry, "McpClient", TimeoutClient)
+    monkeypatch.setattr(mcp_registry, "async_session_factory", TestSessionFactory())
+
+    assert await mcp_registry.connect_server(server) is False
+
+    notification = await db.scalar(select(Notification).where(Notification.entity_id == server.id))
+    assert notification is not None
+    assert notification.notification_type == "mcp_connection_failed"
+    assert notification.title == "MCP connection failed: slow-server"
+    assert "MCP connection timed out after 15.0s" in notification.message
+    assert notification.action_path == "/mcps"

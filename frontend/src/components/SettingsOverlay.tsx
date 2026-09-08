@@ -33,6 +33,26 @@ type Tab = (typeof TABS)[number];
 export function SettingsOverlay({ agent, open, onClose, onSaved, providers }: SettingsOverlayProps) {
   const [tab, setTab] = useState<Tab>("General");
   const [savedMsg, setSavedMsg] = useState("");
+  const [loadedAgent, setLoadedAgent] = useState<Agent | null>(agent);
+
+  useEffect(() => {
+    if (!open || !agent || agent.capabilities !== undefined) {
+      setLoadedAgent(agent);
+      return;
+    }
+
+    let cancelled = false;
+    api.getAgent(agent.id)
+      .then((fullAgent) => {
+        if (!cancelled) setLoadedAgent(fullAgent);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [agent, open]);
+
+  const effectiveAgent = loadedAgent?.id === agent?.id ? loadedAgent : agent;
 
   if (!open) return null;
 
@@ -58,7 +78,7 @@ export function SettingsOverlay({ agent, open, onClose, onSaved, providers }: Se
           style={{ borderBottom: "1px solid var(--border)" }}
         >
           <h2 className="text-[16px] font-semibold text-[var(--ink)]">
-            {agent?.name || "Agent"} Settings
+            {effectiveAgent?.name || "Agent"} Settings
           </h2>
           <div className="flex items-center gap-3">
             {savedMsg && (
@@ -101,10 +121,10 @@ export function SettingsOverlay({ agent, open, onClose, onSaved, providers }: Se
         {/* Content — scrollable */}
         <div className="flex-1 overflow-y-auto p-6">
           {tab === "General" && (
-            <GeneralTab agent={agent} providers={providers} onSaved={onSaved} onClose={onClose} showSaved={showSaved} />
+            <GeneralTab agent={effectiveAgent} providers={providers} onSaved={onSaved} onClose={onClose} showSaved={showSaved} />
           )}
           {tab === "Capabilities" && (
-            <CapabilitiesTab agent={agent} onSaved={onSaved} onClose={onClose} showSaved={showSaved} />
+            <CapabilitiesTab agent={effectiveAgent} onSaved={onSaved} onClose={onClose} showSaved={showSaved} />
           )}
           {tab === "Memory" && <MemoryTab agentId={agent?.id || ""} onClose={onClose} showSaved={showSaved} />}
           {tab === "Skills" && <SkillsTab agentId={agent?.id || ""} showSaved={showSaved} />}
@@ -456,6 +476,38 @@ function grantMode(grant: CapabilityGrant | undefined, kind: string): GrantMode 
   return kind === "mcp_tool" ? "on_demand" : "always";
 }
 
+function capabilityState(agent: Agent | null, allCaps: CapabilityInfo[]) {
+  const grantModes = new Map<string, GrantMode>();
+  const serverModes = new Map<string, GrantMode>();
+  const approvals = new Set<string>();
+  const serverApprovals = new Map<string, boolean>();
+
+  if (agent?.capabilities) {
+    for (const grant of agent.capabilities) {
+      if (grant.name.startsWith(SERVER_GRANT_PREFIX)) {
+        const serverId = grant.name.slice(SERVER_GRANT_PREFIX.length);
+        const mode = grantMode(grant, "mcp_tool");
+        if (mode !== "none") serverModes.set(serverId, mode);
+        serverApprovals.set(serverId, grant.require_approval);
+        continue;
+      }
+      const kind = allCaps.find((cap) => cap.name === grant.name)?.kind || "tool";
+      const mode = grantMode(grant, kind);
+      if (mode !== "none") grantModes.set(grant.name, mode);
+      if (grant.require_approval) approvals.add(grant.name);
+    }
+  } else {
+    for (const cap of allCaps) {
+      if (cap.kind !== "mcp_tool") {
+        grantModes.set(cap.name, "always");
+        if (cap.require_approval) approvals.add(cap.name);
+      }
+    }
+  }
+
+  return { grantModes, serverModes, approvals, serverApprovals };
+}
+
 function CapabilitiesTab({
   agent,
   onSaved,
@@ -471,6 +523,7 @@ function CapabilitiesTab({
   const [approvals, setApprovals] = useState<Set<string>>(new Set());
   const [serverApprovals, setServerApprovals] = useState<Map<string, boolean>>(new Map());
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
   const [allCaps, setAllCaps] = useState<CapabilityInfo[]>(FALLBACK_CAPABILITIES);
   const [yoloMode, setYoloMode] = useState(false);
 
@@ -496,35 +549,11 @@ function CapabilitiesTab({
   }, []);
 
   useEffect(() => {
-    const nextModes = new Map<string, GrantMode>();
-    const nextServerModes = new Map<string, GrantMode>();
-    const nextApprovals = new Set<string>();
-    const nextServerApprovals = new Map<string, boolean>();
-
-    if (agent?.capabilities) {
-      for (const grant of agent.capabilities) {
-        if (grant.name.startsWith(SERVER_GRANT_PREFIX)) {
-          const serverId = grant.name.slice(SERVER_GRANT_PREFIX.length);
-          const mode = grantMode(grant, "mcp_tool");
-          if (mode !== "none") nextServerModes.set(serverId, mode);
-          nextServerApprovals.set(serverId, grant.require_approval);
-          continue;
-        }
-        const kind = allCaps.find((cap) => cap.name === grant.name)?.kind || "tool";
-        const mode = grantMode(grant, kind);
-        if (mode !== "none") nextModes.set(grant.name, mode);
-        if (grant.require_approval) nextApprovals.add(grant.name);
-      }
-    } else {
-      for (const cap of allCaps) {
-        if (cap.kind !== "mcp_tool") nextModes.set(cap.name, "always");
-      }
-    }
-
-    setGrantModes(nextModes);
-    setServerModes(nextServerModes);
-    setApprovals(nextApprovals);
-    setServerApprovals(nextServerApprovals);
+    const state = capabilityState(agent, allCaps);
+    setGrantModes(state.grantModes);
+    setServerModes(state.serverModes);
+    setApprovals(state.approvals);
+    setServerApprovals(state.serverApprovals);
   }, [agent, allCaps]);
 
   const modeFor = (cap: CapabilityInfo): GrantMode => {
@@ -542,6 +571,7 @@ function CapabilitiesTab({
   ) => {
     if (!agent) return;
     setSaving(true);
+    setSaveError("");
     try {
       const caps: CapabilityGrant[] = [];
       const builtinCaps = allCaps.filter((cap) => cap.kind !== "mcp_tool");
@@ -591,8 +621,23 @@ function CapabilitiesTab({
 
       await api.updateAgent(agent.id, { capabilities: caps });
       onSaved();
-    } catch {
-      // Error — don't close, let user retry
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      setSaveError(
+        message.startsWith("503:")
+          ? "The database is busy. Nothing was saved; please retry."
+          : "Could not save capability settings; please retry.",
+      );
+      try {
+        const serverAgent = await api.getAgent(agent.id);
+        const state = capabilityState(serverAgent, allCaps);
+        setGrantModes(state.grantModes);
+        setServerModes(state.serverModes);
+        setApprovals(state.approvals);
+        setServerApprovals(state.serverApprovals);
+        onSaved();
+      } catch {
+      }
     } finally {
       setSaving(false);
     }
@@ -734,6 +779,11 @@ function CapabilitiesTab({
           />
         );
       })}
+      {saveError && (
+        <p role="alert" className="font-mono text-[11px]" style={{ color: "var(--danger)" }}>
+          {saveError}
+        </p>
+      )}
       {saving && (
         <p className="font-mono text-[11px] text-[var(--ink-3)]">Saving…</p>
       )}

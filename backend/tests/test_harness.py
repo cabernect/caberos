@@ -10,13 +10,14 @@ from agentos.config import settings
 from agentos.config_schema import AgentConfig, CapabilityGrant, ModelConfig
 from agentos.harness.context import assemble_system_prompt
 from agentos.harness.litellm_adapter import LiteLLMAdapter
-from agentos.harness.loop import Harness
+from agentos.harness.loop import ApprovalBatch, Harness
 from agentos.harness.scripted_model import ScriptedModel, ScriptedResponse
 from agentos.knowledge.ingest import ingest_document
 from agentos.models.provider import Provider
 from agentos.providers import ProviderRegistry
 from agentos.providers.registry import LiteLLMProviderAdapter, OpenCodeZenProviderAdapter
 from agentos.syscall.mediator import StubSyscallHandler
+from agentos.syscall.protocol import SyscallResult
 
 
 @pytest.mark.asyncio
@@ -409,6 +410,69 @@ async def test_harness_event_emitter(db, workspace):
     statuses = [e[1].get("status") for e in tool_call_events]
     assert "pending" in statuses
     assert "complete" in statuses
+
+
+@pytest.mark.asyncio
+async def test_harness_runs_multiple_tool_calls_concurrently(db, workspace):
+    config = AgentConfig(
+        id="harness-serial-tools",
+        name="Serialized Tools Test",
+        model=ModelConfig(provider_id="test", name="scripted"),
+        capabilities=[CapabilityGrant(name="read_file")],
+    )
+    model = ScriptedModel(
+        [
+            ScriptedResponse(
+                tool_calls=[
+                    {"id": "read-1", "name": "read_file", "args": {"path": "one.txt"}},
+                    {"id": "read-2", "name": "read_file", "args": {"path": "two.txt"}},
+                    {"id": "read-3", "name": "read_file", "args": {"path": "three.txt"}},
+                ]
+            ),
+            ScriptedResponse(content="Done"),
+        ]
+    )
+
+    class RecordingSyscall:
+        def __init__(self):
+            self.active = 0
+            self.max_active = 0
+            self.order: list[str] = []
+
+        async def mediate(self, call, **kwargs):
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            self.order.append(call.id)
+            await asyncio.sleep(0)
+            self.active -= 1
+            return SyscallResult(output={"path": call.args["path"]}, allowed=True)
+
+    syscall = RecordingSyscall()
+    result = await Harness(model=model).run(
+        agent_config=config,
+        session=None,
+        message="Read three files",
+        syscall_handler=syscall,
+        run_id=str(uuid.uuid4()),
+    )
+
+    assert result.status == "completed"
+    assert syscall.max_active == 3
+    assert syscall.order == ["read-1", "read-2", "read-3"]
+
+
+@pytest.mark.asyncio
+async def test_approval_batch_waits_for_all_decisions():
+    batch = ApprovalBatch(["a", "b", "c"])
+    tasks = [
+        asyncio.create_task(batch.arrive("a", True)),
+        asyncio.create_task(batch.arrive("b", False)),
+    ]
+
+    await asyncio.sleep(0)
+    assert not any(task.done() for task in tasks)
+    tasks.append(asyncio.create_task(batch.arrive("c", True)))
+    assert await asyncio.gather(*tasks) == [True, False, True]
 
 
 @pytest.mark.asyncio

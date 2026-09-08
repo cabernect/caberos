@@ -404,19 +404,33 @@ async def list_sessions(
         .order_by(Session.last_activity_at.desc())
     )
     rows = result.all()
-    return [
-        {
-            "id": sess.id,
-            "title": sess.title or "New conversation",
-            "status": sess.status,
-            "started_at": _iso_utc(sess.started_at),
-            "last_activity_at": _iso_utc(sess.last_activity_at),
-            "message_count": msg_count,
-            "channel": sess.channel,
-            "external_user_id": sess.external_user_id,
-        }
-        for sess, msg_count in rows
-    ]
+    sessions = []
+    for sess, msg_count in rows:
+        active_result = await db.execute(
+            select(Run)
+            .where(
+                Run.session_id == sess.id,
+                Run.status.in_(("pending", "running")),
+            )
+            .order_by(Run.started_at.desc())
+            .limit(1)
+        )
+        active_run = active_result.scalar_one_or_none()
+        sessions.append(
+            {
+                "id": sess.id,
+                "title": sess.title or "New conversation",
+                "status": sess.status,
+                "started_at": _iso_utc(sess.started_at),
+                "last_activity_at": _iso_utc(sess.last_activity_at),
+                "message_count": msg_count,
+                "channel": sess.channel,
+                "external_user_id": sess.external_user_id,
+                "active_run_id": active_run.id if active_run else None,
+                "active_run_status": active_run.status if active_run else None,
+            }
+        )
+    return sessions
 
 
 @router.post("/{agent_id}/sessions")
