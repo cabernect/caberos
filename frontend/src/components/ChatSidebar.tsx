@@ -30,16 +30,16 @@ export function ChatSidebar({
 
   return (
     <aside
-      className="flex flex-col overflow-hidden border-r transition-all duration-200"
+      className="chat-sidebar flex flex-col overflow-hidden border-r transition-all duration-200"
       style={{
         width: 260,
         minWidth: 260,
         background: "var(--sidebar)",
-        borderColor: "var(--border)",
+        borderColor: "var(--caberos-sidebar-border)",
       }}
     >
       {/* Top: New Chat */}
-      <div className="px-3 py-3" style={{ borderBottom: "1px solid var(--border)" }}>
+      <div className="chat-sidebar-header px-3 py-3" style={{ borderBottom: "1px solid var(--sidebar-divider)" }}>
         <button
           onClick={onNewChat}
           className="flex w-full items-center gap-2 rounded-[6px] px-3 py-2 text-[13px] font-medium transition"
@@ -77,7 +77,7 @@ export function ChatSidebar({
       </nav>
 
       {/* Bottom: Settings + Back to Agents */}
-      <div className="px-2 py-2" style={{ borderTop: "1px solid var(--border)" }}>
+      <div className="chat-sidebar-footer px-2 py-2" style={{ borderTop: "1px solid var(--sidebar-divider)" }}>
         <button
           onClick={onOpenSettings}
           className="flex w-full items-center gap-2.5 rounded-[5px] px-2.5 py-2 text-[13px] text-[var(--ink-2)] transition"
@@ -184,7 +184,7 @@ function SessionItem({
       className={cn(
         "group flex cursor-pointer items-center gap-2 truncate rounded-[5px] px-2.5 py-1.5 text-[13px] transition",
         active
-          ? "bg-[var(--ink)] font-medium text-[var(--white)]"
+          ? "bg-[var(--accent-bg)] font-medium text-[var(--ink)]"
           : "text-[var(--ink-2)] hover:bg-[var(--border)] hover:text-[var(--ink)]",
       )}
     >
@@ -192,9 +192,7 @@ function SessionItem({
         <span
           className={cn(
             "shrink-0 rounded px-1 py-0.5 text-[9px] font-semibold uppercase",
-            active
-              ? "bg-[var(--white)]/20 text-[var(--white)]"
-              : "bg-[var(--accent)]/15 text-[var(--accent)]",
+            "bg-[var(--accent)]/15 text-[var(--accent)]",
           )}
         >
           {channelLabel}
@@ -206,7 +204,7 @@ function SessionItem({
       {running && !hovering && (
         <Loader2
           className="h-3.5 w-3.5 shrink-0 animate-spin"
-          style={{ color: active ? "var(--white)" : "var(--accent)" }}
+          style={{ color: "var(--accent)" }}
         />
       )}
       {hovering && (

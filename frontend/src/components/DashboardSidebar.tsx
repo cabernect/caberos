@@ -15,6 +15,7 @@ import {
 import { LogoMark } from "@/components/LogoMark";
 import { NotificationCenter } from "@/components/NotificationCenter";
 import { api } from "@/lib/api";
+import { getStoredSidebarCollapsed, setStoredSidebarCollapsed } from "@/lib/sidebarState";
 
 export type NavKey =
   | "agents"
@@ -58,6 +59,18 @@ export function DashboardSidebar({
   agentCount,
 }: DashboardSidebarProps) {
   const [loadedAgentCount, setLoadedAgentCount] = useState<number | undefined>(undefined);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    () => getStoredSidebarCollapsed() ?? collapsed,
+  );
+
+  const handleToggleCollapse = () => {
+    setSidebarCollapsed((current) => {
+      const next = !current;
+      setStoredSidebarCollapsed(next);
+      return next;
+    });
+    onToggleCollapse();
+  };
 
   useEffect(() => {
     if (agentCount !== undefined) return;
@@ -92,7 +105,7 @@ export function DashboardSidebar({
   ];
 
   // Collapsed strip — icons only
-  if (collapsed) {
+  if (sidebarCollapsed) {
     return (
       <div
         className="flex flex-col items-center gap-2 py-3"
@@ -100,18 +113,18 @@ export function DashboardSidebar({
           width: 48,
           minWidth: 48,
           background: "var(--sidebar)",
-          borderRight: "1px solid var(--border)",
+          borderRight: "1px solid var(--caberos-sidebar-border)",
         }}
       >
         <button
-          onClick={onToggleCollapse}
+          onClick={handleToggleCollapse}
           className="flex h-7 w-7 items-center justify-center rounded text-[var(--ink-2)] transition hover:bg-[var(--border)] hover:text-[var(--ink)]"
           style={{ border: "none", background: "none", cursor: "pointer" }}
           title="Expand sidebar"
         >
           <PanelLeft className="h-4 w-4" />
         </button>
-        <div style={{ borderBottom: "1px solid var(--border)", width: 28 }} />
+        <div style={{ borderBottom: "1px solid var(--sidebar-divider)", width: 28 }} />
         {sections.flatMap((s) => s.items).map((item) => {
           const Icon = item.icon;
           const isActive = active === item.key;
@@ -141,8 +154,8 @@ export function DashboardSidebar({
           );
         })}
         <div className="flex-1" />
-        <div className="mb-1 w-8">
-          <NotificationCenter sidebar active={active === "notifications"} />
+        <div className="mb-1 flex w-7 justify-center">
+          <NotificationCenter sidebar collapsed active={active === "notifications"} />
         </div>
         <button
           onClick={() => onNavigate("settings")}
@@ -179,20 +192,20 @@ export function DashboardSidebar({
         width: 240,
         minWidth: 240,
         background: "var(--sidebar)",
-        borderColor: "var(--border)",
+        borderColor: "var(--caberos-sidebar-border)",
       }}
     >
       {/* Brand + collapse toggle */}
       <div
         className="flex items-center gap-2.5 px-4 py-4"
-        style={{ borderBottom: "1px solid var(--border)" }}
+        style={{ borderBottom: "1px solid var(--sidebar-divider)" }}
       >
         <LogoMark className="h-7 w-7 shrink-0" color="var(--brand)" />
         <span className="flex-1 text-[15px] font-semibold text-[var(--ink)]">
           CaberOS
         </span>
         <button
-          onClick={onToggleCollapse}
+          onClick={handleToggleCollapse}
           className="flex h-6 w-6 items-center justify-center rounded text-[var(--ink-3)] transition hover:bg-[var(--border)] hover:text-[var(--ink)]"
           style={{ border: "none", background: "none", cursor: "pointer" }}
           title="Collapse sidebar"
@@ -223,7 +236,7 @@ export function DashboardSidebar({
       </nav>
 
       {/* Footer: Settings + Sign out */}
-      <div className="px-2 py-2" style={{ borderTop: "1px solid var(--border)" }}>
+      <div className="px-2 py-2" style={{ borderTop: "1px solid var(--sidebar-divider)" }}>
         <NotificationCenter sidebar active={active === "notifications"} />
         <NavButton
           item={{ key: "settings", label: "Settings", icon: Settings }}

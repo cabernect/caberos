@@ -4,7 +4,15 @@ import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import type { Notification } from "@/lib/types";
 
-export function NotificationCenter({ sidebar = false, active = false }: { sidebar?: boolean; active?: boolean }) {
+export function NotificationCenter({
+  sidebar = false,
+  collapsed = false,
+  active = false,
+}: {
+  sidebar?: boolean;
+  collapsed?: boolean;
+  active?: boolean;
+}) {
   const navigate = useNavigate();
   const [items, setItems] = useState<Notification[]>([]);
 
@@ -27,7 +35,9 @@ export function NotificationCenter({ sidebar = false, active = false }: { sideba
         aria-label={`Notifications${unread ? `, ${unread} unread` : ""}`}
         onClick={() => navigate("/notifications")}
         className={sidebar
-          ? "relative flex h-8 w-full items-center justify-start gap-2 rounded-[5px] px-2.5 py-2 text-[13px] transition-colors"
+          ? collapsed
+            ? "relative flex h-7 w-7 items-center justify-center rounded transition-colors"
+            : "relative flex h-8 w-full items-center justify-start gap-2 rounded-[5px] px-2.5 py-2 text-[13px] transition-colors"
           : "relative flex h-9 w-9 items-center justify-center rounded-full border shadow-sm transition-colors hover:bg-[var(--hover)]"}
         style={{ background: active ? "var(--ink)" : "none", borderColor: "var(--border)", color: active ? "var(--white)" : "var(--ink-2)", cursor: "pointer", fontWeight: active ? 500 : 400 }}
         onMouseEnter={(event) => {
@@ -40,7 +50,7 @@ export function NotificationCenter({ sidebar = false, active = false }: { sideba
         }}
       >
         <Bell className="h-4 w-4" />
-        {sidebar && <span>Notifications</span>}
+        {sidebar && !collapsed && <span>Notifications</span>}
         {unread > 0 && <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold text-white" style={{ background: "var(--danger)" }}>{unread > 9 ? "9+" : unread}</span>}
       </button>
     </div>

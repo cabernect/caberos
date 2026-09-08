@@ -78,6 +78,21 @@ interface ActiveElicitation {
   multiSelect: boolean;
 }
 
+function createStreamingResponse(): StreamingResponse {
+  return {
+    thinking: "",
+    items: [],
+    text: "",
+    toolCalls: new Map(),
+    thinkingStartTime: Date.now(),
+    thinkingEndTime: null,
+    turnCosts: [],
+    guardrailWarnings: [],
+    completed: false,
+    subagents: new Map(),
+  };
+}
+
 export function Conversation() {
   const { id: agentId } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -291,6 +306,8 @@ export function Conversation() {
               args: data.args,
               status: data.status,
               result: data.result,
+              approval_batch_id: data.approval_batch_id,
+              approval_batch_size: data.approval_batch_size,
             };
             newToolCalls.set(data.id, toolData);
             const exists = items.some(i => i.type === "tool" && i.id === data.id);
@@ -426,6 +443,8 @@ export function Conversation() {
             status: data.status,
             result: data.result,
             approval_id: data.approval_id,
+            approval_batch_id: data.approval_batch_id,
+            approval_batch_size: data.approval_batch_size,
             elicitation_id: existing?.elicitation_id,
           };
           newToolCalls.set(data.id, toolData);
@@ -598,18 +617,7 @@ export function Conversation() {
         if (status.status === "running" || status.status === "awaiting_approval") {
           lastRunId = latestRun;
           const runSessionId = activeSessionId;
-          const newStreaming: StreamingResponse = {
-            thinking: "",
-            items: [],
-            text: "",
-            toolCalls: new Map(),
-            thinkingStartTime: Date.now(),
-            thinkingEndTime: null,
-            turnCosts: [],
-            guardrailWarnings: [],
-            completed: false,
-            subagents: new Map(),
-          };
+          const newStreaming = createStreamingResponse();
           runEntriesRef.current.set(runSessionId, {
             runId: latestRun,
             sessionId: runSessionId,
@@ -720,21 +728,79 @@ export function Conversation() {
     }
   };
 
+  const streamRunRef = useRef(streamRun);
+  streamRunRef.current = streamRun;
+
   // Start streaming for a session (creates abort controller)
-  const startStreaming = (sessionId: string) => {
+  const startStreaming = useCallback((sessionId: string) => {
     const entry = runEntriesRef.current.get(sessionId);
     if (!entry || !agentId) return;
     if (entry.abortController) return;  // already streaming
     const controller = new AbortController();
     entry.abortController = controller;
-    streamRun(agentId, entry.runId, sessionId, entry.lastEventId, controller.signal).catch(() => {
+    streamRunRef.current(agentId, entry.runId, sessionId, entry.lastEventId, controller.signal).catch(() => {
       if (activeSessionRef.current === sessionId) {
         setStreaming(null);
         streamingRef.current = null;
         setIsStreaming(false);
       }
     });
-  };
+  }, [agentId]);
+
+  useEffect(() => {
+    if (!agentId) return;
+    const recoverableSessions = sessions.filter(
+      (session) =>
+        session.active_run_id &&
+        (session.active_run_status === "pending" || session.active_run_status === "running"),
+    );
+    if (recoverableSessions.length === 0) return;
+
+    let cancelled = false;
+    const restoreRuns = async () => {
+      for (const session of recoverableSessions) {
+        if (cancelled || !session.active_run_id || runEntriesRef.current.has(session.id)) {
+          continue;
+        }
+
+        const status = await api.getRunStatus(agentId, session.active_run_id).catch(() => null);
+        if (
+          cancelled ||
+          !status ||
+          (status.status !== "running" && status.status !== "awaiting_approval")
+        ) {
+          continue;
+        }
+
+        const restoredStreaming = createStreamingResponse();
+        runEntriesRef.current.set(session.id, {
+          runId: session.active_run_id,
+          sessionId: session.id,
+          lastEventId: 0,
+          streaming: restoredStreaming,
+          elicitation: null,
+          abortController: null,
+        });
+
+        if (!activeSessionRef.current) {
+          activeSessionRef.current = session.id;
+          setActiveSessionId(session.id);
+        }
+        if (activeSessionRef.current === session.id) {
+          setStreaming(restoredStreaming);
+          streamingRef.current = restoredStreaming;
+          setIsStreaming(true);
+        }
+        setRunningSessionIds(new Set(runEntriesRef.current.keys()));
+        startStreaming(session.id);
+      }
+    };
+
+    void restoreRuns();
+    return () => {
+      cancelled = true;
+    };
+  }, [agentId, sessions, startStreaming]);
 
   // Stop streaming for a session (aborts the SSE connection)
   const stopStreaming = (sessionId: string) => {
@@ -1003,18 +1069,7 @@ export function Conversation() {
 
     setInputWarnings([]);
     setActiveElicitation(null);
-    const newStreaming: StreamingResponse = {
-      thinking: "",
-      items: [],
-      text: "",
-      toolCalls: new Map(),
-      thinkingStartTime: Date.now(),
-      thinkingEndTime: null,
-      turnCosts: [],
-      guardrailWarnings: [],
-      completed: false,
-      subagents: new Map(),
-    };
+    const newStreaming = createStreamingResponse();
     setStreaming(newStreaming);
     streamingRef.current = newStreaming;
     setIsStreaming(true);

@@ -27,6 +27,8 @@
   --white:      #FFFFFF;
   --brand:      #6A8216;   /* olive — light mode */
   --brand-2:    #A8C04A;   /* lifted olive — for dark mode */
+  --caberos-sidebar-border: #E0DFDC;
+  --sidebar-divider: transparent;
 
   /* shadcn mapping */
   --background: var(--surface);
@@ -62,6 +64,78 @@
   --chart-3: var(--success);
   --chart-4: var(--danger);
   --chart-5: var(--ink-3);
+  --card: var(--white);
+}
+
+:root[data-theme="dark"] {
+  --surface:    #151811;
+  --sidebar:    #1D2119;
+  --border:     #3D4935;
+  --ink:        #F5F5F3;
+  --ink-2:      #C0C8B8;
+  --ink-3:      #929C89;
+  --accent:     #A8C04A;
+  --accent-bg:  #2F3B20;
+  --tool-bg:    #2A3225;
+  --thinking-bg:#2F2D1D;
+  --thinking-border: #776B26;
+  --success:    #86C883;
+  --danger:     #F87171;
+  --warning:    #E4A34F;
+  --white:      #F5F5F3;
+  --brand:      #A8C04A;
+  --brand-2:    #D8E99B;
+  --caberos-sidebar-border: #3D4935;
+  --sidebar-divider: transparent;
+
+  --background: var(--surface);
+  --foreground: var(--ink);
+  --card: #20271B;
+  --card-foreground: var(--ink);
+  --popover: #20271B;
+  --popover-foreground: var(--ink);
+  --primary: var(--accent);
+  --primary-foreground: #151811;
+  --secondary: var(--sidebar);
+  --secondary-foreground: var(--ink);
+  --muted: var(--sidebar);
+  --muted-foreground: var(--ink-2);
+  --accent-foreground: #151811;
+  --destructive: var(--danger);
+  --input: var(--border);
+  --ring: var(--accent);
+
+  --sidebar-bg: var(--sidebar);
+  --sidebar-foreground: var(--ink);
+  --sidebar-primary: var(--accent);
+  --sidebar-primary-foreground: #151811;
+  --sidebar-accent: var(--accent-bg);
+  --sidebar-accent-foreground: var(--accent);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--accent);
+
+  --chart-1: var(--accent);
+  --chart-2: var(--warning);
+  --chart-3: var(--success);
+  --chart-4: var(--danger);
+  --chart-5: var(--ink-3);
+}
+
+:root[data-theme="dark"] [style*="background: var(--ink)"][style*="color: var(--white)"] {
+  background: var(--accent) !important;
+  border-color: var(--accent) !important;
+}
+
+:root[data-theme="dark"] [style*="background: var(--white)"] {
+  background: var(--card) !important;
+}
+
+:root[data-theme="dark"] .bg-white {
+  background-color: var(--card) !important;
+}
+
+:root[data-theme="dark"] [style*="color: var(--white)"] {
+  color: var(--surface) !important;
 }
 
 @theme inline {

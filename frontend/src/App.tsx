@@ -20,8 +20,17 @@ import { Traces } from "./pages/Traces";
 import { Notifications } from "./pages/Notifications";
 import { UpdateChecker } from "./components/UpdateChecker";
 import { SetupGuide } from "./components/SetupGuide";
+import { ThemeProvider } from "./lib/theme";
 
 export default function App() {
+  return (
+    <ThemeProvider>
+      <AppContent />
+    </ThemeProvider>
+  );
+}
+
+function AppContent() {
   const [gatewayReady, setGatewayReady] = useState<boolean | null>(null);
   const [gatewayAttempt, setGatewayAttempt] = useState(0);
   const [authed, setAuthed] = useState<boolean | null>(null);

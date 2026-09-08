@@ -34,6 +34,15 @@ export function dismissSetupGuide() {
   window.dispatchEvent(new Event("caberos-setup-guide-change"));
 }
 
+export function resetSetupGuideState() {
+  try {
+    localStorage.removeItem(GUIDE_PHASE_KEY);
+    localStorage.removeItem(GUIDE_AGENT_KEY);
+    localStorage.removeItem(GUIDE_DISMISSED_KEY);
+  } catch {}
+  window.dispatchEvent(new Event("caberos-setup-guide-change"));
+}
+
 export function isSetupGuideDismissed() {
   try { return localStorage.getItem(GUIDE_DISMISSED_KEY) === "true"; } catch { return false; }
 }
