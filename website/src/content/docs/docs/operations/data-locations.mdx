@@ -1,9 +1,11 @@
 ---
 title: Data locations
-description: Find the local database, credentials, workspaces, and gateway logs.
+description: Find the local database, credentials, workspaces, and logs across desktop, Docker, and local dev.
 ---
 
-The desktop application stores its data under:
+Where CaberOS stores data depends on how you run it.
+
+## Desktop app (macOS)
 
 ```text
 ~/Library/Application Support/com.caberos.desktop/
@@ -18,6 +20,47 @@ The desktop application stores its data under:
 | Workspaces | `workspaces/` |
 | Knowledge documents | `knowledge/` |
 
-The secret key protects encrypted provider and connector credentials. Treat the complete application data directory as private and back it up securely.
+## Docker
 
-For local development, paths come from the `AGENTOS_*` environment variables and default to the repository’s `backend/data/` layout.
+Data persists in the `caberos-data` named volume, mounted at `/data` inside the container.
+
+| Data | Location (inside container) |
+| --- | --- |
+| SQLite database | `/data/agentos.db` |
+| Encryption key | `/data/secret.key` |
+| Agent home directories | `/data/agents/` |
+| Workspaces | `/data/workspaces/` |
+
+Inspect the volume on the host:
+
+```bash
+docker volume inspect caberos-data
+```
+
+## Local development
+
+Paths come from `AGENTOS_*` environment variables and default to the repository layout:
+
+| Data | Default location |
+| --- | --- |
+| SQLite database | `backend/data/agentos.db` |
+| Encryption key | `backend/data/secret.key` |
+| Workspaces | `backend/data/workspaces/` |
+| Knowledge documents | `backend/data/knowledge/` |
+| Agent home directories | `~/agentos/agents/` |
+| System skills | `../skills/` (repo root) |
+
+Override any path with the corresponding environment variable:
+
+| Env var | Default |
+| --- | --- |
+| `AGENTOS_DB_PATH` | `data/agentos.db` |
+| `AGENTOS_SECRET_KEY_PATH` | `data/secret.key` |
+| `AGENTOS_WORKSPACE_ROOT` | `data/workspaces` |
+| `AGENTOS_KNOWLEDGE_ROOT` | `data/knowledge` |
+| `AGENTOS_AGENT_HOME_ROOT` | `~/agentos/agents` |
+| `AGENTOS_SKILLS_DIR` | `../skills` |
+
+## Security
+
+The secret key protects encrypted provider and connector credentials. Treat the complete data directory as private and back it up securely. Never commit the secret key or database to version control.

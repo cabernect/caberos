@@ -122,34 +122,7 @@ Four channels route external messages through the same agent pipeline:
 
 ## Quick start
 
-### Option 1: Docker (easiest)
-
-```bash
-git clone <repo-url> && cd foundation-agentos
-./scripts/docker.sh up
-# → http://localhost:8080
-# Login: admin / admin
-```
-
-The first launch seeds the default operator and two agents (Caber, AgentBuilder). Data persists in a named Docker volume.
-
-### Option 2: Local dev
-
-**Prerequisites:** Python 3.12+, [uv](https://docs.astral.sh/uv/), Node 22+, npm, and either macOS (uses built-in `sandbox-exec`) or Linux (`bubblewrap`).
-
-```bash
-git clone <repo-url> && cd foundation-agentos
-
-# Install backend + frontend dependencies
-./scripts/install.sh
-
-# Start both servers (backend :8081, frontend :5173)
-./scripts/dev.sh
-```
-
-Open `http://localhost:5173` — the Vite dev server proxies `/api` to the backend.
-
-### Option 3: Desktop app (macOS Apple Silicon only)
+### Option 1: Desktop app (easiest, macOS Apple Silicon)
 
 > **Platform support:** The desktop app currently supports **macOS ARM64 (Apple Silicon)** only — M1/M2/M3/M4 chips. macOS Intel and Windows builds require cross-compilation or CI runners and are not yet set up. Use Docker or local dev on other platforms.
 
@@ -170,6 +143,33 @@ The desktop app packages the entire backend as a PyInstaller executable and supe
 ```bash
 tail -f "$HOME/Library/Application Support/com.caberos.desktop/logs/gateway.log"
 ```
+
+### Option 2: Docker (any platform)
+
+```bash
+git clone <repo-url> && cd foundation-agentos
+./scripts/docker.sh up
+# → http://localhost:8080
+# Login: admin / admin
+```
+
+The first launch seeds the default operator and two agents (Caber, AgentBuilder). Data persists in a named Docker volume.
+
+### Option 3: Local dev
+
+**Prerequisites:** Python 3.12+, [uv](https://docs.astral.sh/uv/), Node 22+, npm, and either macOS (uses built-in `sandbox-exec`) or Linux (`bubblewrap`).
+
+```bash
+git clone <repo-url> && cd foundation-agentos
+
+# Install backend + frontend dependencies
+./scripts/install.sh
+
+# Start both servers (backend :8081, frontend :5173)
+./scripts/dev.sh
+```
+
+Open `http://localhost:5173` — the Vite dev server proxies `/api` to the backend.
 
 **Creating a release** (maintainers):
 

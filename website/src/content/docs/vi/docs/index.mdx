@@ -10,7 +10,7 @@ Model đề xuất hành động. CaberOS quyết định hành động nào đ�
 
 ## Lộ trình sử dụng lần đầu
 
-1. [Cài đặt CaberOS](/vi/docs/getting-started/installation/) trên macOS Apple Silicon.
+1. [Cài đặt CaberOS](/vi/docs/getting-started/installation/) — desktop app, Docker, hoặc phát triển local.
 2. [Hoàn tất lần khởi chạy đầu tiên](/vi/docs/getting-started/first-launch/) và đổi mật khẩu mặc định.
 3. [Cấu hình và kiểm tra model provider](/vi/docs/getting-started/provider-setup/).
 4. [Tạo và kiểm tra agent đầu tiên](/vi/docs/getting-started/first-agent/).
@@ -58,6 +58,15 @@ Dữ liệu có thể rời máy khi bạn cấu hình cloud model, gọi remote
 
 ## Phạm vi hiện tại
 
-Bản desktop hiện tại dành cho **macOS ARM64 (Apple Silicon)**. Ứng dụng Tauri quản lý local gateway tại `127.0.0.1:51718`. Docker cũng có thể dùng cho development hoặc self-hosting.
+Bản desktop release dành cho **macOS ARM64 (Apple Silicon)**. Docker deployment và phát triển local có sẵn trên macOS, Linux, và Windows (qua WSL2). macOS Intel và Windows desktop build cần cross-compilation và chưa được thiết lập.
 
 CaberOS hiện chưa có product CLI/TUI, distributed job queue bền vững, cron scheduling đã triển khai hoặc event-trigger scheduler.
+
+## Dành cho contributor
+
+CaberOS là headless ở lõi. FastAPI là REST/SSE gateway adapter; React dashboard và Tauri shell là client của cùng agent pipeline và policy system.
+
+- [Phát triển local](/vi/docs/development/local-development/)
+- [Tổng quan kiến trúc](/vi/docs/development/architecture/)
+- [Đóng góp](/vi/docs/development/contributing/)
+- [Bảo mật và sandbox](/vi/docs/security/approvals-and-sandbox/)

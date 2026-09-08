@@ -1,0 +1,115 @@
+---
+title: Docker deployment
+description: Run the full CaberOS stack in Docker on any platform.
+sidebar:
+  order: 1
+---
+
+Docker is the easiest way to run CaberOS on Linux, macOS, or Windows (via WSL2). The Compose stack includes the backend (Python + uv + bubblewrap) and frontend (nginx reverse proxy), with persistent data in a named volume.
+
+## Prerequisites
+
+- Docker 24+ with Compose v2
+- 1 GB free RAM
+
+## Quick start
+
+```bash
+git clone https://github.com/cabernect/caberos.git
+cd caberos
+./scripts/docker.sh up
+```
+
+Open `http://localhost:8080` and log in with `admin` / `admin`.
+
+## Configuration
+
+Copy the example environment file and adjust as needed:
+
+```bash
+cp .env.docker.example .env.docker
+```
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `CABEROS_PORT` | `8080` | Host port for the web UI |
+| `AGENTOS_YOLO_MODE` | `false` | Skip all approval gates (useful for headless deployments) |
+| `AGENTOS_LOG_LEVEL` | `info` | Log verbosity: `critical`, `error`, `warning`, `info`, or `debug` |
+| `AGENTOS_LOG_ACCESS` | `true` | Log routine HTTP access requests |
+
+## Commands
+
+```bash
+./scripts/docker.sh up        # Build and start
+./scripts/docker.sh down      # Stop and remove containers
+./scripts/docker.sh logs       # Tail logs
+./scripts/docker.sh rebuild    # Force rebuild without cache
+```
+
+Or use Docker Compose directly:
+
+```bash
+docker compose up --build -d
+docker compose logs -f
+docker compose down
+```
+
+## Container details
+
+| Service | Image | Port | Notes |
+| --- | --- | --- | --- |
+| Backend | `python:3.12-slim` + uv | 8081 (internal) | Bubblewrap needs `SYS_ADMIN` capability |
+| Frontend | `nginx:alpine` | 80 → host `:8080` | Reverse-proxies `/api` and `/health` to backend |
+
+The backend container uses `cap_add: SYS_ADMIN` so bubblewrap can create user namespaces for shell sandboxing. If your Docker setup blocks this capability, replace it with `privileged: true` in `docker-compose.yml`.
+
+## Data persistence
+
+Application data persists in the `caberos-data` named volume, including the SQLite database, secret key, workspaces, and agent homes.
+
+```bash
+# Inspect the volume
+docker volume inspect caberos-data
+
+# Back up the volume
+docker run --rm -v caberos-data:/data -v $(pwd):/backup alpine tar czf /backup/caberos-data.tar.gz /data
+
+# Restore the volume
+docker run --rm -v caberos-data:/data -v $(pwd):/backup alpine tar xzf /backup/caberos-data.tar.gz -C /
+```
+
+## Using Postgres instead of SQLite
+
+Uncomment the `db` service and `AGENTOS_DATABASE_URL` in `docker-compose.yml`:
+
+```yaml
+db:
+  image: postgres:16-alpine
+  environment:
+    POSTGRES_DB: caberos
+    POSTGRES_USER: caberos
+    POSTGRES_PASSWORD: caberos
+  volumes:
+    - caberos-pg:/var/lib/postgresql/data
+```
+
+Set the database URL in the backend environment:
+
+```yaml
+environment:
+  - AGENTOS_DATABASE_URL=postgresql+asyncpg://caberos:caberos@db:5432/caberos
+```
+
+## Troubleshooting
+
+### bwrap fails
+
+Bubblewrap needs `SYS_ADMIN` capability. The compose file sets `cap_add: SYS_ADMIN`. If your Docker setup blocks this, use `privileged: true` instead.
+
+### Port already in use
+
+Change `CABEROS_PORT` in `.env.docker` or pass it inline:
+
+```bash
+CABEROS_PORT=3000 ./scripts/docker.sh up
+```

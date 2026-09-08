@@ -40,10 +40,26 @@ Mở agent **Caber** và yêu cầu agent kiểm tra workspace. Một run thành
 
 ## 4. Kiểm tra health
 
-Health view của dashboard báo cáo database, provider, agent, run đang hoạt động, MCP server và channel. Có thể kiểm tra desktop gateway không cần authentication:
+Health view của dashboard báo cáo database, provider, agent, run đang hoạt động, MCP server và channel.
+
+Bạn cũng có thể kiểm tra gateway trực tiếp:
+
+**Desktop app:**
 
 ```bash
 curl http://127.0.0.1:51718/health
+```
+
+**Docker:**
+
+```bash
+curl http://localhost:8080/health
+```
+
+**Local dev:**
+
+```bash
+curl http://localhost:8081/health
 ```
 
 Kết quả mong đợi:
@@ -54,8 +70,4 @@ Kết quả mong đợi:
 
 ## Dữ liệu nằm ở đâu
 
-```text
-~/Library/Application Support/com.caberos.desktop/
-```
-
-Xem [Vị trí dữ liệu](/vi/docs/operations/data-locations/) để biết layout đầy đủ.
+Vị trí dữ liệu phụ thuộc vào cách bạn chạy CaberOS. Xem [Vị trí dữ liệu](/vi/docs/operations/data-locations/) để biết layout đầy đủ trên desktop, Docker, và phát triển local.

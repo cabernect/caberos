@@ -1,23 +1,66 @@
 ---
 title: Vị trí dữ liệu
-description: Tìm database local, credential, workspace và gateway log.
+description: Tìm database local, credential, workspace và log trên desktop, Docker, và local dev.
 ---
 
-Desktop application lưu data tại:
+Vị trí CaberOS lưu dữ liệu phụ thuộc vào cách bạn chạy.
+
+## Desktop app (macOS)
 
 ```text
 ~/Library/Application Support/com.caberos.desktop/
 ```
 
-| Data | Location |
+| Dữ liệu | Vị trí |
 | --- | --- |
 | SQLite database | `agentos.db` |
 | Encryption key | `secret.key` |
-| Gateway logs | `logs/gateway.log` và backup rotation |
+| Gateway log | `logs/gateway.log` và backup rotation |
 | Agent home | `agents/` |
 | Workspace | `workspaces/` |
 | Knowledge document | `knowledge/` |
 
-Secret key bảo vệ provider và connector credential được mã hóa. Hãy xem toàn bộ application data directory là private và backup an toàn.
+## Docker
 
-Development local lấy path từ `AGENTOS_*` environment variable và mặc định dùng layout `backend/data/` trong repository.
+Dữ liệu lưu trong named volume `caberos-data`, mount tại `/data` trong container.
+
+| Dữ liệu | Vị trí (trong container) |
+| --- | --- |
+| SQLite database | `/data/agentos.db` |
+| Encryption key | `/data/secret.key` |
+| Agent home | `/data/agents/` |
+| Workspace | `/data/workspaces/` |
+
+Kiểm tra volume trên host:
+
+```bash
+docker volume inspect caberos-data
+```
+
+## Phát triển local
+
+Path lấy từ `AGENTOS_*` environment variable và mặc định dùng layout trong repository:
+
+| Dữ liệu | Vị trí mặc định |
+| --- | --- |
+| SQLite database | `backend/data/agentos.db` |
+| Encryption key | `backend/data/secret.key` |
+| Workspace | `backend/data/workspaces/` |
+| Knowledge document | `backend/data/knowledge/` |
+| Agent home | `~/agentos/agents/` |
+| System skill | `../skills/` (repo root) |
+
+Ghi đè path bằng environment variable tương ứng:
+
+| Env var | Mặc định |
+| --- | --- |
+| `AGENTOS_DB_PATH` | `data/agentos.db` |
+| `AGENTOS_SECRET_KEY_PATH` | `data/secret.key` |
+| `AGENTOS_WORKSPACE_ROOT` | `data/workspaces` |
+| `AGENTOS_KNOWLEDGE_ROOT` | `data/knowledge` |
+| `AGENTOS_AGENT_HOME_ROOT` | `~/agentos/agents` |
+| `AGENTOS_SKILLS_DIR` | `../skills` |
+
+## Bảo mật
+
+Secret key bảo vệ provider và connector credential được mã hóa. Hãy xem toàn bộ data directory là private và backup an toàn. Không bao giờ commit secret key hoặc database vào version control.

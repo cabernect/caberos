@@ -1,24 +1,22 @@
 ---
 title: Installation
-description: Install CaberOS v0.1.8 on macOS Apple Silicon.
+description: Install CaberOS on macOS, Linux, or Docker.
 sidebar:
   order: 1
 ---
 
-## Supported platform
+CaberOS runs on macOS, Linux, and Windows (via WSL2). Choose the option that fits your platform.
 
-The desktop release currently supports **macOS 13 or newer on Apple Silicon**: M1, M2, M3, or M4. Intel Macs and Windows are not supported by this build.
+## Option 1: Desktop app (easiest, macOS Apple Silicon)
 
-## Download the desktop app
+The desktop release currently supports **macOS 13 or newer on Apple Silicon**: M1, M2, M3, or M4. The app bundles its FastAPI gateway and does not require Python, Node, or `uv`.
 
-1. Open the [v0.1.8 release](https://github.com/cabernect/caberos/releases/tag/v0.1.8).
-2. Download `CaberOS_0.1.8_arm64.dmg`.
+1. Open the [latest release](https://github.com/cabernect/caberos/releases/latest).
+2. Download `CaberOS_<version>_arm64.dmg`.
 3. Open the DMG and drag **CaberOS** to **Applications**.
 4. Launch CaberOS from Applications.
 
-The application bundles its FastAPI gateway and does not require Python, Node, or `uv`.
-
-## Gatekeeper message
+### Gatekeeper message
 
 The release is ad-hoc signed and is not notarized by Apple. If macOS says the application cannot be opened or is damaged, first verify that the DMG came from the official release, then run:
 
@@ -28,9 +26,23 @@ xattr -dr com.apple.quarantine /Applications/CaberOS.app
 
 Launch CaberOS again after removing the quarantine attribute.
 
-## Local development instead
+## Option 2: Docker (any platform)
 
-For development builds, use the repository setup:
+Docker is the easiest way to run CaberOS on Linux, macOS, or Windows (via WSL2).
+
+```bash
+git clone https://github.com/cabernect/caberos.git
+cd caberos
+./scripts/docker.sh up
+```
+
+Open `http://localhost:8080` and log in with `admin` / `admin`.
+
+See the [Docker deployment guide](/docs/guides/docker/) for configuration, data persistence, and Postgres setup.
+
+## Option 3: Local development
+
+For development builds on macOS, Linux, or WSL2:
 
 ```bash
 git clone https://github.com/cabernect/caberos.git
@@ -39,7 +51,16 @@ cd caberos
 ./scripts/dev.sh
 ```
 
-Then open `http://localhost:5173`. Development uses the gateway on port `8081`; the packaged desktop application uses port `51718`.
+Open `http://localhost:5173`. See [Local development](/docs/development/local-development/) for prerequisites and the full workflow.
+
+## Platform support summary
+
+| Platform | Desktop app | Docker | Local dev |
+| --- | --- | --- | --- |
+| macOS Apple Silicon | Yes | Yes | Yes |
+| macOS Intel | Not yet | Yes | Yes |
+| Linux | Not yet | Yes | Yes |
+| Windows (WSL2) | Not yet | Yes | Yes |
 
 ## Next step
 

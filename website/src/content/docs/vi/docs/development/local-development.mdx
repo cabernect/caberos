@@ -1,0 +1,155 @@
+---
+title: Phát triển local
+description: Cài đặt CaberOS để phát triển local trên macOS, Linux, hoặc WSL2.
+sidebar:
+  order: 2
+---
+
+CaberOS có thể phát triển local trên macOS (Apple Silicon hoặc Intel), Linux, hoặc Windows qua WSL2. Backend dùng Python 3.12 với `uv`, frontend dùng Node 22 với npm.
+
+## Yêu cầu
+
+| Yêu cầu | macOS | Linux | Windows |
+| --- | --- | --- | --- |
+| Python 3.12 | qua `uv` | qua `uv` | qua `uv` trong WSL2 |
+| [uv](https://docs.astral.sh/uv/) | Bắt buộc | Bắt buộc | Bắt buộc |
+| Node 22+ | Bắt buộc | Bắt buộc | Bắt buộc |
+| npm | Bắt buộc | Bắt buộc | Bắt buộc |
+| Sandbox | `sandbox-exec` (có sẵn) | `bubblewrap` (`apt install bubblewrap`) | `bubblewrap` trong WSL2 |
+
+### Cài uv
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+### Cài bubblewrap (chỉ Linux)
+
+```bash
+# Debian/Ubuntu
+sudo apt install bubblewrap
+
+# Fedora
+sudo dnf install bubblewrap
+
+# Arch
+sudo pacman -S bubblewrap
+```
+
+## Cài đặt
+
+```bash
+git clone https://github.com/cabernect/caberos.git
+cd caberos
+./scripts/install.sh
+```
+
+Script kiểm tra dependencies, cài backend và frontend, tạo data directory, và seed database với operator mặc định và hai agent.
+
+## Chạy dev server
+
+```bash
+./scripts/dev.sh
+```
+
+Khởi động:
+
+- Backend tại `http://localhost:8081` (auto-reload)
+- Frontend tại `http://localhost:5173` (Vite dev server, proxy `/api` tới backend)
+
+Mở `http://localhost:5173`. Đăng nhập mặc định: `admin` / `admin`.
+
+## Phát triển backend
+
+```bash
+cd backend
+
+# Chạy test
+uv run pytest -v
+
+# Chạy module test cụ thể
+uv run pytest tests/test_harness.py -v
+
+# Lint
+uv run ruff check src/ tests/
+uv run ruff format --check src/ tests/
+
+# Format code
+uv run ruff format src/ tests/
+
+# Smoke test (end-to-end, không cần LLM thật)
+uv run python ../scripts/smoke.py test-agent "echo hello"
+
+# Seed database
+uv run python -m agentos.seed
+```
+
+## Phát triển frontend
+
+```bash
+cd frontend
+
+# Cài dependencies
+npm install
+
+# Chạy unit test
+npm run test
+
+# Lint
+npm run lint
+
+# Type-check và build
+npm run build
+
+# Dev server (hot reload)
+npm run dev
+```
+
+## Phát triển desktop (chỉ macOS)
+
+Tauri desktop app bao bọc React frontend và Python gateway đã đóng gói. Phát triển desktop cần macOS với Xcode command-line tools.
+
+```bash
+cd frontend
+
+# Dev mode (hot reload, dùng backend local)
+npm run desktop:dev
+
+# Build production
+npm run desktop:build
+
+# Khởi động app đã build
+open src-tauri/target/release/bundle/macos/CaberOS.app
+```
+
+## Cấu trúc dự án
+
+```
+foundation-agentos/
+├── backend/          # FastAPI gateway + agent harness (Python 3.12)
+├── frontend/         # React 19 dashboard + Tauri 2 desktop shell
+├── website/          # Public website (Astro + Starlight)
+├── skills/           # System-level skills
+├── scripts/          # dev, install, docker, build helpers
+├── sandbox/          # Sandbox profiles (seatbelt, bwrap)
+├── docs/             # Specification and implementation plans
+└── docker-compose.yml
+```
+
+## Biến môi trường
+
+Tất cả backend setting dùng prefix `AGENTOS_`. Các biến chính cho development:
+
+| Biến | Mặc định | Mô tả |
+| --- | --- | --- |
+| `AGENTOS_CONTROL_PLANE_HOST` | `127.0.0.1` | API server bind host |
+| `AGENTOS_CONTROL_PLANE_PORT` | `8081` | API server port |
+| `AGENTOS_DB_PATH` | `data/agentos.db` | SQLite database path |
+| `AGENTOS_YOLO_MODE` | `false` | Bỏ qua approval gate |
+| `AGENTOS_RELOAD` | `false` | Bật auto-reload (set bởi `dev.sh`) |
+
+Xem `backend/src/agentos/config.py` cho danh sách đầy đủ.
+
+## Bước tiếp theo
+
+Đọc [Tổng quan kiến trúc](/vi/docs/development/architecture/) để hiểu system topology và execution pipeline.

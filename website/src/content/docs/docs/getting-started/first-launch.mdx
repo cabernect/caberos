@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-CaberOS creates its local application data directory the first time the gateway starts. The desktop shell waits for the local health endpoint before showing the dashboard.
+CaberOS creates its local data directory the first time the gateway starts. The desktop shell waits for the local health endpoint before showing the dashboard.
 
 ## 1. Sign in
 
@@ -40,10 +40,26 @@ Open the **Caber** agent and ask it to inspect its workspace. A successful run s
 
 ## 4. Check health
 
-The dashboard health view reports database, providers, agents, active runs, MCP servers, and channels. The desktop gateway itself can be checked without authentication:
+The dashboard health view reports database, providers, agents, active runs, MCP servers, and channels.
+
+You can also check the gateway directly:
+
+**Desktop app:**
 
 ```bash
 curl http://127.0.0.1:51718/health
+```
+
+**Docker:**
+
+```bash
+curl http://localhost:8080/health
+```
+
+**Local dev:**
+
+```bash
+curl http://localhost:8081/health
 ```
 
 Expected response:
@@ -54,10 +70,4 @@ Expected response:
 
 ## Where data lives
 
-The desktop data directory is:
-
-```text
-~/Library/Application Support/com.caberos.desktop/
-```
-
-See [Data locations](/docs/operations/data-locations/) for the complete layout.
+Data locations depend on how you run CaberOS. See [Data locations](/docs/operations/data-locations/) for the complete layout across desktop, Docker, and local development.
