@@ -19,9 +19,10 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 WORKDIR /app
 
-# Install dependencies first (cached layer)
+# Install dependencies first (cached layer). The project source is not copied yet,
+# so --no-install-project prevents uv from trying to build the local package here.
 COPY backend/pyproject.toml backend/uv.lock ./
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev --no-install-project
 
 # Copy backend source code
 COPY backend/src/ ./src/
@@ -29,6 +30,9 @@ COPY backend/README.md ./
 
 # Copy system-level skills (read-only, baked into image)
 COPY skills/ /opt/caberos/skills/
+
+# Install the local project after its source is available.
+RUN uv sync --frozen --no-dev
 
 # Create data directories (mounted as volumes at runtime)
 RUN mkdir -p /data /data/workspaces /data/agents
