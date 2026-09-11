@@ -59,7 +59,7 @@ Adding a new integration (Notion, GitHub, Slack) is a new capability, not a new 
 ### Core
 
 - **Real model chat** — streaming SSE, multi-provider support (OpenAI, Anthropic, Google, Ollama, OpenRouter), thinking/reasoning controls with per-message effort adjustment
-- **Tool use** — file read/write/search, shell (sandboxed), web search/fetch, sub-agents, datetime, skills
+- **Tool use** — file read/write/search, shell (sandboxed), web search/fetch (markdown extraction + pagination), sub-agents, datetime, skills
 - **Approval flow** — every egress capability (shell, web) requires operator approval; decisions can be remembered per-scope (exact, same-verb, pattern, capability)
 - **Elicitation** — agents ask clarifying questions via `agent_ask_user`; the dashboard shows a prompt bar
 - **Guardrails** — input/output secret redaction, prompt-injection detection, system-prompt leakage prevention
@@ -93,7 +93,8 @@ Three layers (D34):
 - **MCP client** — stdio and HTTP transports
 - **Server registry** — CRUD for MCP servers, tool discovery, agent bindings
 - **Credentials** — encrypted at rest (Fernet), injected via env/headers at runtime
-- **OAuth** — loopback flow with token refresh and revoke
+- **OAuth** — loopback flow with automatic token refresh and reconnect (persisted auth-server + resource metadata)
+- **Runtime resolution** — stdio commands (`npx`, `uvx`, `node`) resolved against the child PATH with fallback dirs and `CABEROS_MCP_RUNTIME_PATH` override
 - **Catalog** — marketplace of installable MCP servers
 
 ### External channels
@@ -109,6 +110,8 @@ Four channels route external messages through the same agent pipeline:
 
 - **Run history** — filterable list with status, trigger, agent, cost, duration
 - **Run detail** — full message history + audit records inline
+- **Durable runs** — runs survive SSE disconnects; status persisted to DB, orphaned runs reconciled to `interrupted` on restart
+- **Notifications** — in-app operator notifications for run completion/failure/interruption, approval requests, elicitation, MCP/OAuth issues
 - **Syscall log** — every capability call with allowed/denied, arguments, result
 - **Spend tracking** — today / 7-day / 30-day breakdown by agent and trigger
 - **Health dashboard** — provider status, MCP connectivity, channel status
@@ -533,11 +536,18 @@ Use the Playwright MCP server for real-browser testing. See `AGENTS.md` for deta
 - [x] Dashboard theme support (light/dark/system) (v0.1.8)
 - [x] Vietnamese website and documentation (v0.1.8)
 - [x] Public website with scroll animations (v0.1.8)
+- [x] Durable run lifecycle — `interrupted` status, DB-backed recovery, startup reconciliation (v0.1.9)
+- [x] Operator notifications for run completion, failure, interruption, approvals (v0.1.9)
+- [x] `web_fetch` markdown extraction (trafilatura) + `offset`/`has_more` pagination (v0.1.9)
+- [x] MCP stdio runtime PATH resolution (v0.1.9)
+- [x] MCP OAuth auto-refresh with persisted server metadata (v0.1.9)
 
 ### v0.2 (planned)
 
 - [ ] CLI/TUI (`caber` command)
 - [ ] CaberCore extraction (headless runtime, separate from FastAPI)
+- [ ] Browser automation tools (JS-rendered pages, clicking, navigation)
+- [ ] Rich media output — image/audio/PDF/slide preview in chat
 - [ ] Cron/event triggers for scheduler
 - [ ] More MCP catalog entries
 - [ ] More tools integration and variation

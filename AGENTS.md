@@ -84,7 +84,7 @@ Registered in `capabilities/builtin.py`. Two kinds: `tool` (workspace/shell/web 
 | `read_terminal` | tool | no | no | Read output from a running/finished terminal session |
 | `close_terminal` | tool | no | no | Close a terminal session |
 | `web_search` | tool | yes | yes | Search the web via DuckDuckGo (free, no API key) |
-| `web_fetch` | tool | yes | yes | Fetch a URL and return text content (HTML → text) |
+| `web_fetch` | tool | yes | yes | Fetch a URL → markdown via trafilatura; `offset`/`has_more` pagination, 50k char hard ceiling |
 | `agent_ask_user` | tool | no | no | Ask the user a clarifying question (HITL elicitation) |
 | `datetime_now` | tool | no | no | Get current date/time (with optional timezone) |
 | `run_subagent` | tool | no | no | Spawn a sub-agent with its own task + capability subset |
@@ -132,7 +132,15 @@ the workspace `attachments/` directory.
 
 Tickets **01–09 implemented**: smoke slice, real-model chat + SSE streaming, file ops + tool call UI, approval flow + elicitation (`agent.ask_user`), guardrails, run manager, agent management UI, providers, `run_subagent`, memory + skills (ticket 06), scheduler/heartbeat (ticket 07), MCP client infrastructure (08a), MCP credentials/OAuth (08b), external channels (08c), and observability + spend (ticket 09).
 
-**Current: v0.1.6 is released; v0.1.8 implementation is in progress for stability and Vietnamese website/docs localization. The CLI/TUI and CaberCore extraction remain deferred.**
+**Current: v0.1.9 is in progress on branch `feat/v0.1.9` — durable run lifecycle, operator notifications, `web_fetch` markdown pagination, MCP stdio runtime PATH resolution, and MCP OAuth auto-refresh. The CLI/TUI and CaberCore extraction remain deferred.**
+
+**v0.1.9 design notes:**
+- **Durable runs:** run status is persisted to the DB on every transition (`running`, `awaiting_approval`, `completed`, `failed`, `stopped`). On gateway startup, orphaned `running` runs are reconciled to `interrupted`. `get_run_status` falls back to the DB after the 60s in-memory `RunContext` window expires, so results stay inspectable after SSE disconnects.
+- **Notifications:** `create_notification()` dedupes by type + entity + unread state. Run events emit `run_completed`, `run_failed`, `run_interrupted`, `approval_required`, `elicitation_required`, `mcp_connection_failed`, `oauth_reauth_required`.
+- **`web_fetch`:** `httpx` fetch → `trafilatura` markdown extraction (main content, boilerplate removed) → `BeautifulSoup.get_text()` last resort. Hard ceiling of 50k chars; `max_chars` is a model override capped at the ceiling; `offset` + `has_more` let the model paginate. JS rendering is deferred to v0.2 browser automation.
+- **MCP stdio resolver:** bare commands are resolved against the subprocess `PATH`, then `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`, `CABEROS_MCP_RUNTIME_PATH`. The resolved dir is prepended to the child `PATH` so shebang chains (`npx` → `node`) work.
+- **MCP OAuth:** auth-server + protected-resource metadata persisted to the credential store and reloaded on reconnect; `expires_in`/`token_expiry_time = 0` is treated as "no expiry" correctly so refresh triggers when needed.
+- **Language behavior:** the base prompt instructs the model to detect the user's language and use it for both thinking and replies — no explicit language setting.
 
 **v0.1.7 design rule:** Agent configuration defines the permission ceiling; the harness separately tracks which schemas are loaded into the current run. `capabilities_search` exposes bounded metadata for permitted tools, and `capabilities_load` makes selected schemas available on the next model turn without widening syscall authority.
 
@@ -181,6 +189,8 @@ Tickets **01–09 implemented**: smoke slice, real-model chat + SSE streaming, f
 **Updater status:** The startup update popup and Settings → About share updater state. Update flow is `downloading → installing → ready`, followed by an explicit `Restart now` action using the Tauri process plugin.
 
 **v0.1.6 verification status:** 431 backend tests pass with 21 warnings. Frontend lint has 0 warnings/errors, 9 frontend tests pass, and the frontend build passes. Tauri tests and `cargo check` pass. CodeQL analysis for the final v0.1.6 pull request reported zero results.
+
+**v0.1.9 verification status (branch `feat/v0.1.9`):** 473 backend tests pass. Frontend lint clean, build passes. Website builds 61 pages (28 Vietnamese). Browser-verified: thinking toggle survives session remount, `web_fetch` extracts TradingView content via trafilatura, "Jump to latest" stays pinned above the composer.
 
 ## Build & test commands
 
