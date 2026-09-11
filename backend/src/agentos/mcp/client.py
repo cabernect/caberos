@@ -191,9 +191,7 @@ class McpClient:
                 if not self.command:
                     raise ValueError("stdio transport requires a command")
 
-                resolved_command, resolved_env = _resolve_stdio_command(
-                    self.command, self.env
-                )
+                resolved_command, resolved_env = _resolve_stdio_command(self.command, self.env)
                 params = StdioServerParameters(
                     command=resolved_command,
                     args=self.args,
