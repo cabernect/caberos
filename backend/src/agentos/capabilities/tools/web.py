@@ -19,21 +19,13 @@ from ...models.web_source import WebSource
 from ...ssl_utils import SSL_CERT_PATH
 
 # Extraction libraries — trafilatura for main-content → markdown,
-# readability-lxml + markdownify as fallback when trafilatura is thin.
+# BeautifulSoup.get_text() as last resort when trafilatura is thin.
 try:
     import trafilatura
 
     _TRAFILATURA_AVAILABLE = True
 except ImportError:
     _TRAFILATURA_AVAILABLE = False
-
-try:
-    from readability import Document
-    from markdownify import markdownify as md
-
-    _READABILITY_AVAILABLE = True
-except ImportError:
-    _READABILITY_AVAILABLE = False
 
 
 async def web_search(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
@@ -178,20 +170,13 @@ def _extract_markdown(html: str) -> str:
     """Extract main content as markdown.
 
     Tries trafilatura first (best boilerplate removal), falls back to
-    readability-lxml + markdownify, then plain text as last resort.
+    BeautifulSoup plain text when trafilatura returns thin.
     """
     # trafilatura — best for articles/blogs, removes nav/ads/footers
     if _TRAFILATURA_AVAILABLE:
         text = trafilatura.extract(html, output_format="markdown", include_comments=False)
         if text and len(text) > 100:
             return text
-
-    # readability-lxml + markdownify — fallback for pages trafilatura misses
-    if _READABILITY_AVAILABLE:
-        doc = Document(html)
-        summary = doc.summary()
-        if summary:
-            return md(summary)
 
     # Last resort — BeautifulSoup plain text
     soup = BeautifulSoup(html, "html.parser")
