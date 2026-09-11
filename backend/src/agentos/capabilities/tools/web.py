@@ -13,7 +13,7 @@ from typing import Any
 
 import httpx
 from bs4 import BeautifulSoup
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from ...models.web_source import WebSource
 from ...ssl_utils import SSL_CERT_PATH
@@ -112,6 +112,32 @@ async def _persist_web_sources(result: dict[str, Any], kwargs: dict[str, Any]) -
     await db.flush()
 
 
+async def _persist_fetched_source(url: str, title: str, text: str, kwargs: dict[str, Any]) -> None:
+    """Persist a fetched page so the assistant response can cite it."""
+    db = kwargs.get("db")
+    run_id = kwargs.get("run_id")
+    if not db or not run_id:
+        return
+
+    exists = await db.scalar(
+        select(WebSource.id).where(WebSource.run_id == run_id, WebSource.url == url)
+    )
+    if exists is None:
+        rank = (
+            await db.scalar(select(func.count(WebSource.id)).where(WebSource.run_id == run_id)) or 0
+        ) + 1
+        db.add(
+            WebSource(
+                run_id=run_id,
+                url=url,
+                title=title,
+                excerpt=text[:500],
+                rank=rank,
+            )
+        )
+        await db.flush()
+
+
 async def _web_search_html(query: str, max_results: int) -> dict[str, Any]:
     """Fallback: search DuckDuckGo via HTML scraping (may hit captcha)."""
     try:
@@ -198,7 +224,7 @@ def _rewrite_url(url: str) -> str:
     return url
 
 
-async def web_fetch(args: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+async def web_fetch(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     """Fetch a URL and return its text content.
 
     Args:
@@ -237,6 +263,9 @@ async def web_fetch(args: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
     else:
         title = ""
         text = resp.text
+
+    # Persist the fetched page as a source so the reply can cite it
+    await _persist_fetched_source(requested_url, title, text, kwargs)
 
     # Apply offset and max_chars
     content = text[offset : offset + max_chars]
