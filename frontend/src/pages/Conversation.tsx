@@ -1274,6 +1274,7 @@ export function Conversation() {
         </div>
 
         {/* Messages */}
+        <div className="relative flex min-h-0 flex-1 flex-col">
         <div
           ref={scrollContainerRef}
           onScroll={handleScroll}
@@ -1390,28 +1391,29 @@ export function Conversation() {
 
             <div ref={messagesEndRef} />
           </div>
+        </div>
 
-          {showJumpToLatest && (
-            <button
-              onClick={handleJumpToLatest}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  handleJumpToLatest();
-                }
-              }}
-              className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full px-3 py-1.5 text-[12px] font-medium shadow-lg transition-shadow focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
-              style={{
-                background: "var(--white)",
-                border: "1px solid var(--border)",
-                color: "var(--ink-2)",
-                cursor: "pointer",
-              }}
-            >
-              <ArrowDown className="mr-1 inline h-3 w-3" />
-              Jump to latest
-            </button>
-          )}
+        {showJumpToLatest && (
+          <button
+            onClick={handleJumpToLatest}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                handleJumpToLatest();
+              }
+            }}
+            className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full px-3 py-1.5 text-[12px] font-medium shadow-lg transition-shadow focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
+            style={{
+              background: "var(--white)",
+              border: "1px solid var(--border)",
+              color: "var(--ink-2)",
+              cursor: "pointer",
+            }}
+          >
+            <ArrowDown className="mr-1 inline h-3 w-3" />
+            Jump to latest
+          </button>
+        )}
         </div>
 
         {/* No provider / no model configured banner */}
