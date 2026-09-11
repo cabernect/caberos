@@ -18,6 +18,23 @@ from sqlalchemy import select
 from ...models.web_source import WebSource
 from ...ssl_utils import SSL_CERT_PATH
 
+# Extraction libraries — trafilatura for main-content → markdown,
+# readability-lxml + markdownify as fallback when trafilatura is thin.
+try:
+    import trafilatura
+
+    _TRAFILATURA_AVAILABLE = True
+except ImportError:
+    _TRAFILATURA_AVAILABLE = False
+
+try:
+    from readability import Document
+    from markdownify import markdownify as md
+
+    _READABILITY_AVAILABLE = True
+except ImportError:
+    _READABILITY_AVAILABLE = False
+
 
 async def web_search(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     """Search the web using DuckDuckGo (free, no API key).
@@ -157,6 +174,32 @@ async def _web_search_html(query: str, max_results: int) -> dict[str, Any]:
 _WEB_FETCH_HARD_CEILING = 50_000
 
 
+def _extract_markdown(html: str) -> str:
+    """Extract main content as markdown.
+
+    Tries trafilatura first (best boilerplate removal), falls back to
+    readability-lxml + markdownify, then plain text as last resort.
+    """
+    # trafilatura — best for articles/blogs, removes nav/ads/footers
+    if _TRAFILATURA_AVAILABLE:
+        text = trafilatura.extract(html, output_format="markdown", include_comments=False)
+        if text and len(text) > 100:
+            return text
+
+    # readability-lxml + markdownify — fallback for pages trafilatura misses
+    if _READABILITY_AVAILABLE:
+        doc = Document(html)
+        summary = doc.summary()
+        if summary:
+            return md(summary)
+
+    # Last resort — BeautifulSoup plain text
+    soup = BeautifulSoup(html, "html.parser")
+    for script in soup(["script", "style"]):
+        script.decompose()
+    return soup.get_text(separator="\n", strip=True)
+
+
 async def web_fetch(args: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
     """Fetch a URL and return its text content.
 
@@ -184,14 +227,8 @@ async def web_fetch(args: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
     except httpx.HTTPError as e:
         return {"error": f"Fetch failed: {e}"}
 
-    # Parse HTML and extract text
-    soup = BeautifulSoup(resp.text, "html.parser")
-
-    # Remove script and style elements
-    for script in soup(["script", "style"]):
-        script.decompose()
-
-    text = soup.get_text(separator="\n", strip=True)
+    # Extract main content as markdown (system-controlled, not a model option)
+    text = _extract_markdown(resp.text)
 
     # Apply offset and max_chars
     content = text[offset : offset + max_chars]
@@ -200,7 +237,7 @@ async def web_fetch(args: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
     return {
         "url": url,
         "content": content,
-        "title": soup.title.string if soup.title else "",
+        "title": "",
         "offset": offset,
         "has_more": has_more,
         "total_chars": len(text),
