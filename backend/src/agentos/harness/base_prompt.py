@@ -193,17 +193,12 @@ def _build_capabilities_section(enabled_caps: list[str]) -> str:
     return "\n".join(lines)
 
 
-def get_base_system_prompt(
-    enabled_caps: list[str] | None = None,
-    language: str = "auto",
-) -> str:
+def get_base_system_prompt(enabled_caps: list[str] | None = None) -> str:
     """Return the base system prompt, adaptive to enabled capabilities.
 
     Args:
         enabled_caps: List of enabled capability names. If None, all tools
             are described. If empty list, no tools are described.
-        language: Agent output language. "auto" = detect from user message;
-            a language code like "vi" forces that language.
     """
     if enabled_caps is None:
         from ..capabilities.registry import registry
@@ -211,21 +206,4 @@ def get_base_system_prompt(
         enabled_caps = [cap.name for cap in registry.list_all()]
 
     caps_section = _build_capabilities_section(enabled_caps)
-
-    # Inject language instruction when not auto — covers both output and thinking
-    language_section = ""
-    if language != "auto":
-        language_section = (
-            f"\n\n## Language\n\n"
-            f"Always reply in {language}. Do not switch languages mid-conversation.\n"
-            f"Your thinking and reasoning must also be in {language} — not just the final answer.\n"
-        )
-
-    return (
-        _BASE_PROMPT_HEADER
-        + "\n\n"
-        + caps_section
-        + language_section
-        + "\n\n"
-        + _BASE_PROMPT_FOOTER
-    )
+    return _BASE_PROMPT_HEADER + "\n\n" + caps_section + "\n\n" + _BASE_PROMPT_FOOTER

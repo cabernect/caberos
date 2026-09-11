@@ -39,7 +39,6 @@ export interface Agent {
   soul: string;
   persona: string;
   task: string;
-  language?: string;
   capabilities?: CapabilityGrant[] | null;
   limits?: Limits;
   heartbeat?: HeartbeatConfig;

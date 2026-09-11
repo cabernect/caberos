@@ -103,7 +103,6 @@ class UpdateAgentRequest(BaseModel):
     soul: str | None = None
     persona: str | None = None
     task: str | None = None
-    language: str | None = None
     capabilities: list[dict[str, Any]] | None = None
     limits: dict[str, Any] | None = None
     heartbeat: dict[str, Any] | None = None
@@ -232,8 +231,6 @@ async def update_agent_route(
         config.persona = req.persona
     if req.task is not None:
         config.task = req.task
-    if req.language is not None:
-        config.language = req.language
     if req.sandbox_mode is not None:
         config.sandbox_mode = req.sandbox_mode
     if req.capabilities is not None:
