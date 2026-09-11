@@ -329,7 +329,7 @@ async def get_run_status_endpoint(
     operator: Operator = Depends(require_operator),
 ) -> dict:
     """Poll the status of a run. Works even when detached from SSE."""
-    status = get_run_status(run_id)
+    status = await get_run_status(run_id)
     if status is None:
         raise HTTPException(status_code=404, detail="Run not found")
     return status

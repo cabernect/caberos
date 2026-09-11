@@ -16,7 +16,7 @@ class Run(Base, IdMixin):
     agent_id: Mapped[str] = mapped_column(String(36), ForeignKey("agents.id"), nullable=False)
     status: Mapped[str] = mapped_column(
         String(20), default="pending"
-    )  # pending, running, completed, failed
+    )  # pending, running, awaiting_approval, completed, failed, stopped, interrupted
     trigger: Mapped[str] = mapped_column(
         String(20), default="user_message"
     )  # user_message, heartbeat
