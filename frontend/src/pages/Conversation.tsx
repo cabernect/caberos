@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ArrowDown, PanelLeft, AlertCircle, BookOpen, ChevronDown, FileIcon, Paperclip, Loader2, MessageSquare } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Agent, Message, Provider, SessionInfo } from "@/lib/types";
@@ -96,6 +96,7 @@ function createStreamingResponse(): StreamingResponse {
 export function Conversation() {
   const { id: agentId } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
 
   const [agent, setAgent] = useState<Agent | null>(null);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
@@ -173,6 +174,14 @@ export function Conversation() {
   useEffect(() => {
     loadSessions();
   }, [loadSessions]);
+
+  // Deep-link: ?session=<id> selects that session (e.g. from a notification)
+  useEffect(() => {
+    const wanted = searchParams.get("session");
+    if (wanted && sessions.some((s) => s.id === wanted)) {
+      setActiveSessionId(wanted);
+    }
+  }, [searchParams, sessions]);
 
   useEffect(() => {
     if (!agentId || !activeSessionId) {

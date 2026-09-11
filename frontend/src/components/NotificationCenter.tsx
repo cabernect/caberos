@@ -1,8 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
 import { Bell } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { api } from "@/lib/api";
-import type { Notification } from "@/lib/types";
+import { useNotifications } from "@/lib/notificationStore";
 
 export function NotificationCenter({
   sidebar = false,
@@ -14,18 +12,7 @@ export function NotificationCenter({
   active?: boolean;
 }) {
   const navigate = useNavigate();
-  const [items, setItems] = useState<Notification[]>([]);
-
-  const load = useCallback(() => {
-    api.listNotifications().then(setItems).catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    load();
-    const interval = setInterval(load, 15000);
-    return () => clearInterval(interval);
-  }, [load]);
-
+  const items = useNotifications();
   const unread = items.filter((item) => !item.read).length;
 
   return (

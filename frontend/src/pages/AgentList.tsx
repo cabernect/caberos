@@ -1,8 +1,8 @@
 import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bot, Plus, MessageSquare, ArrowRight, Settings } from "lucide-react";
+import { Bot, Plus, MessageSquare, ArrowRight, Settings, Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
-import type { Agent, Provider } from "@/lib/types";
+import type { Agent, Provider, RunSummary } from "@/lib/types";
 import {
   DashboardSidebar,
   type NavKey,
@@ -25,6 +25,7 @@ export function AgentList() {
   const [showSettings, setShowSettings] = useState(false);
   const [settingsAgent, setSettingsAgent] = useState<Agent | null>(null);
   const [providers, setProviders] = useState<Provider[]>([]);
+  const [activeRuns, setActiveRuns] = useState<Map<string, RunSummary>>(new Map());
   const navigate = useNavigate();
 
   const loadAgents = useCallback(async () => {
@@ -75,10 +76,28 @@ export function AgentList() {
     } catch {}
   }, []);
 
+  // Poll for active runs so each card can show a running indicator.
+  const loadActiveRuns = useCallback(async () => {
+    try {
+      const runs = await api.listRuns({
+        status: "pending,running,awaiting_approval",
+        limit: 100,
+      });
+      const map = new Map<string, RunSummary>();
+      for (const run of runs) {
+        if (!map.has(run.agent_id)) map.set(run.agent_id, run);
+      }
+      setActiveRuns(map);
+    } catch {}
+  }, []);
+
   useEffect(() => {
     loadAgents();
     loadProviders();
-  }, [loadAgents, loadProviders]);
+    loadActiveRuns();
+    const interval = setInterval(loadActiveRuns, 10000);
+    return () => clearInterval(interval);
+  }, [loadAgents, loadProviders, loadActiveRuns]);
 
   const handleLogout = async () => {
     try {
@@ -104,7 +123,12 @@ export function AgentList() {
       setSetupGuideAgentId(agent.id);
       setSetupGuidePhase(1);
     }
-    navigate(`/agents/${agent.id}/chat`);
+    const run = activeRuns.get(agent.id);
+    navigate(
+      run
+        ? `/agents/${agent.id}/chat?session=${run.session_id}`
+        : `/agents/${agent.id}/chat`,
+    );
   };
 
   return (
@@ -181,6 +205,7 @@ export function AgentList() {
                 <AgentCard
                   key={agent.id}
                   agent={agent}
+                  activeRun={activeRuns.get(agent.id)}
                   guideTarget={agent.name.toLowerCase() === "caber" && getSetupGuidePhase() === 0}
                   onClick={() => openAgent(agent)}
                   onSettings={() => {
@@ -218,17 +243,29 @@ export function AgentList() {
 
 function AgentCard({
   agent,
+  activeRun,
   onClick,
   onSettings,
   guideTarget,
 }: {
   agent: AgentWithActivity;
+  activeRun: RunSummary | undefined;
   onClick: () => void;
   onSettings: () => void;
   guideTarget: boolean;
 }) {
-  const statusLabel = agent.enabled ? "Active" : "Disabled";
-  const statusColor = agent.enabled ? "var(--success)" : "var(--ink-3)";
+  const statusLabel = activeRun
+    ? activeRun.status === "awaiting_approval"
+      ? "Awaiting approval"
+      : "Running"
+    : agent.enabled
+      ? "Active"
+      : "Disabled";
+  const statusColor = activeRun
+    ? "var(--accent)"
+    : agent.enabled
+      ? "var(--success)"
+      : "var(--ink-3)";
   const lastActivityLabel = agent.lastActivity
     ? formatRelativeTime(agent.lastActivity)
     : "No activity";
@@ -279,10 +316,17 @@ function AgentCard({
           </div>
         </div>
         <div className="flex items-center gap-1.5">
-          <span
-            className="h-1.5 w-1.5 rounded-full"
-            style={{ background: statusColor }}
-          />
+          {activeRun ? (
+            <Loader2
+              className="h-3 w-3 animate-spin"
+              style={{ color: statusColor }}
+            />
+          ) : (
+            <span
+              className="h-1.5 w-1.5 rounded-full"
+              style={{ background: statusColor }}
+            />
+          )}
           <span
             className="font-mono text-[10px] uppercase tracking-wide"
             style={{ color: statusColor }}

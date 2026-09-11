@@ -114,11 +114,13 @@ async def lifespan(app: FastAPI):
         async def _reconcile_runs() -> None:
             # Find orphaned running runs
             orphaned = await db.execute(
-                select(Run.id).where(Run.status == "running")
+                select(Run.id, Run.agent_id, Run.session_id).where(Run.status == "running")
             )
-            orphaned_ids = orphaned.scalars().all()
-            if not orphaned_ids:
+            orphaned_rows = orphaned.all()
+            if not orphaned_rows:
                 return
+
+            orphaned_ids = [row.id for row in orphaned_rows]
 
             # Mark them as interrupted
             await db.execute(
@@ -137,15 +139,15 @@ async def lifespan(app: FastAPI):
             # Notify the operator about interrupted runs
             from .notifications import create_notification
 
-            for run_id in orphaned_ids:
+            for row in orphaned_rows:
                 await create_notification(
                     db,
                     notification_type="run_interrupted",
                     severity="warning",
                     title="Run interrupted",
                     message="A background run was interrupted by a gateway restart.",
-                    action_path="/observability",
-                    entity_id=run_id,
+                    action_path=f"/agents/{row.agent_id}/chat?session={row.session_id}",
+                    entity_id=row.id,
                 )
             await db.commit()
 
