@@ -128,16 +128,28 @@ export function ModelSelector({
     };
   };
 
-  // When providers load and no model is explicitly selected (using default),
-  // emit the default model's capabilities so thinking/vision toggles work
+  // When providers load and the current selection is the agent default
+  // (or no explicit selection), emit the default model's capabilities so
+  // thinking/vision toggles work. Use a ref so we don't keep re-emitting
+  // the same default when providers refresh or selected flips back.
+  const emittedDefaultKey = useRef<string | null>(null);
   useEffect(() => {
     if (providers.length === 0) return;
-    if (!selected && defaultProviderId && defaultModelName) {
-      const defaultModel = lookupDefaultModel();
-      if (defaultModel) onChange(defaultModel);
+    if (!defaultProviderId || !defaultModelName) return;
+
+    const defaultKey = `${defaultProviderId}/${defaultModelName}`;
+    const isCurrentlyDefault = !selected || selected === defaultKey;
+    if (!isCurrentlyDefault) return;
+    if (emittedDefaultKey.current === defaultKey) return;
+
+    const defaultModel = lookupDefaultModel();
+    if (defaultModel) {
+      setSelected(defaultKey);
+      onChange(defaultModel);
+      emittedDefaultKey.current = defaultKey;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [providers, defaultProviderId, defaultModelName]);
+  }, [providers, defaultProviderId, defaultModelName, selected, onChange]);
 
   // Focus search input when dropdown opens
   useEffect(() => {
