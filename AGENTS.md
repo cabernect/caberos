@@ -132,7 +132,7 @@ the workspace `attachments/` directory.
 
 Tickets **01–09 implemented**: smoke slice, real-model chat + SSE streaming, file ops + tool call UI, approval flow + elicitation (`agent.ask_user`), guardrails, run manager, agent management UI, providers, `run_subagent`, memory + skills (ticket 06), scheduler/heartbeat (ticket 07), MCP client infrastructure (08a), MCP credentials/OAuth (08b), external channels (08c), and observability + spend (ticket 09).
 
-**Current: v0.1.9 is in progress on branch `feat/v0.1.9` — durable run lifecycle, operator notifications, `web_fetch` markdown pagination, MCP stdio runtime PATH resolution, and MCP OAuth auto-refresh. The CLI/TUI and CaberCore extraction remain deferred.**
+**Current: v0.1.9 is released — durable run lifecycle, operator notifications (toasts + session deep-links), `web_fetch` trafilatura markdown + pagination, MCP stdio runtime PATH resolution, MCP OAuth auto-refresh, URL-attachment chips, and CodeQL path-injection hardening. The CLI/TUI and CaberCore extraction remain deferred.**
 
 **v0.1.9 design notes:**
 - **Durable runs:** run status is persisted to the DB on every transition (`running`, `awaiting_approval`, `completed`, `failed`, `stopped`). On gateway startup, orphaned `running` runs are reconciled to `interrupted`. `get_run_status` falls back to the DB after the 60s in-memory `RunContext` window expires, so results stay inspectable after SSE disconnects.
@@ -184,7 +184,7 @@ Tickets **01–09 implemented**: smoke slice, real-model chat + SSE streaming, f
 - Image-generation models filtered from chat discovery (402 → 393 models)
 - OpenRouter discovery uses live metadata instead of LiteLLM static catalog
 
-**Current release status:** v0.1.6 is tagged and released from merge commit `48de8a9`. The incorrectly ordered v0.1.51 and v0.1.52 tags/releases were removed. Apple Developer signing/notarization is not configured.
+**Current release status:** v0.1.9 is tagged and released. (Prior: v0.1.6 from merge commit `48de8a9`.) The incorrectly ordered v0.1.51 and v0.1.52 tags/releases were removed. Apple Developer signing/notarization is not configured.
 
 **Updater status:** The startup update popup and Settings → About share updater state. Update flow is `downloading → installing → ready`, followed by an explicit `Restart now` action using the Tauri process plugin.
 
@@ -239,6 +239,13 @@ cd frontend && npm run desktop:dev
 ./scripts/docker.sh down      # stop
 ./scripts/docker.sh rebuild   # force rebuild images
 ```
+
+## Gotchas
+
+- **Release** — `./scripts/set-version.sh X.Y.Z` → `check-version.sh` → commit → `git tag -a vX.Y.Z` → push `main` + the tag (tag push runs `release.yml`, which verifies manifests match).
+- **CodeQL path-injection** — `Path.resolve()`+`is_relative_to` isn't a sanitizer; `os.path.realpath()`+`startswith()` is. Use `resolve_within()` (`sandbox/workspace.py`); check containment before reading.
+- **CodeQL URL-substring** — never `in`/`find` a URL string, even in tests. Use `urlparse(u).hostname == "host"` or `any(tok == url …)`.
+- **Datetimes** — SQLite drops tzinfo; a `Base` load-listener in `models/base.py` stamps UTC. Keep datetimes tz-aware; don't compare with naive `datetime.now()`.
 
 ## Backend module layout
 
