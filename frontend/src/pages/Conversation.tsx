@@ -1668,17 +1668,14 @@ function MessageRow({ message, isLastInRun, subagentMessages }: { message: ChatM
               try {
                 if (f.url) urlLabel = new URL(f.url).hostname;
               } catch { /* keep raw */ }
-              return (
-                <div
-                  key={i}
-                  className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12px]"
-                  style={{
-                    background: "var(--surface)",
-                    border: "1px solid var(--border)",
-                    color: "var(--ink-2)",
-                  }}
-                  title={f.url || f.filename}
-                >
+              const chipStyle: React.CSSProperties = {
+                background: "var(--surface)",
+                border: "1px solid var(--border)",
+                color: "var(--ink-2)",
+                textDecoration: "none",
+              };
+              const chipContent = (
+                <>
                   {isUrl ? (
                     <LinkIcon className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--ink-3)" }} />
                   ) : (
@@ -1688,6 +1685,28 @@ function MessageRow({ message, isLastInRun, subagentMessages }: { message: ChatM
                   <span className="text-[10px]" style={{ color: "var(--ink-3)" }}>
                     {isUrl ? "LINK" : (f.mime_type.split("/")[1]?.toUpperCase() || f.type)}
                   </span>
+                </>
+              );
+              return isUrl && f.url ? (
+                <a
+                  key={i}
+                  href={f.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12px] transition hover:opacity-80"
+                  style={chipStyle}
+                  title={f.url}
+                >
+                  {chipContent}
+                </a>
+              ) : (
+                <div
+                  key={i}
+                  className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12px]"
+                  style={chipStyle}
+                  title={f.url || f.filename}
+                >
+                  {chipContent}
                 </div>
               );
             })}
