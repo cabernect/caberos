@@ -1,6 +1,7 @@
 """Tests for tools: search_files (content/name/list modes), datetime_now, web_search, web_fetch."""
 
 import os
+from urllib.parse import urlparse
 
 import pytest
 
@@ -349,7 +350,7 @@ async def test_web_search_returns_results(monkeypatch):
     assert result["query"] == "test"
     assert result["count"] == 2
     assert result["results"][0]["title"] == "Example Result"
-    assert "example.com" in result["results"][0]["url"]
+    assert urlparse(result["results"][0]["url"]).hostname == "example.com"
 
 
 @pytest.mark.asyncio

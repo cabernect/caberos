@@ -47,9 +47,15 @@ def create_backup(label: str = "pre_import") -> Path | None:
     """
     from datetime import UTC, datetime
 
+    from ..sandbox.workspace import resolve_within
+
     backup_root = backups_dir()
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    backup_dir = backup_root / f"{timestamp}_{label}"
+    # label is a user-supplied form field — restrict it to a safe slug so it
+    # can't inject path separators, then verify the resolved dir stays under
+    # the backups root.
+    safe_label = re.sub(r"[^A-Za-z0-9_-]", "_", label)[:64] or "backup"
+    backup_dir = resolve_within(backup_root, f"{timestamp}_{safe_label}")
     backup_dir.mkdir(parents=True, exist_ok=True)
 
     manifest: dict = {

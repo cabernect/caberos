@@ -192,7 +192,7 @@ def test_attachment_references_do_not_enter_model_context():
     assert user_msg["role"] == "user"
     assert isinstance(user_msg["content"], str)
     assert "screenshot.png" in user_msg["content"]
-    assert "https://example.com" in user_msg["content"]
+    assert "https://example.com" in user_msg["content"].split()
     assert "notes.txt" in user_msg["content"]
     assert "iVBORw0KGgoAAAANSUhEUg==" not in user_msg["content"]
     assert "Hello world from the file!" not in user_msg["content"]
@@ -247,7 +247,7 @@ def test_multiple_attachments_produce_one_reference_message():
     assert isinstance(content, str)
     assert "a.png" in content
     assert "b.jpg" in content
-    assert "https://x.com" in content
+    assert "https://x.com" in content.split()
     assert "abc123==" not in content
     assert "def456==" not in content
 

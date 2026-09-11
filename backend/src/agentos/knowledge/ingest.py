@@ -31,8 +31,12 @@ async def ingest_document(
     agent_id: str | None = None,
 ) -> Document:
     """Extract and index one file in the shared Knowledge Vault."""
-    source_file = source_file.resolve()
+    from ..sandbox.workspace import resolve_within
+
     vault_root = vault_root.resolve()
+    # Verify containment before touching the filesystem — source_file is a
+    # caller-supplied path and must stay inside the vault.
+    source_file = resolve_within(vault_root, source_file)
     if not source_file.is_file():
         raise ValueError(f"Document does not exist: {source_file.name}")
     logical_path = source_path or source_file.name
