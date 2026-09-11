@@ -185,6 +185,19 @@ def _extract_markdown(html: str) -> str:
     return soup.get_text(separator="\n", strip=True)
 
 
+def _rewrite_url(url: str) -> str:
+    """Rewrite known-boilerplate URLs to their raw/plain equivalents.
+
+    github.com/{owner}/{repo}/blob/{ref}/{path} serves a heavy React shell;
+    raw.githubusercontent.com serves the file directly.
+    """
+    m = re.match(r"^https?://github\.com/([^/]+)/([^/]+)/blob/([^/]+)/(.+)$", url)
+    if m:
+        owner, repo, ref, path = m.groups()
+        return f"https://raw.githubusercontent.com/{owner}/{repo}/{ref}/{path}"
+    return url
+
+
 async def web_fetch(args: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
     """Fetch a URL and return its text content.
 
@@ -193,7 +206,8 @@ async def web_fetch(args: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
         max_chars: Maximum characters to return (default: 8000, capped at hard ceiling)
         offset: Character offset to start reading from (default: 0)
     """
-    url = args["url"]
+    requested_url = args["url"]
+    url = _rewrite_url(requested_url)
     max_chars = args.get("max_chars", 8000)
     offset = args.get("offset", 0)
 
@@ -212,17 +226,26 @@ async def web_fetch(args: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
     except httpx.HTTPError as e:
         return {"error": f"Fetch failed: {e}"}
 
-    # Extract main content as markdown (system-controlled, not a model option)
-    text = _extract_markdown(resp.text)
+    # Extract main content as markdown (system-controlled, not a model option).
+    # Non-HTML responses (raw files, plain text, JSON) skip extraction entirely —
+    # running trafilatura on non-HTML would corrupt the content.
+    content_type = resp.headers.get("content-type", "")
+    if "html" in content_type:
+        soup = BeautifulSoup(resp.text, "html.parser")
+        title = soup.title.string.strip() if soup.title and soup.title.string else ""
+        text = _extract_markdown(resp.text)
+    else:
+        title = ""
+        text = resp.text
 
     # Apply offset and max_chars
     content = text[offset : offset + max_chars]
     has_more = (offset + len(content)) < len(text)
 
     return {
-        "url": url,
+        "url": requested_url,
         "content": content,
-        "title": "",
+        "title": title,
         "offset": offset,
         "has_more": has_more,
         "total_chars": len(text),
