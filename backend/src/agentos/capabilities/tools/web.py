@@ -152,15 +152,25 @@ async def _web_search_html(query: str, max_results: int) -> dict[str, Any]:
     }
 
 
+# Hard context ceiling — system-controlled, not model-overridable.
+# The model can request more via offset/has_more, but cannot exceed this.
+_WEB_FETCH_HARD_CEILING = 50_000
+
+
 async def web_fetch(args: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
     """Fetch a URL and return its text content.
 
     Args:
         url: The URL to fetch
-        max_chars: Maximum characters to return (default: 8000)
+        max_chars: Maximum characters to return (default: 8000, capped at hard ceiling)
+        offset: Character offset to start reading from (default: 0)
     """
     url = args["url"]
     max_chars = args.get("max_chars", 8000)
+    offset = args.get("offset", 0)
+
+    # Cap max_chars at the hard ceiling — the model cannot exceed this
+    max_chars = min(max_chars, _WEB_FETCH_HARD_CEILING)
 
     try:
         async with httpx.AsyncClient(
@@ -183,12 +193,15 @@ async def web_fetch(args: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
 
     text = soup.get_text(separator="\n", strip=True)
 
-    # Truncate to max_chars
-    if len(text) > max_chars:
-        text = text[:max_chars] + "\n... [truncated]"
+    # Apply offset and max_chars
+    content = text[offset : offset + max_chars]
+    has_more = (offset + len(content)) < len(text)
 
     return {
         "url": url,
-        "content": text,
+        "content": content,
         "title": soup.title.string if soup.title else "",
+        "offset": offset,
+        "has_more": has_more,
+        "total_chars": len(text),
     }
