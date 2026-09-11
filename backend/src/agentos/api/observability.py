@@ -161,7 +161,10 @@ async def list_runs(
     if agent_id:
         stmt = stmt.where(Run.agent_id == agent_id)
     if status:
-        stmt = stmt.where(Run.status == status)
+        statuses = [s.strip() for s in status.split(",") if s.strip()]
+        stmt = stmt.where(
+            Run.status.in_(statuses) if len(statuses) > 1 else Run.status == statuses[0]
+        )
     if trigger:
         stmt = stmt.where(Run.trigger == trigger)
     if is_test is not None:

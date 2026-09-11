@@ -1,8 +1,26 @@
 """Workspace management — path validation and workspace creation (D29)."""
 
+import os
 from pathlib import Path
 
 from ..config import settings
+
+
+def resolve_within(base: str | Path, *parts: str | Path) -> Path:
+    """Resolve path segments under ``base`` and verify containment.
+
+    Uses ``os.path.realpath`` + ``startswith`` — the canonicalization pattern
+    recognized for path-injection sanitization. ``realpath`` normalizes the
+    path and resolves symlinks, so neither ``..`` sequences nor symlinked
+    intermediate components can escape the base directory.
+
+    Returns the resolved path. Raises ValueError if it escapes ``base``.
+    """
+    base_real = os.path.realpath(str(base))
+    target = os.path.realpath(str(Path(base_real).joinpath(*parts)))
+    if target != base_real and not target.startswith(base_real + os.sep):
+        raise ValueError(f"Path escapes allowed root: {parts!r}")
+    return Path(target)
 
 
 class WorkspaceManager:
@@ -38,13 +56,9 @@ class WorkspaceManager:
             # Relative paths still resolve against workspace
             return str((Path(workspace_root) / rel_path).resolve())
 
-        # Strict mode — enforce workspace boundary
-        # Use relative_to() instead of startswith() to properly handle
-        # symlinks and path components that look like prefixes.
-        root = Path(workspace_root).resolve()
-        target = (root / rel_path).resolve()
+        # Strict mode — enforce workspace boundary via realpath + startswith,
+        # which resolves symlinks and '..' before the containment check.
         try:
-            target.relative_to(root)
+            return str(resolve_within(workspace_root, rel_path))
         except ValueError:
             raise ValueError(f"Path escapes workspace: {rel_path}") from None
-        return str(target)

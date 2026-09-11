@@ -25,6 +25,17 @@ def _safe_component(value: str, label: str) -> str:
     return value
 
 
+def _child_path(parent: Path, name: str) -> Path:
+    """Resolve ``name`` inside ``parent``, verifying it can't escape.
+
+    ``name`` has already passed ``_safe_component`` (no separators), but the
+    resolved-path containment check keeps the guarantee CodeQL-visible.
+    """
+    from ..sandbox.workspace import resolve_within
+
+    return resolve_within(parent, name)
+
+
 def _agent_home(agent_id: str) -> Path:
     """Get the agent's home directory."""
     agent_id = _safe_component(agent_id, "agent id")
@@ -153,7 +164,7 @@ async def create_skill(
     """Create a new skill (as a directory with SKILL.md)."""
     skills_dir = _skills_dir(agent_id)
     skill_name = _safe_component(req.name, "skill name")
-    skill_path = skills_dir / skill_name
+    skill_path = _child_path(skills_dir, skill_name)
     if skill_path.exists():
         raise HTTPException(status_code=409, detail="Skill already exists")
     skill_path.mkdir(parents=True)
@@ -173,7 +184,7 @@ async def delete_skill(
     """Delete a skill."""
     skills_dir = _skills_dir(agent_id)
     skill_name = _safe_component(skill_name, "skill name")
-    skill_path = skills_dir / skill_name
+    skill_path = _child_path(skills_dir, skill_name)
     if not skill_path.exists():
         raise HTTPException(status_code=404, detail="Skill not found")
     if skill_path.is_dir():

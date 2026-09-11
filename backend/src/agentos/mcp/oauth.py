@@ -205,11 +205,105 @@ class EncryptedTokenStorage:
             )
             await db.commit()
 
+    async def get_oauth_metadata(self):
+        """Retrieve stored OAuth authorization-server metadata."""
+        from mcp.shared.auth import OAuthMetadata
+
+        async with async_session_factory() as db:
+            creds = await mcp_creds.list_credentials(db, self.server_id)
+            for cred in creds:
+                if cred.credential_type == "oauth_metadata":
+                    value = mcp_creds.decrypt_credential(cred)
+                    if isinstance(value, dict):
+                        try:
+                            return OAuthMetadata.model_validate(value)
+                        except Exception:
+                            log.warning(
+                                "Failed to parse stored OAuth metadata for %s", self.server_id
+                            )
+                            return None
+        return None
+
+    async def set_oauth_metadata(self, metadata) -> None:
+        """Store OAuth authorization-server metadata for token refresh."""
+        if metadata is None:
+            return
+        try:
+            metadata_dict = metadata.model_dump(mode="json", exclude_none=True)
+        except Exception:
+            log.warning("Failed to serialize OAuth metadata for %s", self.server_id)
+            return
+        async with async_session_factory() as db:
+            creds = await mcp_creds.list_credentials(db, self.server_id)
+            for cred in creds:
+                if cred.credential_type == "oauth_metadata":
+                    await mcp_creds.delete_credential(db, cred.id)
+            await mcp_creds.store_credential(
+                db, self.server_id, "oauth_metadata", metadata_dict, label="OAuth metadata"
+            )
+            await db.commit()
+
+    async def get_protected_resource_metadata(self):
+        """Retrieve stored OAuth protected-resource metadata."""
+        from mcp.shared.auth import ProtectedResourceMetadata
+
+        async with async_session_factory() as db:
+            creds = await mcp_creds.list_credentials(db, self.server_id)
+            for cred in creds:
+                if cred.credential_type == "protected_resource_metadata":
+                    value = mcp_creds.decrypt_credential(cred)
+                    if isinstance(value, dict):
+                        try:
+                            return ProtectedResourceMetadata.model_validate(value)
+                        except Exception:
+                            log.warning(
+                                "Failed to parse stored protected resource metadata for %s",
+                                self.server_id,
+                            )
+                            return None
+        return None
+
+    async def set_protected_resource_metadata(self, metadata) -> None:
+        """Store OAuth protected-resource metadata for token refresh."""
+        if metadata is None:
+            return
+        try:
+            metadata_dict = metadata.model_dump(mode="json", exclude_none=True)
+        except Exception:
+            log.warning("Failed to serialize protected resource metadata for %s", self.server_id)
+            return
+        async with async_session_factory() as db:
+            creds = await mcp_creds.list_credentials(db, self.server_id)
+            for cred in creds:
+                if cred.credential_type == "protected_resource_metadata":
+                    await mcp_creds.delete_credential(db, cred.id)
+            await mcp_creds.store_credential(
+                db,
+                self.server_id,
+                "protected_resource_metadata",
+                metadata_dict,
+                label="Protected resource metadata",
+            )
+            await db.commit()
+
 
 class CaberOSOAuthProvider(OAuthClientProvider):
     async def _initialize(self) -> None:
         await super()._initialize()
         self._prepare_refresh_window()
+        # Reload persisted OAuth metadata so token refresh can use the correct
+        # token endpoint on reconnect, even when the authorization server is on
+        # a different origin than the protected MCP resource.
+        if self.context.oauth_metadata is None and hasattr(
+            self.context.storage, "get_oauth_metadata"
+        ):
+            self.context.oauth_metadata = await self.context.storage.get_oauth_metadata()
+        if self.context.protected_resource_metadata is None and hasattr(
+            self.context.storage, "get_protected_resource_metadata"
+        ):
+            self.context.protected_resource_metadata = (
+                await self.context.storage.get_protected_resource_metadata()
+            )
 
     def _prepare_refresh_window(self) -> None:
         if self.context.current_tokens and self.context.current_tokens.expires_in is not None:
@@ -217,7 +311,11 @@ class CaberOSOAuthProvider(OAuthClientProvider):
             import time
 
             if should_refresh_access_token(self.context.token_expiry_time, time.time()):
-                self.context.token_expiry_time = 0
+                # Force a refresh by making the token look expired. Use a
+                # non-zero timestamp in the past — `OAuthContext.is_token_valid()`
+                # treats a 0/falsy token_expiry_time as "no expiry" and would
+                # otherwise consider the token still valid, skipping refresh.
+                self.context.token_expiry_time = time.time() - 1
 
     async def async_auth_flow(self, request):
         async with self.context.lock:
@@ -357,6 +455,26 @@ async def _connect_after_oauth(server_id: str) -> None:
         raise ConnectionError(error or "MCP server connection failed after OAuth authorization")
 
 
+async def _persist_oauth_metadata(auth) -> None:
+    """Persist discovered OAuth metadata so reconnects can refresh tokens."""
+    if auth.context.protected_resource_metadata is not None and hasattr(
+        auth.context.storage, "set_protected_resource_metadata"
+    ):
+        try:
+            await auth.context.storage.set_protected_resource_metadata(
+                auth.context.protected_resource_metadata
+            )
+        except Exception:
+            log.debug("Failed to persist protected resource metadata", exc_info=True)
+    if auth.context.oauth_metadata is not None and hasattr(
+        auth.context.storage, "set_oauth_metadata"
+    ):
+        try:
+            await auth.context.storage.set_oauth_metadata(auth.context.oauth_metadata)
+        except Exception:
+            log.debug("Failed to persist OAuth metadata", exc_info=True)
+
+
 async def _run_oauth_flow(server_id: str, server_url: str, auth, flow: OAuthFlowState) -> None:
     """Run the OAuth flow in the background.
 
@@ -396,6 +514,7 @@ async def _run_oauth_flow(server_id: str, server_url: str, auth, flow: OAuthFlow
         if not flow.completed:
             flow.completed = True
 
+        await _persist_oauth_metadata(auth)
         await _connect_after_oauth(server_id)
         flow.ready = True
         log.info("OAuth flow completed and MCP server connected for %s", server_id)
@@ -404,6 +523,7 @@ async def _run_oauth_flow(server_id: str, server_url: str, auth, flow: OAuthFlow
         log.exception("OAuth flow failed for server %s", server_id)
         flow.reject(str(e))
     finally:
+        await _persist_oauth_metadata(auth)
         # Clean up the pending flow after a short delay (gives the frontend
         # a chance to poll and see the error status before we remove it)
         await asyncio.sleep(10.0)

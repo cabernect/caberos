@@ -334,8 +334,13 @@ def register_builtin_capabilities() -> None:
                     "url": {"type": "string", "description": "The URL to fetch"},
                     "max_chars": {
                         "type": "integer",
-                        "description": "Maximum characters to return",
+                        "description": "Maximum characters to return (capped at 50000)",
                         "default": 8000,
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "description": "Character offset to start reading from",
+                        "default": 0,
                     },
                 },
                 "required": ["url"],

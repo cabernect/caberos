@@ -31,8 +31,10 @@ async def _notify_run_event(
     title: str,
     message: str,
     run_id: str,
-    action_path: str = "/observability",
+    agent_id: str,
+    session_id: str,
 ) -> None:
+    action_path = f"/agents/{agent_id}/chat?session={session_id}"
     try:
         async with async_session_factory() as db:
             await create_notification(
@@ -49,6 +51,29 @@ async def _notify_run_event(
         import logging
 
         logging.getLogger(__name__).exception("Failed to persist run notification")
+
+
+async def _update_run_status(run_id: str, status: str, error: str | None = None) -> None:
+    """Persist a run status change to the DB."""
+    from sqlalchemy import update
+
+    from .models.run import Run
+
+    try:
+        async with async_session_factory() as db:
+            values: dict = {"status": status}
+            if error:
+                values["error"] = error
+            if status in ("completed", "failed", "stopped", "interrupted"):
+                from datetime import UTC, datetime
+
+                values["completed_at"] = datetime.now(UTC)
+            await db.execute(update(Run).where(Run.id == run_id).values(**values))
+            await db.commit()
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).exception("Failed to persist run status %s", status)
 
 
 @dataclass
@@ -149,6 +174,7 @@ async def start_run(
             ctx = _active_runs[rid]
             if event_type == "tool_call" and payload.get("status") == "pending_approval":
                 ctx.status = "awaiting_approval"
+                asyncio.create_task(_update_run_status(rid, "awaiting_approval"))
                 asyncio.create_task(
                     _notify_run_event(
                         notification_type="approval_required",
@@ -156,12 +182,15 @@ async def start_run(
                         title="Approval required",
                         message="An agent is waiting for approval before continuing.",
                         run_id=rid,
-                        action_path="/agents",
+                        agent_id=ctx.agent_id,
+                        session_id=ctx.session_id,
                     )
                 )
             elif event_type == "message_complete":
-                ctx.status = "completed" if payload.get("status") == "completed" else "failed"
-                if ctx.status == "failed":
+                status = payload.get("status", "completed")
+                ctx.status = status
+                asyncio.create_task(_update_run_status(rid, status))
+                if status == "failed":
                     asyncio.create_task(
                         _notify_run_event(
                             notification_type="run_failed",
@@ -169,6 +198,20 @@ async def start_run(
                             title="Run failed",
                             message=payload.get("error", "An agent run failed."),
                             run_id=rid,
+                            agent_id=ctx.agent_id,
+                            session_id=ctx.session_id,
+                        )
+                    )
+                elif status == "completed":
+                    asyncio.create_task(
+                        _notify_run_event(
+                            notification_type="run_completed",
+                            severity="info",
+                            title="Run completed",
+                            message="A background run finished successfully.",
+                            run_id=rid,
+                            agent_id=ctx.agent_id,
+                            session_id=ctx.session_id,
                         )
                     )
             ctx.append_event(event_type, payload)
@@ -280,18 +323,41 @@ async def stop_run(run_id: str) -> bool:
     except asyncio.CancelledError:
         pass
     ctx.status = "stopped"
+    await _update_run_status(run_id, "stopped")
     return True
 
 
-def get_run_status(run_id: str) -> dict | None:
-    """Get the status of a run. Works even when detached from SSE."""
+async def get_run_status(run_id: str) -> dict | None:
+    """Get the status of a run. Works even when detached from SSE.
+
+    Falls back to the DB for runs that have finished and been cleaned up
+    from memory, so status polling works after the 60s buffer window.
+    """
     ctx = _active_runs.get(run_id)
-    if ctx is None:
-        return None
-    return {
-        "run_id": ctx.run_id,
-        "session_id": ctx.session_id,
-        "agent_id": ctx.agent_id,
-        "status": ctx.status,
-        "event_count": len(ctx.events),
-    }
+    if ctx is not None:
+        return {
+            "run_id": ctx.run_id,
+            "session_id": ctx.session_id,
+            "agent_id": ctx.agent_id,
+            "status": ctx.status,
+            "event_count": len(ctx.events),
+        }
+
+    # Fall back to DB lookup for runs that have finished and been cleaned up
+    from sqlalchemy import select
+
+    from .db import async_session_factory
+    from .models.run import Run
+
+    async with async_session_factory() as db:
+        result = await db.execute(select(Run).where(Run.id == run_id))
+        run = result.scalar_one_or_none()
+        if run is None:
+            return None
+        return {
+            "run_id": run.id,
+            "session_id": run.session_id,
+            "agent_id": run.agent_id,
+            "status": run.status,
+            "event_count": 0,  # Events are in the DB, not in memory
+        }

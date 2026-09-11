@@ -26,10 +26,71 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from contextlib import AsyncExitStack
 from typing import Any
 
 log = logging.getLogger("agentos.mcp.client")
+
+# Common runtime install directories for stdio command resolution.
+# Ordered by preference — Homebrew first, then system, then user-local.
+_RUNTIME_DIRS = [
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    os.path.expanduser("~/.local/bin"),
+]
+
+
+def _resolve_stdio_command(
+    command: str,
+    env: dict[str, str] | None,
+) -> tuple[str, dict[str, str]]:
+    """Resolve a bare stdio command to a full path and update env.
+
+    The subprocess's PATH is env["PATH"] if set, else the current process's
+    PATH (from get_default_environment()). We resolve the command against
+    that PATH, falling back to common runtime directories, and prepend the
+    resolved directory to the subprocess's PATH so shebang chains (e.g.
+    npx re-executing node) resolve correctly.
+
+    Returns (resolved_command, updated_env).
+    Raises RuntimeError with an actionable message if not found.
+    """
+    if not command:
+        raise ValueError("stdio transport requires a command")
+
+    env = dict(env or {})
+
+    # If it's already a full path, use it as-is
+    if os.path.isabs(command):
+        return command, env
+
+    # Get the PATH the subprocess would see
+    path = env.get("PATH") or os.environ.get("PATH", "")
+    path_dirs = [d for d in path.split(os.pathsep) if d]
+
+    # Build the full search path: existing PATH + fallback dirs
+    search_dirs = list(path_dirs)
+    custom_path = os.environ.get("CABEROS_MCP_RUNTIME_PATH")
+    fallback = list(_RUNTIME_DIRS)
+    if custom_path:
+        fallback.append(custom_path)
+    search_dirs.extend(d for d in fallback if d not in search_dirs)
+
+    # Search for the command
+    for d in search_dirs:
+        candidate = os.path.join(d, command)
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            # Found — prepend the resolved directory to the subprocess's
+            # PATH so shebang chains (npx → node) resolve
+            env["PATH"] = d + os.pathsep + path
+            return candidate, env
+
+    raise RuntimeError(
+        f"MCP stdio command '{command}' not found. "
+        f"Searched: {', '.join(search_dirs)}. "
+        "Install the runtime or set CABEROS_MCP_RUNTIME_PATH."
+    )
 
 
 class McpClient:
@@ -130,10 +191,11 @@ class McpClient:
                 if not self.command:
                     raise ValueError("stdio transport requires a command")
 
+                resolved_command, resolved_env = _resolve_stdio_command(self.command, self.env)
                 params = StdioServerParameters(
-                    command=self.command,
+                    command=resolved_command,
                     args=self.args,
-                    env=self.env if self.env else None,
+                    env=resolved_env if resolved_env else None,
                 )
                 read, write = await self._exit_stack.enter_async_context(stdio_client(params))
 

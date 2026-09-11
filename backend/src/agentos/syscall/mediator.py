@@ -18,6 +18,7 @@ For each tool call, in order:
 
 import asyncio
 import json
+import logging
 import time
 import uuid
 from datetime import UTC, datetime
@@ -624,6 +625,35 @@ class SyscallHandler:
                 if hasattr(result_emit, "__await__"):
                     await result_emit
 
+            # Notify the operator that the approval timed out
+            try:
+                async with async_session_factory() as notify_session:
+
+                    async def _persist_timeout_notification() -> None:
+                        await create_notification(
+                            notify_session,
+                            notification_type="approval_timeout",
+                            severity="warning",
+                            title="Approval timed out",
+                            message=(
+                                f"Approval for `{call.name}` timed out — "
+                                "the run continued without it."
+                            ),
+                            action_path=f"/agents/{agent_config.id}/chat?session={session_id}",
+                            entity_id=run_id,
+                        )
+                        await notify_session.commit()
+
+                    await retry_locked_transaction(
+                        _persist_timeout_notification,
+                        notify_session,
+                        f"approval_timeout:{approval_id}",
+                    )
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Failed to persist approval-timeout notification"
+                )
+
         # Read the decision
         decision = pending.decision or "rejected"
         approval_registry.cleanup(approval_id)
@@ -726,7 +756,7 @@ class SyscallHandler:
                     severity="warning",
                     title="Agent needs your input",
                     message=question,
-                    action_path="/agents",
+                    action_path=f"/agents/{agent_config.id}/chat?session={session.id}",
                     entity_id=run_id,
                 )
                 await el_session.commit()

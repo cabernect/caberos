@@ -19,6 +19,7 @@ export interface ChatInputBarHandle {
 export interface ContextItem {
   type: "file" | "image" | "url" | "skill";
   label: string;
+  title?: string; // tooltip — full URL for url chips
 }
 
 export interface ElicitationOption {
@@ -340,14 +341,19 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
   };
 
   const handleUrlSubmit = () => {
-    if (!urlValue.trim()) return;
+    const url = urlValue.trim();
+    if (!url) return;
+    let label = url;
+    try {
+      label = new URL(url).hostname;
+    } catch {}
     setAttachments((prev) => [...prev, {
       type: "url",
       mimeType: "text/uri-list",
-      data: urlValue.trim(),
+      data: url,
       filename: "",
     }]);
-    setContextItems((prev) => [...prev, { type: "url", label: urlValue.trim() }]);
+    setContextItems((prev) => [...prev, { type: "url", label, title: url }]);
     setUrlValue("");
     setShowUrlInput(false);
     setShowContextMenu(false);
@@ -356,6 +362,23 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
   const removeAttachment = (index: number) => {
     setAttachments(attachments.filter((_, i) => i !== index));
     setContextItems(contextItems.filter((_, i) => i !== index));
+  };
+
+  // Pasting a bare URL auto-attaches it as a chip (labelled by domain) instead
+  // of dropping it into the text. URLs inside longer pasted text stay in text.
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const pasted = e.clipboardData.getData("text").trim();
+    if (!/^https?:\/\/\S+$/.test(pasted)) return;
+    e.preventDefault();
+    let label = pasted;
+    try {
+      label = new URL(pasted).hostname;
+    } catch {}
+    setAttachments((prev) => [
+      ...prev,
+      { type: "url", mimeType: "text/uri-list", data: pasted, filename: "" },
+    ]);
+    setContextItems((prev) => [...prev, { type: "url", label, title: pasted }]);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -607,7 +630,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
               {item.type === "image" && <ImageIcon className="h-3 w-3" />}
               {item.type === "url" && <Link className="h-3 w-3" />}
               {item.type === "skill" && <Wrench className="h-3 w-3" />}
-              <span className="max-w-[150px] truncate font-mono">
+              <span className="max-w-[150px] truncate font-mono" title={item.title}>
                 {item.label}
               </span>
               <button
@@ -822,6 +845,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
           ref={textareaRef}
           value={text}
           onChange={(e) => setText(e.target.value)}
+          onPaste={handlePaste}
           onKeyDown={handleKeyDown}
           placeholder={isElicitation
             ? (activeElicitation?.multiSelect

@@ -147,6 +147,20 @@ def test_base_prompt_before_soul():
     assert base_pos < soul_pos, "Base prompt must come before soul"
 
 
+def test_language_rule_covers_thinking():
+    """The base prompt's language rule covers both output and thinking."""
+    config = AgentConfig(
+        id="test",
+        name="Test",
+        model=ModelConfig(provider_id="test", name="scripted"),
+        capabilities=[],
+    )
+    prompt = assemble_system_prompt(config)
+    assert "Match the user's language" in prompt
+    assert "thinking and replies" in prompt
+    assert "Stay consistent" in prompt
+
+
 def test_attachment_references_do_not_enter_model_context():
     """Attachments are metadata-only until the agent uses an existing tool."""
     from agentos.harness.context import build_message_history
@@ -178,7 +192,7 @@ def test_attachment_references_do_not_enter_model_context():
     assert user_msg["role"] == "user"
     assert isinstance(user_msg["content"], str)
     assert "screenshot.png" in user_msg["content"]
-    assert "https://example.com" in user_msg["content"]
+    assert any(tok == "https://example.com" for tok in user_msg["content"].split())
     assert "notes.txt" in user_msg["content"]
     assert "iVBORw0KGgoAAAANSUhEUg==" not in user_msg["content"]
     assert "Hello world from the file!" not in user_msg["content"]
@@ -233,7 +247,7 @@ def test_multiple_attachments_produce_one_reference_message():
     assert isinstance(content, str)
     assert "a.png" in content
     assert "b.jpg" in content
-    assert "https://x.com" in content
+    assert any(tok == "https://x.com" for tok in content.split())
     assert "abc123==" not in content
     assert "def456==" not in content
 

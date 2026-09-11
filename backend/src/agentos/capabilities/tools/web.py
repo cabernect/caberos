@@ -13,10 +13,19 @@ from typing import Any
 
 import httpx
 from bs4 import BeautifulSoup
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from ...models.web_source import WebSource
 from ...ssl_utils import SSL_CERT_PATH
+
+# Extraction libraries — trafilatura for main-content → markdown,
+# BeautifulSoup.get_text() as last resort when trafilatura is thin.
+try:
+    import trafilatura
+
+    _TRAFILATURA_AVAILABLE = True
+except ImportError:
+    _TRAFILATURA_AVAILABLE = False
 
 
 async def web_search(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
@@ -103,6 +112,32 @@ async def _persist_web_sources(result: dict[str, Any], kwargs: dict[str, Any]) -
     await db.flush()
 
 
+async def _persist_fetched_source(url: str, title: str, text: str, kwargs: dict[str, Any]) -> None:
+    """Persist a fetched page so the assistant response can cite it."""
+    db = kwargs.get("db")
+    run_id = kwargs.get("run_id")
+    if not db or not run_id:
+        return
+
+    exists = await db.scalar(
+        select(WebSource.id).where(WebSource.run_id == run_id, WebSource.url == url)
+    )
+    if exists is None:
+        rank = (
+            await db.scalar(select(func.count(WebSource.id)).where(WebSource.run_id == run_id)) or 0
+        ) + 1
+        db.add(
+            WebSource(
+                run_id=run_id,
+                url=url,
+                title=title,
+                excerpt=text[:500],
+                rank=rank,
+            )
+        )
+        await db.flush()
+
+
 async def _web_search_html(query: str, max_results: int) -> dict[str, Any]:
     """Fallback: search DuckDuckGo via HTML scraping (may hit captcha)."""
     try:
@@ -152,15 +187,44 @@ async def _web_search_html(query: str, max_results: int) -> dict[str, Any]:
     }
 
 
-async def web_fetch(args: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+# Hard context ceiling — system-controlled, not model-overridable.
+# The model can request more via offset/has_more, but cannot exceed this.
+_WEB_FETCH_HARD_CEILING = 50_000
+
+
+def _extract_markdown(html: str) -> str:
+    """Extract main content as markdown.
+
+    Tries trafilatura first (best boilerplate removal), falls back to
+    BeautifulSoup plain text when trafilatura returns thin.
+    """
+    # trafilatura — best for articles/blogs, removes nav/ads/footers
+    if _TRAFILATURA_AVAILABLE:
+        text = trafilatura.extract(html, output_format="markdown", include_comments=False)
+        if text and len(text) > 100:
+            return text
+
+    # Last resort — BeautifulSoup plain text
+    soup = BeautifulSoup(html, "html.parser")
+    for script in soup(["script", "style"]):
+        script.decompose()
+    return soup.get_text(separator="\n", strip=True)
+
+
+async def web_fetch(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     """Fetch a URL and return its text content.
 
     Args:
         url: The URL to fetch
-        max_chars: Maximum characters to return (default: 8000)
+        max_chars: Maximum characters to return (default: 8000, capped at hard ceiling)
+        offset: Character offset to start reading from (default: 0)
     """
     url = args["url"]
     max_chars = args.get("max_chars", 8000)
+    offset = args.get("offset", 0)
+
+    # Cap max_chars at the hard ceiling — the model cannot exceed this
+    max_chars = min(max_chars, _WEB_FETCH_HARD_CEILING)
 
     try:
         async with httpx.AsyncClient(
@@ -174,21 +238,30 @@ async def web_fetch(args: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
     except httpx.HTTPError as e:
         return {"error": f"Fetch failed: {e}"}
 
-    # Parse HTML and extract text
-    soup = BeautifulSoup(resp.text, "html.parser")
+    # Extract main content as markdown (system-controlled, not a model option).
+    # Non-HTML responses (raw files, plain text, JSON) skip extraction entirely —
+    # running trafilatura on non-HTML would corrupt the content.
+    content_type = resp.headers.get("content-type", "")
+    if "html" in content_type:
+        soup = BeautifulSoup(resp.text, "html.parser")
+        title = soup.title.string.strip() if soup.title and soup.title.string else ""
+        text = _extract_markdown(resp.text)
+    else:
+        title = ""
+        text = resp.text
 
-    # Remove script and style elements
-    for script in soup(["script", "style"]):
-        script.decompose()
+    # Persist the fetched page as a source so the reply can cite it
+    await _persist_fetched_source(url, title, text, kwargs)
 
-    text = soup.get_text(separator="\n", strip=True)
-
-    # Truncate to max_chars
-    if len(text) > max_chars:
-        text = text[:max_chars] + "\n... [truncated]"
+    # Apply offset and max_chars
+    content = text[offset : offset + max_chars]
+    has_more = (offset + len(content)) < len(text)
 
     return {
         "url": url,
-        "content": text,
-        "title": soup.title.string if soup.title else "",
+        "content": content,
+        "title": title,
+        "offset": offset,
+        "has_more": has_more,
+        "total_chars": len(text),
     }

@@ -102,7 +102,9 @@ async def lifespan(app: FastAPI):
 
     # Clean up runs stuck in "running" from a previous server crash.
     # Without this, the contact lock would block future runs for that contact.
-    from sqlalchemy import update
+    # Mark them as "interrupted" (not "failed") so the operator can see the
+    # difference between a run that crashed and one that was killed by restart.
+    from sqlalchemy import select, update
 
     from .db import async_session_factory, engine, retry_locked_transaction
     from .models.run import Run
@@ -110,13 +112,43 @@ async def lifespan(app: FastAPI):
     async with async_session_factory() as db:
 
         async def _reconcile_runs() -> None:
-            result = await db.execute(
-                update(Run)
-                .where(Run.status == "running")
-                .values(status="failed", error="Server restarted — run was interrupted")
+            # Find orphaned running runs
+            orphaned = await db.execute(
+                select(Run.id, Run.agent_id, Run.session_id).where(Run.status == "running")
             )
-            if result.rowcount > 0:
-                print(f"[startup] Cleaned up {result.rowcount} stuck run(s)")
+            orphaned_rows = orphaned.all()
+            if not orphaned_rows:
+                return
+
+            orphaned_ids = [row.id for row in orphaned_rows]
+
+            # Mark them as interrupted
+            await db.execute(
+                update(Run)
+                .where(Run.id.in_(orphaned_ids))
+                .values(
+                    status="interrupted",
+                    error="Gateway restarted — run was interrupted",
+                )
+            )
+            logging.getLogger("agentos.main").info(
+                "[startup] Marked %d interrupted run(s) from previous crash",
+                len(orphaned_ids),
+            )
+
+            # Notify the operator about interrupted runs
+            from .notifications import create_notification
+
+            for row in orphaned_rows:
+                await create_notification(
+                    db,
+                    notification_type="run_interrupted",
+                    severity="warning",
+                    title="Run interrupted",
+                    message="A background run was interrupted by a gateway restart.",
+                    action_path=f"/agents/{row.agent_id}/chat?session={row.session_id}",
+                    entity_id=row.id,
+                )
             await db.commit()
 
         await retry_locked_transaction(_reconcile_runs, db, "startup_reconcile_runs")

@@ -1,6 +1,7 @@
 """Tests for tools: search_files (content/name/list modes), datetime_now, web_search, web_fetch."""
 
 import os
+from urllib.parse import urlparse
 
 import pytest
 
@@ -349,7 +350,7 @@ async def test_web_search_returns_results(monkeypatch):
     assert result["query"] == "test"
     assert result["count"] == 2
     assert result["results"][0]["title"] == "Example Result"
-    assert "example.com" in result["results"][0]["url"]
+    assert urlparse(result["results"][0]["url"]).hostname == "example.com"
 
 
 @pytest.mark.asyncio
@@ -391,3 +392,91 @@ async def test_web_fetch_extracts_text(monkeypatch):
     assert "content" in result
     assert "Hello world" in result["content"]
     assert "bad code" not in result["content"]
+    assert result["offset"] == 0
+    assert result["has_more"] is False
+    assert "total_chars" in result
+
+
+async def test_web_fetch_pagination(monkeypatch):
+    """web_fetch supports offset + has_more for reading large pages."""
+    from agentos.capabilities.tools import web as web_module
+
+    # Build a page with more than max_chars of text
+    long_text = "A" * 20_000
+    html = f"<html><body><p>{long_text}</p></body></html>"
+
+    class FakeResponse:
+        text = html
+        headers = {"content-type": "text/html"}
+
+        def raise_for_status(self):
+            pass
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def get(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr(web_module.httpx, "AsyncClient", FakeClient)
+
+    # First page
+    result = await web_module.web_fetch({"url": "https://example.com", "max_chars": 8000})
+    assert result["offset"] == 0
+    assert result["has_more"] is True
+    assert result["total_chars"] == 20_000
+    assert len(result["content"]) == 8000
+
+    # Second page
+    result = await web_module.web_fetch(
+        {"url": "https://example.com", "max_chars": 8000, "offset": 8000}
+    )
+    assert result["offset"] == 8000
+    assert result["has_more"] is True
+    assert len(result["content"]) == 8000
+
+    # Last page
+    result = await web_module.web_fetch(
+        {"url": "https://example.com", "max_chars": 8000, "offset": 16000}
+    )
+    assert result["offset"] == 16000
+    assert result["has_more"] is False
+    assert len(result["content"]) == 4000
+
+
+async def test_web_fetch_hard_ceiling(monkeypatch):
+    """web_fetch caps max_chars at the hard ceiling."""
+    from agentos.capabilities.tools import web as web_module
+
+    class FakeResponse:
+        text = "<html><body><p>x</p></body></html>"
+        headers = {"content-type": "text/html"}
+
+        def raise_for_status(self):
+            pass
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def get(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr(web_module.httpx, "AsyncClient", FakeClient)
+
+    # Requesting more than the hard ceiling should be capped
+    result = await web_module.web_fetch({"url": "https://example.com", "max_chars": 999_999})
+    assert result["total_chars"] < 50_000

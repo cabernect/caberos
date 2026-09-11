@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { useNavigate, useParams } from "react-router-dom";
-import { ArrowDown, PanelLeft, AlertCircle, BookOpen, ChevronDown, FileIcon, Paperclip, Loader2, MessageSquare } from "lucide-react";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { ArrowDown, PanelLeft, AlertCircle, BookOpen, ChevronDown, FileIcon, Link as LinkIcon, Paperclip, Loader2, MessageSquare } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Agent, Message, Provider, SessionInfo } from "@/lib/types";
 import { ToolCallBlock, type ToolCallData, type SubAgentStreamData } from "@/components/ToolCallBlock";
@@ -96,6 +96,7 @@ function createStreamingResponse(): StreamingResponse {
 export function Conversation() {
   const { id: agentId } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
 
   const [agent, setAgent] = useState<Agent | null>(null);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
@@ -173,6 +174,14 @@ export function Conversation() {
   useEffect(() => {
     loadSessions();
   }, [loadSessions]);
+
+  // Deep-link: ?session=<id> selects that session (e.g. from a notification)
+  useEffect(() => {
+    const wanted = searchParams.get("session");
+    if (wanted && sessions.some((s) => s.id === wanted)) {
+      setActiveSessionId(wanted);
+    }
+  }, [searchParams, sessions]);
 
   useEffect(() => {
     if (!agentId || !activeSessionId) {
@@ -820,16 +829,25 @@ export function Conversation() {
     setShowJumpToLatest(!nearBottom);
   };
 
+  const prefersReducedMotion = useRef(
+    typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
+
   useEffect(() => {
     if (autoScrollRef.current) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      messagesEndRef.current?.scrollIntoView({
+        behavior: prefersReducedMotion.current ? "instant" : "smooth",
+      });
     }
   }, [messages, streaming, isStreaming]);
 
   const handleJumpToLatest = () => {
     autoScrollRef.current = true;
     setShowJumpToLatest(false);
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    messagesEndRef.current?.scrollIntoView({
+      behavior: prefersReducedMotion.current ? "instant" : "smooth",
+    });
   };
 
   const handleNewChat = () => {
@@ -1062,7 +1080,12 @@ export function Conversation() {
         content: text,
         created_at: new Date().toISOString(),
         attachments: attachments && attachments.length > 0
-          ? JSON.stringify(attachments.map((a) => ({ type: a.type, mime_type: a.mimeType, filename: a.filename })))
+          ? JSON.stringify(attachments.map((a) => ({
+            type: a.type,
+            mime_type: a.mimeType,
+            filename: a.filename,
+            ...(a.type === "url" || a.type === "image_url" ? { url: a.data } : {}),
+          })))
           : null,
       },
     ]);
@@ -1265,6 +1288,7 @@ export function Conversation() {
         </div>
 
         {/* Messages */}
+        <div className="relative flex min-h-0 flex-1 flex-col">
         <div
           ref={scrollContainerRef}
           onScroll={handleScroll}
@@ -1381,22 +1405,29 @@ export function Conversation() {
 
             <div ref={messagesEndRef} />
           </div>
+        </div>
 
-          {showJumpToLatest && (
-            <button
-              onClick={handleJumpToLatest}
-              className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full px-3 py-1.5 text-[12px] shadow-lg"
-              style={{
-                background: "var(--white)",
-                border: "1px solid var(--border)",
-                color: "var(--ink-2)",
-                cursor: "pointer",
-              }}
-            >
-              <ArrowDown className="mr-1 inline h-3 w-3" />
-              Jump to latest
-            </button>
-          )}
+        {showJumpToLatest && (
+          <button
+            onClick={handleJumpToLatest}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                handleJumpToLatest();
+              }
+            }}
+            className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full px-3 py-1.5 text-[12px] font-medium shadow-lg transition-shadow focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
+            style={{
+              background: "var(--white)",
+              border: "1px solid var(--border)",
+              color: "var(--ink-2)",
+              cursor: "pointer",
+            }}
+          >
+            <ArrowDown className="mr-1 inline h-3 w-3" />
+            Jump to latest
+          </button>
+        )}
         </div>
 
         {/* No provider / no model configured banner */}
@@ -1615,12 +1646,14 @@ function StreamingMessage({ streaming }: { streaming: StreamingResponse }) {
 function MessageRow({ message, isLastInRun, subagentMessages }: { message: ChatMessage; isLastInRun?: boolean; subagentMessages?: ChatMessage[] }) {
   if (message.role === "user") {
     // Parse attachment metadata (JSON string from the API)
-    let attachmentFiles: { type: string; mime_type: string; filename: string }[] = [];
+    let attachmentFiles: { type: string; mime_type: string; filename: string; url?: string }[] = [];
     if (message.attachments) {
       try {
         const parsed = JSON.parse(message.attachments);
         if (Array.isArray(parsed)) {
-          attachmentFiles = parsed.filter((a: any) => a.filename);
+          attachmentFiles = parsed.filter(
+            (a: any) => a.filename || a.type === "url" || a.type === "image_url"
+          );
         }
       } catch { /* ignore */ }
     }
@@ -1629,23 +1662,54 @@ function MessageRow({ message, isLastInRun, subagentMessages }: { message: ChatM
       <div className="mb-6 flex flex-col items-end gap-1.5">
         {attachmentFiles.length > 0 && (
           <div className="flex flex-wrap justify-end gap-1.5">
-            {attachmentFiles.map((f, i) => (
-              <div
-                key={i}
-                className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12px]"
-                style={{
-                  background: "var(--surface)",
-                  border: "1px solid var(--border)",
-                  color: "var(--ink-2)",
-                }}
-              >
-                <FileIcon className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--ink-3)" }} />
-                <span className="font-medium">{f.filename}</span>
-                <span className="text-[10px]" style={{ color: "var(--ink-3)" }}>
-                  {f.mime_type.split("/")[1]?.toUpperCase() || f.type}
-                </span>
-              </div>
-            ))}
+            {attachmentFiles.map((f, i) => {
+              const isUrl = f.type === "url" || f.type === "image_url";
+              let urlLabel = f.url || "";
+              try {
+                if (f.url) urlLabel = new URL(f.url).hostname;
+              } catch { /* keep raw */ }
+              const chipStyle: React.CSSProperties = {
+                background: "var(--surface)",
+                border: "1px solid var(--border)",
+                color: "var(--ink-2)",
+                textDecoration: "none",
+              };
+              const chipContent = (
+                <>
+                  {isUrl ? (
+                    <LinkIcon className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--ink-3)" }} />
+                  ) : (
+                    <FileIcon className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--ink-3)" }} />
+                  )}
+                  <span className="font-medium">{isUrl ? urlLabel : f.filename}</span>
+                  <span className="text-[10px]" style={{ color: "var(--ink-3)" }}>
+                    {isUrl ? "LINK" : (f.mime_type.split("/")[1]?.toUpperCase() || f.type)}
+                  </span>
+                </>
+              );
+              return isUrl && f.url ? (
+                <a
+                  key={i}
+                  href={f.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12px] transition hover:opacity-80"
+                  style={chipStyle}
+                  title={f.url}
+                >
+                  {chipContent}
+                </a>
+              ) : (
+                <div
+                  key={i}
+                  className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12px]"
+                  style={chipStyle}
+                  title={f.url || f.filename}
+                >
+                  {chipContent}
+                </div>
+              );
+            })}
           </div>
         )}
         <div
