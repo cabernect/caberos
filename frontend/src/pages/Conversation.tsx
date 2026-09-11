@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { ArrowDown, PanelLeft, AlertCircle, BookOpen, ChevronDown, FileIcon, Paperclip, Loader2, MessageSquare } from "lucide-react";
+import { ArrowDown, PanelLeft, AlertCircle, BookOpen, ChevronDown, FileIcon, Link as LinkIcon, Paperclip, Loader2, MessageSquare } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Agent, Message, Provider, SessionInfo } from "@/lib/types";
 import { ToolCallBlock, type ToolCallData, type SubAgentStreamData } from "@/components/ToolCallBlock";
@@ -1080,7 +1080,12 @@ export function Conversation() {
         content: text,
         created_at: new Date().toISOString(),
         attachments: attachments && attachments.length > 0
-          ? JSON.stringify(attachments.map((a) => ({ type: a.type, mime_type: a.mimeType, filename: a.filename })))
+          ? JSON.stringify(attachments.map((a) => ({
+            type: a.type,
+            mime_type: a.mimeType,
+            filename: a.filename,
+            ...(a.type === "url" || a.type === "image_url" ? { url: a.data } : {}),
+          })))
           : null,
       },
     ]);
@@ -1641,12 +1646,14 @@ function StreamingMessage({ streaming }: { streaming: StreamingResponse }) {
 function MessageRow({ message, isLastInRun, subagentMessages }: { message: ChatMessage; isLastInRun?: boolean; subagentMessages?: ChatMessage[] }) {
   if (message.role === "user") {
     // Parse attachment metadata (JSON string from the API)
-    let attachmentFiles: { type: string; mime_type: string; filename: string }[] = [];
+    let attachmentFiles: { type: string; mime_type: string; filename: string; url?: string }[] = [];
     if (message.attachments) {
       try {
         const parsed = JSON.parse(message.attachments);
         if (Array.isArray(parsed)) {
-          attachmentFiles = parsed.filter((a: any) => a.filename);
+          attachmentFiles = parsed.filter(
+            (a: any) => a.filename || a.type === "url" || a.type === "image_url"
+          );
         }
       } catch { /* ignore */ }
     }
@@ -1655,23 +1662,35 @@ function MessageRow({ message, isLastInRun, subagentMessages }: { message: ChatM
       <div className="mb-6 flex flex-col items-end gap-1.5">
         {attachmentFiles.length > 0 && (
           <div className="flex flex-wrap justify-end gap-1.5">
-            {attachmentFiles.map((f, i) => (
-              <div
-                key={i}
-                className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12px]"
-                style={{
-                  background: "var(--surface)",
-                  border: "1px solid var(--border)",
-                  color: "var(--ink-2)",
-                }}
-              >
-                <FileIcon className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--ink-3)" }} />
-                <span className="font-medium">{f.filename}</span>
-                <span className="text-[10px]" style={{ color: "var(--ink-3)" }}>
-                  {f.mime_type.split("/")[1]?.toUpperCase() || f.type}
-                </span>
-              </div>
-            ))}
+            {attachmentFiles.map((f, i) => {
+              const isUrl = f.type === "url" || f.type === "image_url";
+              let urlLabel = f.url || "";
+              try {
+                if (f.url) urlLabel = new URL(f.url).hostname;
+              } catch { /* keep raw */ }
+              return (
+                <div
+                  key={i}
+                  className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12px]"
+                  style={{
+                    background: "var(--surface)",
+                    border: "1px solid var(--border)",
+                    color: "var(--ink-2)",
+                  }}
+                  title={f.url || f.filename}
+                >
+                  {isUrl ? (
+                    <LinkIcon className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--ink-3)" }} />
+                  ) : (
+                    <FileIcon className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--ink-3)" }} />
+                  )}
+                  <span className="font-medium">{isUrl ? urlLabel : f.filename}</span>
+                  <span className="text-[10px]" style={{ color: "var(--ink-3)" }}>
+                    {isUrl ? "LINK" : (f.mime_type.split("/")[1]?.toUpperCase() || f.type)}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         )}
         <div
