@@ -157,8 +157,8 @@ def test_language_rule_covers_thinking():
     )
     prompt = assemble_system_prompt(config)
     assert "Match the user's language" in prompt
-    assert "thinking and reasoning" in prompt
-    assert "not just the final answer" in prompt
+    assert "thinking and replies" in prompt
+    assert "Stay consistent" in prompt
 
 
 def test_attachment_references_do_not_enter_model_context():
