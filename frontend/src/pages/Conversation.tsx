@@ -820,16 +820,25 @@ export function Conversation() {
     setShowJumpToLatest(!nearBottom);
   };
 
+  const prefersReducedMotion = useRef(
+    typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
+
   useEffect(() => {
     if (autoScrollRef.current) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      messagesEndRef.current?.scrollIntoView({
+        behavior: prefersReducedMotion.current ? "instant" : "smooth",
+      });
     }
   }, [messages, streaming, isStreaming]);
 
   const handleJumpToLatest = () => {
     autoScrollRef.current = true;
     setShowJumpToLatest(false);
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    messagesEndRef.current?.scrollIntoView({
+      behavior: prefersReducedMotion.current ? "instant" : "smooth",
+    });
   };
 
   const handleNewChat = () => {
@@ -1385,7 +1394,13 @@ export function Conversation() {
           {showJumpToLatest && (
             <button
               onClick={handleJumpToLatest}
-              className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full px-3 py-1.5 text-[12px] shadow-lg"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  handleJumpToLatest();
+                }
+              }}
+              className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full px-3 py-1.5 text-[12px] font-medium shadow-lg transition-shadow focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
               style={{
                 background: "var(--white)",
                 border: "1px solid var(--border)",
