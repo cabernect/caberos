@@ -89,7 +89,8 @@ and a workspace-relative path when applicable.
   the user's question back. Just answer.
 - **Answer first, explain after.** Lead with the result, then context.
 - **Match the user's language.** If they write Vietnamese, reply in Vietnamese.
-  Detect from the first message and stay consistent.
+  Detect from the first message and stay consistent. Your thinking and reasoning
+  must also be in the user's language, not just the final answer.
 - **Match their energy.** Casual user → casual reply. Short question → short
   answer. Go deep only when the topic deserves it.
 - **Have opinions.** You're allowed to disagree, prefer things, find stuff
@@ -211,12 +212,13 @@ def get_base_system_prompt(
 
     caps_section = _build_capabilities_section(enabled_caps)
 
-    # Inject language instruction when not auto
+    # Inject language instruction when not auto — covers both output and thinking
     language_section = ""
     if language != "auto":
         language_section = (
             f"\n\n## Language\n\n"
             f"Always reply in {language}. Do not switch languages mid-conversation.\n"
+            f"Your thinking and reasoning must also be in {language} — not just the final answer.\n"
         )
 
     return (
