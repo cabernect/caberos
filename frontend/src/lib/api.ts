@@ -136,6 +136,7 @@ export const api = {
     soul?: string;
     persona?: string;
     task?: string;
+    language?: string;
     sandbox_mode?: "strict" | "open";
     capabilities?: CapabilityGrant[] | null;
     limits?: Limits;

@@ -147,6 +147,49 @@ def test_base_prompt_before_soul():
     assert base_pos < soul_pos, "Base prompt must come before soul"
 
 
+def test_language_auto_by_default():
+    """Default language is auto — no language instruction in the prompt."""
+    config = AgentConfig(
+        id="test",
+        name="Test",
+        model=ModelConfig(provider_id="test", name="scripted"),
+        capabilities=[],
+    )
+    prompt = assemble_system_prompt(config)
+    # "Match the user's language" is in the base prompt footer
+    assert "Match the user's language" in prompt
+    # No explicit language section
+    assert "## Language" not in prompt
+
+
+def test_language_vi_injected():
+    """language="vi" injects a language instruction into the prompt."""
+    config = AgentConfig(
+        id="test",
+        name="Test",
+        model=ModelConfig(provider_id="test", name="scripted"),
+        capabilities=[],
+        language="vi",
+    )
+    prompt = assemble_system_prompt(config)
+    assert "## Language" in prompt
+    assert "Always reply in vi" in prompt
+
+
+def test_language_en_injected():
+    """language="en" injects a language instruction into the prompt."""
+    config = AgentConfig(
+        id="test",
+        name="Test",
+        model=ModelConfig(provider_id="test", name="scripted"),
+        capabilities=[],
+        language="en",
+    )
+    prompt = assemble_system_prompt(config)
+    assert "## Language" in prompt
+    assert "Always reply in en" in prompt
+
+
 def test_attachment_references_do_not_enter_model_context():
     """Attachments are metadata-only until the agent uses an existing tool."""
     from agentos.harness.context import build_message_history

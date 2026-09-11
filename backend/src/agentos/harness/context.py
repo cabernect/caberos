@@ -86,10 +86,10 @@ def assemble_system_prompt(
     """
     parts: list[str] = []
 
-    # 1. Base system prompt — adaptive to enabled capabilities
+    # 1. Base system prompt — adaptive to enabled capabilities + language
     if enabled_caps is None:
         enabled_caps = get_enabled_capabilities(agent_config)
-    parts.append(get_base_system_prompt(enabled_caps))
+    parts.append(get_base_system_prompt(enabled_caps, language=agent_config.language))
 
     # 2-4. Agent identity (D35)
     if agent_config.soul:

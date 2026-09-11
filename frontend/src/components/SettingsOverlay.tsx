@@ -159,6 +159,7 @@ function GeneralTab({
   const [soul, setSoul] = useState("");
   const [persona, setPersona] = useState("");
   const [task, setTask] = useState("");
+  const [language, setLanguage] = useState("auto");
   const [maxTurns, setMaxTurns] = useState(15);
   const [maxCost, setMaxCost] = useState(500);
   const [idleTimeout, setIdleTimeout] = useState(60);
@@ -176,6 +177,7 @@ function GeneralTab({
       setSoul(agent.soul || "");
       setPersona(agent.persona || "");
       setTask(agent.task || "");
+      setLanguage(agent.language || "auto");
       if (agent.limits) {
         setMaxTurns(agent.limits.max_turns_per_run);
         setMaxCost(agent.limits.max_cost_per_run);
@@ -209,7 +211,7 @@ function GeneralTab({
         name, provider_id: providerId, model_name: modelName,
         thinking_enabled: thinkingEnabled,
         thinking_effort: thinkingEnabled ? thinkingEffort : null,
-        soul, persona, task,
+        soul, persona, task, language,
         sandbox_mode: sandboxMode,
         limits: {
           max_turns_per_run: maxTurns,
@@ -378,6 +380,25 @@ function GeneralTab({
             className="w-full resize-y rounded-[5px] border px-3 py-2 text-[13px] leading-[1.6] text-[var(--ink)] outline-none"
             style={{ borderColor: "var(--border)", background: "var(--surface)" }}
           />
+        </Field>
+        <Field label="Language — output language">
+          <select
+            value={language}
+            onChange={(e) => setLanguage(e.target.value)}
+            className="w-full rounded-[5px] px-2.5 py-1.5 text-[13px]"
+            style={{ border: "1px solid var(--border)", background: "var(--surface)" }}
+          >
+            <option value="auto">Auto — detect from user message</option>
+            <option value="en">English</option>
+            <option value="vi">Tiếng Việt</option>
+            <option value="fr">Français</option>
+            <option value="de">Deutsch</option>
+            <option value="ja">日本語</option>
+            <option value="zh">中文</option>
+            <option value="ko">한국어</option>
+            <option value="es">Español</option>
+            <option value="pt">Português</option>
+          </select>
         </Field>
       </Section>
 

@@ -91,6 +91,9 @@ class AgentConfig(BaseModel):
     soul: str = ""
     persona: str = ""
     task: str = ""
+    # Agent output language: "auto" = detect from user message, or a language code
+    # like "en", "vi", "fr" — the model is instructed to always reply in this language.
+    language: str = "auto"
     capabilities: list[CapabilityGrant] | None = None  # None = all tools, [] = none
     limits: Limits = Field(default_factory=Limits)
     fallback: Fallback = Field(default_factory=Fallback)
