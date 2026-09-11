@@ -113,7 +113,12 @@ def decrypt_credential(cred: McpServerCredential) -> dict[str, Any] | str:
     For api_key/bearer: returns the string value
     """
     plaintext = decrypt(cred.encrypted_value)
-    if cred.credential_type in ("oauth_token", "oauth_client_info"):
+    if cred.credential_type in (
+        "oauth_token",
+        "oauth_client_info",
+        "oauth_metadata",
+        "protected_resource_metadata",
+    ):
         return json.loads(plaintext)
     return plaintext
 
