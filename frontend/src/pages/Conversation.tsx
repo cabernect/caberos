@@ -867,6 +867,10 @@ export function Conversation() {
   };
 
   const handleSelectSession = (id: string) => {
+    // Re-clicking the active session is a no-op — otherwise we'd clear
+    // messages but React would bail on the identical setActiveSessionId and
+    // never re-run the fetch effect, leaving an empty (new-chat) view.
+    if (id === activeSessionRef.current) return;
     // Save completed streaming text before switching (only for the session we're leaving)
     const leavingSessionId = activeSessionRef.current;
     const leavingEntry = leavingSessionId ? runEntriesRef.current.get(leavingSessionId) : null;
