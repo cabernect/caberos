@@ -11,6 +11,7 @@ import { ChatSidebar } from "@/components/ChatSidebar";
 import { ChatInputBar, type ChatInputBarHandle, type ContextItem } from "@/components/ChatInputBar";
 import { SettingsOverlay } from "@/components/SettingsOverlay";
 import { useDesktopFileDrop } from "@/lib/desktopFileDrop";
+import { refreshNotifications } from "@/lib/notificationStore";
 
 interface ChatMessage {
   id: string;
@@ -392,6 +393,9 @@ export function Conversation() {
         break;
 
       case "clarifying_question":
+        // An elicitation_required notification was just persisted — refetch
+        // now (small delay for the commit) so the toast is instant.
+        refreshNotifications(400);
         // Store elicitation per-session in the run entry
         {
           const entry = runEntriesRef.current.get(sessionId);
@@ -425,6 +429,9 @@ export function Conversation() {
         break;
 
       case "tool_call":
+        // An approval-gated tool call persists an approval_required
+        // notification — refetch now so the toast is instant.
+        if (data.approval_id || data.approval_batch_id) refreshNotifications(400);
         updateStreamingForSession(sessionId, (prev) => {
           if (!prev) return prev;
           // Flush buffered thinking AND text into items before the tool call,
@@ -501,6 +508,10 @@ export function Conversation() {
         break;
 
       case "message_complete":
+        // The run just finished — a run_completed/failed notification was
+        // persisted. Refetch now so the toast is instant instead of waiting
+        // for the next poll tick.
+        refreshNotifications(400);
         if (data.session_id && !activeSessionRef.current) {
           setActiveSessionId(data.session_id);
         }

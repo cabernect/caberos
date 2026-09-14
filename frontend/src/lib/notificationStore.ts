@@ -10,7 +10,7 @@ import type { Notification } from "./types";
  * existing notifications don't toast; only newly-arrived unread ones do.
  */
 
-const POLL_MS = 15_000;
+const POLL_MS = 5_000;
 const TOAST_DURATION_MS = 6_000;
 
 type Listener = () => void;
@@ -81,6 +81,20 @@ function subscribe(cb: Listener): () => void {
       seenIds = null;
     }
   };
+}
+
+/**
+ * Refetch notifications now instead of waiting for the next poll tick.
+ * Called when the client already knows something happened (e.g. an SSE
+ * run-lifecycle event) so the toast fires immediately rather than lagging
+ * behind the poll interval. `delayMs` lets the backend commit first.
+ */
+export function refreshNotifications(delayMs = 0) {
+  if (delayMs > 0) {
+    setTimeout(() => void poll(), delayMs);
+  } else {
+    void poll();
+  }
 }
 
 export function useNotifications(): Notification[] {
