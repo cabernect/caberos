@@ -242,7 +242,7 @@ cd frontend && npm run desktop:dev
 
 ## Gotchas
 
-- **Release** — `./scripts/set-version.sh X.Y.Z` → `check-version.sh` → commit → `git tag -a vX.Y.Z` → push `main` + the tag (tag push runs `release.yml`, which verifies manifests match).
+- **Release** — `./scripts/release.sh X.Y.Z` from a clean `main`. It bumps all manifests, commits "Bump version to X.Y.Z", tags `vX.Y.Z`, and pushes `main` + the tag (tag push runs `release.yml`). uv_build can't do dynamic/VCS versioning, so the version is a literal the script sets atomically with the tag — never hand-edit manifests or tag a stale commit.
 - **CodeQL path-injection** — `Path.resolve()`+`is_relative_to` isn't a sanitizer; `os.path.realpath()`+`startswith()` is. Use `resolve_within()` (`sandbox/workspace.py`); check containment before reading.
 - **CodeQL URL-substring** — never `in`/`find` a URL string, even in tests. Use `urlparse(u).hostname == "host"` or `any(tok == url …)`.
 - **Datetimes** — SQLite drops tzinfo; a `Base` load-listener in `models/base.py` stamps UTC. Keep datetimes tz-aware; don't compare with naive `datetime.now()`.
