@@ -198,9 +198,14 @@ def _extract_markdown(html: str) -> str:
     Tries trafilatura first (best boilerplate removal), falls back to
     BeautifulSoup plain text when trafilatura returns thin.
     """
-    # trafilatura — best for articles/blogs, removes nav/ads/footers
+    # trafilatura — best for articles/blogs, removes nav/ads/footers.
+    # Guard with try/except: in the PyInstaller bundle its settings.cfg data
+    # file may be missing, making extract() raise — fall back to BeautifulSoup.
     if _TRAFILATURA_AVAILABLE:
-        text = trafilatura.extract(html, output_format="markdown", include_comments=False)
+        try:
+            text = trafilatura.extract(html, output_format="markdown", include_comments=False)
+        except Exception:
+            text = None
         if text and len(text) > 100:
             return text
 
