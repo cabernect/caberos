@@ -418,14 +418,15 @@ class LiteLLMAdapter:
 
             delta = chunk.choices[0].delta
 
-            # Reasoning/thinking tokens (some models)
-            if hasattr(delta, "reasoning_content") and delta.reasoning_content:
+            # Reasoning/thinking tokens (some models). Some providers populate
+            # BOTH delta.reasoning_content and delta.reasoning with the same
+            # text — so use elif to fall back, or every token is emitted twice.
+            if getattr(delta, "reasoning_content", None):
                 full_thinking += delta.reasoning_content
                 yield ("thinking", delta.reasoning_content)
-
-            # Some providers (e.g. OpenAI Responses API bridge) may put
-            # reasoning text in delta.reasoning instead of delta.reasoning_content
-            if hasattr(delta, "reasoning") and delta.reasoning:
+            elif getattr(delta, "reasoning", None):
+                # Providers that put reasoning in delta.reasoning instead of
+                # delta.reasoning_content (e.g. OpenAI Responses API bridge)
                 reasoning_text = (
                     delta.reasoning if isinstance(delta.reasoning, str) else str(delta.reasoning)
                 )
