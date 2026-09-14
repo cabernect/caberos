@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
-# One-command release.
+# Two-phase release for a protected `main`.
 #
 #   ./scripts/release.sh 0.1.10
 #
-# Bumps every version manifest to <X.Y.Z>, commits "Bump version to X.Y.Z" on
-# the current branch (must be main), tags v<X.Y.Z>, and pushes main + the tag.
-# Pushing the tag triggers .github/workflows/release.yml, which re-verifies the
-# manifests match and builds the DMG + website.
+# Phase 1 (bump not on main yet): main is protected, so the version bump goes
+# through a PR like everything else. Creates `release/vX.Y.Z`, bumps all
+# manifests, commits, pushes the branch, and prints the compare URL to open.
 #
-# Why a script and not bare `git tag`? The version has to be a literal the
-# builders read — uv_build rejects dynamic versioning, and Tauri/Cargo/npm all
-# read committed literals. This script makes the bump atomic with the tag so
-# you never hand-edit manifests or tag a commit whose version is stale.
+# Phase 2 (re-run after the PR merges): detects the bump already on origin/main
+# and tags the merge commit `vX.Y.Z`, pushing the tag — which triggers
+# .github/workflows/release.yml to build the DMG + website.
+#
+# The version stays a committed literal (uv_build can't do VCS versioning), but
+# this script makes bump+tag atomic so you never hand-edit manifests.
 
 set -euo pipefail
 
@@ -28,24 +29,43 @@ if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   exit 1
 fi
 
-BRANCH="$(git rev-parse --abbrev-ref HEAD)"
-if [[ "$BRANCH" != "main" ]]; then
-  echo "Error: releases are cut from main (currently on '$BRANCH')." >&2
-  exit 1
-fi
-
 if [[ -n "$(git status --porcelain)" ]]; then
   echo "Error: working tree is dirty — commit or stash first." >&2
   git status --short >&2
   exit 1
 fi
 
-if git rev-parse "v${VERSION}" >/dev/null 2>&1; then
+ORIG_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+
+if git rev-parse "v${VERSION}" >/dev/null 2>&1 \
+  || git ls-remote --exit-code --tags origin "v${VERSION}" >/dev/null 2>&1; then
   echo "Error: tag v${VERSION} already exists." >&2
   exit 1
 fi
 
-echo "→ Bumping manifests to ${VERSION}"
+git fetch origin main --quiet
+MAIN_VER="$(git show origin/main:backend/pyproject.toml \
+  | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)"
+
+# Phase 2 — the bump is already merged to main: tag it and push the tag.
+if [[ "$MAIN_VER" == "$VERSION" ]]; then
+  git tag -a "v${VERSION}" -m "v${VERSION}" origin/main
+  git push origin "v${VERSION}"
+  echo "✅ Tagged v${VERSION} on origin/main — release.yml is building the DMG + website."
+  exit 0
+fi
+
+# Phase 1 — bump not on main: ship it via a release PR.
+BRANCH="release/v${VERSION}"
+if git show-ref --verify --quiet "refs/heads/${BRANCH}" \
+  || git ls-remote --exit-code --heads origin "${BRANCH}" >/dev/null 2>&1; then
+  echo "Error: branch ${BRANCH} already exists." >&2
+  exit 1
+fi
+
+echo "→ main is at ${MAIN_VER}; creating ${BRANCH} with the bump to ${VERSION}"
+git checkout -b "$BRANCH" origin/main
+
 ./scripts/set-version.sh "$VERSION"
 ./scripts/check-version.sh
 
@@ -63,10 +83,15 @@ MANIFESTS=(
 git add -- "${MANIFESTS[@]}"
 git commit -m "Bump version to ${VERSION}"
 
-echo "→ Tagging v${VERSION}"
-git tag -a "v${VERSION}" -m "v${VERSION}"
+echo "→ Pushing ${BRANCH}"
+git push -u origin "$BRANCH"
+git checkout "$ORIG_BRANCH" --quiet
 
-echo "→ Pushing main + v${VERSION}"
-git push origin main "v${VERSION}"
+cat <<EOF
 
-echo "✅ Released v${VERSION} — release.yml is building the DMG + website."
+✅ Release branch pushed. Next:
+   1. Open the PR and merge it:
+      https://github.com/cabernect/caberos/compare/main...${BRANCH}
+   2. Then finish the release:
+      ./scripts/release.sh ${VERSION}
+EOF
