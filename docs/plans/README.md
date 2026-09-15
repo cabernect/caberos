@@ -1,10 +1,10 @@
 # Implementation Plans
 
-Each file in this folder is an implementation plan for one part of CaberOS v0.1, derived from [`docs/spec-v0.1.md`](../spec-v0.1.md).
+This folder contains the original CaberOS v0.1 implementation plans, derived from [`docs/spec-v0.1.md`](../spec-v0.1.md), plus active release plans. Older plans remain architectural and historical references; they do not override the active release plan.
 
 ## Active release plan
 
-The current next release is **v0.1.8 — Stable HITL and Localized Documentation**. Its outcome, invariants, ordered workstreams, verification matrix, and release gate are documented in [`v0.1.8-release-plan.md`](v0.1.8-release-plan.md). Older numbered plans remain architectural and historical references; they do not override the current release section.
+The next major release is **v0.2.0 — Agent Workbench**. Its product promise, release boundary, invariants, workstream status, integrated acceptance stories, migration strategy, and release gate are documented in [`v0.2-release-plan.md`](v0.2-release-plan.md). Detailed pillar plans live under [`v0.2/`](v0.2/).
 
 ## Build order
 

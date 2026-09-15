@@ -514,51 +514,58 @@ Use the Playwright MCP server for real-browser testing. See `AGENTS.md` for deta
 
 ## Roadmap
 
-### v0.1 (current)
+### v0.1 (released)
 
-- [x] Smoke test vertical slice
-- [x] Dashboard chat with real models
-- [x] File operations + tool call visibility
-- [x] Approval flow + elicitation
-- [x] Agent management UI
-- [x] Global settings & provider management
-- [x] Memory + skills
-- [x] Scheduler/heartbeat
-- [x] MCP client infrastructure + credentials/OAuth
-- [x] External channels (Telegram, Discord, Zalo)
-- [x] Observability + spend
-- [x] Tauri desktop app
-- [x] Docker support
-- [x] Progressive capability discovery (v0.1.7)
-- [x] Stable HITL with same-turn approval batching (v0.1.8)
-- [x] SQLite contention retry and persistence resilience (v0.1.8)
-- [x] MCP OAuth refresh and auto-reconnect (v0.1.8)
-- [x] Dashboard theme support (light/dark/system) (v0.1.8)
-- [x] Vietnamese website and documentation (v0.1.8)
-- [x] Public website with scroll animations (v0.1.8)
-- [x] Durable run lifecycle — `interrupted` status, DB-backed recovery, startup reconciliation (v0.1.9)
-- [x] Operator notifications for run completion, failure, interruption, approvals (v0.1.9)
-- [x] `web_fetch` markdown extraction (trafilatura) + `offset`/`has_more` pagination (v0.1.9)
-- [x] MCP stdio runtime PATH resolution (v0.1.9)
-- [x] MCP OAuth auto-refresh with persisted server metadata (v0.1.9)
+- [x] Real-model chat, SSE streaming, files, sandbox, approvals, and elicitation
+- [x] Agent/provider management, memory, skills, Knowledge Vault, and citations
+- [x] Scheduler/heartbeat, MCP credentials/OAuth, and external channels
+- [x] Observability, spend, Tauri desktop, Docker, and signed auto-update
+- [x] Progressive capability discovery with run-scoped schema loading
+- [x] Stable HITL, concurrent runs, SQLite resilience, and durable run lifecycle
+- [x] Operator notifications, web extraction/pagination, and MCP runtime hardening
 
-### v0.2 (planned)
+### v0.2.0 — Agent Workbench (planned)
 
-- [ ] CLI/TUI (`caber` command)
-- [ ] CaberCore extraction (headless runtime, separate from FastAPI)
-- [ ] Browser automation tools (JS-rendered pages, clicking, navigation)
-- [ ] Rich media output — image/audio/PDF/slide preview in chat
-- [ ] Cron/event triggers for scheduler
-- [ ] More MCP catalog entries
-- [ ] More tools integration and variation
-- [ ] Knowledge Vault integration
+- [ ] Artifact Studio — generate DOCX, PPTX, and XLSX; export PDF
+- [ ] Workspace, composer, and chat previews for documents, slides, sheets, PDFs, media, and code
+- [ ] Clipboard image paste, drag/drop, and visual attachment previews instead of filename-only chips
+- [ ] Immutable artifact revision history, restore, and external-edit conflict handling
+- [ ] Browser automation with an explicit first-use managed browser-runtime install, isolated sessions, and opt-in persistent profiles
+- [ ] `/plan` mode with syscall-enforced read-only planning, revisions, approval, and tracked execution
+- [ ] Skills Studio — built-in/global/agent scopes plus agent-assisted draft and publication
+- [ ] RAG v2 foundation — embedding-model settings, local hybrid retrieval, health, and safe re-indexing
+- [ ] One-time/interval/cron schedules with restart, DST, overlap, retry, and history semantics
+- [ ] Browser and Tauri/system notifications with exact-related-view suppression
+- [ ] Functional background terminals with incremental output, ownership isolation, and process-group cleanup
+- [ ] Execution Manifests, per-model-call provider observability, and runtime/release hardening
 
-### v0.5+
+See the detailed [`v0.2.0 release plan`](docs/plans/v0.2-release-plan.md).
 
-- [ ] Postgres migration tooling (Alembic)
+### v0.2.1 — Connected Knowledge (planned)
+
+- [ ] OneDrive and SharePoint file/folder Knowledge Sources
+- [ ] Google Drive and Shared Drive file/folder Knowledge Sources
+- [ ] Read-only OAuth, source browsing, and scheduled incremental snapshots
+- [ ] Google Docs/Sheets/Slides export for local indexing
+- [ ] Qdrant and configurable Retrieval Resources/Profiles
+- [ ] Remote embedding privacy, cost, health, reconnect, and purge controls
+
+### v0.2.2 — Tasks and Event Automation (planned)
+
+- [ ] Durable Tasks, assignment, dependencies, due dates, and completion evidence
+- [ ] Task → Plan → Run → Artifact relationships
+- [ ] Webhook, inbox, calendar, file-change, and connector event triggers
+- [ ] Reusable approved automation templates
+- [ ] Inline approval and elicitation through supported external channels
+
+### Later
+
+- [ ] Additional cloud-storage and retrieval adapters; pgvector after PostgreSQL support matures
+- [ ] Persistent multi-agent Missions — coordinated agents, dependencies, budgets, approvals, and artifacts across runs
 - [ ] Multi-operator support
-- [ ] Agent marketplace
-- [ ] Plugin SDK
+- [ ] Agent marketplace and signed plugin SDK
+- [ ] CLI/TUI only when it serves a concrete workflow
+- [ ] Additional desktop platforms after sandbox behavior is verified
 
 ## Troubleshooting
 

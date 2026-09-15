@@ -1,0 +1,165 @@
+# v0.2.0 Browser Automation
+
+## Outcome
+
+Agents research and interact with dynamic websites through a CaberOS-managed browser, with isolated defaults, opt-in persistent profiles, visible provenance, and side-effect-aware approval.
+
+## Open implementation decision
+
+The product browser automation engine/protocol has not been selected. Workstream 0 must evaluate and prove it before implementation. The plan must not assume Playwright. The selected engine and compatible browser runtime are pinned and hidden behind the Browser module interface.
+
+## Managed runtime
+
+CaberOS never depends on Safari, Chrome, Edge, or another personal browser installation and never reads a personal browser profile.
+
+Desktop installs the compatible automation browser explicitly on first use:
+
+1. Explain isolation and required disk/download size.
+2. Download an exact approved artifact.
+3. Verify hash/signature.
+4. Install under CaberOS application data.
+5. Run a health check.
+6. Support cancel/retry/reinstall/remove/diagnostics.
+
+A tool call never silently downloads the runtime or invokes `terminal` to install it. Compatible runtime versions survive app updates; incompatible versions install side-by-side before new sessions switch. Docker bundles the same pinned compatible runtime.
+
+## Browser modes
+
+- **Headless:** default for routine and scheduled work.
+- **Visible:** login, MFA, CAPTCHA, consent, user takeover, debugging, or explicit Watch Browser.
+
+The managed browser uses separate isolated/persistent profiles regardless of mode.
+
+## Profiles
+
+- Isolated profile: default, fresh per run, discarded.
+- Persistent profile: operator-owned, named, domain-scoped, assigned explicitly to agents/schedules.
+- One active owner per persistent profile; additional runs queue.
+- Cookies/storage never enter model context.
+- Browser binary and profile storage are separate.
+
+## Capability distinction
+
+`web_fetch` and the Browser module have separate, explicit purposes:
+
+```text
+web_fetch       -> static HTTP retrieval and readable-content extraction
+Browser module  -> JavaScript rendering, dynamic-page observation, and interaction
+```
+
+The agent-facing descriptions must state:
+
+- `web_fetch`: "Fetch and extract readable content from a static URL over HTTP. Does not execute JavaScript, interact with the page, or start the managed browser runtime."
+- `browser_open`: "Open a URL in the managed browser for JavaScript-rendered content or page interaction. Starts or reuses a browser session."
+
+Neither capability silently changes into the other. The agent may explicitly use `web_fetch` for a cheap static read and open the same URL in the Browser module only if rendering or interaction is required. Browser observations remain semantic by default and become visual only when layout or imagery matters.
+
+## Performance and context efficiency
+
+The browser engine and protocol affect startup cost, memory, and reliability, but the Browser module implementation owns most avoidable latency and model-token usage. Headless execution alone does not make automation token-efficient.
+
+The implementation must:
+
+- keep one persistent protocol connection for an active session;
+- reuse a managed browser process and safe isolated contexts instead of launching a browser per action;
+- use event-driven, bounded waits rather than fixed sleeps;
+- support a research mode that blocks unnecessary media, fonts, advertisements, and trackers, with a normal-load fallback when the page breaks;
+- keep browser state, full page trees, network logs, and extracted resources outside model context;
+- stage large extracts and downloads as traceable resources and return only bounded previews and handles;
+- shut down idle browser processes and enforce page, tab, memory, download, and concurrency limits.
+
+Performance work optimizes total latency and total tokens required to complete a task, not the size of one observation at the cost of extra turns or failed actions.
+
+## Browser module interface
+
+The Browser module is a deep module with a compact agent-facing interface:
+
+```text
+browser_open(url, profile?, mode?)
+browser_observe(scope?, detail?, token_budget?)
+browser_act(action, target?, value?)
+browser_extract(scope?, format?, query?)
+browser_close()
+```
+
+`browser_open` returns the initial observation. `browser_act` performs exactly one state-changing browser action and returns its post-action observation, preserving `reason -> act -> observe -> repeat` without requiring a redundant snapshot call. Click, type, select, scroll, navigation, screenshot, and download mechanics remain hidden inside the module and are mediated according to their actual effects.
+
+Observations use short-lived stable element references and bounded accessibility/DOM semantics rather than raw HTML, full page trees, generated selectors, or coordinates. The default initial observation targets at most 2,000 model tokens and a post-action delta at most 800 model tokens; the implementation spike must validate and tune these provisional budgets against task success. Omitted regions are reported and can be inspected through a targeted `browser_observe` call.
+
+Screenshots are on-demand visual observations stored as traceable artifacts, never base64 text in ordinary tool output. Visual observations are sent to a vision-capable model only when the task requires them. Repeated observations return changed semantic regions where possible; full bounded observations remain available for recovery. Element references are invalidated safely when their underlying page state disappears.
+
+## Agent view and live browser
+
+Agent observation and human visibility are separate interfaces over the managed browser session:
+
+- The agent receives compact semantic observations, stable references, and bounded deltas.
+- The operator sees rendered pixels through the visible managed browser runtime or a future streamed viewer.
+- Live frames, pointer movement, and unchanged pixels never enter model context automatically.
+- Credentials entered during takeover travel directly to the managed browser and never through the model.
+
+Tauri can launch or resume a persistent profile in the visible managed browser runtime. A truly headless browser process cannot be assumed to become headed in place; visible takeover may require a headed session or a controlled relaunch using the same persistent profile followed by mandatory re-observation. Web and Docker retain the v0.2 screenshot, URL, status, and trace experience unless the implementation spike proves an interactive streamed viewer without destabilizing scope.
+
+## Implementation spike and budgets
+
+Candidate engine/protocol adapters are compared on the same representative dynamic-site tasks. The spike records:
+
+- runtime and dependency footprint;
+- cold start and warm action latency;
+- idle and one-page memory usage;
+- initial and post-action observation tokens;
+- model turns and total tokens per successful task;
+- extraction, recovery, and task-completion reliability.
+
+The adapter is selected on successful-task efficiency, not framework popularity or the smallest individual snapshot. A lightweight protocol adapter is preferred, but reliability is not traded away for negligible client-library savings because the managed browser process and page content dominate runtime cost.
+
+## Authority and trust
+
+- Public read navigation follows policy.
+- Login, upload, form submission, publishing, deleting, purchasing, and uncertain external writes require appropriate approval.
+- Redirect beyond profile domains pauses.
+- Plan Mode permits passive inspection and blocks external writes.
+- Web content is untrusted and cannot modify system policy.
+- MFA/CAPTCHA/consent pauses for user takeover.
+- Downloads enter run staging, never execute, and require explicit workspace/Vault promotion.
+
+## Client behavior
+
+- Tauri may launch the managed browser visibly for takeover.
+- Web/Docker guarantee headless execution, screenshots, URL, action trace, and status.
+- A fully interactive streamed remote-browser viewer is not required for v0.2.0 unless the implementation spike proves it without destabilizing scope.
+- Scheduled work never opens surprise windows; it pauses and notifies.
+
+## Recovery
+
+A reopened persistent session must re-observe before acting. Browser crashes become explicit interrupted/failed events. Missing/expired login produces actionable reauthentication, never credential prompts to the model.
+
+## Tests first
+
+- Safari-only clean-machine installation
+- Corrupt/interrupted runtime install recovery
+- Tool descriptions distinguish static `web_fetch` from rendered, interactive browsing
+- `web_fetch` never executes JavaScript or starts the managed browser runtime
+- Explicit transition from static fetch to browser use for the same URL
+- Initial observation and post-action delta budgets
+- Targeted expansion after bounded content omission
+- One state-changing action per `browser_act`
+- Browser process, context, and protocol-connection reuse
+- Event-driven timeout and idle-process cleanup
+- Research-mode resource blocking with normal-load fallback
+- Semantic default without automatic screenshot/vision input
+- Live-view frames and takeover credentials excluded from model context
+- Isolated cookie separation
+- Persistent state across runs/restart/update
+- Profile lock/queue
+- Domain redirect pause
+- No cookie/password model exposure
+- Prompt-injection resistance
+- Plan Mode external-write denial
+- Screenshot/download provenance
+- Missing runtime actionable state
+- Docker runtime parity
+- Repeatable spike benchmark for latency, memory, turns, tokens, and completion reliability
+
+## Done when
+
+An agent can research a JavaScript site headlessly within validated latency, resource, and context budgets; request visible takeover for a persistent login on desktop without sending the live visual stream or credentials to the model; resume safely; and produce auditable browser evidence without accessing personal browser data.
