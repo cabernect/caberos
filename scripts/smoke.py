@@ -37,7 +37,7 @@ TEST_AGENT_CONFIG = AgentConfig(
     persona="Direct and concise.",
     task="Execute commands and report results.",
     capabilities=[
-        CapabilityGrant(name="shell_run", require_approval=False),  # auto-approve for smoke test
+        CapabilityGrant(name="terminal", require_approval=False),  # auto-approve for smoke test
     ],
 )
 
@@ -48,7 +48,9 @@ async def run_smoke(agent_id: str, message: str) -> None:
     register_builtin_capabilities()
     await init_db()
 
-    # Ensure the test agent exists
+    # Ensure the test agent exists — and keep a pre-existing smoke agent's
+    # grants in sync (capabilities get renamed between versions, and the
+    # persisted config would otherwise keep granting the stale name).
     async with async_session_factory() as db:
         config = await get_active_config(db, agent_id)
         if config is None:
@@ -58,13 +60,18 @@ async def run_smoke(agent_id: str, message: str) -> None:
             else:
                 print(f"[smoke] Agent {agent_id} not found. Use 'test-agent' for the smoke test.")
                 return
+        elif agent_id == "test-agent":
+            from agentos.agent_service import save_agent
+
+            config.capabilities = TEST_AGENT_CONFIG.capabilities
+            await save_agent(db, config)
 
     # Set up the scripted model: first call returns a tool call, second returns the answer
     model = ScriptedModel([
         ScriptedResponse(
             tool_calls=[{
                 "id": "call_1",
-                "name": "shell_run",
+                "name": "terminal",
                 "args": {"command": message},
             }],
         ),

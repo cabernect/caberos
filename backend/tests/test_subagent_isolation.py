@@ -18,6 +18,23 @@ from agentos.syscall.mediator import SyscallHandler
 from agentos.syscall.protocol import ToolCall
 
 
+def test_subagent_tool_imports_cleanly():
+    """Regression for `No module named 'agentos.capabilities.tools.protocol'`.
+
+    The restricted sub-agent path must import cleanly — this is what the
+    packaged gateway broke on when a stale module was referenced.
+    """
+    import importlib.util
+
+    import agentos.capabilities.tools.subagent as subagent_mod
+
+    assert callable(subagent_mod.register_subagent_tools)
+    # No stale protocol module under capabilities.tools
+    assert importlib.util.find_spec("agentos.capabilities.tools.protocol") is None
+    # The real protocol lives in agentos.syscall.
+    assert importlib.util.find_spec("agentos.syscall.protocol") is not None
+
+
 @pytest.fixture(autouse=True)
 def _setup_caps():
     registry._caps.clear()

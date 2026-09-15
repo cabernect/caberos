@@ -7,7 +7,16 @@ export interface ToolCallData {
   id: string;
   capability: string;
   args: Record<string, unknown>;
-  status: "pending" | "pending_approval" | "pending_input" | "running" | "complete" | "denied";
+  status:
+    | "pending"
+    | "pending_approval"
+    | "pending_input"
+    | "running"
+    | "complete"
+    | "denied"
+    | "failed"
+    | "timeout"
+    | "interrupted";
   result?: unknown;
   approval_id?: string;
   approval_batch_id?: string;
@@ -52,14 +61,20 @@ export function ToolCallBlock({ call, subagentStream }: ToolCallBlockProps) {
     pending_input: { symbol: "?", color: "var(--info, var(--warning))", label: "asking" },
     running: { symbol: "⋯", color: "var(--warning)", label: "run" },
     complete: { symbol: "✓", color: "var(--success)", label: "done" },
-    denied: { symbol: "✕", color: "var(--danger)", label: "error" },
+    denied: { symbol: "✕", color: "var(--danger)", label: "denied" },
+    failed: { symbol: "✕", color: "var(--danger)", label: "error" },
+    timeout: { symbol: "⏱", color: "var(--warning)", label: "timeout" },
+    interrupted: { symbol: "◼", color: "var(--warning)", label: "stopped" },
   };
 
   const config = statusConfig[call.status];
   const argsStr = formatArgs(call.capability, call.args);
   const hasResult =
     call.status === "complete" && call.result != null ||
-    call.status === "denied";
+    call.status === "denied" ||
+    call.status === "failed" ||
+    call.status === "timeout" ||
+    call.status === "interrupted";
 
   const isSubagent = call.capability === "run_subagent";
 
@@ -240,13 +255,22 @@ export function ToolCallBlock({ call, subagentStream }: ToolCallBlockProps) {
           style={{
             background: "var(--white)",
             border: "1px solid var(--border)",
-            color: call.status === "denied" ? "var(--danger)" : "var(--ink-2)",
+            color:
+              call.status === "denied" || call.status === "failed"
+                ? "var(--danger)"
+                : "var(--ink-2)",
           }}
         >
-          {call.status === "denied"
+          {call.status === "denied" || call.status === "failed" || call.status === "timeout" || call.status === "interrupted"
             ? typeof call.result === "string"
               ? call.result
-              : "Call was denied by the syscall layer."
+              : call.status === "denied"
+                ? "Call was denied by the syscall layer."
+                : call.status === "timeout"
+                  ? "Call timed out."
+                  : call.status === "interrupted"
+                    ? "Call was interrupted."
+                    : "Call failed."
             : formatResult(call.result)}
         </div>
       )}

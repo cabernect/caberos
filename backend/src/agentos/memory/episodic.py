@@ -16,6 +16,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config_schema import AgentConfig
+from ..fts import fts5_match_query
 from ..models.session import Session
 
 
@@ -57,7 +58,13 @@ async def search_history(
 
     Called on-demand by the agent via the search_history tool.
     """
-    safe_query = query.replace('"', '""')
+    # Sanitize to quoted terms — raw input can contain FTS5 syntax
+    # (colons, parens, *) that produced "no such column" errors. OR keeps
+    # recall broad; FTS5 rank surfaces rows matching the most terms, and
+    # explicit "quoted phrases" still require the whole phrase.
+    safe_query = fts5_match_query(query, operator="OR")
+    if safe_query is None:
+        return []
     result = await db.execute(
         text(
             "SELECT f.message_id, f.run_id, f.session_id, f.content "
@@ -91,7 +98,12 @@ async def search_session_summaries(
 
     Returns matching summaries for injection into the system prompt.
     """
-    safe_query = query.replace('"', '""')
+    # Sanitize to quoted terms — raw input can contain FTS5 syntax
+    # (colons, parens, *) that produced "no such column" errors. OR because
+    # this is topical recall over a natural-language message.
+    safe_query = fts5_match_query(query, operator="OR")
+    if safe_query is None:
+        return []
     result = await db.execute(
         text(
             "SELECT f.session_id, f.summary "

@@ -194,3 +194,82 @@ async def test_pipeline_deduplication(db, tmp_path, monkeypatch):
     result = await db.execute(select(Run).where(Run.message_id == msg_id))
     runs = result.scalars().all()
     assert len(runs) == 1
+
+
+async def _agent_with_active_version(db, agent_id: str, version_number: int = 1):
+    from agentos.models.agent import Agent, AgentVersion
+
+    agent = Agent(id=agent_id, name="Manifest Agent", enabled=True)
+    db.add(agent)
+    await db.flush()
+    version = AgentVersion(
+        agent_id=agent.id,
+        version_number=version_number,
+        config="{}",
+        is_active=True,
+    )
+    db.add(version)
+    await db.flush()
+    agent.active_version_id = version.id
+    await db.flush()
+    return agent
+
+
+async def test_execution_manifest_captures_exact_revisions(db):
+    from agentos.manifest import capture_execution_manifest
+    from agentos.models.execution_manifest import ExecutionManifest
+
+    agent = await _agent_with_active_version(db, "agent-m1", version_number=3)
+    run_id = str(uuid.uuid4())
+    config = AgentConfig(
+        id=agent.id,
+        name="Manifest Agent",
+        model=ModelConfig(provider_id="test-provider", name="test-model"),
+        capabilities=[CapabilityGrant(name="read_file")],
+    )
+
+    manifest = await capture_execution_manifest(
+        db,
+        run_id=run_id,
+        agent_id=agent.id,
+        agent_config=config,
+        skill_revision_ids=["skill-a@2"],
+    )
+    await db.commit()
+
+    row = await db.scalar(select(ExecutionManifest).where(ExecutionManifest.run_id == run_id))
+    assert row is not None
+    assert row.agent_version_id == agent.active_version_id
+    assert row.agent_version_number == 3
+    assert row.model_provider_id == "test-provider"
+    assert row.model_name == "test-model"
+    import json as _json
+
+    assert _json.loads(row.skill_revision_ids) == ["skill-a@2"]
+    # No secrets or private content — only ids/version numbers.
+    assert row.plan_revision_id is None
+    assert row.browser_profile_id is None
+    assert manifest.run_id == run_id
+
+
+async def test_execution_manifest_idempotent_per_run(db):
+    from agentos.manifest import capture_execution_manifest
+    from agentos.models.execution_manifest import ExecutionManifest
+
+    agent = await _agent_with_active_version(db, "agent-m2")
+    run_id = str(uuid.uuid4())
+    config = AgentConfig(
+        id=agent.id,
+        name="Manifest Agent",
+        model=ModelConfig(provider_id="test-provider", name="test-model"),
+        capabilities=[],
+    )
+
+    await capture_execution_manifest(db, run_id=run_id, agent_id=agent.id, agent_config=config)
+    again = await capture_execution_manifest(
+        db, run_id=run_id, agent_id=agent.id, agent_config=config
+    )
+    await db.commit()
+
+    row = await db.scalar(select(ExecutionManifest).where(ExecutionManifest.run_id == run_id))
+    assert row.id == again.id

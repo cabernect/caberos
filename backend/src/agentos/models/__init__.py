@@ -9,12 +9,15 @@ from .channel_config import ChannelConfig
 from .contact import Contact
 from .document import Document, DocumentChunk
 from .elicitation import ElicitationRequest
+from .execution_manifest import ExecutionManifest
 from .mcp import ContactMcpBinding, McpServer, McpServerCredential, McpTool
 from .memory import MemoryEntry, MemoryTriple
+from .model_call import ModelCall
 from .notification import Notification
 from .operator import Operator, OperatorAuditLog
 from .operator_session import OperatorSession
 from .provider import Provider
+from .revision import RevisionedEntityMixin, RevisionMixin
 from .run import Message, Run
 from .session import Session
 from .source import RunSource
@@ -38,6 +41,10 @@ __all__ = [
     "Contact",
     "Document",
     "DocumentChunk",
+    "ExecutionManifest",
+    "ModelCall",
+    "RevisionedEntityMixin",
+    "RevisionMixin",
     "Session",
     "Run",
     "Message",

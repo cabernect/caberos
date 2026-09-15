@@ -31,6 +31,7 @@ def register_builtin_capabilities() -> None:
     registry.register(
         CapabilityDef(
             name="read_file",
+            effects=frozenset({"read"}),
             kind="tool",
             description="Read a full file or an inclusive line range from the agent's workspace",
             parameters_schema={
@@ -58,6 +59,7 @@ def register_builtin_capabilities() -> None:
     registry.register(
         CapabilityDef(
             name="write_file",
+            effects=frozenset({"workspace_write"}),
             kind="tool",
             description="Write a file to the agent's workspace",
             parameters_schema={
@@ -78,6 +80,7 @@ def register_builtin_capabilities() -> None:
     registry.register(
         CapabilityDef(
             name="search_files",
+            effects=frozenset({"read"}),
             kind="tool",
             description=(
                 "Search files in the workspace. Three modes: "
@@ -132,6 +135,9 @@ def register_builtin_capabilities() -> None:
     registry.register(
         CapabilityDef(
             name="terminal",
+            effects=frozenset(
+                {"local_execute", "workspace_write", "external_write", "destructive"}
+            ),
             kind="tool",
             description=(
                 "Execute a shell command in the sandbox. By default, blocks until "
@@ -161,6 +167,7 @@ def register_builtin_capabilities() -> None:
     registry.register(
         CapabilityDef(
             name="read_terminal",
+            effects=frozenset({"read"}),
             kind="tool",
             description="Read output from a background terminal session. Returns current stdout/stderr and whether the command is still running.",
             parameters_schema={
@@ -183,6 +190,7 @@ def register_builtin_capabilities() -> None:
     registry.register(
         CapabilityDef(
             name="close_terminal",
+            effects=frozenset({"local_execute"}),
             kind="tool",
             description="Close a background terminal session and return its final output.",
             parameters_schema={
@@ -207,6 +215,7 @@ def register_builtin_capabilities() -> None:
     registry.register(
         CapabilityDef(
             name="doc_list",
+            effects=frozenset({"read"}),
             kind="tool",
             description=(
                 "List documents available in the shared and active agent's private Knowledge Vault. "
@@ -241,6 +250,7 @@ def register_builtin_capabilities() -> None:
     registry.register(
         CapabilityDef(
             name="doc_search",
+            effects=frozenset({"read"}),
             kind="tool",
             description=(
                 "Search the Knowledge Vault for relevant document excerpts. Results combine "
@@ -269,6 +279,7 @@ def register_builtin_capabilities() -> None:
     registry.register(
         CapabilityDef(
             name="doc_inspect",
+            effects=frozenset({"read"}),
             kind="tool",
             description=(
                 "Inspect a page of a PDF or an embedded image in a DOCX using the model's "
@@ -299,6 +310,7 @@ def register_builtin_capabilities() -> None:
     registry.register(
         CapabilityDef(
             name="web_search",
+            effects=frozenset({"read"}),
             kind="tool",
             description="Search the web using DuckDuckGo. Returns titles, URLs, and snippets. "
             "Use this to find current information, look up documentation, or research topics.",
@@ -324,10 +336,16 @@ def register_builtin_capabilities() -> None:
     registry.register(
         CapabilityDef(
             name="web_fetch",
+            effects=frozenset({"read"}),
             kind="tool",
-            description="Fetch a URL and return its text content. For HTML pages, extracts "
-            "readable text (removes scripts, styles, navigation). Use this to read web pages "
-            "found via web_search.",
+            # Static-read contract (v0.2): HTTP retrieval + readable-content
+            # extraction only. Never executes JavaScript, never starts the
+            # managed browser runtime — dynamic pages are the Browser
+            # module's job.
+            description="Fetch and extract readable content from a static URL over HTTP. "
+            "For HTML pages, removes scripts, styles, and navigation. Does not execute "
+            "JavaScript, interact with the page, or start the managed browser runtime. "
+            "Use this to read web pages found via web_search.",
             parameters_schema={
                 "type": "object",
                 "properties": {
@@ -361,6 +379,7 @@ def register_builtin_capabilities() -> None:
     registry.register(
         CapabilityDef(
             name="agent_ask_user",
+            effects=frozenset({"read"}),
             kind="tool",
             description="Ask the user a clarifying question and wait for their response. "
             "Use this when you need more information to proceed — e.g. 'which file?' "
@@ -408,6 +427,7 @@ def register_builtin_capabilities() -> None:
     registry.register(
         CapabilityDef(
             name="datetime_now",
+            effects=frozenset({"read"}),
             kind="tool",
             description="Get the current date and time. Use this when you need to know "
             "what day it is, create timestamps, or reason about time.",
@@ -432,6 +452,7 @@ def register_builtin_capabilities() -> None:
     registry.register(
         CapabilityDef(
             name="memory_recall",
+            effects=frozenset({"read"}),
             kind="memory",
             description=(
                 "Recall past conversation snippets relevant to a query. "
@@ -455,6 +476,7 @@ def register_builtin_capabilities() -> None:
     registry.register(
         CapabilityDef(
             name="memory_store",
+            effects=frozenset({"workspace_write"}),
             kind="memory",
             description=(
                 "Store a conversation snippet for later recall. Use this when the user "
@@ -488,6 +510,7 @@ def register_builtin_capabilities() -> None:
     registry.register(
         CapabilityDef(
             name="memory_remember_fact",
+            effects=frozenset({"workspace_write"}),
             kind="memory",
             description=(
                 "Store a structured fact as a (entity, predicate, object) triple in the "
@@ -522,6 +545,7 @@ def register_builtin_capabilities() -> None:
     registry.register(
         CapabilityDef(
             name="memory_query_facts",
+            effects=frozenset({"read"}),
             kind="memory",
             description=(
                 "Query the knowledge graph for structured facts. All filters are optional "
@@ -551,6 +575,7 @@ def register_builtin_capabilities() -> None:
     registry.register(
         CapabilityDef(
             name="memory_update",
+            effects=frozenset({"workspace_write"}),
             kind="memory",
             description=(
                 "Update MEMORY.md — the agent's long-term notebook. Use this when you learn "
@@ -574,6 +599,7 @@ def register_builtin_capabilities() -> None:
     registry.register(
         CapabilityDef(
             name="search_history",
+            effects=frozenset({"read"}),
             kind="memory",
             description=(
                 "Search raw message history for exact phrases or details. "
@@ -610,6 +636,7 @@ def register_builtin_capabilities() -> None:
     registry.register(
         CapabilityDef(
             name="skills_list",
+            effects=frozenset({"read"}),
             kind="tool",
             description=(
                 "List all available skills (name + description only). "
@@ -628,6 +655,7 @@ def register_builtin_capabilities() -> None:
     registry.register(
         CapabilityDef(
             name="skills_load",
+            effects=frozenset({"read"}),
             kind="tool",
             description=(
                 "Load a specific skill's full content (SKILL.md body) and list its "
@@ -656,6 +684,7 @@ def register_builtin_capabilities() -> None:
     registry.register(
         CapabilityDef(
             name="skills_read_resource",
+            effects=frozenset({"read"}),
             kind="tool",
             description=(
                 "Read a resource file from a skill directory (templates, checklists, "
@@ -687,6 +716,7 @@ def register_builtin_capabilities() -> None:
     registry.register(
         CapabilityDef(
             name="capabilities_search",
+            effects=frozenset({"read"}),
             kind="tool",
             description=(
                 "Search the capabilities permitted for this run by name or description. "
@@ -726,6 +756,7 @@ def register_builtin_capabilities() -> None:
     registry.register(
         CapabilityDef(
             name="capabilities_load",
+            effects=frozenset({"read"}),
             kind="tool",
             description=(
                 "Load selected permitted capability schemas for the next model turn. "

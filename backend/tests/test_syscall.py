@@ -5,7 +5,7 @@ import asyncio
 import pytest
 
 from agentos.capabilities.builtin import register_builtin_capabilities
-from agentos.capabilities.registry import registry
+from agentos.capabilities.registry import CapabilityDef, registry
 from agentos.config_schema import AgentConfig, CapabilityGrant, ModelConfig
 from agentos.harness.loop import ApprovalBatch
 from agentos.syscall.mediator import SyscallHandler
@@ -72,7 +72,15 @@ class TestSyscallHandler:
         )
 
         assert result.allowed is False
+        assert result.status == "error"  # an execution failure, not a policy denial
         assert "execution error" in (result.denied_reason or "")
+
+        from sqlalchemy import select
+
+        from agentos.models.audit import AuditRecord
+
+        audit_result = await db.execute(select(AuditRecord).where(AuditRecord.run_id == "run-1"))
+        assert audit_result.scalars().one().outcome == "error"
 
     async def test_not_granted_capability_denied(self, db, workspace):
         handler = SyscallHandler(db=db, workspace_path=workspace)
@@ -304,7 +312,74 @@ class TestSyscallHandler:
         records = result.scalars().all()
         assert len(records) == 1
         assert records[0].allowed is False
+        assert records[0].outcome == "denied"
         assert records[0].denied_reason == "not granted"
+
+    async def test_timeout_status(self, db, workspace):
+        """A tool that raises TimeoutError reports status=timeout, not error/denied."""
+
+        async def _timeout(**_kwargs):
+            raise TimeoutError("timed out")
+
+        registry.register(
+            CapabilityDef(
+                name="slow_tool",
+                kind="tool",
+                description="slow",
+                parameters_schema={"type": "object", "properties": {}},
+                execute=_timeout,
+            )
+        )
+        handler = SyscallHandler(db=db, workspace_path=workspace)
+        result = await handler.mediate(
+            call=ToolCall(id="1", name="slow_tool", args={}),
+            session=_make_session("contact-1"),
+            agent_config=_make_agent_config(["slow_tool"]),
+            run_id="run-timeout",
+        )
+        assert result.allowed is False
+        assert result.status == "timeout"
+
+    async def test_interrupted_status_audited(self, db, workspace):
+        """Cancelling an in-flight call writes outcome=interrupted to the audit log."""
+        from sqlalchemy import select
+
+        from agentos.models.audit import AuditRecord
+
+        started = asyncio.Event()
+
+        async def _hang(**_kwargs):
+            started.set()
+            await asyncio.Event().wait()
+
+        registry.register(
+            CapabilityDef(
+                name="hang_tool",
+                kind="tool",
+                description="hangs",
+                parameters_schema={"type": "object", "properties": {}},
+                execute=_hang,
+            )
+        )
+        handler = SyscallHandler(db=db, workspace_path=workspace)
+        task = asyncio.create_task(
+            handler.mediate(
+                call=ToolCall(id="1", name="hang_tool", args={}),
+                session=_make_session("contact-1"),
+                agent_config=_make_agent_config(["hang_tool"]),
+                run_id="run-interrupt",
+            )
+        )
+        await asyncio.wait_for(started.wait(), timeout=5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        audit = await db.scalar(
+            select(AuditRecord).where(AuditRecord.capability_name == "hang_tool")
+        )
+        assert audit is not None
+        assert audit.outcome == "interrupted"
 
     async def test_large_read_file_output_is_not_truncated(self, db, workspace):
         import os

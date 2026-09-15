@@ -160,6 +160,19 @@ class TestRecall:
         assert len(results) >= 1
         assert "dark mode" in results[0]["value"]
 
+    async def test_recall_natural_language_query(self, db):
+        """Natural-language queries with FTS5 punctuation must not error."""
+        from agentos.memory.recall import recall_snippets, store_snippet
+
+        await _create_contact(db, "contact-1")
+        await store_snippet(db, "contact-1", "test-agent", "note", "prefer postgres over mysql")
+        await db.commit()
+
+        results = await recall_snippets(
+            db, "contact-1", "test-agent", "what database: postgres or mysql?"
+        )
+        assert any("postgres" in r["value"] for r in results)
+
     async def test_cross_contact_recall_isolation(self, db):
         """Contact A's snippets are invisible to Contact B (D10)."""
         from agentos.memory.recall import recall_snippets, store_snippet

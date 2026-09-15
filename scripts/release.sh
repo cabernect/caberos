@@ -49,9 +49,23 @@ MAIN_VER="$(git show origin/main:backend/pyproject.toml \
 
 # Phase 2 — the bump is already merged to main: tag it and push the tag.
 if [[ "$MAIN_VER" == "$VERSION" ]]; then
-  git tag -a "v${VERSION}" -m "v${VERSION}" origin/main
+  EXPECTED="$(git rev-parse origin/main)"
+  git tag -a "v${VERSION}" -m "v${VERSION}" "$EXPECTED"
   git push origin "v${VERSION}"
-  echo "✅ Tagged v${VERSION} on origin/main — release.yml is building the DMG + website."
+
+  # Verify the pushed tag actually points at the intended commit — a tag on
+  # the wrong commit silently builds and publishes the wrong code.
+  # `^{}` peels the annotated tag object to its commit.
+  ACTUAL="$(git ls-remote origin "refs/tags/v${VERSION}^{}" | awk '{print $1}')"
+  if [[ -z "$ACTUAL" ]]; then
+    ACTUAL="$(git ls-remote origin "refs/tags/v${VERSION}" | awk '{print $1}')"
+  fi
+  if [[ "$ACTUAL" != "$EXPECTED" ]]; then
+    echo "Error: pushed tag v${VERSION} resolves to ${ACTUAL:-<nothing>}, expected ${EXPECTED}." >&2
+    echo "Delete the remote tag (git push origin :refs/tags/v${VERSION}) and re-run." >&2
+    exit 1
+  fi
+  echo "✅ Tagged v${VERSION} at ${EXPECTED} — release.yml is building the DMG + website."
   exit 0
 fi
 

@@ -287,6 +287,7 @@ class McpClient:
 
         tools = []
         for tool in result.tools:
+            annotations = getattr(tool, "annotations", None)
             tools.append(
                 {
                     "name": tool.name,
@@ -294,6 +295,13 @@ class McpClient:
                     "inputSchema": getattr(tool, "inputSchema", None)
                     or tool.input_schema
                     or {"type": "object", "properties": {}},
+                    # MCP ToolAnnotations (readOnlyHint, destructiveHint, ...)
+                    # inform the trusted effect classification (v0.2).
+                    "annotations": (
+                        annotations.model_dump(exclude_none=True)
+                        if annotations is not None and hasattr(annotations, "model_dump")
+                        else None
+                    ),
                 }
             )
         return tools

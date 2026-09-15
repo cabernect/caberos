@@ -222,7 +222,15 @@ export interface ToolCallEvent {
   id: string;
   capability: string;
   args: Record<string, unknown>;
-  status: "pending" | "pending_approval" | "running" | "complete" | "denied";
+  status:
+    | "pending"
+    | "pending_approval"
+    | "running"
+    | "complete"
+    | "denied"
+    | "failed"
+    | "timeout"
+    | "interrupted";
   result?: unknown;
   approval_id?: string;
   approval_batch_id?: string;

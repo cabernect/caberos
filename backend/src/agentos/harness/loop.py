@@ -6,6 +6,7 @@ the syscall layer), enforces turn/cost limits, and emits SSE events.
 
 import asyncio
 import json
+import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -332,8 +333,10 @@ class Harness:
             # Step 8: Call model
             # Use streaming if the adapter supports it (LiteLLMAdapter);
             # fall back to non-streaming for ScriptedModel
+            call_started = time.monotonic()
+            streamed_call = hasattr(self.model, "complete_stream")
             try:
-                if hasattr(self.model, "complete_stream"):
+                if streamed_call:
                     response = await self._call_streaming(
                         agent_config, history, tool_schemas, event_emitter
                     )
@@ -347,6 +350,21 @@ class Harness:
                     if response.thinking and event_emitter:
                         await self._emit(event_emitter, "thinking", {"content": response.thinking})
             except Exception as e:
+                await self._record_model_call(
+                    syscall_handler,
+                    run_id=run_id,
+                    agent_config=agent_config,
+                    turn=result.total_turns,
+                    model_str=model_str,
+                    streamed=streamed_call,
+                    latency_ms=int((time.monotonic() - call_started) * 1000),
+                    status=(
+                        "timeout"
+                        if isinstance(e, (TimeoutError, asyncio.TimeoutError))
+                        else "error"
+                    ),
+                    error=str(e),
+                )
                 import logging as _log
 
                 _log.getLogger("agentos.harness.loop").exception(
@@ -401,6 +419,22 @@ class Harness:
             result.tokens_out += response.tokens_out
             result.cached_tokens = response.cached_tokens
             result.total_cost += response.cost
+
+            # Per-model-call accounting (v0.2 foundations)
+            await self._record_model_call(
+                syscall_handler,
+                run_id=run_id,
+                agent_config=agent_config,
+                turn=result.total_turns,
+                model_str=model_str,
+                streamed=streamed_call,
+                latency_ms=int((time.monotonic() - call_started) * 1000),
+                status="ok",
+                tokens_in=response.tokens_in,
+                tokens_out=response.tokens_out,
+                cached_tokens=response.cached_tokens,
+                cost=response.cost,
+            )
 
             # Step 9: Process tool calls
             if response.tool_calls:
@@ -477,9 +511,16 @@ class Harness:
 
                 # Process results in order (to maintain history ordering)
                 for call, syscall_result in zip(calls, syscall_results, strict=True):
-                    # Emit tool_call complete/denied
+                    # Emit the outcome: complete, denied, failed, timeout,
+                    # or interrupted — the caller sees *how* a call ended.
                     if event_emitter:
-                        status = "complete" if syscall_result.allowed else "denied"
+                        status = {
+                            "ok": "complete",
+                            "denied": "denied",
+                            "error": "failed",
+                            "timeout": "timeout",
+                            "interrupted": "interrupted",
+                        }.get(syscall_result.status, "complete")
                         await self._emit(
                             event_emitter,
                             "tool_call",
@@ -502,6 +543,7 @@ class Harness:
                             "name": call.name,
                             "args": call.args,
                             "allowed": syscall_result.allowed,
+                            "status": syscall_result.status,
                             "result": syscall_result.output,
                         }
                     )
@@ -535,10 +577,17 @@ class Harness:
                         )
                     else:
                         consecutive_tool_failures += 1
+                        # Tell the model *how* the call ended — a denial is a
+                        # policy decision, an error/timeout is a failure.
+                        prefix = {
+                            "denied": "Denied",
+                            "timeout": "Timed out",
+                            "interrupted": "Interrupted",
+                        }.get(syscall_result.status, "Error")
                         history.append(
                             {
                                 "role": "tool",
-                                "content": f"Denied: {syscall_result.denied_reason}",
+                                "content": f"{prefix}: {syscall_result.denied_reason}",
                                 "tool_call_id": call.id,
                                 "name": call.name,
                             }
@@ -638,6 +687,69 @@ class Harness:
         # the SSE connection on the first message_complete it receives.
 
         return result
+
+    async def _record_model_call(
+        self,
+        syscall_handler: Any,
+        *,
+        run_id: str,
+        agent_config: AgentConfig,
+        turn: int,
+        model_str: str,
+        streamed: bool,
+        latency_ms: int,
+        status: str,
+        tokens_in: int = 0,
+        tokens_out: int = 0,
+        cached_tokens: int | None = None,
+        cost: float = 0.0,
+        error: str | None = None,
+    ) -> None:
+        """Write one ModelCall row per model request (v0.2 foundations).
+
+        Best-effort accounting: the record resolves its DB through the
+        syscall handler (sub-agent handlers carry the parent's run id and
+        their own sub-agent id) and must never break a run.
+        """
+        db = getattr(syscall_handler, "db", None)
+        if db is None:
+            return
+        try:
+            from ..models.model_call import ModelCall
+
+            record_run_id = getattr(syscall_handler, "_parent_run_id", None) or run_id
+            sub_agent_id = getattr(syscall_handler, "_sub_agent_id", None)
+            row = ModelCall(
+                run_id=record_run_id,
+                agent_id=agent_config.id,
+                sub_agent_id=sub_agent_id,
+                turn=turn,
+                provider_id=agent_config.model.provider_id if agent_config.model else None,
+                model_name=agent_config.model.name if agent_config.model else None,
+                model_str=model_str or None,
+                streamed=streamed,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                cached_tokens=cached_tokens,
+                cost=cost,
+                latency_ms=latency_ms,
+                status=status,
+                error=error[:2000] if error else None,
+            )
+            db_lock = getattr(syscall_handler, "_db_lock", None)
+            if db_lock is not None:
+                async with db_lock:
+                    db.add(row)
+                    await db.flush()
+            else:
+                db.add(row)
+                await db.flush()
+        except Exception:
+            import logging as _log
+
+            _log.getLogger("agentos.harness.loop").debug(
+                "Could not record model call for run %s", run_id
+            )
 
     async def _emit(self, emitter: EventEmitter, event_type: str, payload: dict[str, Any]) -> None:
         """Safely emit an SSE event."""

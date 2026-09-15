@@ -313,6 +313,7 @@ class SyscallHandler:
                 capability_name=call.name,
                 subject_contact_id=subject_contact_id,
                 allowed=True,
+                outcome="ok",
                 denied_reason=None,
                 cost=0.0,
                 latency_ms=elapsed,
@@ -331,10 +332,46 @@ class SyscallHandler:
                 audit_id=audit.id,
                 model_content=model_content,
             )
+        except asyncio.CancelledError:
+            # The run was stopped mid-call — audit the interruption, then let
+            # the cancellation propagate so the task actually stops.
+            await self._record_outcome(
+                run_id,
+                call,
+                agent_config,
+                subject_contact_id,
+                outcome="interrupted",
+                start=start,
+                sub_agent_id=sub_agent_id,
+            )
+            raise
         except Exception as e:
             elapsed = int((time.monotonic() - start) * 1000)
-            return await self._deny(
-                run_id, call, agent_config, f"execution error: {e}", start, sub_agent_id
+            status = "timeout" if isinstance(e, (TimeoutError, asyncio.TimeoutError)) else "error"
+            audit = AuditRecord(
+                id=str(uuid.uuid4()),
+                run_id=run_id,
+                agent_id=agent_config.id,
+                sub_agent_id=sub_agent_id,
+                capability_name=call.name,
+                subject_contact_id=subject_contact_id,
+                allowed=False,
+                outcome=status,
+                denied_reason=f"execution error: {e}",
+                cost=0.0,
+                latency_ms=elapsed,
+                args=json.dumps(call.args),
+            )
+            async with self._db_lock:
+                self.db.add(audit)
+                await self.db.flush()
+            return SyscallResult(
+                output=None,
+                allowed=False,
+                denied_reason=f"execution error: {e}",
+                cost=0.0,
+                latency_ms=elapsed,
+                status=status,
             )
 
     async def _execute_mcp_tool(
@@ -435,6 +472,7 @@ class SyscallHandler:
                 capability_name=call.name,
                 subject_contact_id=subject_contact_id,
                 allowed=True,
+                outcome="ok",
                 denied_reason=None,
                 cost=0.0,
                 latency_ms=elapsed,
@@ -452,9 +490,21 @@ class SyscallHandler:
                 latency_ms=elapsed,
                 audit_id=audit.id,
             )
+        except asyncio.CancelledError:
+            await self._record_outcome(
+                run_id,
+                call,
+                agent_config,
+                subject_contact_id,
+                outcome="interrupted",
+                start=start,
+                sub_agent_id=sub_agent_id,
+            )
+            raise
         except Exception as e:
             elapsed = int((time.monotonic() - start) * 1000)
-            # Write audit record for the failure
+            # An MCP failure is not a denial — record it as error/timeout.
+            status = "timeout" if isinstance(e, (TimeoutError, asyncio.TimeoutError)) else "error"
             audit = AuditRecord(
                 id=str(uuid.uuid4()),
                 run_id=run_id,
@@ -462,8 +512,9 @@ class SyscallHandler:
                 sub_agent_id=sub_agent_id,
                 capability_name=call.name,
                 subject_contact_id=subject_contact_id,
-                allowed=True,
-                denied_reason=None,
+                allowed=False,
+                outcome=status,
+                denied_reason=f"MCP tool error: {e}",
                 cost=0.0,
                 latency_ms=elapsed,
                 args=json.dumps(call.args),
@@ -472,8 +523,13 @@ class SyscallHandler:
             async with self._db_lock:
                 self.db.add(audit)
                 await self.db.flush()
-            return await self._deny(
-                run_id, call, agent_config, f"MCP tool error: {e}", start, sub_agent_id
+            return SyscallResult(
+                output={"error": f"MCP tool error: {e}"},
+                allowed=False,
+                denied_reason=f"MCP tool error: {e}",
+                cost=0.0,
+                latency_ms=elapsed,
+                status=status,
             )
 
     async def _deny(
@@ -493,6 +549,7 @@ class SyscallHandler:
             sub_agent_id=sub_agent_id,
             capability_name=call.name,
             allowed=False,
+            outcome="denied",
             denied_reason=reason,
             cost=0.0,
             latency_ms=elapsed,
@@ -507,7 +564,48 @@ class SyscallHandler:
             denied_reason=reason,
             cost=0.0,
             latency_ms=elapsed,
+            status="denied",
         )
+
+    async def _record_outcome(
+        self,
+        run_id: str,
+        call: ToolCall,
+        agent_config: AgentConfig,
+        subject_contact_id: str | None,
+        *,
+        outcome: str,
+        start: float,
+        sub_agent_id: str | None = None,
+    ) -> None:
+        """Write an audit row for a call that ended without a result.
+
+        Used for interruptions (run cancelled mid-call). Best-effort — a
+        failing audit write must never swallow the cancellation.
+        """
+        elapsed = int((time.monotonic() - start) * 1000)
+        try:
+            audit = AuditRecord(
+                id=str(uuid.uuid4()),
+                run_id=run_id,
+                agent_id=agent_config.id,
+                sub_agent_id=sub_agent_id,
+                capability_name=call.name,
+                subject_contact_id=subject_contact_id,
+                allowed=False,
+                outcome=outcome,
+                denied_reason=None,
+                cost=0.0,
+                latency_ms=elapsed,
+                args=json.dumps(call.args),
+            )
+            async with self._db_lock:
+                self.db.add(audit)
+                await self.db.flush()
+        except Exception:
+            logging.getLogger(__name__).debug(
+                "Could not record %s outcome for %s", outcome, call.name
+            )
 
     async def _resolve_channel_policy(self, session: Any, agent_config: AgentConfig) -> str:
         """Look up the approval policy for the session's channel.
@@ -868,6 +966,7 @@ class SyscallHandler:
             sub_agent_id=sub_agent_id,
             capability_name=call.name,
             allowed=True,
+            outcome="ok",
             denied_reason=None,
             cost=0.0,
             latency_ms=elapsed,

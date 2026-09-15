@@ -23,6 +23,8 @@ from ..auth import require_operator
 from ..db import get_db
 from ..models.agent import Agent
 from ..models.audit import AuditRecord
+from ..models.execution_manifest import ExecutionManifest
+from ..models.model_call import ModelCall
 from ..models.operator import OperatorAuditLog
 from ..models.provider import Provider
 from ..models.run import Message, Run
@@ -75,12 +77,47 @@ class AuditOut(BaseModel):
     agent_id: str
     capability_name: str
     allowed: bool
+    outcome: str = "ok"
     denied_reason: str | None = None
     cost: float
     latency_ms: int
     args: str
     result: str | None = None
     created_at: datetime | None = None
+
+
+class ModelCallOut(BaseModel):
+    id: str
+    run_id: str
+    agent_id: str
+    sub_agent_id: str | None = None
+    turn: int
+    provider_id: str | None = None
+    model_name: str | None = None
+    model_str: str | None = None
+    streamed: bool = False
+    tokens_in: int
+    tokens_out: int
+    cached_tokens: int | None = None
+    cost: float
+    latency_ms: int
+    status: str
+    error: str | None = None
+    created_at: datetime | None = None
+
+
+class ManifestOut(BaseModel):
+    agent_version_id: str | None = None
+    agent_version_number: int | None = None
+    model_provider_id: str | None = None
+    model_name: str | None = None
+    plan_revision_id: str | None = None
+    schedule_revision_id: str | None = None
+    skill_revision_ids: list[str] = []
+    retrieval_profile_revision_id: str | None = None
+    knowledge_snapshot_ids: list[str] = []
+    browser_profile_id: str | None = None
+    artifact_base_revision_ids: list[str] = []
 
 
 class RunDetail(BaseModel):
@@ -103,8 +140,10 @@ class RunDetail(BaseModel):
     compacted: bool = False
     context_breakdown: dict[str, int] = {}
     loaded_capabilities: list[str] = []
+    manifest: ManifestOut | None = None
     messages: list[MessageOut]
     audit_records: list[AuditOut]
+    model_calls: list[ModelCallOut] = []
 
 
 class SpendBreakdown(BaseModel):
@@ -245,6 +284,7 @@ async def get_run_detail(
             agent_id=a.agent_id,
             capability_name=a.capability_name,
             allowed=a.allowed,
+            outcome=a.outcome,
             denied_reason=a.denied_reason,
             cost=a.cost,
             latency_ms=a.latency_ms,
@@ -252,6 +292,56 @@ async def get_run_detail(
             result=a.result,
         )
         for a in audit_result.scalars().all()
+    ]
+
+    # Execution manifest (immutable provenance captured at run start)
+    manifest_result = await db.execute(
+        select(ExecutionManifest).where(ExecutionManifest.run_id == run_id)
+    )
+    manifest_row = manifest_result.scalar_one_or_none()
+    manifest = (
+        ManifestOut(
+            agent_version_id=manifest_row.agent_version_id,
+            agent_version_number=manifest_row.agent_version_number,
+            model_provider_id=manifest_row.model_provider_id,
+            model_name=manifest_row.model_name,
+            plan_revision_id=manifest_row.plan_revision_id,
+            schedule_revision_id=manifest_row.schedule_revision_id,
+            skill_revision_ids=_decode_json(manifest_row.skill_revision_ids, []),
+            retrieval_profile_revision_id=manifest_row.retrieval_profile_revision_id,
+            knowledge_snapshot_ids=_decode_json(manifest_row.knowledge_snapshot_ids, []),
+            browser_profile_id=manifest_row.browser_profile_id,
+            artifact_base_revision_ids=_decode_json(manifest_row.artifact_base_revision_ids, []),
+        )
+        if manifest_row is not None
+        else None
+    )
+
+    # Per-model-call accounting (v0.2)
+    model_call_result = await db.execute(
+        select(ModelCall).where(ModelCall.run_id == run_id).order_by(ModelCall.created_at)
+    )
+    model_calls = [
+        ModelCallOut(
+            id=m.id,
+            run_id=m.run_id,
+            agent_id=m.agent_id,
+            sub_agent_id=m.sub_agent_id,
+            turn=m.turn,
+            provider_id=m.provider_id,
+            model_name=m.model_name,
+            model_str=m.model_str,
+            streamed=m.streamed,
+            tokens_in=m.tokens_in,
+            tokens_out=m.tokens_out,
+            cached_tokens=m.cached_tokens,
+            cost=m.cost,
+            latency_ms=m.latency_ms,
+            status=m.status,
+            error=m.error,
+            created_at=m.created_at,
+        )
+        for m in model_call_result.scalars().all()
     ]
 
     context_breakdown = _decode_json(run.context_breakdown, {})
@@ -281,8 +371,10 @@ async def get_run_detail(
         compacted=run.compacted,
         context_breakdown=context_breakdown,
         loaded_capabilities=loaded_capabilities,
+        manifest=manifest,
         messages=messages,
         audit_records=audit_records,
+        model_calls=model_calls,
     )
 
 
@@ -316,6 +408,7 @@ async def list_audit(
             agent_id=a.agent_id,
             capability_name=a.capability_name,
             allowed=a.allowed,
+            outcome=a.outcome,
             denied_reason=a.denied_reason,
             cost=a.cost,
             latency_ms=a.latency_ms,

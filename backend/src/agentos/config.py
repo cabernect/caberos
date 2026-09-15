@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     sandbox_timeout: int = 30
 
     model_request_timeout: int = 120
-    model_stream_idle_timeout: int = 30
+    model_stream_idle_timeout: int = 60
     mcp_connection_timeout: float = 30.0
 
     db_lock_retries: int = 2

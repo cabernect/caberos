@@ -26,6 +26,7 @@ from typing import Any
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..capabilities.effects import DEFAULT_MUTATING, effects_from_mcp_annotations
 from ..capabilities.registry import CapabilityDef
 from ..capabilities.registry import registry as cap_registry
 from ..config import settings
@@ -284,6 +285,7 @@ async def _discover_tools(server: McpServer, client: McpClient) -> None:
             for tool in tools:
                 cap_name = _namespace(server.name, tool["name"])
                 schema_json = json.dumps(tool["inputSchema"])
+                tool_effects = effects_from_mcp_annotations(tool.get("annotations"))
                 db.add(
                     McpTool(
                         mcp_server_id=server.id,
@@ -294,6 +296,7 @@ async def _discover_tools(server: McpServer, client: McpClient) -> None:
                         egress=True,
                         require_approval=server.require_approval,
                         subject_scoped=True,
+                        effects=json.dumps(sorted(tool_effects)),
                     )
                 )
                 cap_registry.register(
@@ -305,6 +308,7 @@ async def _discover_tools(server: McpServer, client: McpClient) -> None:
                         egress=True,
                         require_approval=server.require_approval,
                         subject_scoped=True,
+                        effects=tool_effects,
                         execute=None,
                     )
                 )
@@ -394,6 +398,7 @@ async def load_tools_from_db() -> None:
                 egress=tool.egress,
                 require_approval=tool.require_approval,
                 subject_scoped=tool.subject_scoped,
+                effects=(frozenset(json.loads(tool.effects)) if tool.effects else DEFAULT_MUTATING),
             )
         )
 

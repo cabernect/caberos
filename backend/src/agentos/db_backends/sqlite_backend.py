@@ -52,13 +52,19 @@ class SQLiteBackend(DatabaseBackend):
             contact,
             document,
             elicitation,
+            execution_manifest,
             mcp,
             memory,
+            model_call,
+            notification,
             operator,
+            operator_session,
             provider,
             run,
             session,
+            source,
             sub_agent,
+            web_source,
         )
         from ..models.base import Base
 
@@ -142,6 +148,8 @@ class SQLiteBackend(DatabaseBackend):
             ("runs", "compacted", "BOOLEAN DEFAULT 0"),
             ("runs", "context_breakdown", "TEXT NOT NULL DEFAULT '{}'"),
             ("runs", "loaded_capabilities", "TEXT NOT NULL DEFAULT '[]'"),
+            ("mcp_tools", "effects", "TEXT"),
+            ("audit_records", "outcome", "VARCHAR(20) DEFAULT 'ok'"),
         ]
         for table, column, col_type in patches:
             if not await self.column_exists(conn, table, column):
@@ -295,6 +303,7 @@ class SQLiteBackend(DatabaseBackend):
             "TEXT",
             "INTEGER DEFAULT 0",
             "VARCHAR(36)",
+            "VARCHAR(20) DEFAULT 'ok'",
             "VARCHAR(30) NOT NULL DEFAULT 'paragraph'",
             "VARCHAR(50)",
             "VARCHAR(255)",

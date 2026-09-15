@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from ..config_schema import AgentConfig
 from ..models.mcp import McpServer, McpTool
+from .effects import DEFAULT_MUTATING
 from .registry import CapabilityDef, registry
 
 DISCOVERY_CAPABILITY_NAMES = ("capabilities_search", "capabilities_load")
@@ -136,6 +137,11 @@ class CapabilityRunCatalog:
                         egress=tool.egress,
                         require_approval=tool.require_approval,
                         subject_scoped=tool.subject_scoped,
+                        effects=(
+                            frozenset(json.loads(tool.effects))
+                            if tool.effects
+                            else DEFAULT_MUTATING
+                        ),
                     )
                     registry.register(capability)
                 from ..mcp import registry as mcp_registry

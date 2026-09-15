@@ -377,6 +377,21 @@ class Pipeline:
                         "Add a provider in Settings → Providers, then assign a model."
                     )
 
+                # Capture the Execution Manifest — the immutable provenance
+                # record of which revisions this run uses (v0.2 foundations).
+                from .manifest import capture_execution_manifest
+
+                try:
+                    await capture_execution_manifest(
+                        self.db,
+                        run_id=run.id,
+                        agent_id=message.bot_id,
+                        agent_config=agent_config,
+                        skill_revision_ids=[message.skill] if message.skill else None,
+                    )
+                except Exception:
+                    logger.exception("Execution manifest capture failed for run %s", run.id)
+
                 # Get recent messages from this session (last 10)
                 # Exclude the current run — its user message is appended
                 # separately by build_message_history to avoid duplication.
@@ -488,8 +503,12 @@ class Pipeline:
                     if event_type == "tool_call":
                         tc_id = payload.get("id", "")
                         status = payload.get("status", "")
-                        # Store the final state (complete/denied) as a Message
-                        if status in ("complete", "denied") and tc_id not in _tool_calls_seen:
+                        # Store the final state as a Message — every terminal
+                        # outcome, not just complete/denied.
+                        if (
+                            status in ("complete", "denied", "failed", "timeout", "interrupted")
+                            and tc_id not in _tool_calls_seen
+                        ):
                             _tool_calls_seen.add(tc_id)
                             import json as _json
 

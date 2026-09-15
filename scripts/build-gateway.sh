@@ -7,7 +7,14 @@ RESOURCE_DIR="${ROOT_DIR}/frontend/src-tauri/resources"
 GATEWAY_OUTPUT_DIR="${RESOURCE_DIR}/gateway"
 BUILD_DIR="${BACKEND_DIR}/build/pyinstaller"
 
-mkdir -p "${RESOURCE_DIR}" "${GATEWAY_OUTPUT_DIR}" "${BUILD_DIR}/work" "${BUILD_DIR}/spec"
+mkdir -p "${RESOURCE_DIR}" "${GATEWAY_OUTPUT_DIR}"
+
+# Start the PyInstaller workpath clean — a stale modulegraph analysis can
+# resurrect imports for modules that were renamed or removed (that is how a
+# packaged build once shipped an `agentos.capabilities.tools.protocol`
+# import error for restricted sub-agents).
+rm -rf "${BUILD_DIR}/work" "${BUILD_DIR}/spec"
+mkdir -p "${BUILD_DIR}/work" "${BUILD_DIR}/spec"
 
 cd "${BACKEND_DIR}"
 uv run pyinstaller \

@@ -10,6 +10,7 @@ from typing import Any
 from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..fts import fts5_match_query
 from ..models.document import Document, DocumentChunk
 from .chunker import chunk_extracted_blocks
 from .extractors import extract_document
@@ -158,7 +159,8 @@ async def search_documents(
     if not terms:
         return []
     limit = max(1, min(limit, 20))
-    fts_query = " ".join('"' + term.replace('"', '""') + '"' for term in terms)
+    # AND-joined quoted terms — a document search should match all terms.
+    fts_query = fts5_match_query(query, operator="AND")
     if db.get_bind().dialect.name == "postgresql":
         result = await db.execute(
             text(

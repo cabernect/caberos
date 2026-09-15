@@ -127,29 +127,41 @@ async def doc_search(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     )
     run_id = kwargs.get("run_id")
     if run_id:
-        for result in results:
-            exists = await db.scalar(
-                select(RunSource.id).where(
-                    RunSource.run_id == run_id,
-                    RunSource.chunk_id == result["chunk_id"],
-                )
-            )
-            if exists is None:
-                db.add(
-                    RunSource(
-                        run_id=run_id,
-                        chunk_id=result["chunk_id"],
-                        document_id=result["document_id"],
-                        source_path=result["source_path"],
-                        storage_path=result["storage_path"],
-                        heading_path=json.dumps(result["heading_path"], ensure_ascii=False),
-                        page_number=result.get("page_number"),
-                        sheet_name=result.get("sheet_name"),
-                        source_location=result.get("source_location"),
-                        excerpt=result["text"],
+
+        async def _record_sources() -> None:
+            for result in results:
+                exists = await db.scalar(
+                    select(RunSource.id).where(
+                        RunSource.run_id == run_id,
+                        RunSource.chunk_id == result["chunk_id"],
                     )
                 )
-        await db.flush()
+                if exists is None:
+                    db.add(
+                        RunSource(
+                            run_id=run_id,
+                            chunk_id=result["chunk_id"],
+                            document_id=result["document_id"],
+                            source_path=result["source_path"],
+                            storage_path=result["storage_path"],
+                            heading_path=json.dumps(result["heading_path"], ensure_ascii=False),
+                            page_number=result.get("page_number"),
+                            sheet_name=result.get("sheet_name"),
+                            source_location=result.get("source_location"),
+                            excerpt=result["text"],
+                        )
+                    )
+            await db.flush()
+
+        # Serialize flushes with other tool calls on this session — a bare
+        # flush during a concurrent asyncio.gather caused "Session is
+        # already flushing" errors.
+        db_lock = kwargs.get("db_lock")
+        if db_lock is not None:
+            async with db_lock:
+                await _record_sources()
+        else:
+            await _record_sources()
 
     response: dict[str, Any] = {"query": query, "results": results, "count": len(results)}
     if kwargs.get("supports_vision"):

@@ -257,6 +257,11 @@ class _SubAgentSyscallHandler:
     def db(self) -> Any:
         return self._parent.db
 
+    @property
+    def _db_lock(self) -> Any:
+        # Shares the parent's session — its writes must take the same lock.
+        return self._parent._db_lock
+
     async def mediate(
         self,
         call: Any,
@@ -292,6 +297,11 @@ def register_subagent_tools() -> None:
         CapabilityDef(
             name="run_subagent",
             kind="tool",
+            # A sub-agent can reach every effect class inside the parent's
+            # ceiling, so it is always mutating for policy purposes.
+            effects=frozenset(
+                {"workspace_write", "local_execute", "external_write", "destructive"}
+            ),
             description=(
                 "Run a sub-agent for a one-off task. The sub-agent runs independently "
                 "with its own context and tool loop, shares your workspace and model, "
@@ -349,6 +359,7 @@ def register_subagent_tools() -> None:
         CapabilityDef(
             name="read_subagent",
             kind="tool",
+            effects=frozenset({"read"}),
             description=(
                 "Read the status and result of a background sub-agent. "
                 "Returns status='running' if still executing, or the final result if done."

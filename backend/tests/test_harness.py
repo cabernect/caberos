@@ -335,6 +335,103 @@ async def test_harness_preserves_cached_token_usage(db, workspace):
     assert result.cached_tokens == 350
 
 
+async def _make_run_rows(db, agent_id: str, run_id: str):
+    from agentos.models.agent import Agent
+    from agentos.models.contact import Contact
+    from agentos.models.run import Run
+    from agentos.models.session import Session
+
+    agent = Agent(id=agent_id, name="Test Agent", enabled=True)
+    contact = Contact(
+        id=f"c-{run_id}", channel="dashboard_chat", bot_id=agent_id, external_user_id="e"
+    )
+    session = Session(id=f"s-{run_id}", contact_id=contact.id, agent_id=agent_id)
+    run = Run(id=run_id, session_id=session.id, contact_id=contact.id, agent_id=agent_id)
+    db.add_all([agent, contact, session, run])
+    await db.commit()
+    return session
+
+
+@pytest.mark.asyncio
+async def test_harness_records_each_model_call(db, workspace):
+    """Every model request lands as a ModelCall row with turn, tokens, status."""
+    from sqlalchemy import select
+
+    from agentos.models.model_call import ModelCall
+    from agentos.syscall.mediator import SyscallHandler
+
+    await _make_run_rows(db, "a-mc", "r-mc")
+    config = AgentConfig(
+        id="a-mc",
+        name="MC Agent",
+        model=ModelConfig(provider_id="test-provider", name="test-model"),
+        capabilities=[CapabilityGrant(name="datetime_now")],
+    )
+    model = ScriptedModel(
+        [
+            ScriptedResponse(
+                tool_calls=[{"id": "t1", "name": "datetime_now", "args": {}}],
+                content="",
+                tokens_in=10,
+                tokens_out=5,
+            ),
+            ScriptedResponse(tool_calls=[], content="done", tokens_in=20, tokens_out=8),
+        ]
+    )
+
+    result = await Harness(model=model).run(
+        agent_config=config,
+        session=None,
+        message="hi",
+        syscall_handler=SyscallHandler(db=db, workspace_path=workspace),
+        run_id="r-mc",
+    )
+    assert result.status == "completed"
+
+    rows = (await db.execute(select(ModelCall).where(ModelCall.run_id == "r-mc"))).scalars().all()
+    assert len(rows) == 2
+    assert {r.turn for r in rows} == {1, 2}
+    assert all(r.status == "ok" for r in rows)
+    assert rows[0].tokens_in == 10
+    assert rows[1].tokens_in == 20
+    assert all(r.provider_id == "test-provider" for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_harness_records_failed_model_call(db, workspace):
+    """A provider exception still leaves a ModelCall row with status=error."""
+    from sqlalchemy import select
+
+    from agentos.models.model_call import ModelCall
+    from agentos.syscall.mediator import SyscallHandler
+
+    await _make_run_rows(db, "a-mf", "r-mf")
+    config = AgentConfig(
+        id="a-mf",
+        name="MF Agent",
+        model=ModelConfig(provider_id="test-provider", name="test-model"),
+        capabilities=[],
+    )
+
+    class BrokenModel:
+        async def complete(self, **_kwargs):
+            raise RuntimeError("provider exploded")
+
+    result = await Harness(model=BrokenModel()).run(
+        agent_config=config,
+        session=None,
+        message="hi",
+        syscall_handler=SyscallHandler(db=db, workspace_path=workspace),
+        run_id="r-mf",
+    )
+    assert result.status == "failed"
+
+    row = await db.scalar(select(ModelCall).where(ModelCall.run_id == "r-mf"))
+    assert row is not None
+    assert row.status == "error"
+    assert "provider exploded" in row.error
+
+
 @pytest.mark.asyncio
 async def test_harness_turn_limit(db, workspace):
     """Harness stops when turn limit is hit."""
