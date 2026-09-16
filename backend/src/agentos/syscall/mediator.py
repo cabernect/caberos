@@ -27,7 +27,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..capabilities.catalog import is_capability_granted
+from ..capabilities.catalog import _grant_for, is_capability_granted
 from ..capabilities.registry import registry
 from ..config import settings
 from ..config_schema import AgentConfig
@@ -139,14 +139,12 @@ class SyscallHandler:
         # For now, the grant check above is sufficient.
 
         # 5. Check approval (Ticket 04)
-        # The grant's require_approval flag takes precedence, then the capability def's.
-        # When capabilities is None (all tools), there's no per-grant override —
-        # fall back to the capability definition's require_approval.
-        grant = (
-            next((g for g in agent_config.capabilities if g.name == call.name), None)
-            if agent_config.capabilities is not None
-            else None
-        )
+        # Resolve the grant the same way the permission check does —
+        # per-tool grant first, then the mcp_server wildcard — so a flag on
+        # the server grant actually governs wildcard-covered calls.
+        # _grant_for also returns the capability def when capabilities is
+        # None (all tools), which carries require_approval itself.
+        grant = _grant_for(agent_config, call.name, server_id)
         needs_approval = grant.require_approval if grant else cap.require_approval
         if needs_approval and not settings.yolo_mode:
             # External channel sessions use a configurable approval policy
@@ -423,8 +421,8 @@ class SyscallHandler:
             return await self._deny(
                 run_id, call, agent_config, "MCP server is disabled", start, sub_agent_id
             )
-        tool_filter = _json.loads(server.tool_filter) if server.tool_filter else None
-        if tool_filter and tool_name not in tool_filter:
+        tool_filter = _json.loads(server.tool_filter) if server.tool_filter is not None else None
+        if tool_filter is not None and tool_name not in tool_filter:
             return await self._deny(
                 run_id, call, agent_config, "MCP tool is filtered", start, sub_agent_id
             )

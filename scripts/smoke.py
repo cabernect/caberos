@@ -28,7 +28,16 @@ from agentos.harness.scripted_model import ScriptedModel, ScriptedResponse  # no
 from agentos.pipeline import InboundMessage, Pipeline  # noqa: E402
 
 
-# A test agent config
+# Grants the scripted smoke run needs — auto-approved so the run never blocks
+# on an approval prompt. Upserted onto the agent's existing capability list
+# (which may be None = all builtins enabled); never replaces it.
+SMOKE_GRANTS = [
+    CapabilityGrant(name="terminal", require_approval=False),
+    CapabilityGrant(name="read_terminal", require_approval=False),
+    CapabilityGrant(name="close_terminal", require_approval=False),
+]
+
+# A test agent config — used only when creating a fresh test agent.
 TEST_AGENT_CONFIG = AgentConfig(
     id="test-agent",
     name="Test Agent",
@@ -36,9 +45,7 @@ TEST_AGENT_CONFIG = AgentConfig(
     soul="You are a test agent. You help verify the system works.",
     persona="Direct and concise.",
     task="Execute commands and report results.",
-    capabilities=[
-        CapabilityGrant(name="terminal", require_approval=False),  # auto-approve for smoke test
-    ],
+    capabilities=list(SMOKE_GRANTS),
 )
 
 
@@ -63,7 +70,21 @@ async def run_smoke(agent_id: str, message: str) -> None:
         elif agent_id == "test-agent":
             from agentos.agent_service import save_agent
 
-            config.capabilities = TEST_AGENT_CONFIG.capabilities
+            # Upsert the smoke grants into the agent's existing list —
+            # capabilities get renamed between versions and the persisted
+            # config can drift, but we never shrink the agent's other grants.
+            existing = {g.name: g for g in (config.capabilities or [])}
+            if config.capabilities is None:
+                # None = "all builtins" — materialize the list so the
+                # terminal-family grants can carry require_approval=False.
+                from agentos.capabilities.registry import registry
+
+                for cap in registry.list_all():
+                    if cap.kind != "mcp_tool":
+                        existing.setdefault(cap.name, CapabilityGrant(name=cap.name))
+            for grant in SMOKE_GRANTS:
+                existing[grant.name] = grant
+            config.capabilities = list(existing.values())
             await save_agent(db, config)
 
     # Set up the scripted model: first call returns a tool call, second returns the answer

@@ -371,9 +371,7 @@ class TestSyncPath:
         """terminal(async=true) → read_terminal → close_terminal through the mediator."""
         monkeypatch.setattr("agentos.terminal.registry.terminal_registry", terminals)
         handler = SyscallHandler(db=db, workspace_path=workspace)
-        config = _config(
-            ["terminal", "read_terminal", "close_terminal"], require_approval=False
-        )
+        config = _config(["terminal", "read_terminal", "close_terminal"], require_approval=False)
         session = _session()
 
         start = await handler.mediate(

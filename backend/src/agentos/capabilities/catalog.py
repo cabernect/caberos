@@ -205,8 +205,8 @@ class CapabilityRunCatalog:
         row = result.one_or_none()
         if row is None or not row[1]:
             return False
-        tool_filter = json.loads(row[2]) if row[2] else None
-        return not tool_filter or row[0] in tool_filter
+        tool_filter = json.loads(row[2]) if row[2] is not None else None
+        return tool_filter is None or row[0] in tool_filter
 
     async def search(
         self,
@@ -218,25 +218,31 @@ class CapabilityRunCatalog:
     ) -> list[dict[str, Any]]:
         """Return bounded metadata for capabilities inside the run's ceiling."""
         query_text = query.strip().lower()
+        tokens = query_text.split()
         server_text = server.strip().lower() if server else None
         kind_text = kind.strip().lower() if kind else None
         limit = max(1, min(limit, self.max_results))
 
-        results = []
+        scored: list[tuple[int, dict[str, Any]]] = []
         for item in await self._metadata():
-            searchable = f"{item['name']} {item['description']}".lower()
-            if query_text and not all(token in searchable for token in query_text.split()):
-                continue
             if kind_text and item["kind"].lower() != kind_text:
                 continue
             if server_text and server_text not in (
                 f"{item['server_id'] or ''} {item['server_name'] or ''}".lower()
             ):
                 continue
-            results.append(item)
-            if len(results) >= limit:
-                break
-        return results
+            score = 0
+            if tokens:
+                searchable = f"{item['name']} {item['description']}".lower()
+                name_text = item["name"].lower()
+                matched = sum(1 for token in tokens if token in searchable)
+                if matched == 0:
+                    continue
+                score = matched + sum(1 for token in tokens if token in name_text)
+            scored.append((score, item))
+
+        scored.sort(key=lambda entry: entry[0], reverse=True)
+        return [item for _, item in scored[:limit]]
 
     def can_discover(self) -> bool:
         """Return whether this agent has a non-empty capability ceiling."""

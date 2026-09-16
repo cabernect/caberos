@@ -222,6 +222,121 @@ class TestSyscallHandler:
         assert result.output == {"query": "CaberOS", "results": []}
         assert approval_calls == []
 
+    async def test_server_grant_approval_flag_governs_wildcard_mcp_calls(
+        self, db, workspace, monkeypatch
+    ):
+        """A tool covered only by an mcp_server wildcard must use the server
+        grant's require_approval — not the capability def's flag."""
+        from agentos.mcp import registry as mcp_registry
+
+        cap_name = "mcp.demo.server_tool"
+        registry.register(
+            CapabilityDef(
+                name=cap_name,
+                kind="mcp_tool",
+                description="Server tool",
+                parameters_schema={"type": "object", "properties": {}},
+                require_approval=True,  # propagated from McpServer.require_approval
+            )
+        )
+        monkeypatch.setitem(mcp_registry._tool_map, cap_name, ("srv-1", "server_tool"))
+
+        approval_calls: list = []
+
+        async def unexpected_approval(**kwargs):
+            approval_calls.append(kwargs)
+            return True
+
+        from agentos.syscall.protocol import SyscallResult
+
+        async def fake_mcp_execute(**kwargs):
+            return SyscallResult(output={"ok": True})
+
+        handler = SyscallHandler(db=db, workspace_path=workspace)
+        monkeypatch.setattr(handler, "_await_approval", unexpected_approval)
+        monkeypatch.setattr(handler, "_execute_mcp_tool", fake_mcp_execute)
+        agent_config = AgentConfig(
+            id="test-agent",
+            name="Test Agent",
+            model=ModelConfig(provider_id="test-provider", name="test-model"),
+            capabilities=[CapabilityGrant(name="mcp_server:srv-1", require_approval=False)],
+        )
+
+        result = await handler.mediate(
+            call=ToolCall(id="1", name=cap_name, args={}),
+            session=_make_session("contact-1"),
+            agent_config=agent_config,
+            run_id="run-mcp-wildcard-approval",
+        )
+
+        assert result.allowed is True
+        assert result.output == {"ok": True}
+        assert approval_calls == []
+
+    async def test_tool_filter_denies_granted_mcp_tool(self, db, workspace, monkeypatch):
+        """A granted tool still denied when the server's tool_filter excludes
+        it — and an empty filter ([]) denies every tool on the server."""
+        import json
+        from unittest.mock import AsyncMock
+
+        from agentos.mcp import registry as mcp_registry
+        from agentos.models.mcp import McpServer
+
+        cap_name = "mcp.demo.filtered_tool"
+        registry.register(
+            CapabilityDef(
+                name=cap_name,
+                kind="mcp_tool",
+                description="Filtered tool",
+                parameters_schema={"type": "object", "properties": {}},
+            )
+        )
+        server = McpServer(
+            id="srv-filtered",
+            name="demo",
+            transport="stdio",
+            command="demo",
+            enabled=True,
+            tool_filter=json.dumps(["other_tool"]),
+        )
+        db.add(server)
+        await db.flush()
+        monkeypatch.setitem(mcp_registry._tool_map, cap_name, (server.id, "filtered_tool"))
+        execute = AsyncMock(
+            return_value={"content": [{"type": "text", "text": "ok"}], "isError": False}
+        )
+        monkeypatch.setattr(mcp_registry, "execute_mcp_tool", execute)
+
+        handler = SyscallHandler(db=db, workspace_path=workspace)
+        agent_config = AgentConfig(
+            id="test-agent",
+            name="Test Agent",
+            model=ModelConfig(provider_id="test-provider", name="test-model"),
+            capabilities=[CapabilityGrant(name="mcp_server:srv-filtered", require_approval=False)],
+        )
+
+        result = await handler.mediate(
+            call=ToolCall(id="1", name=cap_name, args={}),
+            session=_make_session("contact-1"),
+            agent_config=agent_config,
+            run_id="run-mcp-filtered",
+        )
+        assert result.allowed is False
+        assert "filtered" in (result.denied_reason or "")
+        assert execute.call_count == 0
+
+        # Empty filter = every tool off (distinct from null = unfiltered)
+        server.tool_filter = json.dumps([])
+        await db.flush()
+        result = await handler.mediate(
+            call=ToolCall(id="2", name=cap_name, args={}),
+            session=_make_session("contact-1"),
+            agent_config=agent_config,
+            run_id="run-mcp-filtered-empty",
+        )
+        assert result.allowed is False
+        assert execute.call_count == 0
+
     async def test_approval_batch_waits_before_mixed_calls_execute(
         self, db, workspace, monkeypatch
     ):

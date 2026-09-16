@@ -530,11 +530,17 @@ export const api = {
     request<{ id: string; connected: boolean }>(`/api/mcp/servers/${id}/connect`, {
       method: "POST",
     }),
-  updateMcpServer: (id: string, data: { require_approval?: boolean; enabled?: boolean }) =>
-    request<{ id: string; require_approval: boolean; enabled: boolean; connected: boolean }>(
-      `/api/mcp/servers/${id}`,
-      { method: "PATCH", body: JSON.stringify(data) },
-    ),
+  updateMcpServer: (
+    id: string,
+    data: { require_approval?: boolean; enabled?: boolean; tool_filter?: string[] | null },
+  ) =>
+    request<{
+      id: string;
+      require_approval: boolean;
+      enabled: boolean;
+      tool_filter: string[] | null;
+      connected: boolean;
+    }>(`/api/mcp/servers/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   storeMcpCredential: (serverId: string, data: {
     credential_type: string;
     value: string | Record<string, unknown>;
