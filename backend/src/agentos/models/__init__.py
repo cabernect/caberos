@@ -22,6 +22,7 @@ from .run import Message, Run
 from .session import Session
 from .source import RunSource
 from .sub_agent import SubAgent
+from .terminal import TerminalSession
 from .web_source import WebSource
 
 __all__ = [
@@ -33,6 +34,7 @@ __all__ = [
     "Capability",
     "AgentCapability",
     "SubAgent",
+    "TerminalSession",
     "McpServer",
     "McpServerCredential",
     "ContactMcpBinding",

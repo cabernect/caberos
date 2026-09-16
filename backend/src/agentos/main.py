@@ -153,6 +153,18 @@ async def lifespan(app: FastAPI):
 
         await retry_locked_transaction(_reconcile_runs, db, "startup_reconcile_runs")
 
+        # Terminal processes never survive a gateway restart — reconcile
+        # persisted `running` rows to `interrupted`.
+        from .terminal.registry import terminal_registry
+
+        interrupted = await terminal_registry.reconcile_startup(db)
+        if interrupted:
+            logging.getLogger("agentos.main").info(
+                "[startup] Marked %d terminal(s) interrupted from previous run",
+                interrupted,
+            )
+        await db.commit()
+
     # Clean up expired auth sessions from previous runs
     from .auth import cleanup_expired_sessions
 
@@ -216,6 +228,12 @@ async def lifespan(app: FastAPI):
     )
 
     yield
+
+    # Shutdown: kill every background terminal process group first — agents
+    # must not orphan processes on gateway exit.
+    from .terminal.registry import terminal_registry
+
+    await terminal_registry.shutdown_all()
 
     # Shutdown: disconnect all MCP servers
     await mcp_registry.disconnect_all()

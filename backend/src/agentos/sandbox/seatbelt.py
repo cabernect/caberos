@@ -5,7 +5,7 @@ import shutil
 import time
 from pathlib import Path
 
-from .base import SandboxBackend, ShellResult
+from .base import SandboxBackend, ShellResult, kill_process_group
 
 
 def _build_profile(workspace: str, allow_network: bool) -> str:
@@ -47,26 +47,38 @@ class SeatbeltBackend(SandboxBackend):
     def is_available(self) -> bool:
         return shutil.which("sandbox-exec") is not None
 
+    def spawn_argv(
+        self, workspace_path: str, command: str, allow_network: bool = False
+    ) -> list[str]:
+        profile = _build_profile(workspace_path, allow_network)
+        return [
+            "/usr/bin/sandbox-exec",
+            "-p",
+            profile,
+            "--",
+            "/bin/sh",
+            "-c",
+            command,
+        ]
+
+    def spawn_env(self, workspace_path: str) -> dict[str, str] | None:
+        ws_resolved = str(Path(workspace_path).resolve())
+        return {"PATH": "/usr/bin:/bin", "HOME": ws_resolved, "TMPDIR": "/tmp"}
+
     async def run_command(
         self, workspace_path: str, command: str, timeout: int = 30, allow_network: bool = False
     ) -> ShellResult:
-        profile = _build_profile(workspace_path, allow_network)
         ws_resolved = str(Path(workspace_path).resolve())
         start = time.monotonic()
+        proc = await asyncio.create_subprocess_exec(
+            *self.spawn_argv(ws_resolved, command, allow_network),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=ws_resolved,
+            env={"PATH": "/usr/bin:/bin", "HOME": ws_resolved, "TMPDIR": "/tmp"},
+            start_new_session=True,
+        )
         try:
-            proc = await asyncio.create_subprocess_exec(
-                "/usr/bin/sandbox-exec",
-                "-p",
-                profile,
-                "--",
-                "/bin/sh",
-                "-c",
-                command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=ws_resolved,
-                env={"PATH": "/usr/bin:/bin", "HOME": ws_resolved, "TMPDIR": "/tmp"},
-            )
             stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
             elapsed = int((time.monotonic() - start) * 1000)
             return ShellResult(
@@ -76,6 +88,7 @@ class SeatbeltBackend(SandboxBackend):
                 duration_ms=elapsed,
             )
         except TimeoutError:
+            await kill_process_group(proc)
             elapsed = int((time.monotonic() - start) * 1000)
             return ShellResult(
                 stdout="",

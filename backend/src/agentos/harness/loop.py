@@ -41,6 +41,7 @@ class RunResult:
     compacted: bool = False  # whether compaction occurred this run
     context_breakdown: dict[str, int] = field(default_factory=dict)  # per-section token counts
     loaded_capabilities: list[str] = field(default_factory=list)
+    terminals_active: list[str] = field(default_factory=list)
 
 
 # SSE event emitter type: async callable that takes (event_type: str, payload: dict)
@@ -680,6 +681,23 @@ class Harness:
         if result.total_turns >= max_turns and not result.final_answer:
             result.status = "limit_exceeded"
             result.final_answer = "I've reached my turn limit for this run."
+
+        # A run must not silently finish with live terminals — surface them so
+        # the operator/model can read or close them.
+        try:
+            from ..terminal.registry import terminal_registry
+
+            active = await terminal_registry.active_for_run(run_id)
+            if active:
+                result.terminals_active = active
+                if event_emitter:
+                    await self._emit(
+                        event_emitter,
+                        "terminals_active",
+                        {"terminal_ids": active},
+                    )
+        except Exception:
+            pass
 
         # Note: message_complete is emitted by runner.py after the pipeline
         # finishes, with full context metadata (context_tokens, max_context_tokens,

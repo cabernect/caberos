@@ -282,6 +282,18 @@ class SyscallHandler:
         if call.name in ("skills_list", "skills_load", "skills_read_resource"):
             extra_kwargs["agent_id"] = agent_config.id
 
+        # Terminal tools: registry + ownership scope (agent/session/run) so a
+        # terminal can only be read or closed by the run that started it.
+        if call.name in ("terminal", "read_terminal", "close_terminal"):
+            from ..terminal.registry import terminal_registry
+
+            extra_kwargs["terminal_registry"] = terminal_registry
+            extra_kwargs["db"] = self.db
+            extra_kwargs["db_lock"] = getattr(self, "_db_lock", None)
+            extra_kwargs["agent_id"] = agent_config.id
+            extra_kwargs["run_id"] = run_id
+            extra_kwargs["session_id"] = getattr(session, "id", None)
+
         if call.name in ("capabilities_search", "capabilities_load"):
             extra_kwargs["capability_catalog"] = capability_catalog
 

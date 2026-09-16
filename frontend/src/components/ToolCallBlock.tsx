@@ -45,6 +45,41 @@ interface ToolCallBlockProps {
   subagentStream?: SubAgentStreamData;
 }
 
+const TERMINAL_CAPS = new Set(["terminal", "read_terminal", "close_terminal"]);
+
+const TERMINAL_STATUS_COLORS: Record<string, string> = {
+  running: "var(--warning)",
+  completed: "var(--success)",
+  failed: "var(--danger)",
+  timeout: "var(--danger)",
+  closed: "var(--ink-3)",
+  interrupted: "var(--warning)",
+};
+
+function TerminalResult({ result }: { result: Record<string, unknown> }) {
+  const status = typeof result.status === "string" ? result.status : "completed";
+  const stdout = (result.stdout ?? result.stdout_tail ?? "") as string;
+  const stderr = (result.stderr ?? result.stderr_tail ?? "") as string;
+  const exitCode = result.exit_code as number | null | undefined;
+  const terminalId = result.terminal_id as string | undefined;
+
+  return (
+    <div
+      className="mb-2 overflow-x-auto rounded-[5px] p-2 font-mono text-[11px]"
+      style={{ background: "var(--white)", border: "1px solid var(--border)", color: "var(--ink-2)" }}
+    >
+      <div className="flex items-center gap-2">
+        <span style={{ color: TERMINAL_STATUS_COLORS[status] ?? "var(--ink-2)" }}>{status}</span>
+        {exitCode != null && <span className="text-[var(--ink-3)]">exit {exitCode}</span>}
+        {terminalId && <span className="text-[var(--ink-3)]">id {terminalId.slice(0, 8)}</span>}
+        {result.truncated === true && <span className="text-[var(--warning)]">truncated</span>}
+      </div>
+      {stdout && <pre className="mt-1 whitespace-pre-wrap break-words text-[var(--ink-1)]">{stdout}</pre>}
+      {stderr && <pre className="mt-1 whitespace-pre-wrap break-words text-[var(--danger)]">{stderr}</pre>}
+    </div>
+  );
+}
+
 export function ToolCallBlock({ call, subagentStream }: ToolCallBlockProps) {
   const [expanded, setExpanded] = useState(false);
   const [subExpanded, setSubExpanded] = useState(false);
@@ -247,8 +282,15 @@ export function ToolCallBlock({ call, subagentStream }: ToolCallBlockProps) {
 
       {/* Expanded result — hidden for write_file (diff block replaces it)
           and run_subagent (the nested sub-agent stream replaces it) */}
+      {expanded && hasResult && call.status === "complete" &&
+        TERMINAL_CAPS.has(call.capability) &&
+        typeof call.result === "object" && call.result !== null && (
+        <TerminalResult result={call.result as Record<string, unknown>} />
+      )}
+
       {expanded && hasResult &&
         !(call.capability === "write_file" && call.status === "complete" && typeof call.result === "object" && call.result !== null && "action" in (call.result as Record<string, unknown>)) &&
+        !(call.status === "complete" && TERMINAL_CAPS.has(call.capability) && typeof call.result === "object" && call.result !== null) &&
         !(isSubagent && subagentStream && (subagentStream.items.length > 0 || subagentStream.text)) && (
         <div
           className="mb-2 overflow-x-auto whitespace-pre-wrap break-words rounded-[5px] p-2 font-mono text-[11px]"
