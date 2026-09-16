@@ -79,6 +79,21 @@ cd frontend/src-tauri && cargo check
 
 Also require existing Playwright E2E verification, packaged-runtime tests, security tests, Docker parity, clean desktop installation, v0.1.9 upgrade, signed updater, and release tag/version/commit verification.
 
+## Security scanning (W10 scope)
+
+Add `.github/workflows/security.yml` — runs on all PRs (any base) + weekly schedule:
+
+- `dependency-review-action` — fails PRs that add vulnerable deps
+- `osv-scanner` — CVE scan across `uv.lock`, `package-lock.json`, `Cargo.lock`
+- `gitleaks` — secret scanning of commit history
+- `zizmor` — static analysis of workflow files (template injection, over-privileged tokens, unpinned actions)
+- `trivy` — scan the Docker image for OS + dependency CVEs
+- Enable ruff `S` rules (bandit-derived) in the existing lint step
+
+Repo settings (no code): Dependabot alerts + security updates (scans main's manifests, opens fix PRs), secret scanning + push protection, GitHub code scanning default setup.
+
+CodeQL decision needed: default setup only scans the default/protected branches — either protect `feat/**` via ruleset (also blocks force-push/deletion of umbrella branches) or use advanced setup with unrestricted `pull_request` triggers. Rust extraction needs a successful Tauri build — flag if flaky on CI.
+
 ## Manual smoke
 
 - Clipboard image and attachment previews
