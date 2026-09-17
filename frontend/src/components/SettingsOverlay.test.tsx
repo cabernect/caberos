@@ -84,7 +84,7 @@ describe("SettingsOverlay capabilities", () => {
   });
 
   it("persists an explicit deny grant when a tool is set to Not permitted under a granted server", async () => {
-    const updateAgent = vi.spyOn(api, "updateAgent").mockResolvedValue(baseAgent);
+    const updateAgent = vi.spyOn(api, "updateAgent").mockResolvedValue({ id: baseAgent.id, version: 1, version_id: "v1" });
     renderCapabilities(
       {
         ...baseAgent,
@@ -115,7 +115,7 @@ describe("SettingsOverlay capabilities", () => {
   });
 
   it("re-selecting the inherited mode clears the explicit entry", async () => {
-    const updateAgent = vi.spyOn(api, "updateAgent").mockResolvedValue(baseAgent);
+    const updateAgent = vi.spyOn(api, "updateAgent").mockResolvedValue({ id: baseAgent.id, version: 1, version_id: "v1" });
     renderCapabilities(
       {
         ...baseAgent,

@@ -354,7 +354,14 @@ class TestReconcileAndShutdown:
             os.killpg(pgid, 0)
 
 
+_needs_sandbox = pytest.mark.skipif(
+    not get_backend().is_available(),
+    reason="sandbox backend unavailable (e.g. bwrap blocked on CI)",
+)
+
+
 class TestSyncPath:
+    @_needs_sandbox
     async def test_sync_terminal_unchanged(self, db, workspace):
         handler = SyscallHandler(db=db, workspace_path=workspace)
         result = await handler.mediate(
@@ -367,6 +374,7 @@ class TestSyncPath:
         assert result.output["exit_code"] == 0
         assert "sync-ok" in result.output["stdout"]
 
+    @_needs_sandbox
     async def test_mediated_async_roundtrip(self, db, workspace, terminals, monkeypatch):
         """terminal(async=true) → read_terminal → close_terminal through the mediator."""
         monkeypatch.setattr("agentos.terminal.registry.terminal_registry", terminals)
