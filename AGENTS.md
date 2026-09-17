@@ -153,10 +153,11 @@ Tickets **01–09 implemented**: smoke slice, real-model chat + SSE streaming, f
 - Gateway log: `tail -f "$HOME/Library/Application Support/com.caberos.desktop/logs/gateway.log"`
 
 **Docker:** IMPLEMENTED. Full stack via docker-compose:
-- Backend: `python:3.12-slim` + uv + bubblewrap (bwrap) for shell sandboxing, `SYS_ADMIN` cap for user namespaces.
+- Backend: `python:3.12-slim` + uv. For shell sandboxing, tries bwrap (if `SYS_ADMIN` cap present) or falls back to Docker's alpine:3.20 container isolation.
 - Frontend: multi-stage Node build → nginx:alpine, reverse-proxies `/api` and `/health` to backend, SSE buffering disabled.
 - Data persists in named volume `caberos-data`. Postgres option commented out in `docker-compose.yml`.
 - `./scripts/docker.sh {up|down|logs|rebuild}`
+- See `docs/platform-support.md` for sandbox availability across platforms.
 
 **Ticket 07 (Scheduler/Heartbeat):** IMPLEMENTED. Heartbeat scheduler with multi-mode UI.
 
@@ -303,10 +304,11 @@ backend/src/agentos/
 │   ├── registry.py      — server registry, tool discovery
 │   ├── credentials.py   — encrypted credential storage
 │   └── oauth.py         — OAuth loopback flow
-├── sandbox/             — process-level sandbox
-│   ├── base.py          — SandboxBackend ABC, get_backend()
+├── sandbox/             — process-level sandbox (D28)
+│   ├── base.py          — SandboxBackend ABC, get_backend(), probe()
 │   ├── seatbelt.py      — macOS sandbox-exec
 │   ├── bwrap.py         — Linux bubblewrap
+│   ├── docker.py        — Docker container (cross-platform fallback)
 │   └── workspace.py     — path validation, workspace creation
 ├── syscall/             — the single boundary every capability call crosses
 │   ├── protocol.py      — SyscallHandler Protocol, ToolCall, SyscallResult

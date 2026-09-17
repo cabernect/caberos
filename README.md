@@ -160,7 +160,7 @@ The first launch seeds the default operator and two agents (Caber, AgentBuilder)
 
 ### Option 3: Local dev
 
-**Prerequisites:** Python 3.12+, [uv](https://docs.astral.sh/uv/), Node 22+, npm, and either macOS (uses built-in `sandbox-exec`) or Linux (`bubblewrap`).
+**Prerequisites:** Python 3.12+, [uv](https://docs.astral.sh/uv/), Node 22+, npm. For shell sandboxing: macOS (uses built-in `sandbox-exec`) or Linux (`bubblewrap`). Windows requires Docker Desktop. See [docs/platform-support.md](docs/platform-support.md) for details.
 
 ```bash
 git clone <repo-url> && cd foundation-agentos
@@ -239,7 +239,7 @@ The website can also be deployed manually from the Actions tab → "Deploy websi
 | Model transport | LiteLLM |
 | Frontend | React 19, Vite, TypeScript, Tailwind CSS 4 |
 | Desktop | Tauri 2 (Rust) |
-| Sandbox | macOS `sandbox-exec` / Linux `bubblewrap` |
+| Sandbox | Native backends (seatbelt/bwrap) + Docker fallback |
 | Packaging | PyInstaller (gateway), Tauri bundler (desktop) |
 
 ### Key design decisions
@@ -380,7 +380,7 @@ npm run desktop:dev
 
 ## Docker
 
-The Docker setup runs the full stack: backend (Python + uv + bwrap) and frontend (nginx reverse proxy).
+The Docker setup runs the full stack: backend (Python + uv) and frontend (nginx reverse proxy).
 
 ```bash
 # Build and start
@@ -400,7 +400,7 @@ The Docker setup runs the full stack: backend (Python + uv + bwrap) and frontend
 
 | Service | Image | Port | Notes |
 |---|---|---|---|
-| `backend` | `python:3.12-slim` + uv | 8081 (internal) | bwrap needs `SYS_ADMIN` cap |
+| `backend` | `python:3.12-slim` + uv | 8081 (internal) | Agents can use bwrap (if `SYS_ADMIN` cap present) or Docker isolation |
 | `frontend` | `nginx:alpine` | 80 → `:8080` (host) | Reverse-proxies `/api`, `/health` to backend |
 
 Data persists in the `caberos-data` named volume (SQLite DB, secret key, workspaces, agent homes). To use Postgres instead, uncomment the `db` service and `AGENTOS_DATABASE_URL` in `docker-compose.yml`.

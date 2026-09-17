@@ -26,6 +26,7 @@ from ..models.audit import AuditRecord
 from ..models.operator import OperatorAuditLog
 from ..models.provider import Provider
 from ..models.run import Message, Run
+from ..sandbox import probe as sandbox_probe
 
 log = logging.getLogger(__name__)
 
@@ -133,12 +134,19 @@ class OperatorAuditOut(BaseModel):
     created_at: datetime
 
 
+class SandboxStatus(BaseModel):
+    kind: str
+    state: str
+    reason: str | None = None
+
+
 class HealthStatus(BaseModel):
     status: str
     database: str
     providers: int
     agents: int
     active_runs: int
+    sandbox: SandboxStatus
     timestamp: datetime
 
 
@@ -446,6 +454,7 @@ async def system_health(
     provider_count = (await db.execute(select(func.count(Provider.id)))).scalar() or 0
     agent_count = (await db.execute(select(func.count(Agent.id)))).scalar() or 0
     active_runs = len(list_active_runs())
+    sandbox = sandbox_probe()
 
     return HealthStatus(
         status="ok",
@@ -453,6 +462,7 @@ async def system_health(
         providers=provider_count,
         agents=agent_count,
         active_runs=active_runs,
+        sandbox=SandboxStatus(kind=sandbox.kind, state=sandbox.state, reason=sandbox.reason),
         timestamp=datetime.now(UTC),
     )
 
