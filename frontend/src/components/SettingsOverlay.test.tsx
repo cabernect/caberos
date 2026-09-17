@@ -14,6 +14,16 @@ const webSearch: CapabilityInfo = {
   server_name: null,
 };
 
+const mcpTool: CapabilityInfo = {
+  name: "mcp.playwright.browser_evaluate",
+  kind: "mcp_tool",
+  description: "Evaluate JavaScript",
+  egress: true,
+  require_approval: false,
+  server_id: "srv-pw",
+  server_name: "Playwright",
+};
+
 const baseAgent: Agent = {
   id: "agent-1",
   name: "Test Agent",
@@ -25,9 +35,9 @@ const baseAgent: Agent = {
   task: "",
 };
 
-function renderCapabilities(agent: Agent) {
+function renderCapabilities(agent: Agent, caps: CapabilityInfo[] = [webSearch]) {
   vi.spyOn(api, "getYoloMode").mockResolvedValue({ yolo_mode: false });
-  vi.spyOn(api, "listCapabilities").mockResolvedValue([webSearch]);
+  vi.spyOn(api, "listCapabilities").mockResolvedValue(caps);
   render(
     <SettingsOverlay
       agent={agent}
@@ -71,5 +81,67 @@ describe("SettingsOverlay capabilities", () => {
     fireEvent.click(approval);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("database is busy");
+  });
+
+  it("persists an explicit deny grant when a tool is set to Not permitted under a granted server", async () => {
+    const updateAgent = vi.spyOn(api, "updateAgent").mockResolvedValue({ id: baseAgent.id, version: 1, version_id: "v1" });
+    renderCapabilities(
+      {
+        ...baseAgent,
+        capabilities: [
+          { name: "mcp_server:srv-pw", subject: "none" as const, require_approval: true },
+        ],
+      },
+      [webSearch, mcpTool],
+    );
+
+    // Expand the MCP server group to reveal tool rows.
+    fireEvent.click(await screen.findByText("MCP: Playwright"));
+    const toolRow = (await screen.findByText("mcp.playwright.browser_evaluate")).closest(
+      "div.flex.items-center.justify-between",
+    )!;
+    const select = toolRow.querySelector("select")!;
+
+    fireEvent.change(select, { target: { value: "none" } });
+
+    await waitFor(() => expect(updateAgent).toHaveBeenCalled());
+    const saved = updateAgent.mock.calls.at(-1)?.[1]?.capabilities ?? [];
+    expect(saved).toContainEqual(
+      expect.objectContaining({ name: "mcp_server:srv-pw" }),
+    );
+    expect(saved).toContainEqual(
+      expect.objectContaining({ name: "mcp.playwright.browser_evaluate", enabled: false }),
+    );
+  });
+
+  it("re-selecting the inherited mode clears the explicit entry", async () => {
+    const updateAgent = vi.spyOn(api, "updateAgent").mockResolvedValue({ id: baseAgent.id, version: 1, version_id: "v1" });
+    renderCapabilities(
+      {
+        ...baseAgent,
+        capabilities: [
+          { name: "mcp_server:srv-pw", subject: "none" as const, require_approval: true },
+          { name: "mcp.playwright.browser_evaluate", enabled: false, subject: "none" as const, require_approval: false },
+        ],
+      },
+      [webSearch, mcpTool],
+    );
+
+    fireEvent.click(await screen.findByText("MCP: Playwright"));
+    const toolRow = (await screen.findByText("mcp.playwright.browser_evaluate")).closest(
+      "div.flex.items-center.justify-between",
+    )!;
+    const select = toolRow.querySelector("select")!;
+    // The deny renders as Not permitted under the granted server.
+    expect(select).toHaveValue("none");
+
+    fireEvent.change(select, { target: { value: "on_demand" } });
+
+    await waitFor(() => expect(updateAgent).toHaveBeenCalled());
+    const saved = updateAgent.mock.calls.at(-1)?.[1]?.capabilities ?? [];
+    // Matching the inherited mode drops the explicit entry entirely.
+    expect(saved).not.toContainEqual(
+      expect.objectContaining({ name: "mcp.playwright.browser_evaluate" }),
+    );
   });
 });

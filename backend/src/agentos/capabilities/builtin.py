@@ -17,9 +17,9 @@ from .tools.memory import (
     memory_update,
     search_history,
 )
-from .tools.shell import shell_run
 from .tools.skills import skills_list, skills_load, skills_read_resource
 from .tools.subagent import register_subagent_tools
+from .tools.terminal import close_terminal, read_terminal, terminal_run
 from .tools.web import web_fetch, web_search
 
 
@@ -148,7 +148,14 @@ def register_builtin_capabilities() -> None:
             parameters_schema={
                 "type": "object",
                 "properties": {
-                    "command": {"type": "string", "description": "Shell command to execute"},
+                    "command": {
+                        "type": "string",
+                        "description": (
+                            "The exact shell command to run, passed verbatim to "
+                            "the shell — e.g. `ls -la`, `echo hello`. Do not "
+                            "prefix with words like 'run' or 'execute'."
+                        ),
+                    },
                     "async": {
                         "type": "boolean",
                         "description": "If true, run in background and return terminal_id immediately",
@@ -160,7 +167,7 @@ def register_builtin_capabilities() -> None:
             egress=True,
             require_approval=True,
             subject_scoped=False,
-            execute=shell_run,
+            execute=terminal_run,
         )
     )
 
@@ -169,7 +176,11 @@ def register_builtin_capabilities() -> None:
             name="read_terminal",
             effects=frozenset({"read"}),
             kind="tool",
-            description="Read output from a background terminal session. Returns current stdout/stderr and whether the command is still running.",
+            description=(
+                "Read incremental output from a background terminal. Pass the "
+                "next_offset from the previous call to get only new output. "
+                "wait_ms long-polls for output or completion (max 30000)."
+            ),
             parameters_schema={
                 "type": "object",
                 "properties": {
@@ -177,13 +188,28 @@ def register_builtin_capabilities() -> None:
                         "type": "string",
                         "description": "Terminal session ID from terminal(async=true)",
                     },
+                    "offset": {
+                        "type": "integer",
+                        "description": "Byte offset for incremental stdout reads (next_offset from previous call)",
+                        "default": 0,
+                    },
+                    "max_chars": {
+                        "type": "integer",
+                        "description": "Max stdout chars to return (cap 65536)",
+                        "default": 8192,
+                    },
+                    "wait_ms": {
+                        "type": "integer",
+                        "description": "Long-poll up to this many ms for new output or completion (cap 30000)",
+                        "default": 0,
+                    },
                 },
                 "required": ["terminal_id"],
             },
             egress=False,
             require_approval=False,
             subject_scoped=False,
-            execute=None,  # handled by terminal registry
+            execute=read_terminal,
         )
     )
 
@@ -192,7 +218,7 @@ def register_builtin_capabilities() -> None:
             name="close_terminal",
             effects=frozenset({"local_execute"}),
             kind="tool",
-            description="Close a background terminal session and return its final output.",
+            description="Close a background terminal session — terminates the process group if running and returns final output.",
             parameters_schema={
                 "type": "object",
                 "properties": {
@@ -206,7 +232,7 @@ def register_builtin_capabilities() -> None:
             egress=False,
             require_approval=False,
             subject_scoped=False,
-            execute=None,  # handled by terminal registry
+            execute=close_terminal,
         )
     )
 

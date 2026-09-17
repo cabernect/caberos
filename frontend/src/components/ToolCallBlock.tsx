@@ -45,6 +45,41 @@ interface ToolCallBlockProps {
   subagentStream?: SubAgentStreamData;
 }
 
+const TERMINAL_CAPS = new Set(["terminal", "read_terminal", "close_terminal"]);
+
+const TERMINAL_STATUS_COLORS: Record<string, string> = {
+  running: "var(--warning)",
+  completed: "var(--success)",
+  failed: "var(--danger)",
+  timeout: "var(--danger)",
+  closed: "var(--ink-3)",
+  interrupted: "var(--warning)",
+};
+
+function TerminalResult({ result }: { result: Record<string, unknown> }) {
+  const status = typeof result.status === "string" ? result.status : "completed";
+  const stdout = (result.stdout ?? result.stdout_tail ?? "") as string;
+  const stderr = (result.stderr ?? result.stderr_tail ?? "") as string;
+  const exitCode = result.exit_code as number | null | undefined;
+  const terminalId = result.terminal_id as string | undefined;
+
+  return (
+    <div
+      className="mb-2 overflow-x-auto rounded-[5px] p-2 font-mono text-[11px]"
+      style={{ background: "var(--white)", border: "1px solid var(--border)", color: "var(--ink-2)" }}
+    >
+      <div className="flex items-center gap-2">
+        <span style={{ color: TERMINAL_STATUS_COLORS[status] ?? "var(--ink-2)" }}>{status}</span>
+        {exitCode != null && <span className="text-[var(--ink-3)]">exit {exitCode}</span>}
+        {terminalId && <span className="text-[var(--ink-3)]">id {terminalId.slice(0, 8)}</span>}
+        {result.truncated === true && <span className="text-[var(--warning)]">truncated</span>}
+      </div>
+      {stdout && <pre className="mt-1 whitespace-pre-wrap break-words text-[var(--ink-1)]">{stdout}</pre>}
+      {stderr && <pre className="mt-1 whitespace-pre-wrap break-words text-[var(--danger)]">{stderr}</pre>}
+    </div>
+  );
+}
+
 export function ToolCallBlock({ call, subagentStream }: ToolCallBlockProps) {
   const [expanded, setExpanded] = useState(false);
   const [subExpanded, setSubExpanded] = useState(false);
@@ -68,7 +103,7 @@ export function ToolCallBlock({ call, subagentStream }: ToolCallBlockProps) {
   };
 
   const config = statusConfig[call.status];
-  const argsStr = formatArgs(call.capability, call.args);
+  const { label, detail } = describeCall(call.capability, call.args);
   const hasResult =
     call.status === "complete" && call.result != null ||
     call.status === "denied" ||
@@ -110,15 +145,23 @@ export function ToolCallBlock({ call, subagentStream }: ToolCallBlockProps) {
             cursor: hasResult ? "pointer" : "default",
           }}
         >
-          <span className="font-mono text-[11px] text-[var(--ink-2)]">
-            {`${call.capability}(${argsStr})`}
-          </span>
+          <span className="text-[11px] font-medium text-[var(--ink-1)]">{label}</span>
+          {detail && (
+            <span className="min-w-0 truncate font-mono text-[11px] text-[var(--ink-3)]">{detail}</span>
+          )}
           <span
             className={`ml-auto font-mono text-[11px] ${call.status === "running" ? "pulse" : ""}`}
             style={{ color: config.color }}
           >
             {config.symbol}
           </span>
+        </div>
+      )}
+
+      {/* Raw signature — full audit detail one click away */}
+      {expanded && (
+        <div className="mb-1 truncate font-mono text-[10px] text-[var(--ink-3)]">
+          {`${call.capability}(${formatArgs(call.capability, call.args)})`}
         </div>
       )}
 
@@ -247,8 +290,15 @@ export function ToolCallBlock({ call, subagentStream }: ToolCallBlockProps) {
 
       {/* Expanded result — hidden for write_file (diff block replaces it)
           and run_subagent (the nested sub-agent stream replaces it) */}
+      {expanded && hasResult && call.status === "complete" &&
+        TERMINAL_CAPS.has(call.capability) &&
+        typeof call.result === "object" && call.result !== null && (
+        <TerminalResult result={call.result as Record<string, unknown>} />
+      )}
+
       {expanded && hasResult &&
         !(call.capability === "write_file" && call.status === "complete" && typeof call.result === "object" && call.result !== null && "action" in (call.result as Record<string, unknown>)) &&
+        !(call.status === "complete" && TERMINAL_CAPS.has(call.capability) && typeof call.result === "object" && call.result !== null) &&
         !(isSubagent && subagentStream && (subagentStream.items.length > 0 || subagentStream.text)) && (
         <div
           className="mb-2 overflow-x-auto whitespace-pre-wrap break-words rounded-[5px] p-2 font-mono text-[11px]"
@@ -330,6 +380,82 @@ export function ToolCallBlock({ call, subagentStream }: ToolCallBlockProps) {
       )}
     </div>
   );
+}
+
+/** Verb-first label + the one argument a user actually wants to glance at. */
+function describeCall(
+  capability: string,
+  args: Record<string, unknown>,
+): { label: string; detail?: string } {
+  const a = args;
+  const str = (v: unknown) => (typeof v === "string" ? v : undefined);
+  const short = (v: unknown) => (typeof v === "string" ? v.slice(0, 8) : undefined);
+  const trunc = (v: unknown, n = 80) => {
+    const s = str(v);
+    return s ? (s.length > n ? s.slice(0, n) + "…" : s) : undefined;
+  };
+
+  switch (capability) {
+    case "terminal":
+      return { label: "Run command", detail: trunc(a.command) };
+    case "read_terminal":
+      return { label: "Read terminal output", detail: short(a.terminal_id) };
+    case "close_terminal":
+      return { label: "Close terminal", detail: short(a.terminal_id) };
+    case "read_file":
+      return { label: "Read file", detail: trunc(a.path) };
+    case "write_file":
+      return { label: "Write file", detail: trunc(a.path) };
+    case "search_files":
+      return { label: "Search files", detail: trunc(a.pattern ?? a.query ?? a.path) };
+    case "web_search":
+      return { label: "Search the web", detail: trunc(a.query) };
+    case "web_fetch":
+      return { label: "Fetch page", detail: trunc(a.url) };
+    case "datetime_now":
+      return { label: "Check the time" };
+    case "agent_ask_user":
+      return { label: "Ask a question", detail: trunc(a.question) };
+    case "run_subagent":
+      return { label: "Delegate to sub-agent", detail: trunc(a.task, 60) };
+    case "read_subagent":
+      return { label: "Check sub-agent", detail: short(a.subagent_id ?? a.id) };
+    case "memory_recall":
+      return { label: "Recall memory", detail: trunc(a.query) };
+    case "memory_store":
+      return { label: "Store memory" };
+    case "memory_remember_fact":
+      return { label: "Remember a fact" };
+    case "memory_query_facts":
+      return { label: "Query memory" };
+    case "memory_update":
+      return { label: "Update memory" };
+    case "skills_list":
+      return { label: "List skills" };
+    case "skills_load":
+      return { label: "Load skill", detail: trunc(a.name ?? a.skill) };
+    case "skills_read_resource":
+      return { label: "Read skill resource", detail: trunc(a.path ?? a.resource) };
+    case "capabilities_search":
+      return { label: "Find a tool", detail: trunc(a.query) };
+    case "capabilities_load":
+      return { label: "Load tool", detail: trunc(JSON.stringify(a.names ?? a.capabilities ?? "")) };
+    case "doc_search":
+      return { label: "Search documents", detail: trunc(a.query) };
+    case "doc_list":
+      return { label: "List documents" };
+    case "doc_inspect":
+      return { label: "Inspect document", detail: trunc(a.doc_id ?? a.id ?? a.path) };
+    case "search_history":
+      return { label: "Search history", detail: trunc(a.query) };
+    default: {
+      // MCP tools and anything unregistered: humanize the name.
+      const words = capability.replace(/^mcp[._]/, "").replace(/[._-]+/g, " ").trim();
+      const label = words.charAt(0).toUpperCase() + words.slice(1);
+      const firstArg = Object.values(a).find((v) => typeof v === "string" && v.length > 0);
+      return { label, detail: trunc(firstArg) };
+    }
+  }
 }
 
 function formatArgs(

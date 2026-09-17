@@ -102,21 +102,35 @@ export function Mcps() {
     }
   };
 
-  const handleApprovalChange = async (serverId: string, requireApproval: boolean) => {
-    try {
-      await api.updateMcpServer(serverId, { require_approval: requireApproval });
-      fetchServers();
-    } catch {
-      // ignore
-    }
-  };
-
   const handleEnabledChange = async (serverId: string, enabled: boolean) => {
     try {
       await api.updateMcpServer(serverId, { enabled });
       fetchServers();
     } catch {
       // ignore
+    }
+  };
+
+  const handleToolEnabledChange = async (
+    server: McpServerInfo,
+    toolName: string,
+    enabled: boolean,
+  ) => {
+    const all = (tools[server.id] ?? []).map((t) => t.tool_name);
+    if (all.length === 0) return;
+    // Current effective set: the filter if present, else every tool.
+    const current = new Set(server.tool_filter ?? all);
+    if (enabled) current.add(toolName);
+    else current.delete(toolName);
+    // Everything on → clear the filter entirely (null = unfiltered).
+    const next = all.every((n) => current.has(n))
+      ? null
+      : all.filter((n) => current.has(n));
+    try {
+      await api.updateMcpServer(server.id, { tool_filter: next });
+      fetchServers();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Could not update the tool filter.");
     }
   };
 
@@ -203,8 +217,10 @@ export function Mcps() {
                         onToggle={() => toggleExpand(server.id)}
                         onDelete={() => handleDelete(server.id, server.name)}
                         onConnect={() => handleConnect(server.id)}
-                        onApprovalChange={(requireApproval) => handleApprovalChange(server.id, requireApproval)}
                         onEnabledChange={(enabled) => handleEnabledChange(server.id, enabled)}
+                        onToolEnabledChange={(toolName, enabled) =>
+                          handleToolEnabledChange(server, toolName, enabled)
+                        }
                         onCredentialChanged={fetchServers}
                       />
                     ))}
@@ -548,8 +564,8 @@ function ServerCard({
   onToggle,
   onDelete,
   onConnect,
-  onApprovalChange,
   onEnabledChange,
+  onToolEnabledChange,
   onCredentialChanged,
 }: {
   server: McpServerInfo;
@@ -558,8 +574,8 @@ function ServerCard({
   onToggle: () => void;
   onDelete: () => void;
   onConnect: () => Promise<void>;
-  onApprovalChange: (requireApproval: boolean) => void;
   onEnabledChange: (enabled: boolean) => void;
+  onToolEnabledChange: (toolName: string, enabled: boolean) => void;
   onCredentialChanged: () => void;
 }) {
   const statusColor = server.connected ? "#6A8216" : "#999";
@@ -627,7 +643,9 @@ function ServerCard({
           {statusText}
         </span>
         <span className="font-mono text-[11px]" style={{ color: "var(--ink-3)" }}>
-          {server.tool_count} tools
+          {server.tool_filter === null
+            ? `${server.tool_count} tools`
+            : `${server.tool_filter.length}/${server.tool_count} tools`}
         </span>
         {/* Actions */}
         {needsApiKey && (
@@ -841,35 +859,12 @@ function ServerCard({
             </div>
           )}
 
-          {/* Approval toggle */}
-          <div className="mb-3 flex items-center gap-2">
-            <span className="font-mono text-[10px] uppercase tracking-wider text-[var(--ink-3)]">
-              Require approval
-            </span>
-            <button
-              onClick={() => onApprovalChange(!server.require_approval)}
-              className="relative inline-flex h-5 w-9 items-center rounded-full transition"
-              style={{
-                background: server.require_approval ? "var(--accent)" : "#D6D5D2",
-                border: "none",
-                cursor: "pointer",
-              }}
-              title={server.require_approval ? "Approval required — click to bypass" : "No approval needed — click to require"}
-            >
-              <span
-                className="inline-block h-3.5 w-3.5 transform rounded-full bg-white transition"
-                style={{ transform: server.require_approval ? "translateX(18px)" : "translateX(2px)" }}
-              />
-            </button>
-            <span className="text-[11px]" style={{ color: "var(--ink-3)" }}>
-              {server.require_approval ? "Operator approves each call" : "Agent runs without asking"}
-            </span>
-          </div>
-
           {/* Tools */}
           <div>
             <span className="mb-2 block font-mono text-[10px] uppercase tracking-wider text-[var(--ink-3)]">
-              Tools ({tools?.length ?? 0})
+              {server.tool_filter === null
+                ? `Tools (${tools?.length ?? 0})`
+                : `Tools (${tools?.filter((t) => server.tool_filter!.includes(t.tool_name)).length ?? 0}/${tools?.length ?? 0} enabled)`}
             </span>
             {!tools ? (
               <p className="text-[12px] text-[var(--ink-3)]">Loading tools…</p>
@@ -880,7 +875,15 @@ function ServerCard({
             ) : (
               <div className="space-y-1.5">
                 {tools.map((tool) => (
-                  <ToolRow key={tool.id} tool={tool} />
+                  <ToolRow
+                    key={tool.id}
+                    tool={tool}
+                    enabled={
+                      server.tool_filter === null ||
+                      server.tool_filter.includes(tool.tool_name)
+                    }
+                    onToggle={(enabled) => onToolEnabledChange(tool.tool_name, enabled)}
+                  />
                 ))}
               </div>
             )}
@@ -899,7 +902,15 @@ function ServerCard({
   );
 }
 
-function ToolRow({ tool }: { tool: McpToolInfo }) {
+function ToolRow({
+  tool,
+  enabled,
+  onToggle,
+}: {
+  tool: McpToolInfo;
+  enabled: boolean;
+  onToggle: (enabled: boolean) => void;
+}) {
   const [expanded, setExpanded] = useState(false);
   const maxLen = 80;
   const isLong = tool.description.length > maxLen;
@@ -908,21 +919,13 @@ function ToolRow({ tool }: { tool: McpToolInfo }) {
   return (
     <div
       className="flex items-start gap-2 rounded-[5px] px-3 py-2"
-      style={{ background: "var(--surface)" }}
+      style={{ background: "var(--surface)", opacity: enabled ? 1 : 0.55 }}
     >
       <div className="flex-1">
         <div className="flex items-center gap-2">
           <span className="font-mono text-[12px] font-medium" style={{ color: "var(--ink)" }}>
             {tool.capability_name}
           </span>
-          {tool.require_approval && (
-            <span
-              className="rounded-full px-1.5 py-0.5 font-mono text-[9px] uppercase"
-              style={{ background: "var(--surface)", color: "var(--ink-3)" }}
-            >
-              approval
-            </span>
-          )}
           {tool.egress && (
             <span
               className="rounded-full px-1.5 py-0.5 font-mono text-[9px] uppercase"
@@ -945,6 +948,21 @@ function ToolRow({ tool }: { tool: McpToolInfo }) {
           )}
         </p>
       </div>
+      <button
+        onClick={() => onToggle(!enabled)}
+        className="relative mt-0.5 inline-flex h-4 w-7 shrink-0 items-center rounded-full transition"
+        style={{
+          background: enabled ? "var(--accent)" : "#D1D1D1",
+          border: "none",
+          cursor: "pointer",
+        }}
+        title={enabled ? "Disable tool" : "Enable tool"}
+      >
+        <span
+          className="inline-block h-3 w-3 rounded-full bg-white transition"
+          style={{ transform: enabled ? "translateX(14px)" : "translateX(2px)" }}
+        />
+      </button>
     </div>
   );
 }

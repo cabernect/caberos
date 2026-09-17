@@ -481,6 +481,7 @@ function capabilityState(agent: Agent | null, allCaps: CapabilityInfo[]) {
   const serverModes = new Map<string, GrantMode>();
   const approvals = new Set<string>();
   const serverApprovals = new Map<string, boolean>();
+  const denied = new Set<string>();
 
   if (agent?.capabilities) {
     for (const grant of agent.capabilities) {
@@ -493,7 +494,8 @@ function capabilityState(agent: Agent | null, allCaps: CapabilityInfo[]) {
       }
       const kind = allCaps.find((cap) => cap.name === grant.name)?.kind || "tool";
       const mode = grantMode(grant, kind);
-      if (mode !== "none") grantModes.set(grant.name, mode);
+      if (mode === "none") denied.add(grant.name);
+      else grantModes.set(grant.name, mode);
       if (grant.require_approval) approvals.add(grant.name);
     }
   } else {
@@ -505,7 +507,7 @@ function capabilityState(agent: Agent | null, allCaps: CapabilityInfo[]) {
     }
   }
 
-  return { grantModes, serverModes, approvals, serverApprovals };
+  return { grantModes, serverModes, approvals, serverApprovals, denied };
 }
 
 function CapabilitiesTab({
@@ -522,6 +524,7 @@ function CapabilitiesTab({
   const [serverModes, setServerModes] = useState<Map<string, GrantMode>>(new Map());
   const [approvals, setApprovals] = useState<Set<string>>(new Set());
   const [serverApprovals, setServerApprovals] = useState<Map<string, boolean>>(new Map());
+  const [denied, setDenied] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [allCaps, setAllCaps] = useState<CapabilityInfo[]>(FALLBACK_CAPABILITIES);
@@ -554,11 +557,18 @@ function CapabilitiesTab({
     setServerModes(state.serverModes);
     setApprovals(state.approvals);
     setServerApprovals(state.serverApprovals);
+    setDenied(state.denied);
   }, [agent, allCaps]);
 
   const modeFor = (cap: CapabilityInfo): GrantMode => {
-    if (cap.server_id && serverModes.has(cap.server_id)) {
-      return serverModes.get(cap.server_id) || "none";
+    if (cap.kind === "mcp_tool") {
+      // Explicit entries beat the server wildcard (same precedence as backend).
+      if (denied.has(cap.name)) return "none";
+      if (grantModes.has(cap.name)) return grantModes.get(cap.name)!;
+      if (cap.server_id && serverModes.has(cap.server_id)) {
+        return serverModes.get(cap.server_id) || "none";
+      }
+      return "none";
     }
     return grantModes.get(cap.name) || "none";
   };
@@ -568,6 +578,7 @@ function CapabilitiesTab({
     serverModeMap: Map<string, GrantMode> = serverModes,
     approvalSet: Set<string> = approvals,
     serverApprovalMap: Map<string, boolean> = serverApprovals,
+    deniedSet: Set<string> = denied,
   ) => {
     if (!agent) return;
     setSaving(true);
@@ -596,7 +607,8 @@ function CapabilitiesTab({
       }
       for (const [serverId, serverCaps] of mcpServers) {
         const serverMode = serverModeMap.get(serverId) || "none";
-        if (serverId !== "other" && serverMode !== "none") {
+        const serverGranted = serverId !== "other" && serverMode !== "none";
+        if (serverGranted) {
           caps.push({
             name: `${SERVER_GRANT_PREFIX}${serverId}`,
             subject: "none",
@@ -604,9 +616,20 @@ function CapabilitiesTab({
               serverApprovalMap.get(serverId) ?? serverCaps.some((cap) => cap.egress),
             always_loaded: serverMode === "always",
           });
-          continue;
         }
         for (const cap of serverCaps) {
+          // Explicit deny overrides the wildcard — keep the grant so the
+          // backend honors it (exact match beats the server grant).
+          if (deniedSet.has(cap.name)) {
+            caps.push({
+              name: cap.name,
+              enabled: false,
+              subject: "none",
+              require_approval: false,
+              always_loaded: false,
+            });
+            continue;
+          }
           const mode = modeMap.get(cap.name) || "none";
           if (mode !== "none") {
             caps.push({
@@ -635,6 +658,7 @@ function CapabilitiesTab({
         setServerModes(state.serverModes);
         setApprovals(state.approvals);
         setServerApprovals(state.serverApprovals);
+        setDenied(state.denied);
         onSaved();
       } catch {
       }
@@ -644,11 +668,35 @@ function CapabilitiesTab({
   };
 
   const updateMode = (name: string, mode: GrantMode) => {
+    const cap = allCaps.find((c) => c.name === name);
     const next = new Map(grantModes);
-    if (mode === "none") next.delete(name);
-    else next.set(name, mode);
+    const nextDenied = new Set(denied);
+    const inherited =
+      cap?.kind === "mcp_tool" && cap.server_id
+        ? serverModes.get(cap.server_id) || "none"
+        : "none";
+    if (cap?.kind === "mcp_tool" && inherited !== "none") {
+      // Under a granted server: explicit entries only exist as overrides —
+      // matching the inherited mode falls back to inheriting, "none" writes
+      // an explicit deny, anything else writes an explicit grant.
+      if (mode === inherited) {
+        next.delete(name);
+        nextDenied.delete(name);
+      } else if (mode === "none") {
+        next.delete(name);
+        nextDenied.add(name);
+      } else {
+        next.set(name, mode);
+        nextDenied.delete(name);
+      }
+    } else {
+      if (mode === "none") next.delete(name);
+      else next.set(name, mode);
+      nextDenied.delete(name);
+    }
     setGrantModes(next);
-    void saveCapabilities(next, serverModes, approvals, serverApprovals);
+    setDenied(nextDenied);
+    void saveCapabilities(next, serverModes, approvals, serverApprovals, nextDenied);
   };
 
   const updateServerMode = (serverId: string, mode: GrantMode, caps: CapabilityInfo[]) => {
@@ -685,13 +733,25 @@ function CapabilitiesTab({
 
   const setAllModes = (caps: CapabilityInfo[], enable: boolean) => {
     const next = new Map(grantModes);
+    const nextDenied = new Set(denied);
     for (const cap of caps) {
       if (enable) next.set(cap.name, cap.kind === "mcp_tool" ? "on_demand" : "always");
       else next.delete(cap.name);
+      nextDenied.delete(cap.name);
     }
     setGrantModes(next);
-    void saveCapabilities(next, serverModes, approvals, serverApprovals);
+    setDenied(nextDenied);
+    void saveCapabilities(next, serverModes, approvals, serverApprovals, nextDenied);
   };
+
+  // A row inherits when the server wildcard covers it and it has no explicit
+  // grant or deny of its own (backend: exact match beats the wildcard).
+  const isInherited = (cap: CapabilityInfo) =>
+    cap.kind === "mcp_tool" &&
+    !!cap.server_id &&
+    serverModes.has(cap.server_id) &&
+    !denied.has(cap.name) &&
+    !grantModes.has(cap.name);
 
   // Group capabilities: built-in vs MCP (grouped by stable server ID)
   const builtinCaps = allCaps.filter((cap) => cap.kind !== "mcp_tool");
@@ -751,6 +811,7 @@ function CapabilitiesTab({
         title="Built-in Tools"
         caps={builtinCaps}
         modeFor={modeFor}
+        isInherited={isInherited}
         onModeChange={updateMode}
         onSetAll={setAllModes}
         approvals={approvals}
@@ -767,6 +828,7 @@ function CapabilitiesTab({
             title={`MCP: ${serverName}`}
             caps={caps}
             modeFor={modeFor}
+            isInherited={isInherited}
             onModeChange={updateMode}
             onSetAll={setAllModes}
             approvals={approvals}
@@ -795,6 +857,7 @@ function CapabilityGroup({
   title,
   caps,
   modeFor,
+  isInherited,
   onModeChange,
   onSetAll,
   approvals,
@@ -808,6 +871,7 @@ function CapabilityGroup({
   title: string;
   caps: CapabilityInfo[];
   modeFor: (cap: CapabilityInfo) => GrantMode;
+  isInherited: (cap: CapabilityInfo) => boolean;
   onModeChange: (name: string, mode: GrantMode) => void;
   onSetAll: (caps: CapabilityInfo[], enable: boolean) => void;
   approvals: Set<string>;
@@ -891,7 +955,7 @@ function CapabilityGroup({
         <div className="space-y-1.5 px-4 pb-3">
           {caps.map((cap) => {
             const mode = modeFor(cap);
-            const viaServer = serverGrantActive && serverMode !== "none";
+            const viaServer = serverGrantActive && serverMode !== "none" && isInherited(cap);
             const needsApproval = approvals.has(cap.name);
             return (
               <div
@@ -927,20 +991,19 @@ function CapabilityGroup({
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
-                  {viaServer ? (
+                  {viaServer && (
                     <span className="font-mono text-[10px] text-[var(--ink-3)]">via server</span>
-                  ) : (
-                    <select
-                      value={mode}
-                      onChange={(event) => onModeChange(cap.name, event.target.value as GrantMode)}
-                      className="rounded-[4px] border px-1.5 py-1 text-[10px]"
-                      style={{ borderColor: "var(--border)", color: "var(--ink-2)", background: "var(--white)" }}
-                    >
-                      <option value="none">Not permitted</option>
-                      <option value="on_demand">On demand</option>
-                      <option value="always">Always</option>
-                    </select>
                   )}
+                  <select
+                    value={mode}
+                    onChange={(event) => onModeChange(cap.name, event.target.value as GrantMode)}
+                    className="rounded-[4px] border px-1.5 py-1 text-[10px]"
+                    style={{ borderColor: "var(--border)", color: "var(--ink-2)", background: "var(--white)" }}
+                  >
+                    <option value="none">Not permitted</option>
+                    <option value="on_demand">On demand</option>
+                    <option value="always">Always</option>
+                  </select>
                   {!viaServer && mode !== "none" && cap.egress && (
                     <label className="flex items-center gap-1.5 text-[10px] text-[var(--ink-2)]">
                       <input type="checkbox" checked={needsApproval} onChange={() => toggleApproval(cap.name)} style={{ cursor: "pointer" }} />
