@@ -98,3 +98,10 @@ Every edit names a base revision. If the current file hash differs, do not overw
 ## Done when
 
 The integrated acceptance story can create, validate, revise, restore, and export all four target formats on clean desktop and Docker builds.
+
+## Implementation status (feat/v0.2-artifacts)
+
+- Core + all format handlers + mediated `artifact_*` capabilities: implemented and green (22 tests in `backend/tests/test_artifacts.py`, plus `scripts/smoke_artifacts.py` scripted/live pipeline verification).
+- PDF export: LibreOffice headless when installed → pure-Python reportlab fallback for docx/xlsx → honest `renderer_unavailable` otherwise. pptx excluded from text-flow export (layout-bound). TODO(W4): Chromium render path via the managed browser — positioned HTML reproduces slide layout without LibreOffice.
+- Direct `format: "pdf"` creation is supported (spec → reportlab, write-once).
+- Open gaps: `preview_status` populated by W3; `artifact_base_revision_ids` run-start capture pending; templates/themes guidance deferred to W6 skills; LibreOffice availability in Docker image deferred to W10 packaging.

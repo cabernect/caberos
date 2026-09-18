@@ -5,6 +5,15 @@ run_subagent is just another tool.
 """
 
 from .registry import CapabilityDef, registry
+from .tools.artifact import (
+    artifact_adopt,
+    artifact_create,
+    artifact_export_pdf,
+    artifact_history,
+    artifact_inspect,
+    artifact_restore,
+    artifact_revise,
+)
 from .tools.catalog import capabilities_load, capabilities_search
 from .tools.datetime_tool import datetime_now
 from .tools.file import read_file, search_files, write_file
@@ -804,5 +813,184 @@ def register_builtin_capabilities() -> None:
             require_approval=False,
             subject_scoped=False,
             execute=capabilities_load,
+        )
+    )
+
+    # --- Artifact Studio (W2) ---
+
+    _doc_spec_hint = (
+        "Structured document spec — e.g. docx: {title?, blocks:[heading|"
+        "paragraph|list|table|image|page_break]}; xlsx: {sheets:[{name,rows,"
+        "cells,freeze,column_widths,formats}]}; pptx: {slides:[{layout,title,"
+        "subtitle,blocks:[bullets|table|image|chart|notes|text]}]}"
+    )
+    registry.register(
+        CapabilityDef(
+            name="artifact_create",
+            effects=frozenset({"workspace_write"}),
+            kind="tool",
+            description=(
+                "Create a versioned Office deliverable (docx/xlsx/pptx) in the "
+                "workspace from a structured spec — never raw file bytes. " + _doc_spec_hint
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Workspace-relative output path (e.g. report.docx)",
+                    },
+                    "format": {
+                        "type": "string",
+                        "enum": ["docx", "xlsx", "pptx"],
+                        "description": "Format; inferred from path extension when omitted",
+                    },
+                    "spec": {"type": "object", "description": _doc_spec_hint},
+                    "change_summary": {
+                        "type": "string",
+                        "description": "Short note recorded on revision 1",
+                    },
+                },
+                "required": ["path", "spec"],
+            },
+            egress=False,
+            require_approval=False,
+            subject_scoped=False,
+            execute=artifact_create,
+        )
+    )
+
+    registry.register(
+        CapabilityDef(
+            name="artifact_inspect",
+            effects=frozenset({"read"}),
+            kind="tool",
+            description="Inspect a tracked artifact — validity, structure (headings/sheets/slides), tracking status.",
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "artifact_id": {"type": "string"},
+                },
+                "required": ["artifact_id"],
+            },
+            egress=False,
+            require_approval=False,
+            subject_scoped=False,
+            execute=artifact_inspect,
+        )
+    )
+
+    registry.register(
+        CapabilityDef(
+            name="artifact_revise",
+            effects=frozenset({"workspace_write"}),
+            kind="tool",
+            description=(
+                "Apply structured edit ops to an artifact → new immutable revision. "
+                "Requires base_revision_id (from inspect/history); conflicts instead "
+                "of overwriting when the file changed externally. Ops — docx: "
+                "append_blocks|replace_paragraph|set_cell; xlsx: set_cell|append_rows|"
+                "add_sheet|remove_sheet; pptx: add_slide|move_slide|set_title|append_bullets."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "artifact_id": {"type": "string"},
+                    "base_revision_id": {
+                        "type": "string",
+                        "description": "Revision the edit is based on — get it from artifact_inspect",
+                    },
+                    "ops": {"type": "array", "items": {"type": "object"}},
+                    "change_summary": {"type": "string"},
+                },
+                "required": ["artifact_id", "base_revision_id", "ops"],
+            },
+            egress=False,
+            require_approval=False,
+            subject_scoped=False,
+            execute=artifact_revise,
+        )
+    )
+
+    registry.register(
+        CapabilityDef(
+            name="artifact_adopt",
+            effects=frozenset({"workspace_write"}),
+            kind="tool",
+            description="Start tracking an existing workspace file (download, import, user drop) — current bytes become revision 1.",
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Workspace-relative path"},
+                    "change_summary": {"type": "string"},
+                },
+                "required": ["path"],
+            },
+            egress=False,
+            require_approval=False,
+            subject_scoped=False,
+            execute=artifact_adopt,
+        )
+    )
+
+    registry.register(
+        CapabilityDef(
+            name="artifact_history",
+            effects=frozenset({"read"}),
+            kind="tool",
+            description="List an artifact's revisions, newest first — revision ids, summaries, provenance.",
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "artifact_id": {"type": "string"},
+                },
+                "required": ["artifact_id"],
+            },
+            egress=False,
+            require_approval=False,
+            subject_scoped=False,
+            execute=artifact_history,
+        )
+    )
+
+    registry.register(
+        CapabilityDef(
+            name="artifact_restore",
+            effects=frozenset({"workspace_write"}),
+            kind="tool",
+            description="Write an old revision's bytes back to the workspace as a NEW revision — history is never rewritten.",
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "artifact_id": {"type": "string"},
+                    "revision_id": {"type": "string"},
+                    "change_summary": {"type": "string"},
+                },
+                "required": ["artifact_id", "revision_id"],
+            },
+            egress=False,
+            require_approval=False,
+            subject_scoped=False,
+            execute=artifact_restore,
+        )
+    )
+
+    registry.register(
+        CapabilityDef(
+            name="artifact_export_pdf",
+            effects=frozenset({"workspace_write", "local_execute"}),
+            kind="tool",
+            description="Render an Office artifact to PDF. Uses LibreOffice when installed for layout fidelity, otherwise a pure-Python renderer. Honest status: exported / renderer_unavailable / failed, plus which renderer produced it.",
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "artifact_id": {"type": "string"},
+                },
+                "required": ["artifact_id"],
+            },
+            egress=False,
+            require_approval=False,
+            subject_scoped=False,
+            execute=artifact_export_pdf,
         )
     )

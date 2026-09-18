@@ -2,6 +2,7 @@
 
 from .agent import Agent, AgentVersion
 from .approval import ApprovalRequest
+from .artifact import Artifact, ArtifactRevision
 from .audit import AuditRecord
 from .base import Base, IdMixin, TimestampMixin
 from .capability import AgentCapability, Capability
@@ -31,6 +32,8 @@ __all__ = [
     "TimestampMixin",
     "Agent",
     "AgentVersion",
+    "Artifact",
+    "ArtifactRevision",
     "Capability",
     "AgentCapability",
     "SubAgent",
