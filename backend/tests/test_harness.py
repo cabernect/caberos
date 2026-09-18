@@ -212,12 +212,12 @@ def test_workspace_attachment_references_are_used():
                 "type": "file",
                 "mime_type": "text/plain",
                 "filename": "notes.txt",
-                "path": "attachments/attachment_1_notes.txt",
+                "path": "attachments/notes.txt",
             }
         ],
     )
     content = history[1]["content"]
-    assert "attachments/attachment_1_notes.txt" in content
+    assert "attachments/notes.txt" in content
     assert "Hello world" not in content
 
 

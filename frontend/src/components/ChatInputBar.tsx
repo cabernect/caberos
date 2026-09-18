@@ -739,23 +739,24 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
                     background: "var(--white)",
                   }}
                 >
-                  {/* Thumbnail — image object URL, rendered page, or icon */}
+                  {/* Thumbnail — image object URL, rendered page, or a
+                      file-type tile (ext badge) for documents */}
                   {att.previewUrl || att.thumb ? (
                     <img
                       src={att.previewUrl || att.thumb}
                       alt=""
                       className="h-9 w-9 shrink-0 rounded-[4px] border border-[var(--border)] object-cover"
                     />
-                  ) : (
+                  ) : att.type === "image" ? (
                     <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[4px] bg-[var(--surface)] text-[var(--ink-3)]">
-                      {att.type === "image" ? (
-                        <ImageIcon className="h-4 w-4" />
-                      ) : att.type === "url" ? (
-                        <Link className="h-4 w-4" />
-                      ) : (
-                        <FileText className="h-4 w-4" />
-                      )}
+                      <ImageIcon className="h-4 w-4" />
                     </span>
+                  ) : att.type === "url" ? (
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[4px] bg-[var(--surface)] text-[var(--ink-3)]">
+                      <Link className="h-4 w-4" />
+                    </span>
+                  ) : (
+                    <FileTypeTile filename={att.filename} />
                   )}
                   <span className="min-w-0">
                     <span
@@ -1293,5 +1294,24 @@ function ContextCircle({
         </div>
       )}
     </div>
+  );
+}
+
+/** File-type tile for non-image attachments — the extension badge reads
+    like Drive/Slack file chips, honest where no real thumbnail exists. */
+function FileTypeTile({ filename }: { filename: string }) {
+  const ext = filename.includes(".")
+    ? filename.split(".").pop()!.toUpperCase()
+    : "";
+  const label = ext && ext.length <= 5 ? ext : "FILE";
+  return (
+    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[4px] border border-[var(--border)] bg-[var(--surface)]">
+      <span
+        className="font-mono font-bold tracking-tight text-[var(--accent)]"
+        style={{ fontSize: label.length > 4 ? "7px" : "9px" }}
+      >
+        {label}
+      </span>
+    </span>
   );
 }

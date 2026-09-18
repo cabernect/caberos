@@ -148,9 +148,22 @@ async def test_pipeline_stores_attachments_for_existing_file_tools(db, tmp_path,
     run = await pipeline.handle_inbound(inbound, is_test=True)
 
     assert run.status == "completed"
-    stored = ws_dir / "attachments" / "attachment_1_notes.txt"
+    stored = ws_dir / "attachments" / "notes.txt"
     assert stored.read_text() == "private attachment text"
     assert not (tmp_path / "knowledge").exists()
+
+
+def test_attachment_target_dedupes_with_number_suffix(tmp_path):
+    """Original filename wins; collisions get Finder-style (n) suffixes."""
+    from agentos.pipeline import _dedupe_attachment_target
+
+    (tmp_path / "attachments").mkdir()
+    ws = str(tmp_path)
+    assert _dedupe_attachment_target(ws, "report.pdf", 1) == "attachments/report.pdf"
+    (tmp_path / "attachments" / "report.pdf").write_bytes(b"x")
+    assert _dedupe_attachment_target(ws, "report.pdf", 1) == "attachments/report (1).pdf"
+    (tmp_path / "attachments" / "report (1).pdf").write_bytes(b"x")
+    assert _dedupe_attachment_target(ws, "report.pdf", 1) == "attachments/report (2).pdf"
 
 
 @pytest.mark.asyncio
