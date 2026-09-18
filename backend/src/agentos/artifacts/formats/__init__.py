@@ -4,9 +4,11 @@ Handlers never touch the DB or the filesystem outside explicitly provided
 paths; the artifact service owns revisions, containment, and provenance.
 """
 
-from . import docx
+from . import docx, xlsx
 
-_HANDLERS = {"docx": docx, "docm": docx}
+# Macro-enabled formats (docm/xlsm/pptm) intentionally have no handler —
+# the plan keeps them read-only/unsupported rather than risk macro loss.
+_HANDLERS = {"docx": docx, "xlsx": xlsx}
 
 
 class UnsupportedFormatError(Exception):

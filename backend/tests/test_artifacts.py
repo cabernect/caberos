@@ -357,3 +357,69 @@ async def test_corrupt_file_reports_invalid_not_crash(db, workspace, artifact_st
     info = await service.inspect(db, art.id, workspace_path=workspace)
     assert info["valid"] is False
     assert info["errors"]
+
+
+# --- W2c: XLSX structured generation ---
+
+
+async def test_xlsx_create_inspect_with_honest_formula_status(db, workspace, artifact_storage):
+    from agentos.artifacts import service
+
+    spec = {
+        "sheets": [
+            {
+                "name": "Summary",
+                "rows": [["Metric", "Value"], ["ARR", 4.2], ["MRR", 0.35]],
+                "cells": {"B5": {"formula": "=SUM(B2:B3)"}},
+                "freeze": "A2",
+            }
+        ]
+    }
+    art, _ = await service.create_structured(
+        db,
+        workspace_id="agent-1",
+        workspace_path=workspace,
+        rel_path="model.xlsx",
+        format="xlsx",
+        spec=spec,
+        created_by="agent-1",
+    )
+
+    info = await service.inspect(db, art.id, workspace_path=workspace)
+    assert info["valid"] is True
+    s = info["structure"]
+    assert s["sheets"] == ["Summary"]
+    assert s["formulas"] == 1
+    # openpyxl writes formulas but never computes — report honestly.
+    assert info["formulas_recalculated"] is False
+
+
+async def test_xlsx_revise_set_cell_and_append(db, workspace, artifact_storage):
+    from agentos.artifacts import service
+
+    spec = {"sheets": [{"name": "Data", "rows": [["a", 1]]}]}
+    art, rev1 = await service.create_structured(
+        db,
+        workspace_id="agent-1",
+        workspace_path=workspace,
+        rel_path="book.xlsx",
+        format="xlsx",
+        spec=spec,
+        created_by="agent-1",
+    )
+
+    await service.revise_structured(
+        db,
+        art.id,
+        workspace_path=workspace,
+        base_revision_id=rev1.id,
+        ops=[
+            {"op": "set_cell", "sheet": "Data", "cell": "B2", "value": 2},
+            {"op": "set_cell", "sheet": "Data", "cell": "B3", "formula": "=SUM(B1:B2)"},
+            {"op": "append_rows", "sheet": "Data", "rows": [["b", 3]]},
+        ],
+    )
+
+    info = await service.inspect(db, art.id, workspace_path=workspace)
+    assert info["structure"]["formulas"] == 1
+    assert info["structure"]["cells"] == 6  # 2 original + B2 + B3 + appended row

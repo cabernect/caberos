@@ -375,7 +375,9 @@ async def inspect(db: AsyncSession, artifact_id: str, *, workspace_path: str | P
         return info
     info.update(handler.validate(data))
     if info["valid"]:
-        info["structure"] = handler.inspect(data)["structure"]
+        inspected = handler.inspect(data)
+        info["structure"] = inspected.pop("structure", None)
+        info.update(inspected)
     return info
 
 
