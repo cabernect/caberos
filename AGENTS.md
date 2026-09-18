@@ -97,6 +97,13 @@ Registered in `capabilities/builtin.py`. Two kinds: `tool` (workspace/shell/web 
 | `skills_list` | tool | no | no | List available skills (name + description only — menu) |
 | `skills_load` | tool | no | no | Load a skill's full content + resource listing |
 | `skills_read_resource` | tool | no | no | Read a resource file from a skill directory (scoped to skill dir) |
+| `artifact_create` | tool | no | no | Create a tracked deliverable (docx/xlsx/pptx/pdf) from a structured spec — never raw Office XML |
+| `artifact_inspect` | tool | no | no | Reopen + validate an artifact; report structure + tracking state honestly |
+| `artifact_revise` | tool | no | no | Apply structured ops against a base revision — conflict on external edits, never overwrite |
+| `artifact_adopt` | tool | no | no | Start tracking an existing workspace file (revision 1 snapshot) |
+| `artifact_history` | tool | no | no | List immutable revisions for an artifact, newest first |
+| `artifact_restore` | tool | no | no | Restore an old revision's bytes as a NEW revision (never rewinds) |
+| `artifact_export_pdf` | tool | no | no | Render Office artifact to PDF — LibreOffice if installed, pure-Python reportlab fallback (docx/xlsx); honest status + renderer |
 
 ## Attachments
 
@@ -143,6 +150,13 @@ Tickets **01–09 implemented**: smoke slice, real-model chat + SSE streaming, f
 - **Language behavior:** the base prompt instructs the model to detect the user's language and use it for both thinking and replies — no explicit language setting.
 
 **v0.1.7 design rule:** Agent configuration defines the permission ceiling; the harness separately tracks which schemas are loaded into the current run. `capabilities_search` exposes bounded metadata for permitted tools, and `capabilities_load` makes selected schemas available on the next model turn without widening syscall authority.
+
+**v0.2 W1+W2 status (branch `feat/v0.2-artifacts`, unmerged):**
+- **W1 (merged via #49):** background terminals, capability search (ranked OR-token), per-tool MCP `tool_filter` + deny overrides, approval precedence (per-tool → wildcard → default), blast-radius accounting.
+- **W2 Artifact Studio (implemented):** `Artifact`/`ArtifactRevision` models — stable identity, immutable revisions, restore-as-new-revision, conflict detection on external edits, workspace containment, run/message provenance. Format handlers for docx/xlsx/pptx (spec→bytes, never raw XML) + pdf (inspect/validate + build). `artifact_*` capabilities wired through the mediator.
+- **PDF export:** `artifact_export_pdf` uses LibreOffice headless when installed (layout-faithful); otherwise a pure-Python reportlab renderer for docx/xlsx. pptx export requires the layout engine — `renderer_unavailable` honestly. TODO(W4): Chromium render path via the managed browser (positioned HTML for slides).
+- **Verification:** `backend/tests/test_artifacts.py` (22 tests) + `scripts/smoke_artifacts.py` — scripted chain through the real pipeline and `--live` mode driving a real provider end-to-end.
+- **Gaps:** `preview_status` column exists but rendering is W3; `artifact_base_revision_ids` on ExecutionManifest unpopulated; LibreOffice Docker packaging is W10; templates/themes guidance is W6 skills.
 
 **Ticket 10 (Tauri Desktop App):** SHIPPED for macOS ARM64 (Apple Silicon). macOS Intel and Windows builds require cross-compilation/CI and are not yet set up.
 - Tauri 2 shell wraps the React frontend + packaged PyInstaller gateway.
