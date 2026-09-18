@@ -423,3 +423,49 @@ async def test_xlsx_revise_set_cell_and_append(db, workspace, artifact_storage):
     info = await service.inspect(db, art.id, workspace_path=workspace)
     assert info["structure"]["formulas"] == 1
     assert info["structure"]["cells"] == 6  # 2 original + B2 + B3 + appended row
+
+
+# --- W2d: PPTX structured generation ---
+
+
+async def test_pptx_create_inspect_roundtrip(db, workspace, artifact_storage):
+    from agentos.artifacts import service
+
+    spec = {
+        "slides": [
+            {"layout": "title", "title": "Q3 Review", "subtitle": "Engineering"},
+            {
+                "layout": "title_content",
+                "title": "Highlights",
+                "blocks": [{"type": "bullets", "items": ["ship W1", "start W2"]}],
+            },
+            {
+                "layout": "title_content",
+                "title": "Numbers",
+                "blocks": [
+                    {
+                        "type": "chart",
+                        "chart_type": "bar",
+                        "categories": ["Q1", "Q2", "Q3"],
+                        "series": [{"name": "ARR", "values": [3.1, 3.8, 4.2]}],
+                    },
+                    {"type": "notes", "text": "emphasize Q3 acceleration"},
+                ],
+            },
+        ]
+    }
+    art, _ = await service.create_structured(
+        db,
+        workspace_id="agent-1",
+        workspace_path=workspace,
+        rel_path="q3.pptx",
+        format="pptx",
+        spec=spec,
+        created_by="agent-1",
+    )
+
+    info = await service.inspect(db, art.id, workspace_path=workspace)
+    assert info["valid"] is True
+    s = info["structure"]
+    assert s["slides"] == 3
+    assert s["charts"] == 1
