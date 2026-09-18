@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { ArrowDown, PanelLeft, AlertCircle, BookOpen, ChevronDown, FileIcon, Link as LinkIcon, Paperclip, Loader2, MessageSquare } from "lucide-react";
-import { api, type PreviewSource } from "@/lib/api";
+import { ArrowDown, PanelLeft, AlertCircle, BookOpen, ChevronDown, Link as LinkIcon, Paperclip, Loader2, MessageSquare } from "lucide-react";
+import { api, workspaceBackend, type PreviewSource } from "@/lib/api";
 import type { Agent, Message, Provider, SessionInfo } from "@/lib/types";
 import { PreviewPanel } from "@/components/previews/PreviewPanel";
+import { formatBytes } from "@/components/previews/renderers";
+import { useObjectUrl } from "@/components/previews/useObjectUrl";
+import { FileTypeTile } from "@/components/FileTypeTile";
 import { ToolCallBlock, FileChips, collectFileRefs, type ToolCallData, type SubAgentStreamData } from "@/components/ToolCallBlock";
 import { Markdown } from "@/components/Markdown";
 import { ThinkingBlock } from "@/components/ThinkingBlock";
@@ -1447,6 +1450,7 @@ export function Conversation() {
                       }
                       subagentMessages={subagentMessages}
                       onPreview={openPreview}
+                      agentId={agentId}
                     />
                   );
                 }
@@ -1769,15 +1773,17 @@ function MessageRow({
   isLastInRun,
   subagentMessages,
   onPreview,
+  agentId,
 }: {
   message: ChatMessage;
   isLastInRun?: boolean;
   subagentMessages?: ChatMessage[];
   onPreview?: (source: PreviewSource) => void;
+  agentId?: string;
 }) {
   if (message.role === "user") {
     // Parse attachment metadata (JSON string from the API)
-    let attachmentFiles: { type: string; mime_type: string; filename: string; url?: string; path?: string }[] = [];
+    let attachmentFiles: { type: string; mime_type: string; filename: string; url?: string; path?: string; size?: number }[] = [];
     if (message.attachments) {
       try {
         const parsed = JSON.parse(message.attachments);
@@ -1793,76 +1799,9 @@ function MessageRow({
       <div className="mb-6 flex flex-col items-end gap-1.5">
         {attachmentFiles.length > 0 && (
           <div className="flex flex-wrap justify-end gap-1.5">
-            {attachmentFiles.map((f, i) => {
-              const isUrl = f.type === "url" || f.type === "image_url";
-              let urlLabel = f.url || "";
-              try {
-                if (f.url) urlLabel = new URL(f.url).hostname;
-              } catch { /* keep raw */ }
-              const chipStyle: React.CSSProperties = {
-                background: "var(--surface)",
-                border: "1px solid var(--border)",
-                color: "var(--ink-2)",
-                textDecoration: "none",
-              };
-              const chipContent = (
-                <>
-                  {isUrl ? (
-                    <LinkIcon className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--ink-3)" }} />
-                  ) : (
-                    <FileIcon className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--ink-3)" }} />
-                  )}
-                  <span className="font-medium">{isUrl ? urlLabel : f.filename}</span>
-                  <span className="text-[10px]" style={{ color: "var(--ink-3)" }}>
-                    {isUrl
-                      ? "LINK"
-                      : (() => {
-                          // Friendly tag: the file extension is what users
-                          // recognize — raw MIME subtypes like
-                          // VND.OPENXMLFORMATS-OFFICEDOCUMENT.… are unreadable.
-                          const ext = f.filename?.includes(".")
-                            ? f.filename.split(".").pop()!.toUpperCase()
-                            : "";
-                          return ext && ext.length <= 5
-                            ? ext
-                            : f.mime_type?.split("/")[0] || f.type;
-                        })()}
-                  </span>
-                </>
-              );
-              return isUrl && f.url ? (
-                <a
-                  key={i}
-                  href={f.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12px] transition hover:opacity-80"
-                  style={chipStyle}
-                  title={f.url}
-                >
-                  {chipContent}
-                </a>
-              ) : f.path && onPreview ? (
-                <button
-                  key={i}
-                  onClick={() => onPreview({ path: f.path! })}
-                  className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12px] transition hover:opacity-80"
-                  style={{ ...chipStyle, cursor: "pointer" }}
-                  title={`Preview ${f.filename}`}
-                >
-                  {chipContent}
-                </button>
-              ) : (
-                <div
-                  key={i}
-                  className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12px]"
-                  style={chipStyle}
-                  title={f.url || f.filename}
-                >
-                  {chipContent}
-                </div>
-              );
-            })}
+            {attachmentFiles.map((f, i) => (
+              <AttachmentCard key={i} file={f} agentId={agentId} onPreview={onPreview} />
+            ))}
           </div>
         )}
         <div
@@ -2025,6 +1964,104 @@ function TypingIndicator() {
         <span className="bounce-dot" />
         <span className="bounce-dot" />
       </div>
+    </div>
+  );
+}
+
+/** Message-level attachment card — a real card (tile + name + meta), not a
+    bare chip. Images get a real thumbnail through the preview backend's
+    blob read; other files show an extension tile; URLs keep link treatment. */
+function AttachmentCard({
+  file,
+  agentId,
+  onPreview,
+}: {
+  file: { type: string; mime_type: string; filename: string; url?: string; path?: string; size?: number };
+  agentId?: string;
+  onPreview?: (source: PreviewSource) => void;
+}) {
+  const isUrl = file.type === "url" || file.type === "image_url";
+  const isImage = !isUrl && (file.type === "image" || file.mime_type?.startsWith("image/"));
+  const { url: thumbUrl } = useObjectUrl(
+    isImage && file.path && agentId
+      ? () => workspaceBackend(agentId).blob({ path: file.path! })
+      : null,
+    [file.path, agentId]
+  );
+
+  let urlLabel = file.url || "";
+  try {
+    if (file.url) urlLabel = new URL(file.url).hostname;
+  } catch { /* keep raw */ }
+
+  const ext = file.filename?.includes(".")
+    ? file.filename.split(".").pop()!.toUpperCase()
+    : "";
+  const meta = isUrl
+    ? "link"
+    : `${ext && ext.length <= 5 ? ext : file.mime_type?.split("/")[0] || file.type}${
+        file.size != null ? ` · ${formatBytes(file.size)}` : ""
+      }`;
+
+  const inner = (
+    <>
+      {isUrl ? (
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[4px] border border-[var(--border)] bg-[var(--surface)] text-[var(--ink-3)]">
+          <LinkIcon className="h-4 w-4" />
+        </span>
+      ) : thumbUrl ? (
+        <img
+          src={thumbUrl}
+          alt={file.filename}
+          className="h-9 w-9 shrink-0 rounded-[4px] border border-[var(--border)] object-cover"
+        />
+      ) : (
+        <FileTypeTile filename={file.filename} />
+      )}
+      <span className="min-w-0 flex-1">
+        <span
+          className="block truncate text-[12px] font-medium text-[var(--ink)]"
+          title={isUrl ? file.url : file.filename}
+        >
+          {isUrl ? urlLabel : file.filename}
+        </span>
+        <span className="block text-[10px]" style={{ color: "var(--ink-3)" }}>
+          {meta}
+        </span>
+      </span>
+    </>
+  );
+
+  const cardClass =
+    "flex w-[220px] max-w-full items-center gap-2 rounded-md border px-2.5 py-2 text-left transition hover:opacity-80";
+  const cardStyle: React.CSSProperties = {
+    background: "var(--white)",
+    borderColor: "var(--border)",
+    textDecoration: "none",
+  };
+
+  if (isUrl && file.url) {
+    return (
+      <a href={file.url} target="_blank" rel="noopener noreferrer" className={cardClass} style={cardStyle}>
+        {inner}
+      </a>
+    );
+  }
+  if (file.path && onPreview) {
+    return (
+      <button
+        onClick={() => onPreview({ path: file.path! })}
+        className={cardClass}
+        style={{ ...cardStyle, cursor: "pointer" }}
+        title={`Preview ${file.filename}`}
+      >
+        {inner}
+      </button>
+    );
+  }
+  return (
+    <div className={cardClass} style={cardStyle} title={file.url || file.filename}>
+      {inner}
     </div>
   );
 }

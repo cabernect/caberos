@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useImperativeHandle, useCallback, forwardR
 import { Paperclip, FileText, Image as ImageIcon, Link, Wrench, ArrowUp, HelpCircle, Check, Sparkles, Square, ChevronLeft, ChevronRight, X } from "lucide-react";
 import { ModelSelector } from "@/components/ModelSelector";
 import { ThinkingToggle } from "@/components/ThinkingToggle";
+import { FileTypeTile } from "@/components/FileTypeTile";
 import { api } from "@/lib/api";
 import { attachmentKind, fileHash, formatAttachmentSize, moveItem } from "@/lib/attachmentUtils";
 import type { SkillInfo } from "@/lib/types";
@@ -1297,21 +1298,3 @@ function ContextCircle({
   );
 }
 
-/** File-type tile for non-image attachments — the extension badge reads
-    like Drive/Slack file chips, honest where no real thumbnail exists. */
-function FileTypeTile({ filename }: { filename: string }) {
-  const ext = filename.includes(".")
-    ? filename.split(".").pop()!.toUpperCase()
-    : "";
-  const label = ext && ext.length <= 5 ? ext : "FILE";
-  return (
-    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[4px] border border-[var(--border)] bg-[var(--surface)]">
-      <span
-        className="font-mono font-bold tracking-tight text-[var(--accent)]"
-        style={{ fontSize: label.length > 4 ? "7px" : "9px" }}
-      >
-        {label}
-      </span>
-    </span>
-  );
-}
