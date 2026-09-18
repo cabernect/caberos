@@ -301,7 +301,12 @@ async def create_structured(
 ) -> tuple[Artifact, ArtifactRevision]:
     """Build a deliverable from a structured spec (never raw XML) and track
     it — the primary creation path for Office formats."""
-    handler = formats.get_handler(format)
+    try:
+        handler = formats.get_handler(format)
+    except formats.UnsupportedFormatError as e:
+        raise ArtifactError(str(e)) from e
+    if not hasattr(handler, "build"):
+        raise ArtifactError(f"format is read-only: {format}")
     data = handler.build(spec, workspace_path)
     return await create(
         db,
@@ -333,7 +338,12 @@ async def revise_structured(
     """Apply structured ops (append/replace/set-cell) and store the result
     as a new revision — same base-check as raw revise."""
     artifact = await _get(db, artifact_id)
-    handler = formats.get_handler(artifact.format)
+    try:
+        handler = formats.get_handler(artifact.format)
+    except formats.UnsupportedFormatError as e:
+        raise ArtifactError(str(e)) from e
+    if not hasattr(handler, "revise"):
+        raise ArtifactError(f"format is read-only: {artifact.format}")
     target = resolve_within(workspace_path, artifact.current_path)
     if not target.exists():
         raise ArtifactError(f"file missing: {artifact.current_path}")
@@ -379,6 +389,103 @@ async def inspect(db: AsyncSession, artifact_id: str, *, workspace_path: str | P
         info["structure"] = inspected.pop("structure", None)
         info.update(inspected)
     return info
+
+
+def _find_soffice() -> str | None:
+    """Locate a LibreOffice binary for Office→PDF rendering."""
+    import shutil
+
+    if found := shutil.which("soffice"):
+        return found
+    for candidate in (
+        "/Applications/LibreOffice.app/Contents/MacOS/soffice",
+        "/usr/bin/soffice",
+        "/usr/lib/libreoffice/program/soffice",
+    ):
+        if Path(candidate).exists():
+            return candidate
+    return None
+
+
+async def export_pdf(
+    db: AsyncSession,
+    artifact_id: str,
+    *,
+    workspace_path: str | Path,
+    created_by: str | None = None,
+    source_run_id: str | None = None,
+    source_message_id: str | None = None,
+) -> dict:
+    """Render the current revision to PDF via LibreOffice headless.
+
+    Honest status reporting: renderer_unavailable / failed / exported. The
+    produced PDF is adopted as its own read-only artifact linked to the
+    source revision.
+    """
+    import asyncio
+    import tempfile
+
+    artifact = await _get(db, artifact_id)
+    if artifact.format == "pdf":
+        raise ArtifactError("artifact is already pdf")
+
+    soffice = _find_soffice()
+    if soffice is None:
+        return {"export_status": "renderer_unavailable", "renderer": None}
+
+    src = resolve_within(workspace_path, artifact.current_path)
+    if not src.exists():
+        raise ArtifactError(f"file missing: {artifact.current_path}")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        proc = await asyncio.create_subprocess_exec(
+            soffice,
+            "--headless",
+            "--convert-to",
+            "pdf",
+            "--outdir",
+            tmp,
+            str(src),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+        except TimeoutError:
+            proc.kill()
+            return {"export_status": "failed", "renderer": "libreoffice", "error": "timeout"}
+        if proc.returncode != 0:
+            return {
+                "export_status": "failed",
+                "renderer": "libreoffice",
+                "error": stderr.decode("utf-8", errors="replace")[-500:],
+            }
+        produced = Path(tmp) / f"{src.stem}.pdf"
+        if not produced.exists():
+            return {
+                "export_status": "failed",
+                "renderer": "libreoffice",
+                "error": "renderer produced no output",
+            }
+        pdf_data = produced.read_bytes()
+
+    pdf_rel = str(Path(artifact.current_path).with_suffix(".pdf"))
+    pdf_artifact, _ = await create(
+        db,
+        workspace_id=artifact.workspace_id,
+        workspace_path=workspace_path,
+        rel_path=pdf_rel,
+        data=pdf_data,
+        created_by=created_by,
+        source_run_id=source_run_id,
+        source_message_id=source_message_id,
+        change_summary=f"exported from {artifact.current_path}",
+    )
+    return {
+        "export_status": "exported",
+        "renderer": "libreoffice",
+        "pdf_artifact_id": pdf_artifact.id,
+    }
 
 
 async def _get(db: AsyncSession, artifact_id: str) -> Artifact:

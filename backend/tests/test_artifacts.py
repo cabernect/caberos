@@ -469,3 +469,63 @@ async def test_pptx_create_inspect_roundtrip(db, workspace, artifact_storage):
     s = info["structure"]
     assert s["slides"] == 3
     assert s["charts"] == 1
+
+
+# --- W2e: PDF export + read-only imported PDFs ---
+
+
+def _pdf_bytes(pages: int = 2) -> bytes:
+    from io import BytesIO
+
+    from pypdf import PdfWriter
+
+    w = PdfWriter()
+    for _ in range(pages):
+        w.add_blank_page(width=200, height=200)
+    buf = BytesIO()
+    w.write(buf)
+    return buf.getvalue()
+
+
+async def test_imported_pdf_is_readable_but_not_editable(db, workspace, artifact_storage):
+    from agentos.artifacts import service
+
+    (Path(workspace) / "scan.pdf").write_bytes(_pdf_bytes())
+    art, _ = await service.adopt(
+        db,
+        workspace_id="agent-1",
+        workspace_path=workspace,
+        rel_path="scan.pdf",
+        created_by="agent-1",
+    )
+
+    info = await service.inspect(db, art.id, workspace_path=workspace)
+    assert info["valid"] is True
+    assert info["structure"]["pages"] == 2
+
+    # Read-only: no structured revision path for pdf.
+    with pytest.raises(service.ArtifactError):
+        await service.revise_structured(
+            db, art.id, workspace_path=workspace, base_revision_id=art.current_revision_id, ops=[]
+        )
+
+
+async def test_pdf_export_without_renderer_reports_unavailable(db, workspace, artifact_storage, monkeypatch):
+    """No LibreOffice → honest renderer_unavailable, no phantom artifact."""
+    from agentos.artifacts import service
+
+    monkeypatch.setattr(service, "_find_soffice", lambda: None)
+
+    art, _ = await service.create_structured(
+        db,
+        workspace_id="agent-1",
+        workspace_path=workspace,
+        rel_path="report.docx",
+        format="docx",
+        spec={"blocks": [{"type": "paragraph", "text": "x"}]},
+        created_by="agent-1",
+    )
+
+    result = await service.export_pdf(db, art.id, workspace_path=workspace)
+    assert result["export_status"] == "renderer_unavailable"
+    assert "pdf_artifact_id" not in result
