@@ -1814,7 +1814,19 @@ function MessageRow({
                   )}
                   <span className="font-medium">{isUrl ? urlLabel : f.filename}</span>
                   <span className="text-[10px]" style={{ color: "var(--ink-3)" }}>
-                    {isUrl ? "LINK" : (f.mime_type.split("/")[1]?.toUpperCase() || f.type)}
+                    {isUrl
+                      ? "LINK"
+                      : (() => {
+                          // Friendly tag: the file extension is what users
+                          // recognize — raw MIME subtypes like
+                          // VND.OPENXMLFORMATS-OFFICEDOCUMENT.… are unreadable.
+                          const ext = f.filename?.includes(".")
+                            ? f.filename.split(".").pop()!.toUpperCase()
+                            : "";
+                          return ext && ext.length <= 5
+                            ? ext
+                            : f.mime_type?.split("/")[0] || f.type;
+                        })()}
                   </span>
                 </>
               );

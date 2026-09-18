@@ -219,6 +219,37 @@ def test_pptx_preview_groups_slides():
     assert payload["slides"][1]["title"] == "Two"
 
 
+def test_pptx_preview_untitled_slide_falls_back_to_text():
+    """Real decks often lack title placeholders — the card title falls back
+    to the first short text run, and the injected heading must not render
+    twice in the body."""
+    from agentos import previews
+    from agentos.artifacts.formats import pptx
+
+    data = pptx.build(
+        {"slides": [{"layout": "title_only", "blocks": []}]},
+        ".",
+    )
+    # title_only has a title placeholder; drop it to simulate a text-box deck.
+    from io import BytesIO
+    from pptx import Presentation
+
+    prs = Presentation(BytesIO(data))
+    slide = prs.slides[0]
+    slide.shapes.title.text = ""
+    buf = BytesIO()
+    prs.save(buf)
+
+    payload = previews.preview_bytes(buf.getvalue(), "deck.pptx")
+    assert payload["kind"] == "slides"
+    s1 = payload["slides"][0]
+    # No paragraph text → generic fallback stays, but body must not carry a
+    # duplicated injected heading.
+    headings = [e for e in s1["elements"] if e["type"] == "heading"]
+    assert headings == []
+    assert s1["title"] is not None
+
+
 def test_xlsx_preview_returns_sheet_grids():
     from agentos import previews
     from agentos.artifacts.formats import xlsx

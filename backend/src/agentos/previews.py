@@ -255,7 +255,41 @@ def _preview_slides(data: bytes) -> dict:
         if el["type"] == "heading" and slides[-1]["title"] is None:
             slides[-1]["title"] = el.get("text")
         slides[-1]["elements"].append(el)
+
+    import re
+
+    generic_title = re.compile(r"^Slide \d+$")
+    bare_bullet = re.compile(r"^[•·▪‣–—-]+$")
     for slide in slides:
+        els = slide["elements"]
+        # The injected leading heading is the title carrier — the card header
+        # already displays it, so it must not render twice in the body.
+        if els and els[0]["type"] == "heading" and els[0].get("level") == 1:
+            els.pop(0)
+        # Real decks often have no title placeholder (text boxes instead) —
+        # fall back to the first short text run rather than "Slide N"; the
+        # chosen element leaves the body so it never renders twice.
+        if slide["title"] is None or generic_title.match(slide["title"] or ""):
+            for j, e in enumerate(els):
+                t = e.get("text", "").strip()
+                if (
+                    e["type"] == "paragraph"
+                    and 0 < len(t) <= 80
+                    and not bare_bullet.match(t)
+                ):
+                    slide["title"] = t
+                    els.pop(j)
+                    break
+        # Bullet glyphs orphaned from their text by shape splitting, and
+        # near-blank decoration images that render as empty white boxes.
+        slide["elements"] = [
+            e
+            for e in els
+            if not (
+                e["type"] == "paragraph" and bare_bullet.match(e.get("text", "").strip())
+            )
+            and not (e["type"] == "image" and _near_blank_image(e.get("data")))
+        ]
         slide["elements"], slide["truncated"] = _cap_elements(slide["elements"])
     return {"slides": slides, "slide_count": len(slides)}
 
@@ -303,6 +337,22 @@ def _json_safe(value):
     if isinstance(value, datetime.datetime | datetime.date | datetime.time):
         return value.isoformat()
     return value
+
+
+def _near_blank_image(data) -> bool:
+    """Near-blank decoration images (white spacers, empty placeholder rects) —
+    ≥97% pixels above ~245 luminance with a tiny encoded payload. Real
+    graphics carry more data and detail, so both conditions must hold."""
+    if not isinstance(data, bytes | bytearray) or len(data) > 8192:
+        return False
+    try:
+        from PIL import Image
+
+        im = Image.open(io.BytesIO(bytes(data))).convert("L")
+        hist = im.histogram()
+        return sum(hist[246:]) / (im.width * im.height) >= 0.97
+    except Exception:
+        return False
 
 
 def _cap_elements(elements: list[dict]) -> tuple[list[dict], bool]:

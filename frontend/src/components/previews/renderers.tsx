@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { ChevronLeft, ChevronRight, FileWarning, Loader2 } from "lucide-react";
 import type { PreviewBackend, PreviewSource } from "@/lib/api";
 import type { PreviewElement, PreviewPayload } from "@/lib/types";
@@ -259,10 +259,45 @@ function PdfView({
 
 /** The shared W2 element vocabulary — one renderer for docx + slide content. */
 export function ElementsView({ elements }: { elements: PreviewElement[] }) {
+  // Consecutive images render as a wrap grid — real decks pack logos/icons/
+  // decorations that look broken when stacked as full-width empty boxes.
+  const items: ReactNode[] = [];
+  for (let i = 0; i < elements.length; i++) {
+    if (elements[i].type === "image") {
+      const run: PreviewElement[] = [];
+      while (i < elements.length && elements[i].type === "image") {
+        run.push(elements[i]);
+        i++;
+      }
+      i--;
+      items.push(
+        <div key={`imgs-${i}`} className="flex flex-wrap items-start gap-2">
+          {run.map((el, j) =>
+            el.data_url ? (
+              <img
+                key={j}
+                src={el.data_url}
+                alt=""
+                className="max-h-44 max-w-[45%] rounded-[5px] border border-[var(--border)] object-contain"
+              />
+            ) : null
+          )}
+        </div>
+      );
+      continue;
+    }
+    items.push(renderElement(elements[i], i));
+  }
   return (
     <div className="space-y-2 text-[13px] text-[var(--ink)]">
-      {elements.map((el, i) => {
-        switch (el.type) {
+      {items}
+      {elements.length === 0 && <p className="text-[var(--ink-3)]">Empty document.</p>}
+    </div>
+  );
+}
+
+function renderElement(el: PreviewElement, i: number): ReactNode {
+  switch (el.type) {
           case "heading": {
             const level = el.level || 1;
             const cls =
@@ -333,11 +368,7 @@ export function ElementsView({ elements }: { elements: PreviewElement[] }) {
             return <hr key={i} className="border-[var(--border)]" />;
           default:
             return null;
-        }
-      })}
-      {elements.length === 0 && <p className="text-[var(--ink-3)]">Empty document.</p>}
-    </div>
-  );
+  }
 }
 
 function SlidesView({ payload }: { payload: PreviewPayload }) {
