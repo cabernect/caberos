@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Eye } from "lucide-react";
+import { Eye, FileText } from "lucide-react";
 import { api, type PreviewSource } from "@/lib/api";
 import { DiffBlock } from "@/components/DiffBlock";
 import { ThinkingBlock } from "@/components/ThinkingBlock";
@@ -70,6 +70,116 @@ export function previewSourceFor(call: ToolCallData): PreviewSource | null {
     if (path) return { path };
   }
   return null;
+}
+
+export interface FileRef {
+  source: PreviewSource;
+  name: string;
+  /** true = the run created/modified the file; false = it only consulted it. */
+  produced: boolean;
+}
+
+const FILE_ARTIFACT_PRODUCERS = new Set([
+  "artifact_create",
+  "artifact_revise",
+  "artifact_restore",
+]);
+const FILE_ARTIFACT_SKIP = new Set([
+  "artifact_history",
+  "artifact_adopt",
+  "artifact_list",
+]);
+
+/**
+ * Collect the files a set of completed tool calls produced or consulted —
+ * rendered as chips below the run so created files stay visible after the
+ * tool-call steps collapse. Deduped by path/artifact; produced wins over
+ * consulted, and for artifacts the latest produced revision wins.
+ */
+export function collectFileRefs(calls: ToolCallData[]): FileRef[] {
+  const seen = new Map<string, FileRef>();
+  const base = (p: string) => p.split("/").pop() || p;
+  const add = (key: string, ref: FileRef) => {
+    const prev = seen.get(key);
+    if (!prev || ref.produced) seen.set(key, ref);
+  };
+  for (const call of calls) {
+    if (call.status !== "complete") continue;
+    const result = (call.result ?? {}) as Record<string, unknown>;
+    if (typeof result.error === "string") continue;
+
+    if (call.capability === "write_file") {
+      const path = (result.path ?? call.args.path) as string | undefined;
+      if (path && result.action !== "unchanged") {
+        add(`p:${path}`, { source: { path }, name: base(path), produced: true });
+      }
+    } else if (call.capability === "read_file") {
+      const path = call.args.path as string | undefined;
+      if (path && result.mode !== "list") {
+        add(`p:${path}`, { source: { path }, name: base(path), produced: false });
+      }
+    } else if (call.capability === "artifact_export_pdf") {
+      const id = result.pdf_artifact_id as string | undefined;
+      const path = result.pdf_path as string | undefined;
+      if (id) {
+        add(`a:${id}`, {
+          source: { artifactId: id },
+          name: path ? base(path) : "PDF export",
+          produced: true,
+        });
+      }
+    } else if (
+      call.capability.startsWith("artifact_") &&
+      !FILE_ARTIFACT_SKIP.has(call.capability)
+    ) {
+      const id = (result.artifact_id ?? call.args.artifact_id) as string | undefined;
+      if (!id) continue;
+      const produced = FILE_ARTIFACT_PRODUCERS.has(call.capability);
+      const path = result.path as string | undefined;
+      add(`a:${id}`, {
+        source: {
+          artifactId: id,
+          revisionId: (result.revision_id as string | undefined) ?? undefined,
+        },
+        name: path ? base(path) : "artifact",
+        produced,
+      });
+    }
+  }
+  return [...seen.values()];
+}
+
+/** Chips row of files a run produced or consulted — click opens the preview. */
+export function FileChips({
+  refs,
+  onPreview,
+}: {
+  refs: FileRef[];
+  onPreview?: (source: PreviewSource) => void;
+}) {
+  if (!onPreview || refs.length === 0) return null;
+  return (
+    <div className="mb-3 flex flex-wrap items-center gap-1.5">
+      <span className="mr-0.5 font-mono text-[10px] uppercase tracking-wider text-[var(--ink-3)]">
+        files
+      </span>
+      {refs.map((ref, i) => (
+        <button
+          key={i}
+          onClick={() => onPreview(ref.source)}
+          title={`${ref.source.path ?? ref.name} — click to preview`}
+          className="flex items-center gap-1.5 rounded-full border border-[var(--border)] bg-[var(--surface)]/60 py-0.5 pl-2 pr-2.5 text-[11px] text-[var(--ink-2)] transition-colors hover:border-[var(--accent)]/50 hover:bg-[var(--surface)] hover:text-[var(--ink)]"
+          style={{ cursor: "pointer" }}
+        >
+          <FileText
+            className="h-3 w-3 shrink-0"
+            style={{ color: ref.produced ? "var(--accent)" : "var(--ink-3)" }}
+          />
+          <span className="max-w-[200px] truncate">{ref.name}</span>
+        </button>
+      ))}
+    </div>
+  );
 }
 
 const TERMINAL_CAPS = new Set(["terminal", "read_terminal", "close_terminal"]);

@@ -66,7 +66,15 @@ async def artifact_revise(args: dict[str, Any], workspace_path: str, **kwargs: A
         )
     except (ArtifactError, KeyError, ValueError) as e:
         return {"error": str(e), "conflict": "changed since base revision" in str(e)}
-    return {"revision_id": rev.id, "revision_number": rev.revision_number}
+    out = {"revision_id": rev.id, "revision_number": rev.revision_number}
+    try:
+        info = await service.inspect(
+            kwargs["db"], args["artifact_id"], workspace_path=workspace_path
+        )
+        out["path"] = info["path"]
+    except (ArtifactError, KeyError):
+        pass
+    return out
 
 
 async def artifact_adopt(args: dict[str, Any], workspace_path: str, **kwargs: Any) -> dict:
@@ -111,7 +119,15 @@ async def artifact_restore(args: dict[str, Any], workspace_path: str, **kwargs: 
         )
     except ArtifactError as e:
         return {"error": str(e)}
-    return {"revision_id": rev.id, "revision_number": rev.revision_number}
+    out = {"revision_id": rev.id, "revision_number": rev.revision_number}
+    try:
+        info = await service.inspect(
+            kwargs["db"], args["artifact_id"], workspace_path=workspace_path
+        )
+        out["path"] = info["path"]
+    except (ArtifactError, KeyError):
+        pass
+    return out
 
 
 async def artifact_export_pdf(args: dict[str, Any], workspace_path: str, **kwargs: Any) -> dict:

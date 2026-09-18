@@ -4,7 +4,7 @@ import { ArrowDown, PanelLeft, AlertCircle, BookOpen, ChevronDown, FileIcon, Lin
 import { api, type PreviewSource } from "@/lib/api";
 import type { Agent, Message, Provider, SessionInfo } from "@/lib/types";
 import { PreviewPanel } from "@/components/previews/PreviewPanel";
-import { ToolCallBlock, type ToolCallData, type SubAgentStreamData } from "@/components/ToolCallBlock";
+import { ToolCallBlock, FileChips, collectFileRefs, type ToolCallData, type SubAgentStreamData } from "@/components/ToolCallBlock";
 import { Markdown } from "@/components/Markdown";
 import { ThinkingBlock } from "@/components/ThinkingBlock";
 import { ProcessSteps } from "@/components/ProcessSteps";
@@ -1379,6 +1379,20 @@ export function Conversation() {
                 const subagentMsgs = groupRunId
                   ? messages.filter((m) => m.subagent_id && m.run_id === groupRunId)
                   : [];
+                // Files this step group produced/consulted — shown as chips so
+                // created files stay visible after the steps collapse.
+                const fileRefs = collectFileRefs(
+                  processGroup
+                    .filter((g) => g.msg.role === "tool_call")
+                    .map((g) => {
+                      try {
+                        return JSON.parse(g.msg.content) as ToolCallData;
+                      } catch {
+                        return null;
+                      }
+                    })
+                    .filter((c): c is ToolCallData => c !== null)
+                );
                 rendered.push(
                   <ProcessSteps
                     key={`process-${processGroup[0].index}`}
@@ -1387,6 +1401,15 @@ export function Conversation() {
                     onPreview={openPreview}
                   />
                 );
+                if (fileRefs.length > 0) {
+                  rendered.push(
+                    <FileChips
+                      key={`files-${processGroup[0].index}`}
+                      refs={fileRefs}
+                      onPreview={openPreview}
+                    />
+                  );
+                }
                 processGroup = [];
                 groupRunId = undefined;
               };
@@ -1646,6 +1669,11 @@ function StreamingMessage({
     ? Math.round((endTime - streaming.thinkingStartTime) / 1000)
     : undefined;
   const isThinkingStreaming = !!streaming.thinking && !streaming.text && !streaming.completed;
+  const fileRefs = collectFileRefs(
+    streaming.items
+      .filter((i) => i.type === "tool")
+      .map((i) => i.data as ToolCallData)
+  );
 
   return (
     <div className="mb-6">
@@ -1700,6 +1728,10 @@ function StreamingMessage({
           {!streaming.completed && <span className="streaming-cursor" />}
         </div>
       )}
+
+      {/* Files produced/consulted — visible after the run ends, not buried
+          inside collapsed tool-call steps. */}
+      {fileRefs.length > 0 && <FileChips refs={fileRefs} onPreview={onPreview} />}
 
       {streaming.guardrailWarnings.length > 0 && (
         <div

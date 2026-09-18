@@ -16,10 +16,13 @@ export function PreviewBody({
   payload,
   backend,
   source,
+  expanded,
 }: {
   payload: PreviewPayload;
   backend: PreviewBackend;
   source: PreviewSource;
+  /** Expanded modal mode — visual kinds render larger. */
+  expanded?: boolean;
 }) {
   if (payload.error && !payload.elements?.length && !payload.slides?.length) {
     return <Note text={payload.error} />;
@@ -42,9 +45,9 @@ export function PreviewBody({
         <GridTable header={payload.header || []} rows={payload.rows || []} />
       );
     case "image":
-      return <ImageView backend={backend} source={source} name={payload.name} />;
+      return <ImageView backend={backend} source={source} name={payload.name} expanded={expanded} />;
     case "pdf":
-      return <PdfView backend={backend} source={source} pageCount={payload.page_count || 0} />;
+      return <PdfView backend={backend} source={source} pageCount={payload.page_count || 0} expanded={expanded} />;
     case "document":
       return <ElementsView elements={payload.elements || []} />;
     case "slides":
@@ -53,7 +56,7 @@ export function PreviewBody({
       return <WorkbookView payload={payload} />;
     case "media":
       return (
-        <MediaView backend={backend} source={source} media={payload.media || "audio"} />
+        <MediaView backend={backend} source={source} media={payload.media || "audio"} expanded={expanded} />
       );
     default:
       return <UnknownView payload={payload} />;
@@ -177,10 +180,12 @@ function ImageView({
   backend,
   source,
   name,
+  expanded,
 }: {
   backend: PreviewBackend;
   source: PreviewSource;
   name: string;
+  expanded?: boolean;
 }) {
   const { url, loading, error } = useObjectUrl(
     () => backend.blob(source),
@@ -192,7 +197,7 @@ function ImageView({
     <img
       src={url}
       alt={name}
-      className="max-h-[70vh] max-w-full rounded-[5px] border border-[var(--border)] object-contain"
+      className={`${expanded ? "max-h-[82vh]" : "max-h-[70vh]"} max-w-full rounded-[5px] border border-[var(--border)] object-contain`}
     />
   );
 }
@@ -201,10 +206,12 @@ function PdfView({
   backend,
   source,
   pageCount,
+  expanded,
 }: {
   backend: PreviewBackend;
   source: PreviewSource;
   pageCount: number;
+  expanded?: boolean;
 }) {
   const [page, setPage] = useState(1);
   const { url, loading, error } = useObjectUrl(
@@ -213,7 +220,7 @@ function PdfView({
   );
   if (pageCount === 0) return <Note text="No pages to render." />;
   return (
-    <div>
+    <div className={expanded ? "flex flex-col items-center" : ""}>
       <div className="mb-2 flex items-center gap-2 text-[12px] text-[var(--ink-2)]">
         <button
           onClick={() => setPage((p) => Math.max(1, p - 1))}
@@ -243,7 +250,7 @@ function PdfView({
         <img
           src={url}
           alt={`Page ${page}`}
-          className="max-h-[70vh] max-w-full rounded-[5px] border border-[var(--border)]"
+          className={`${expanded ? "max-h-[80vh]" : "max-h-[70vh]"} max-w-full rounded-[5px] border border-[var(--border)]`}
         />
       )}
     </div>
@@ -410,10 +417,12 @@ function MediaView({
   backend,
   source,
   media,
+  expanded,
 }: {
   backend: PreviewBackend;
   source: PreviewSource;
   media: "audio" | "video";
+  expanded?: boolean;
 }) {
   const { url, loading, error } = useObjectUrl(
     () => backend.blob(source),
@@ -422,9 +431,13 @@ function MediaView({
   if (error) return <Note text={error} />;
   if (loading || !url) return <Loader2 className="h-5 w-5 animate-spin text-[var(--ink-3)]" />;
   return media === "video" ? (
-    <video src={url} controls className="max-h-[70vh] max-w-full rounded-[5px]" />
+    <video
+      src={url}
+      controls
+      className={`${expanded ? "max-h-[80vh]" : "max-h-[70vh]"} max-w-full rounded-[5px]`}
+    />
   ) : (
-    <audio src={url} controls className="w-full" />
+    <audio src={url} controls className={expanded ? "w-[560px] max-w-full" : "w-full"} />
   );
 }
 

@@ -527,6 +527,7 @@ async def export_pdf(
         "export_status": "exported",
         "renderer": renderer,
         "pdf_artifact_id": pdf_artifact.id,
+        "pdf_path": pdf_artifact.current_path,
     }
 
 

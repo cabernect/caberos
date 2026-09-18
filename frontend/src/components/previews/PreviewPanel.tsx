@@ -262,7 +262,7 @@ export function PreviewPanel({ agentId, source, backend, onClose, onAskRevise, c
       {/* Backdrop for expanded mode — click collapses back to docked. */}
       {expanded && (
         <div
-          className="fixed inset-0 z-40 bg-black/50"
+          className="fixed inset-0 z-40 bg-black/55 backdrop-blur-[2px]"
           aria-hidden="true"
           onClick={() => setExpanded(false)}
         />
@@ -270,7 +270,7 @@ export function PreviewPanel({ agentId, source, backend, onClose, onAskRevise, c
       <div
         className={
           expanded
-            ? "fixed left-1/2 top-[4vh] bottom-[4vh] z-50 flex w-[min(1100px,94vw)] -translate-x-1/2 flex-col overflow-hidden rounded-[8px] border border-[var(--border)] bg-[var(--white)] shadow-2xl"
+            ? "fixed inset-x-0 top-[2.5vh] bottom-[2.5vh] z-50 mx-auto flex w-[min(1240px,95vw)] flex-col overflow-hidden rounded-[10px] border border-[var(--border)] bg-[var(--white)] shadow-2xl"
             : `flex h-full flex-col border-l border-[var(--border)] bg-[var(--white)] ${className || ""}`
         }
         role="complementary"
@@ -425,8 +425,32 @@ export function PreviewPanel({ agentId, source, backend, onClose, onAskRevise, c
         </p>
       )}
 
-      {/* Content — compare mode swaps the preview for the diff. */}
-      <div className="flex-1 overflow-auto p-3">
+      {/* Content — compare mode swaps the preview for the diff. In expanded
+          mode each kind gets its own framing: visual kinds center on both
+          axes (auto margins clamp to top-align + scroll when taller), wide
+          kinds get a wider column, text kinds a readable column. */}
+      <div
+        className={`flex-1 overflow-auto ${
+          expanded
+            ? payload && !compare && ["image", "pdf", "media"].includes(payload.kind)
+              ? "flex flex-col"
+              : ""
+            : "p-3"
+        }`}
+      >
+        <div
+          className={
+            !expanded
+              ? ""
+              : payload && !compare && ["image", "pdf", "media"].includes(payload.kind)
+                ? "m-auto w-fit max-w-full p-6"
+                : `mx-auto w-full p-6 ${
+                    compare || (payload && ["table", "workbook", "slides"].includes(payload.kind))
+                      ? "max-w-[1000px]"
+                      : "max-w-[840px]"
+                  }`
+          }
+        >
         {compare ? (
           <div>
             <button
@@ -463,7 +487,7 @@ export function PreviewPanel({ agentId, source, backend, onClose, onAskRevise, c
             )}
           </div>
         ) : payload ? (
-          <PreviewBody payload={payload} backend={be} source={viewing} />
+          <PreviewBody payload={payload} backend={be} source={viewing} expanded={expanded} />
         ) : error ? (
           <div className="rounded-[5px] border border-[var(--border)] bg-[var(--surface)] p-3 text-[12px] text-[var(--ink-2)]">
             {error}
@@ -473,6 +497,7 @@ export function PreviewPanel({ agentId, source, backend, onClose, onAskRevise, c
             <Loader2 className="h-5 w-5 animate-spin text-[var(--ink-3)]" />
           </div>
         )}
+        </div>
       </div>
       </div>
     </>
