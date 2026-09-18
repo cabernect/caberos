@@ -391,6 +391,17 @@ async def inspect(db: AsyncSession, artifact_id: str, *, workspace_path: str | P
     return info
 
 
+# Formats where a linear document render preserves the content faithfully —
+# slide decks are layout-bound: a text-flow PDF of a presentation isn't a
+# real export, so pptx requires the layout engine (LibreOffice).
+#
+# TODO(W4): Chromium renderer — elements → HTML → headless --print-to-pdf.
+# W4 browser automation ships a managed engine (Playwright cache); slides
+# carry absolute coordinates so positioned-HTML gives real deck layout
+# without LibreOffice. Chain: soffice → chromium → reportlab → unavailable.
+_REPORTLAB_FORMATS = {"docx", "xlsx"}
+
+
 def _find_soffice() -> str | None:
     """Locate a LibreOffice binary for Office→PDF rendering."""
     import shutil
@@ -468,7 +479,7 @@ async def export_pdf(
                     pdf_data = produced.read_bytes()
                     renderer = "libreoffice"
 
-    if pdf_data is None:
+    if pdf_data is None and artifact.format in _REPORTLAB_FORMATS:
         try:
             handler = formats.get_handler(artifact.format)
         except formats.UnsupportedFormatError:
@@ -493,7 +504,12 @@ async def export_pdf(
     if pdf_data is None:
         if soffice_error is not None:
             return {"export_status": "failed", "renderer": "libreoffice", "error": soffice_error}
-        return {"export_status": "renderer_unavailable", "renderer": None}
+        reason = (
+            f"{artifact.format} export requires LibreOffice — layout-bound format"
+            if artifact.format not in _REPORTLAB_FORMATS
+            else None
+        )
+        return {"export_status": "renderer_unavailable", "renderer": None, "reason": reason}
 
     pdf_rel = str(Path(artifact.current_path).with_suffix(".pdf"))
     pdf_artifact, _ = await create(
