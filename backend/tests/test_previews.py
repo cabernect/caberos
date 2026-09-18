@@ -394,3 +394,63 @@ async def test_pdf_page_rejects_non_pdf(client, workspace_root, artifact_storage
     (ws / "a.txt").write_text("not a pdf")
     resp = await client.get("/api/agents/agent-1/workspace/pdf-page?path=a.txt&page=1")
     assert resp.status_code == 400
+
+
+# --- Artifact panel actions ---
+
+
+async def test_revisions_endpoint_lists_newest_first(db, client, workspace_root, artifact_storage):
+    from agentos.artifacts import service
+
+    ws = _agent_workspace(workspace_root)
+    art, rev1 = await service.create(
+        db, workspace_id="agent-1", workspace_path=ws, rel_path="a.txt", data=b"1"
+    )
+    await service.revise(db, art.id, workspace_path=ws, base_revision_id=rev1.id, data=b"2")
+    resp = await client.get(f"/api/agents/agent-1/artifacts/{art.id}/revisions")
+    assert resp.status_code == 200
+    revs = resp.json()["revisions"]
+    assert [r["revision_number"] for r in revs] == [2, 1]
+    assert revs[0]["current"] is True
+
+    resp = await client.get(f"/api/agents/other/artifacts/{art.id}/revisions")
+    assert resp.status_code == 404
+
+
+async def test_restore_endpoint_appends_new_revision(db, client, workspace_root, artifact_storage):
+    from agentos.artifacts import service
+
+    ws = _agent_workspace(workspace_root)
+    art, rev1 = await service.create(
+        db, workspace_id="agent-1", workspace_path=ws, rel_path="a.txt", data=b"old"
+    )
+    await service.revise(db, art.id, workspace_path=ws, base_revision_id=rev1.id, data=b"new")
+    resp = await client.post(
+        f"/api/agents/agent-1/artifacts/{art.id}/restore",
+        json={"revision_id": rev1.id},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["revision_number"] == 3
+    assert (ws / "a.txt").read_bytes() == b"old"
+
+    resp = await client.post(
+        f"/api/agents/other/artifacts/{art.id}/restore",
+        json={"revision_id": rev1.id},
+    )
+    assert resp.status_code == 404
+
+
+async def test_adopt_endpoint_tracks_ordinary_file(db, client, workspace_root, artifact_storage):
+    ws = _agent_workspace(workspace_root)
+    (ws / "drop.txt").write_text("user file")
+
+    resp = await client.post("/api/agents/agent-1/artifacts/adopt", json={"path": "drop.txt"})
+    assert resp.status_code == 200
+    assert resp.json()["path"] == "drop.txt"
+
+    # Now the preview embeds artifact metadata.
+    resp = await client.get("/api/agents/agent-1/workspace/preview?path=drop.txt")
+    assert resp.json()["artifact"]["revision_count"] == 1
+
+    resp = await client.post("/api/agents/agent-1/artifacts/adopt", json={"path": "missing.txt"})
+    assert resp.status_code == 400

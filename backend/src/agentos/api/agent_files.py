@@ -430,6 +430,102 @@ async def pdf_page(
     return Response(content=png, media_type="image/png")
 
 
+# --- Artifact actions (W3 panel) ---
+#
+# Operator-side artifact operations — the preview panel's History/restore/
+# Track actions call these directly; agent-side edits still go through the
+# artifact_* capabilities. Restore stays append-only: it writes a new
+# revision, never rewinds history.
+
+
+@router.get("/{agent_id}/artifacts/{artifact_id}/revisions")
+async def list_artifact_revisions(
+    agent_id: str,
+    artifact_id: str,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Revision list for the History dropdown — newest first."""
+    from ..artifacts import service as artifact_service
+    from ..artifacts.service import ArtifactError
+
+    try:
+        artifact = await artifact_service._get(db, artifact_id)
+    except ArtifactError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    if artifact.workspace_id != agent_id:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    return {"revisions": await artifact_service.history(db, artifact_id)}
+
+
+class RestoreRevisionRequest(BaseModel):
+    revision_id: str
+
+
+@router.post("/{agent_id}/artifacts/{artifact_id}/restore")
+async def restore_artifact_revision(
+    agent_id: str,
+    artifact_id: str,
+    req: RestoreRevisionRequest,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Operator-initiated restore — old bytes back as a new revision."""
+    from ..artifacts import service as artifact_service
+    from ..artifacts.service import ArtifactError
+
+    ws = _workspace_path(agent_id)
+    try:
+        artifact = await artifact_service._get(db, artifact_id)
+        if artifact.workspace_id != agent_id:
+            raise ArtifactError("Artifact not found")
+        rev = await artifact_service.restore(
+            db,
+            artifact_id,
+            workspace_path=ws,
+            revision_id=req.revision_id,
+            created_by=f"operator:{operator.id}",
+        )
+    except ArtifactError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return {"revision_id": rev.id, "revision_number": rev.revision_number}
+
+
+class AdoptRequest(BaseModel):
+    path: str
+
+
+@router.post("/{agent_id}/artifacts/adopt")
+async def adopt_workspace_file(
+    agent_id: str,
+    req: AdoptRequest,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Track history for an ordinary workspace file — its current bytes
+    become revision 1."""
+    from ..artifacts import service as artifact_service
+    from ..artifacts.service import ArtifactError
+
+    ws = _workspace_path(agent_id)
+    try:
+        artifact, rev = await artifact_service.adopt(
+            db,
+            workspace_id=agent_id,
+            workspace_path=ws,
+            rel_path=req.path,
+            created_by=f"operator:{operator.id}",
+            change_summary="tracked via preview panel",
+        )
+    except ArtifactError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {
+        "artifact_id": artifact.id,
+        "revision_id": rev.id,
+        "path": artifact.current_path,
+    }
+
+
 # --- Memory management (triples + recall entries) ---
 
 
