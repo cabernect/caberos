@@ -245,3 +245,115 @@ async def test_archive_tombstones_without_destroying_history(db, workspace, arti
     assert art.archived_at is not None
     # Revisions survive the tombstone — restore/audit stay possible.
     assert await service.revision_bytes(db, rev1.id) == b"v1"
+
+
+# --- W2b: DOCX structured generation ---
+
+
+async def test_docx_create_inspect_roundtrip(db, workspace, artifact_storage):
+    """Structured spec → valid DOCX → inspectable structure."""
+    from agentos.artifacts import service
+
+    spec = {
+        "title": "Q3 Report",
+        "blocks": [
+            {"type": "heading", "level": 1, "text": "Summary"},
+            {"type": "paragraph", "text": "Revenue grew 12%."},
+            {"type": "list", "style": "bullet", "items": ["alpha", "beta"]},
+            {"type": "table", "header": ["Metric", "Value"], "rows": [["ARR", "4.2"]]},
+        ],
+    }
+    art, _rev = await service.create_structured(
+        db,
+        workspace_id="agent-1",
+        workspace_path=workspace,
+        rel_path="q3.docx",
+        format="docx",
+        spec=spec,
+        created_by="agent-1",
+    )
+
+    info = await service.inspect(db, art.id, workspace_path=workspace)
+    assert info["valid"] is True
+    assert "Summary" in info["structure"]["headings"]
+    assert info["structure"]["tables"] == 1
+    assert info["structure"]["list_items"] == 2
+
+
+async def test_docx_revise_applies_ops_as_new_revision(db, workspace, artifact_storage):
+    from agentos.artifacts import service
+
+    spec = {"blocks": [{"type": "paragraph", "text": "draft"}]}
+    art, rev1 = await service.create_structured(
+        db,
+        workspace_id="agent-1",
+        workspace_path=workspace,
+        rel_path="memo.docx",
+        format="docx",
+        spec=spec,
+        created_by="agent-1",
+    )
+
+    rev2 = await service.revise_structured(
+        db,
+        art.id,
+        workspace_path=workspace,
+        base_revision_id=rev1.id,
+        ops=[
+            {"op": "replace_paragraph", "index": 0, "text": "final"},
+            {"op": "append_blocks", "blocks": [{"type": "heading", "level": 1, "text": "Done"}]},
+        ],
+        change_summary="finalize memo",
+    )
+
+    assert rev2.revision_number == 2
+    info = await service.inspect(db, art.id, workspace_path=workspace)
+    assert "Done" in info["structure"]["headings"]
+    # Old revision still inspectable — messages link to exact revisions.
+    old = await service.revision_bytes(db, rev1.id)
+    assert b"draft" not in old  # zip is binary; verify via structure below
+    from agentos.artifacts.formats import docx as docx_fmt
+
+    assert "Done" not in docx_fmt.inspect(old)["structure"]["headings"]
+
+
+async def test_failed_generation_creates_no_revision(db, workspace, artifact_storage):
+    """A build that blows up leaves no artifact rows and no workspace file."""
+    from sqlalchemy import func, select
+
+    from agentos.artifacts import service
+    from agentos.models.artifact import Artifact, ArtifactRevision
+
+    with pytest.raises(Exception):
+        await service.create_structured(
+            db,
+            workspace_id="agent-1",
+            workspace_path=workspace,
+            rel_path="bad.docx",
+            format="docx",
+            spec={"blocks": [{"type": "bogus"}]},
+            created_by="agent-1",
+        )
+
+    for model in (Artifact, ArtifactRevision):
+        n = (await db.execute(select(func.count(model.id)))).scalar_one()
+        assert n == 0
+    assert not (Path(workspace) / "bad.docx").exists()
+
+
+async def test_corrupt_file_reports_invalid_not_crash(db, workspace, artifact_storage):
+    from agentos.artifacts import service
+
+    # Write garbage where a docx should be, then inspect.
+    (Path(workspace) / "corrupt.docx").write_bytes(b"not-a-zip")
+    art, _ = await service.adopt(
+        db,
+        workspace_id="agent-1",
+        workspace_path=workspace,
+        rel_path="corrupt.docx",
+        created_by="agent-1",
+    )
+
+    info = await service.inspect(db, art.id, workspace_path=workspace)
+    assert info["valid"] is False
+    assert info["errors"]

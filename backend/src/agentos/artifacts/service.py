@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import settings
 from ..models.artifact import Artifact, ArtifactRevision
 from ..sandbox.workspace import resolve_within
+from . import formats
 
 MAX_ARTIFACT_BYTES = 100 * 1024 * 1024
 
@@ -282,6 +283,100 @@ async def archive(db: AsyncSession, artifact_id: str) -> Artifact:
     artifact.archived_at = datetime.now(UTC)
     await db.commit()
     return artifact
+
+
+async def create_structured(
+    db: AsyncSession,
+    *,
+    workspace_id: str,
+    workspace_path: str | Path,
+    rel_path: str,
+    format: str,
+    spec: dict,
+    created_by: str | None = None,
+    source_run_id: str | None = None,
+    source_message_id: str | None = None,
+    source_plan_step_id: str | None = None,
+    change_summary: str | None = None,
+) -> tuple[Artifact, ArtifactRevision]:
+    """Build a deliverable from a structured spec (never raw XML) and track
+    it — the primary creation path for Office formats."""
+    handler = formats.get_handler(format)
+    data = handler.build(spec, workspace_path)
+    return await create(
+        db,
+        workspace_id=workspace_id,
+        workspace_path=workspace_path,
+        rel_path=rel_path,
+        data=data,
+        created_by=created_by,
+        source_run_id=source_run_id,
+        source_message_id=source_message_id,
+        source_plan_step_id=source_plan_step_id,
+        change_summary=change_summary,
+    )
+
+
+async def revise_structured(
+    db: AsyncSession,
+    artifact_id: str,
+    *,
+    workspace_path: str | Path,
+    base_revision_id: str,
+    ops: list[dict],
+    created_by: str | None = None,
+    source_run_id: str | None = None,
+    source_message_id: str | None = None,
+    source_plan_step_id: str | None = None,
+    change_summary: str | None = None,
+) -> ArtifactRevision:
+    """Apply structured ops (append/replace/set-cell) and store the result
+    as a new revision — same base-check as raw revise."""
+    artifact = await _get(db, artifact_id)
+    handler = formats.get_handler(artifact.format)
+    target = resolve_within(workspace_path, artifact.current_path)
+    if not target.exists():
+        raise ArtifactError(f"file missing: {artifact.current_path}")
+
+    new_data = handler.revise(target.read_bytes(), ops, workspace_path)
+    return await revise(
+        db,
+        artifact_id,
+        workspace_path=workspace_path,
+        base_revision_id=base_revision_id,
+        data=new_data,
+        created_by=created_by,
+        source_run_id=source_run_id,
+        source_message_id=source_message_id,
+        source_plan_step_id=source_plan_step_id,
+        change_summary=change_summary,
+    )
+
+
+async def inspect(db: AsyncSession, artifact_id: str, *, workspace_path: str | Path) -> dict:
+    """Structure + validity of the current workspace file."""
+    artifact = await _get(db, artifact_id)
+    target = resolve_within(workspace_path, artifact.current_path)
+    if not target.exists():
+        raise ArtifactError(f"file missing: {artifact.current_path}")
+    data = target.read_bytes()
+
+    info: dict = {
+        "artifact_id": artifact.id,
+        "path": artifact.current_path,
+        "format": artifact.format,
+        "tracking_status": artifact.tracking_status,
+        "current_revision_id": artifact.current_revision_id,
+    }
+    try:
+        handler = formats.get_handler(artifact.format)
+    except formats.UnsupportedFormatError:
+        info.update({"valid": True, "errors": [], "structure": None})
+        return info
+    info.update(handler.validate(data))
+    if info["valid"]:
+        info["structure"] = handler.inspect(data)["structure"]
+    return info
 
 
 async def _get(db: AsyncSession, artifact_id: str) -> Artifact:
