@@ -118,6 +118,95 @@ export interface WorkspaceEntry {
   size: number;
 }
 
+// --- File previews (W3) ---
+
+export interface ArtifactMeta {
+  id: string;
+  format: string;
+  tracking_status: string;
+  current_path: string;
+  current_revision_id: string | null;
+  current_revision_number: number | null;
+  revision_count: number;
+  viewing_revision_id: string | null;
+  viewing_revision_number: number | null;
+  newer_exists: boolean;
+}
+
+export interface PreviewElement {
+  type: "heading" | "paragraph" | "list" | "table" | "image" | "chart" | "notes" | "page_break";
+  text?: string;
+  level?: number;
+  style?: string;
+  items?: string[];
+  header?: string[];
+  rows?: unknown[][];
+  data_url?: string;
+  categories?: string[];
+  series?: { name: string; values: number[] }[];
+}
+
+export interface PreviewSlide {
+  title: string | null;
+  elements: PreviewElement[];
+  truncated?: boolean;
+}
+
+export interface PreviewSheet {
+  name: string;
+  rows: unknown[][];
+  row_count: number;
+  truncated: boolean;
+}
+
+export interface PreviewPayload {
+  kind:
+    | "markdown" | "code" | "text" | "json" | "table" | "image"
+    | "pdf" | "document" | "slides" | "workbook" | "media" | "unknown";
+  size: number;
+  name: string;
+  path: string;
+  /** Operator-only absolute path — the desktop shell uses it for
+   *  open/reveal-in-finder. Always the live file, even for revision views. */
+  absolute_path?: string;
+  artifact: ArtifactMeta | null;
+  content?: string;
+  truncated?: boolean;
+  language?: string;
+  valid?: boolean;
+  header?: string[];
+  rows?: unknown[][];
+  total_rows?: number;
+  mime?: string;
+  svg?: boolean;
+  page_count?: number;
+  format?: string;
+  elements?: PreviewElement[];
+  slides?: PreviewSlide[];
+  slide_count?: number;
+  sheets?: PreviewSheet[];
+  formulas_recalculated?: boolean;
+  media?: "audio" | "video";
+  too_large?: boolean;
+  /** Ephemeral-upload previews only — first PDF page as base64 PNG. */
+  thumb_png?: string;
+  error?: string;
+}
+
+export interface ArtifactRevisionInfo {
+  revision_id: string;
+  revision_number: number;
+  content_hash: string;
+  byte_size: number;
+  change_summary: string | null;
+  created_by: string | null;
+  created_at: string | null;
+  source_run_id: string | null;
+  source_message_id: string | null;
+  base_revision_id: string | null;
+  current: boolean;
+}
+
 export interface KnowledgeScope {
   id: string;
   name: string;

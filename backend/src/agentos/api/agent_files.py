@@ -3,7 +3,7 @@
 import re
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -374,6 +374,10 @@ async def preview_workspace_file(
         payload["path"] = artifact.current_path
     else:
         payload["path"] = path
+    # Operator-only: the desktop shell uses the absolute path for
+    # open/reveal-in-finder. Revision previews point at the live file.
+    live_path = artifact.current_path if artifact else path
+    payload["absolute_path"] = str(ws / live_path)
     return payload
 
 
@@ -524,6 +528,144 @@ async def adopt_workspace_file(
         "revision_id": rev.id,
         "path": artifact.current_path,
     }
+
+
+# --- Composer attachment previews (W3c) ---
+#
+# The tray renders a card before the message sends — these endpoints give
+# it bounded previews of in-flight files and URL metadata without
+# persisting anything. Attachment bytes only reach the workspace when the
+# message actually sends.
+
+
+@router.post("/{agent_id}/attachments/preview")
+async def preview_attachment_upload(
+    agent_id: str,
+    file: UploadFile,
+    operator: Operator = Depends(require_operator),
+) -> dict:
+    """Ephemeral preview of an in-flight attachment — same bounded renderers
+    as workspace previews, nothing persisted. PDF payloads carry a
+    first-page PNG (`thumb_png`, base64) for the card thumbnail."""
+    import base64
+
+    from .. import previews
+
+    _safe_component(agent_id, "agent id")
+    data = await file.read(previews.PREVIEW_MAX_BYTES + 1)
+    payload = previews.preview_bytes(data, file.filename or "attachment")
+    payload["artifact"] = None
+    payload["path"] = ""
+    if payload["kind"] == "pdf" and not payload.get("too_large"):
+        try:
+            png = previews.render_pdf_page(data, 1)
+            payload["thumb_png"] = base64.b64encode(png).decode("ascii")
+        except Exception:
+            pass  # thumbnails are best-effort — the card falls back to an icon
+    return payload
+
+
+@router.get("/{agent_id}/attachments/url-preview")
+async def url_attachment_preview(
+    agent_id: str,
+    url: str,
+    operator: Operator = Depends(require_operator),
+) -> dict:
+    """Domain + <title> for a URL attachment card. Bounded: http(s) only,
+    5s ceiling, first 256KB of the body, 200-char title."""
+    import re as _re
+
+    import httpx
+
+    _safe_component(agent_id, "agent id")
+    if not _re.match(r"^https?://", url, _re.IGNORECASE):
+        raise HTTPException(status_code=400, detail="Only http(s) URLs can be previewed")
+    try:
+        from urllib.parse import urlparse
+
+        domain = urlparse(url).hostname or ""
+    except Exception:
+        domain = ""
+    result: dict = {"url": url, "domain": domain, "title": None}
+    try:
+        from ..ssl_utils import SSL_CERT_PATH
+
+        async with httpx.AsyncClient(
+            timeout=5.0,
+            follow_redirects=True,
+            verify=SSL_CERT_PATH,
+            headers={"User-Agent": "CaberOS-UrlPreview/1.0"},
+        ) as client:
+            resp = await client.get(url)
+            body = resp.content[: 256 * 1024].decode("utf-8", errors="replace")
+            m = _re.search(r"<title[^>]*>(.*?)</title>", body, _re.IGNORECASE | _re.DOTALL)
+            if m:
+                title = _re.sub(r"\s+", " ", m.group(1)).strip()[:200]
+                if title:
+                    result["title"] = title
+    except Exception:
+        pass  # preview metadata is best-effort — domain label still works
+    return result
+
+
+@router.get("/{agent_id}/artifacts/{artifact_id}/compare")
+async def compare_artifact_revisions(
+    agent_id: str,
+    artifact_id: str,
+    from_revision: str,
+    to_revision: str | None = None,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Unified diff between two revisions — text decodable bytes only.
+
+    Binary formats answer honestly: no fabricated diff, just the
+    size/hash delta so the panel can say "changed" without pretending
+    to show what."""
+    import difflib
+
+    from ..artifacts import service as artifact_service
+    from ..artifacts.service import ArtifactError
+
+    try:
+        artifact = await artifact_service._get(db, artifact_id)
+        if artifact.workspace_id != agent_id:
+            raise ArtifactError("Artifact not found")
+        target_id = to_revision or artifact.current_revision_id
+        if not target_id:
+            raise ArtifactError("Artifact has no current revision")
+        old = await artifact_service.revision_bytes(db, from_revision)
+        new = await artifact_service.revision_bytes(db, target_id)
+    except ArtifactError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+    from ..models.artifact import ArtifactRevision
+
+    frm = await db.get(ArtifactRevision, from_revision)
+    to = await db.get(ArtifactRevision, target_id)
+    meta = {
+        "from_revision_number": frm.revision_number if frm else None,
+        "to_revision_number": to.revision_number if to else None,
+        "from_bytes": len(old),
+        "to_bytes": len(new),
+        "identical": old == new,
+    }
+
+    try:
+        old_text = old.decode("utf-8")
+        new_text = new.decode("utf-8")
+    except UnicodeDecodeError:
+        return {"comparable": False, "reason": "binary", **meta}
+
+    diff = "".join(
+        difflib.unified_diff(
+            old_text.splitlines(keepends=True),
+            new_text.splitlines(keepends=True),
+            fromfile=f"r{meta['from_revision_number']}/{artifact.current_path}",
+            tofile=f"r{meta['to_revision_number']}/{artifact.current_path}",
+        )
+    )
+    return {"comparable": True, "diff": diff, **meta}
 
 
 # --- Memory management (triples + recall entries) ---

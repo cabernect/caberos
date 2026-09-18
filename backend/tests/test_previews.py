@@ -454,3 +454,203 @@ async def test_adopt_endpoint_tracks_ordinary_file(db, client, workspace_root, a
 
     resp = await client.post("/api/agents/agent-1/artifacts/adopt", json={"path": "missing.txt"})
     assert resp.status_code == 400
+
+
+async def test_compare_endpoint_diffs_text_revisions(db, client, workspace_root, artifact_storage):
+    from agentos.artifacts import service
+
+    ws = _agent_workspace(workspace_root)
+    art, rev1 = await service.create(
+        db,
+        workspace_id="agent-1",
+        workspace_path=ws,
+        rel_path="notes.txt",
+        data=b"line one\nline two\n",
+    )
+    rev2 = await service.revise(
+        db,
+        art.id,
+        workspace_path=ws,
+        base_revision_id=rev1.id,
+        data=b"line one\nline changed\nline three\n",
+    )
+    resp = await client.get(
+        f"/api/agents/agent-1/artifacts/{art.id}/compare?from_revision={rev1.id}"
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["comparable"] is True
+    assert data["from_revision_number"] == 1
+    assert data["to_revision_number"] == 2
+    assert "-line two" in data["diff"]
+    assert "+line changed" in data["diff"]
+    assert "+line three" in data["diff"]
+
+    # Explicit pair + cross-agent isolation.
+    resp = await client.get(
+        f"/api/agents/agent-1/artifacts/{art.id}/compare"
+        f"?from_revision={rev1.id}&to_revision={rev2.id}"
+    )
+    assert resp.status_code == 200
+    resp = await client.get(f"/api/agents/other/artifacts/{art.id}/compare?from_revision={rev1.id}")
+    assert resp.status_code == 404
+
+
+async def test_compare_endpoint_reports_binary_honestly(
+    db, client, workspace_root, artifact_storage
+):
+    from agentos.artifacts import service
+
+    ws = _agent_workspace(workspace_root)
+    art, rev1 = await service.create(
+        db,
+        workspace_id="agent-1",
+        workspace_path=ws,
+        rel_path="blob.bin",
+        data=b"\x00\xff\x01",
+    )
+    await service.revise(
+        db, art.id, workspace_path=ws, base_revision_id=rev1.id, data=b"\x00\xff\x02\x03"
+    )
+    resp = await client.get(
+        f"/api/agents/agent-1/artifacts/{art.id}/compare?from_revision={rev1.id}"
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["comparable"] is False
+    assert data["reason"] == "binary"
+    assert data["identical"] is False
+    assert data["from_bytes"] == 3 and data["to_bytes"] == 4
+
+
+# --- Composer attachment previews (W3c) ---
+
+
+async def test_ephemeral_preview_renders_without_persisting(client, workspace_root):
+    ws = _agent_workspace(workspace_root)
+    resp = await client.post(
+        "/api/agents/agent-1/attachments/preview",
+        files={"file": ("table.csv", b"a,b\n1,2\n3,4\n", "text/csv")},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["kind"] == "table"
+    assert data["rows"][0] == ["1", "2"]
+    # Nothing landed in the workspace — preview is ephemeral.
+    assert list(ws.iterdir()) == []
+
+
+async def test_ephemeral_preview_pdf_carries_thumbnail(client, workspace_root):
+    _agent_workspace(workspace_root)
+    resp = await client.post(
+        "/api/agents/agent-1/attachments/preview",
+        files={"file": ("doc.pdf", _pdf_bytes(), "application/pdf")},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["kind"] == "pdf"
+    import base64
+
+    assert base64.b64decode(data["thumb_png"])[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+async def test_url_preview_requires_http(client, workspace_root):
+    _agent_workspace(workspace_root)
+    resp = await client.get(
+        "/api/agents/agent-1/attachments/url-preview?url=file:///etc/passwd"
+    )
+    assert resp.status_code == 400
+
+
+async def test_url_preview_extracts_title(client, workspace_root, monkeypatch):
+    """Title extraction is best-effort — a mocked fetch returns the page."""
+    _agent_workspace(workspace_root)
+
+    class FakeResp:
+        content = b"<html><head><title>  Example   Page </title></head></html>"
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url):
+            return FakeResp()
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+    resp = await client.get(
+        "/api/agents/agent-1/attachments/url-preview?url=https://example.com/page"
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["domain"] == "example.com"
+    assert data["title"] == "Example Page"
+
+
+# --- Skill resource previews (W3b) ---
+#
+# Same renderers, different root: skill dirs are operator-managed content
+# outside any agent workspace, so containment is anchored at the skill dir.
+
+
+@pytest.fixture
+def skills_dir(tmp_path, monkeypatch):
+    """Point the skills API at a throwaway skill directory."""
+    from agentos.api import skills as skills_api
+
+    root = tmp_path / "skills"
+    (root / "demo-skill" / "refs").mkdir(parents=True)
+    (root / "demo-skill" / "SKILL.md").write_text("---\nname: demo-skill\n---\n# Demo")
+    (root / "demo-skill" / "refs" / "guide.md").write_text("# Guide\n\nsteps")
+    (root / "demo-skill" / "refs" / "data.csv").write_text("a,b\n1,2\n")
+    monkeypatch.setattr(skills_api, "SKILLS_DIR", root)
+    return root
+
+
+async def test_skill_resources_lists_files(client, skills_dir):
+    resp = await client.get("/api/skills/demo-skill/resources")
+    assert resp.status_code == 200
+    paths = {r["path"] for r in resp.json()["resources"]}
+    assert "SKILL.md" in paths
+    assert "refs/guide.md" in paths
+
+    resp = await client.get("/api/skills/no-such/resources")
+    assert resp.status_code == 404
+
+
+async def test_skill_preview_renders_markdown(client, skills_dir):
+    resp = await client.get("/api/skills/demo-skill/preview?path=refs/guide.md")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["kind"] == "markdown"
+    assert "Guide" in data["content"]
+    assert data["artifact"] is None
+
+
+async def test_skill_preview_containment_blocks_escape(client, skills_dir):
+    resp = await client.get("/api/skills/demo-skill/preview?path=../outside.txt")
+    assert resp.status_code in (403, 404)
+    resp = await client.get("/api/skills/..%2fpreview?path=x")
+    assert resp.status_code in (400, 404, 422)
+
+
+async def test_skill_raw_and_pdf_page(client, skills_dir):
+    (skills_dir / "demo-skill" / "refs" / "doc.pdf").write_bytes(_pdf_bytes())
+
+    resp = await client.get("/api/skills/demo-skill/raw?path=refs/data.csv")
+    assert resp.status_code == 200
+    assert resp.content == b"a,b\n1,2\n"
+
+    resp = await client.get("/api/skills/demo-skill/pdf-page?path=refs/doc.pdf&page=1")
+    assert resp.status_code == 200
+    assert resp.content[:8] == b"\x89PNG\r\n\x1a\n"
+
+    resp = await client.get("/api/skills/demo-skill/pdf-page?path=refs/data.csv&page=1")
+    assert resp.status_code == 400

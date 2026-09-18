@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { api } from "@/lib/api";
+import { Eye } from "lucide-react";
+import { api, type PreviewSource } from "@/lib/api";
 import { DiffBlock } from "@/components/DiffBlock";
 import { ThinkingBlock } from "@/components/ThinkingBlock";
 
@@ -43,6 +44,32 @@ interface ThinkingBlockData {
 interface ToolCallBlockProps {
   call: ToolCallData;
   subagentStream?: SubAgentStreamData;
+  /** Opens the shared preview panel for the file/artifact this call touched. */
+  onPreview?: (source: PreviewSource) => void;
+}
+
+/**
+ * Resolve the preview target a completed call touched, if any:
+ * artifact_* results carry artifact/revision ids; file tools carry a
+ * workspace path. Returns null when nothing previewable exists.
+ */
+export function previewSourceFor(call: ToolCallData): PreviewSource | null {
+  if (call.status !== "complete") return null;
+  const result = (call.result ?? {}) as Record<string, unknown>;
+  if (call.capability.startsWith("artifact_")) {
+    const artifactId = (result.pdf_artifact_id ?? result.artifact_id) as string | undefined;
+    if (artifactId) {
+      return {
+        artifactId,
+        revisionId: (result.revision_id as string | undefined) ?? undefined,
+      };
+    }
+  }
+  if (["read_file", "write_file"].includes(call.capability)) {
+    const path = call.args.path as string | undefined;
+    if (path) return { path };
+  }
+  return null;
 }
 
 const TERMINAL_CAPS = new Set(["terminal", "read_terminal", "close_terminal"]);
@@ -80,7 +107,7 @@ function TerminalResult({ result }: { result: Record<string, unknown> }) {
   );
 }
 
-export function ToolCallBlock({ call, subagentStream }: ToolCallBlockProps) {
+export function ToolCallBlock({ call, subagentStream, onPreview }: ToolCallBlockProps) {
   const [expanded, setExpanded] = useState(false);
   const [subExpanded, setSubExpanded] = useState(false);
   const [remember, setRemember] = useState(false);
@@ -148,6 +175,21 @@ export function ToolCallBlock({ call, subagentStream }: ToolCallBlockProps) {
           <span className="text-[11px] font-medium text-[var(--ink-1)]">{label}</span>
           {detail && (
             <span className="min-w-0 truncate font-mono text-[11px] text-[var(--ink-3)]">{detail}</span>
+          )}
+          {onPreview && previewSourceFor(call) && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                const src = previewSourceFor(call);
+                if (src) onPreview(src);
+              }}
+              title="Preview this file"
+              aria-label="Preview this file"
+              className="ml-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-[3px] text-[var(--ink-3)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--accent)]"
+              style={{ border: "none", background: "none", cursor: "pointer" }}
+            >
+              <Eye className="h-3.5 w-3.5" />
+            </button>
           )}
           <span
             className={`ml-auto font-mono text-[11px] ${call.status === "running" ? "pulse" : ""}`}

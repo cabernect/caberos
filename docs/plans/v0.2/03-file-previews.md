@@ -84,3 +84,23 @@ Replace filename-only chips with visual previews:
 ## Done when
 
 Every target format opens through the same preview module from chat, Workspace, and Skill resources, and clipboard images persist correctly through a complete message round trip.
+
+---
+
+## Implementation status (feat/v0.2-previews)
+
+**Implemented:**
+
+- **Backend** (`agentos/previews.py`): byte classifier → bounded renderers for markdown/code/text/json/csv+tsv tables/image/svg/pdf/docx elements/pptx slides/xlsx workbooks/media/unknown. Caps: 64 MB files, 200k text chars, 500×64 tables, 400 elements, 20 embedded images ≤3 MB, PDF pages at 1.5×.
+- **Workspace API**: `GET …/workspace/preview|raw|pdf-page` accepting `path` or `{artifact_id, revision_id}` — revision bytes come from managed storage, so chat opens the exact attached revision. Containment enforced; `absolute_path` returned for desktop open/reveal.
+- **Artifact actions**: `GET …/artifacts/{id}/revisions`, `POST …/revisions/{rev}/restore` (append-only), `POST …/adopt` (track an ordinary file), `GET …/compare?from=` (unified diff for text, honest refusal for binary).
+- **Skill API**: `GET /api/skills/{name}/resources|preview|raw|pdf-page` — same payload shape, rooted inside the selected skill directory.
+- **Composer API**: `POST …/attachments/preview` (ephemeral — never persists to workspace; PDFs get a base64 page-1 thumb) and `GET …/attachments/url-preview` (http/https only, bounded timeout, ≤256 KB inspected, title extraction with domain fallback).
+- **Frontend** (`components/previews/`): one `PreviewPanel` serves all surfaces via a `PreviewBackend` seam (`workspaceBackend`/`skillBackend`). Artifact history dropdown, revision banner ("Viewing revision N — revision M is current", never silently swaps), compare view via `DiffBlock`, restore/download/open/reveal/Add to Vault/Track history/Ask agent to revise. Payloads are keyed to their source so a stale payload can't render against a new file.
+- **Surfaces**: Conversation (resizable right panel, full-screen below `md`; message chips open stored paths; tool calls that name files get a preview affordance), Settings→Workspace (split browser/preview, scroll+focus restored, "Back to Workspace" on narrow), Skills page (resource count → file list → shared panel, workspace actions hidden).
+- **Composer tray**: clipboard/drag/picker/URL attachments, stable `crypto.randomUUID` ids, SHA-256 dedupe incl. intra-batch, reorder/remove, kind+size chips, image object-URL thumbs + PDF page-1 thumbs, object-URL revocation on remove/send/unmount, best-effort URL titles, `onSend` returning `false` retains the draft + attachments.
+- **Persistence**: `pipeline.py` shares `attachments/attachment_{i}_{name}` between the storer and message metadata, so chips resolve stored files; URL attachments keep their URL.
+
+**Verified:** `backend/tests/test_previews.py` (36), `attachmentUtils.test.ts` (5), `npx tsc -b`, oxlint clean (warnings only), and a live Playwright pass over markdown/csv/pdf/docx previews, history/banner/compare/restore, Track history adoption, skill resources, tray dedupe/reorder/thumbs.
+
+**Deferred:** in-panel video/audio scrub UX beyond native elements; Office→PDF preview rendering (previews render elements, not paginated layout); E2E send-roundtrip with a real model is covered by the smoke path, not a dedicated test.

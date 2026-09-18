@@ -1,6 +1,6 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import {
-  X, Save, Copy, Download, Upload, Power, Trash2,
+  X, Save, Copy, Download, Upload, Power, Trash2, ArrowLeft,
   FileText, Folder, ChevronRight, ChevronDown, FolderOpen,
 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -18,6 +18,7 @@ import type {
 } from "@/lib/types";
 import { ModelSelect } from "@/components/ModelSelect";
 import { ThinkingToggle } from "@/components/ThinkingToggle";
+import { PreviewPanel } from "@/components/previews/PreviewPanel";
 
 interface SettingsOverlayProps {
   agent: Agent | null;
@@ -1208,24 +1209,32 @@ function SkillsTab({ agentId, showSaved }: { agentId: string; showSaved: (msg: s
 }
 
 // --- Workspace Tab ---
+//
+// Split file-browser/preview (W3): the directory stays navigable on the
+// left while the shared PreviewPanel renders the selected file on the
+// right. Narrow layouts fall back to a full-width preview with Back.
 
 function WorkspaceTab({ agentId }: { agentId: string }) {
   const [path, setPath] = useState("");
   const [entries, setEntries] = useState<WorkspaceEntry[]>([]);
-  const [fileContent, setFileContent] = useState<string | null>(null);
+  const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const listRef = useRef<HTMLDivElement>(null);
+  // Saved when the preview opens: where the browser was scrolled and which
+  // row was selected, so closing the preview lands the operator back
+  // exactly where they left off.
+  const browseStateRef = useRef<{ scrollTop: number; selected: string | null }>({
+    scrollTop: 0,
+    selected: null,
+  });
 
   const load = useCallback(async (p: string) => {
     if (!agentId) return;
     setLoading(true);
-    setFileContent(null);
     try {
       const result = await api.listWorkspace(agentId, p);
       if (result.type === "dir") {
         setEntries(result.entries || []);
-      } else {
-        setFileContent(result.content || "");
-        setEntries([]);
       }
     } catch {
       setEntries([]);
@@ -1236,10 +1245,32 @@ function WorkspaceTab({ agentId }: { agentId: string }) {
 
   useEffect(() => { load(""); }, [load]);
 
-  const navigate = (name: string) => {
-    const newPath = path ? `${path}/${name}` : name;
-    setPath(newPath);
-    load(newPath);
+  const navigate = (entry: WorkspaceEntry) => {
+    const newPath = path ? `${path}/${entry.name}` : entry.name;
+    if (entry.type === "dir") {
+      setPath(newPath);
+      load(newPath);
+    } else {
+      browseStateRef.current = {
+        scrollTop: listRef.current?.scrollTop ?? 0,
+        selected: newPath,
+      };
+      setPreviewPath(newPath);
+    }
+  };
+
+  const closePreview = () => {
+    const saved = browseStateRef.current;
+    setPreviewPath(null);
+    // Restore the browser's scroll + focus after React remounts the list.
+    requestAnimationFrame(() => {
+      if (listRef.current) listRef.current.scrollTop = saved.scrollTop;
+      if (saved.selected) {
+        listRef.current
+          ?.querySelector<HTMLButtonElement>(`[data-path="${CSS.escape(saved.selected)}"]`)
+          ?.focus();
+      }
+    });
   };
 
   const goUp = () => {
@@ -1251,6 +1282,52 @@ function WorkspaceTab({ agentId }: { agentId: string }) {
   };
 
   const breadcrumbs = path ? path.split("/").filter(Boolean) : [];
+
+  const fileList = (
+    <div ref={listRef} className="h-full space-y-1 overflow-auto">
+      {path && (
+        <button
+          onClick={goUp}
+          className="flex w-full items-center gap-2 rounded-[5px] px-3 py-2 text-[13px] text-[var(--ink-2)] transition hover:bg-[var(--surface)]"
+          style={{ border: "none", background: "none", cursor: "pointer" }}
+        >
+          <FolderOpen className="h-4 w-4" /> ..
+        </button>
+      )}
+      {entries.map((entry) => (
+        <button
+          key={entry.name}
+          data-path={path ? `${path}/${entry.name}` : entry.name}
+          onClick={() => navigate(entry)}
+          className="flex w-full items-center gap-2 rounded-[5px] px-3 py-2 text-[13px] transition hover:bg-[var(--surface)]"
+          style={{
+            border: "none",
+            background:
+              previewPath === (path ? `${path}/${entry.name}` : entry.name)
+                ? "var(--surface)"
+                : "none",
+            cursor: "pointer",
+            color: "var(--ink)",
+          }}
+        >
+          {entry.type === "dir" ? (
+            <Folder className="h-4 w-4" style={{ color: "var(--accent)" }} />
+          ) : (
+            <FileText className="h-4 w-4" style={{ color: "var(--ink-3)" }} />
+          )}
+          <span className="truncate">{entry.name}</span>
+          {entry.type === "file" && (
+            <span className="ml-auto shrink-0 font-mono text-[11px] text-[var(--ink-3)]">
+              {entry.size > 1024 ? `${(entry.size / 1024).toFixed(1)}KB` : `${entry.size}B`}
+            </span>
+          )}
+        </button>
+      ))}
+      {entries.length === 0 && !loading && (
+        <p className="py-8 text-center text-[13px] text-[var(--ink-3)]">Empty directory.</p>
+      )}
+    </div>
+  );
 
   return (
     <div className="space-y-3">
@@ -1277,52 +1354,32 @@ function WorkspaceTab({ agentId }: { agentId: string }) {
 
       {loading ? (
         <p className="text-[13px] text-[var(--ink-2)]">Loading…</p>
-      ) : fileContent !== null ? (
+      ) : previewPath ? (
         <div>
-          <button onClick={goUp} className="mb-2 flex items-center gap-1 text-[12px] text-[var(--accent)]" style={{ border: "none", background: "none", cursor: "pointer" }}>
-            <FolderOpen className="h-3.5 w-3.5" /> Back
-          </button>
-          <pre
-            className="max-h-[60vh] overflow-auto rounded-[5px] border p-3 font-mono text-[12px] leading-[1.5] text-[var(--ink)]"
-            style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+          {/* Narrow layouts get a full-width preview with a way back —
+              the split browser column only exists at md+. */}
+          <button
+            onClick={closePreview}
+            className="mb-2 flex items-center gap-1.5 rounded-[5px] px-2 py-1 text-[12px] text-[var(--ink-2)] transition hover:bg-[var(--surface)] md:hidden"
+            style={{ border: "none", background: "none", cursor: "pointer" }}
           >
-            {fileContent}
-          </pre>
+            <ArrowLeft className="h-3.5 w-3.5" /> Back to Workspace
+          </button>
+          <div className="flex gap-0 overflow-hidden rounded-[5px] border border-[var(--border)]" style={{ height: "60vh" }}>
+            <div className="hidden w-56 shrink-0 overflow-auto border-r border-[var(--border)] p-2 md:block">
+              {fileList}
+            </div>
+            <div className="min-w-0 flex-1">
+              <PreviewPanel
+                agentId={agentId}
+                source={{ path: previewPath }}
+                onClose={closePreview}
+              />
+            </div>
+          </div>
         </div>
-      ) : entries.length === 0 ? (
-        <p className="py-8 text-center text-[13px] text-[var(--ink-3)]">Empty directory.</p>
       ) : (
-        <div className="space-y-1">
-          {path && (
-            <button
-              onClick={goUp}
-              className="flex w-full items-center gap-2 rounded-[5px] px-3 py-2 text-[13px] text-[var(--ink-2)] transition hover:bg-[var(--surface)]"
-              style={{ border: "none", background: "none", cursor: "pointer" }}
-            >
-              <FolderOpen className="h-4 w-4" /> ..
-            </button>
-          )}
-          {entries.map((entry) => (
-            <button
-              key={entry.name}
-              onClick={() => navigate(entry.name)}
-              className="flex w-full items-center gap-2 rounded-[5px] px-3 py-2 text-[13px] text-[var(--ink)] transition hover:bg-[var(--surface)]"
-              style={{ border: "none", background: "none", cursor: "pointer" }}
-            >
-              {entry.type === "dir" ? (
-                <Folder className="h-4 w-4" style={{ color: "var(--accent)" }} />
-              ) : (
-                <FileText className="h-4 w-4" style={{ color: "var(--ink-3)" }} />
-              )}
-              <span>{entry.name}</span>
-              {entry.type === "file" && (
-                <span className="ml-auto font-mono text-[11px] text-[var(--ink-3)]">
-                  {entry.size > 1024 ? `${(entry.size / 1024).toFixed(1)}KB` : `${entry.size}B`}
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
+        <div style={{ maxHeight: "60vh" }}>{fileList}</div>
       )}
     </div>
   );

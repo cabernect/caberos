@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ArrowDown, PanelLeft, AlertCircle, BookOpen, ChevronDown, FileIcon, Link as LinkIcon, Paperclip, Loader2, MessageSquare } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, type PreviewSource } from "@/lib/api";
 import type { Agent, Message, Provider, SessionInfo } from "@/lib/types";
+import { PreviewPanel } from "@/components/previews/PreviewPanel";
 import { ToolCallBlock, type ToolCallData, type SubAgentStreamData } from "@/components/ToolCallBlock";
 import { Markdown } from "@/components/Markdown";
 import { ThinkingBlock } from "@/components/ThinkingBlock";
@@ -118,6 +119,8 @@ export function Conversation() {
   const [compacting, setCompacting] = useState(false);
   const [contextBreakdown, setContextBreakdown] = useState<{ system_prompt: number; conversation: number; tools: number } | undefined>(undefined);
   const [hasModelSelected, setHasModelSelected] = useState(false);
+  const [previewSource, setPreviewSource] = useState<PreviewSource | null>(null);
+  const [previewWidth, setPreviewWidth] = useState(420);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -1044,21 +1047,53 @@ export function Conversation() {
     }
   };
 
+  // --- File preview (W3) — shared right-side panel ---
+  const openPreview = useCallback((source: PreviewSource) => {
+    setPreviewSource(source);
+  }, []);
+
+  const closePreview = useCallback(() => setPreviewSource(null), []);
+
+  const startPreviewResize = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      const startX = e.clientX;
+      const startWidth = previewWidth;
+      const onMove = (ev: MouseEvent) => {
+        // Panel hugs the right edge — dragging left grows it.
+        const next = startWidth + (startX - ev.clientX);
+        setPreviewWidth(Math.min(720, Math.max(300, next)));
+      };
+      const onUp = () => {
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+      };
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    },
+    [previewWidth],
+  );
+
+  const askRevise = useCallback((artifact: { current_path: string }) => {
+    inputBarRef.current?.prefill(`Revise ${artifact.current_path} — `);
+  }, []);
+
+  // Returns success so the composer can keep the draft + tray on failure.
   const handleSend = async (
     text: string,
     modelOverride: { provider_id: string; name: string; thinking_enabled?: boolean | null; thinking_effort?: string | null } | null,
     _context: ContextItem[],
     attachments?: { type: string; mimeType: string; data: string; filename: string }[],
     skill?: string,
-  ) => {
-    if (!agentId) return;
+  ): Promise<boolean> => {
+    if (!agentId) return false;
 
     // Don't allow sending messages from the dashboard into channel sessions
     // (Zalo, Telegram, etc.) — those are external conversations. The dashboard
     // view of a channel session is read-only.
     const activeSession = sessions.find((s) => s.id === activeSessionId);
     if (activeSession?.channel) {
-      return;
+      return false;
     }
 
     // Handle /compact slash command — trigger manual compaction
@@ -1066,7 +1101,7 @@ export function Conversation() {
       if (activeSessionId) {
         handleCompact();
       }
-      return;
+      return true;
     }
 
     // Don't create a session upfront — let the backend auto-resume or create one.
@@ -1087,10 +1122,11 @@ export function Conversation() {
       ]);
     }
 
+    const optimisticId = crypto.randomUUID();
     setMessages((prev) => [
       ...prev,
       {
-        id: crypto.randomUUID(),
+        id: optimisticId,
         role: "user",
         content: text,
         created_at: new Date().toISOString(),
@@ -1154,11 +1190,16 @@ export function Conversation() {
       // Step 2: Start streaming events for this session.
       // Only the currently-viewed session is actively streamed.
       startStreaming(runSessionId);
+      return true;
     } catch (err) {
       console.error("Failed to send message:", err);
       setStreaming(null);
       streamingRef.current = null;
       setIsStreaming(false);
+      // Roll back the optimistic message — the run never started, and
+      // the composer keeps the draft + attachments for a retry.
+      setMessages((prev) => prev.filter((m) => m.id !== optimisticId));
+      return false;
     }
   };
 
@@ -1343,6 +1384,7 @@ export function Conversation() {
                     key={`process-${processGroup[0].index}`}
                     steps={steps}
                     subagentMessages={subagentMsgs}
+                    onPreview={openPreview}
                   />
                 );
                 processGroup = [];
@@ -1381,6 +1423,7 @@ export function Conversation() {
                         filtered[i + 1].run_id !== msg.run_id
                       }
                       subagentMessages={subagentMessages}
+                      onPreview={openPreview}
                     />
                   );
                 }
@@ -1402,12 +1445,12 @@ export function Conversation() {
             )}
 
             {isStreaming && streaming && (
-              <StreamingMessage streaming={streaming} />
+              <StreamingMessage streaming={streaming} onPreview={openPreview} />
             )}
             {isStreaming && !streaming && <TypingIndicator />}
             {/* Completed streaming block — keeps thinking/tool calls/costs visible after run ends */}
             {!isStreaming && streaming && streaming.completed && (
-              <StreamingMessage streaming={streaming} />
+              <StreamingMessage streaming={streaming} onPreview={openPreview} />
             )}
 
             {/* Compacting indicator */}
@@ -1529,6 +1572,30 @@ export function Conversation() {
         })()}
       </div>
 
+      {/* Shared file preview — resizable right panel (W3). On narrow
+          screens it becomes a full-width overlay instead of crushing
+          the chat below 300px. */}
+      {previewSource && (
+        <div
+          className="relative shrink-0 max-md:fixed max-md:inset-0 max-md:z-40"
+          style={{ width: `min(100%, ${previewWidth}px)` }}
+        >
+          <div
+            onMouseDown={startPreviewResize}
+            className="absolute left-0 top-0 z-10 h-full w-1 cursor-col-resize transition-colors hover:bg-[var(--accent)]/40 max-md:hidden"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize preview"
+          />
+          <PreviewPanel
+            agentId={agentId || ""}
+            source={previewSource}
+            onClose={closePreview}
+            onAskRevise={askRevise}
+          />
+        </div>
+      )}
+
       {/* Full-view drag-and-drop overlay */}
       {isDraggingFile && (
         <div
@@ -1566,7 +1633,13 @@ export function Conversation() {
   );
 }
 
-function StreamingMessage({ streaming }: { streaming: StreamingResponse }) {
+function StreamingMessage({
+  streaming,
+  onPreview,
+}: {
+  streaming: StreamingResponse;
+  onPreview?: (source: PreviewSource) => void;
+}) {
   const hasContent = streaming.text || streaming.items.length > 0;
   const endTime = streaming.thinkingEndTime ?? Date.now();
   const currentThinkingDuration = streaming.thinkingStartTime
@@ -1598,6 +1671,7 @@ function StreamingMessage({ streaming }: { streaming: StreamingResponse }) {
         return <ToolCallBlock
           key={item.id}
           call={item.data}
+          onPreview={onPreview}
           subagentStream={
             item.data.capability === "run_subagent" && streaming.subagents.size > 0
               ? Array.from(streaming.subagents.entries()).map(([, s]) => ({
@@ -1658,10 +1732,20 @@ function StreamingMessage({ streaming }: { streaming: StreamingResponse }) {
   );
 }
 
-function MessageRow({ message, isLastInRun, subagentMessages }: { message: ChatMessage; isLastInRun?: boolean; subagentMessages?: ChatMessage[] }) {
+function MessageRow({
+  message,
+  isLastInRun,
+  subagentMessages,
+  onPreview,
+}: {
+  message: ChatMessage;
+  isLastInRun?: boolean;
+  subagentMessages?: ChatMessage[];
+  onPreview?: (source: PreviewSource) => void;
+}) {
   if (message.role === "user") {
     // Parse attachment metadata (JSON string from the API)
-    let attachmentFiles: { type: string; mime_type: string; filename: string; url?: string }[] = [];
+    let attachmentFiles: { type: string; mime_type: string; filename: string; url?: string; path?: string }[] = [];
     if (message.attachments) {
       try {
         const parsed = JSON.parse(message.attachments);
@@ -1714,6 +1798,16 @@ function MessageRow({ message, isLastInRun, subagentMessages }: { message: ChatM
                 >
                   {chipContent}
                 </a>
+              ) : f.path && onPreview ? (
+                <button
+                  key={i}
+                  onClick={() => onPreview({ path: f.path! })}
+                  className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12px] transition hover:opacity-80"
+                  style={{ ...chipStyle, cursor: "pointer" }}
+                  title={`Preview ${f.filename}`}
+                >
+                  {chipContent}
+                </button>
               ) : (
                 <div
                   key={i}
@@ -1772,7 +1866,7 @@ function MessageRow({ message, isLastInRun, subagentMessages }: { message: ChatM
       }
       return (
         <div className="mb-4">
-          <ToolCallBlock call={data} subagentStream={subagentStream} />
+          <ToolCallBlock call={data} subagentStream={subagentStream} onPreview={onPreview} />
         </div>
       );
     } catch {

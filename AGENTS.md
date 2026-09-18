@@ -158,6 +158,13 @@ Tickets **01–09 implemented**: smoke slice, real-model chat + SSE streaming, f
 - **Verification:** `backend/tests/test_artifacts.py` (22 tests) + `scripts/smoke_artifacts.py` — scripted chain through the real pipeline and `--live` mode driving a real provider end-to-end.
 - **Gaps:** `preview_status` column exists but rendering is W3; `artifact_base_revision_ids` on ExecutionManifest unpopulated; LibreOffice Docker packaging is W10; templates/themes guidance is W6 skills.
 
+**v0.2 W3 status (branch `feat/v0.2-previews`, unmerged):**
+- **W3 File previews + attachments (implemented):** shared preview module serves Conversation, Settings→Workspace, and Skills Studio. `agentos/previews.py` classifies bytes → bounded renderers (markdown/code/text/json/csv-table/image/pdf/docx-elements/pptx-slides/xlsx-workbook/media/unknown). Workspace endpoints (`preview`, `raw`, `pdf-page`) accept `path` or `{artifact_id, revision_id}`; skill endpoints mirror them rooted at the skill dir; composer gets ephemeral `attachments/preview` + `url-preview` (http(s)-only, 256 KB cap).
+- **Frontend:** `components/previews/` — `PreviewPanel` (fetch lifecycle, artifact actions, revision banner, compare diff, restore-as-new-revision, Track history, Add to Vault, desktop open/reveal) + per-kind renderers behind a `PreviewBackend` seam (workspace vs skill roots). Payloads are keyed to their source so stale content never renders against a new file. Binary previews fetch authenticated blobs → object URLs (bearer token can't ride `<img src>`).
+- **Composer tray:** clipboard/drag/picker/URL attachments with stable ids, content-hash dedupe (incl. intra-batch), reorder/remove, ephemeral preview chips (kind + size + PDF first-page thumb), object-URL cleanup, retry retention — `onSend` returning `false` keeps the draft.
+- **Attachment persistence:** message attachments carry workspace-relative `attachments/attachment_{i}_{name}` paths (shared helper in `pipeline.py`) so chat chips open the stored file.
+- **Verification:** `backend/tests/test_previews.py` (36 tests) + `attachmentUtils.test.ts` (5 tests); all surfaces exercised live via Playwright MCP.
+
 **Ticket 10 (Tauri Desktop App):** SHIPPED for macOS ARM64 (Apple Silicon). macOS Intel and Windows builds require cross-compilation/CI and are not yet set up.
 - Tauri 2 shell wraps the React frontend + packaged PyInstaller gateway.
 - Gateway supervisor (`frontend/src-tauri/src/gateway.rs`): starts the PyInstaller gateway in its own process group, routes stdout/stderr to `<app_data_dir>/logs/gateway.log`, kills the full process group on app exit.

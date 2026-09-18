@@ -120,6 +120,14 @@ class Attachment:
     filename: str = ""  # original filename (for display + audit)
 
 
+def _attachment_rel_path(index: int, filename: str) -> str:
+    """Workspace-relative storage path for an uploaded attachment — shared
+    by the persister (message metadata) and the storer (tool manifest) so
+    preview chips can resolve the same file."""
+    safe_name = Path(filename).name or f"attachment_{index}"
+    return f"attachments/attachment_{index}_{safe_name}"
+
+
 async def _prepare_attachment_context(
     attachments: list[Attachment], workspace_path: str
 ) -> list[dict[str, Any]]:
@@ -127,7 +135,6 @@ async def _prepare_attachment_context(
     import asyncio
     import base64
 
-    attachment_dir = Path(workspace_path) / "attachments"
     records: list[dict[str, Any]] = []
 
     for index, attachment in enumerate(attachments, start=1):
@@ -144,8 +151,7 @@ async def _prepare_attachment_context(
             records.append(record)
             continue
 
-        safe_name = Path(attachment.filename).name or attachment_id
-        file_path = attachment_dir / f"{attachment_id}_{safe_name}"
+        file_path = Path(workspace_path) / _attachment_rel_path(index, attachment.filename)
 
         if attachment.type == "file" and (
             attachment.mime_type.startswith("text/") or attachment.mime_type == "application/json"
@@ -300,10 +306,12 @@ class Pipeline:
                         "type": attachment.type,
                         "mime_type": attachment.mime_type,
                         "filename": attachment.filename,
+                        # Workspace-relative path so preview chips can resolve
+                        # the stored file (mirrors _prepare_attachment_context).
                         **(
-                            {"url": attachment.data}
-                            if attachment.type in ("url", "image_url")
-                            else {}
+                            {"path": _attachment_rel_path(index, attachment.filename)}
+                            if attachment.type not in ("url", "image_url")
+                            else {"url": attachment.data}
                         ),
                     }
                     for index, attachment in enumerate(message.attachments, start=1)

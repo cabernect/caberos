@@ -1,10 +1,12 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { Sparkles, Upload, Trash2, FileText, Search, Package } from "lucide-react";
+import { ArrowLeft, ChevronRight, File, Sparkles, Upload, Trash2, FileText, Search, Package } from "lucide-react";
 import { DashboardSidebar, type NavKey } from "@/components/DashboardSidebar";
-import { api } from "@/lib/api";
+import { api, skillBackend } from "@/lib/api";
 import { useConfirm } from "@/lib/confirmHook";
 import type { SkillInfo } from "@/lib/types";
+import { PreviewPanel } from "@/components/previews/PreviewPanel";
+import { formatBytes } from "@/components/previews/renderers";
 
 export function Skills() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -14,7 +16,18 @@ export function Skills() {
   const [search, setSearch] = useState("");
   const [importing, setImporting] = useState(false);
   const [importMsg, setImportMsg] = useState<string | null>(null);
+  // Resource browser — selectedSkill expands the file list, previewPath
+  // swaps the list for the shared preview panel.
+  const [selectedSkill, setSelectedSkill] = useState<string | null>(null);
+  const [resources, setResources] = useState<{ path: string; size: number; mime: string }[] | null>(null);
+  const [resourcesLoading, setResourcesLoading] = useState(false);
+  const [previewPath, setPreviewPath] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Memoized — a fresh backend per render would loop the panel's fetch.
+  const selectedBackend = useMemo(
+    () => (selectedSkill ? skillBackend(selectedSkill) : null),
+    [selectedSkill],
+  );
   const navigate = useNavigate();
   const { confirm } = useConfirm();
 
@@ -85,6 +98,26 @@ export function Skills() {
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to delete skill");
     }
+  };
+
+  const openResources = async (name: string) => {
+    setSelectedSkill(name);
+    setPreviewPath(null);
+    setResourcesLoading(true);
+    try {
+      const data = await api.listSkillResources(name);
+      setResources(data.resources);
+    } catch {
+      setResources([]);
+    } finally {
+      setResourcesLoading(false);
+    }
+  };
+
+  const closeResources = () => {
+    setSelectedSkill(null);
+    setPreviewPath(null);
+    setResources(null);
   };
 
   const filtered = skills.filter(
@@ -249,10 +282,16 @@ export function Skills() {
                     className="mt-4 flex items-center gap-3 text-[12px]"
                     style={{ color: "var(--ink-3)" }}
                   >
-                    <span className="flex items-center gap-1">
+                    <button
+                      onClick={() => openResources(skill.name)}
+                      className="flex items-center gap-1 rounded-[4px] px-1 py-0.5 transition-colors hover:bg-[var(--surface)] hover:text-[var(--accent)]"
+                      style={{ background: "none", border: "none", cursor: "pointer" }}
+                      title="Browse skill files"
+                    >
                       <FileText className="h-3 w-3" />
                       {skill.resource_count} resource{skill.resource_count !== 1 ? "s" : ""}
-                    </span>
+                      <ChevronRight className="h-3 w-3" />
+                    </button>
                     <span
                       className="rounded px-1.5 py-0.5"
                       style={{
@@ -286,6 +325,79 @@ export function Skills() {
           )}
         </div>
       </div>
+
+      {/* Resource browser / shared preview (W3) */}
+      {selectedSkill && (
+        <div className="w-[380px] shrink-0">
+          {previewPath ? (
+            <div className="flex h-full flex-col border-l border-[var(--border)] bg-[var(--white)]">
+              <button
+                onClick={() => setPreviewPath(null)}
+                className="flex items-center gap-1.5 border-b border-[var(--border)] px-3 py-2 text-[12px] text-[var(--ink-2)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--ink)]"
+                style={{ background: "none", cursor: "pointer" }}
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+                {selectedSkill} resources
+              </button>
+              <div className="min-h-0 flex-1">
+                {selectedBackend && (
+                  <PreviewPanel
+                    agentId=""
+                    backend={selectedBackend}
+                    source={{ path: previewPath }}
+                    onClose={closeResources}
+                  />
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="flex h-full flex-col border-l border-[var(--border)] bg-[var(--white)]">
+              <div className="flex items-center justify-between border-b border-[var(--border)] px-3 py-2">
+                <p className="truncate text-[13px] font-medium text-[var(--ink)]">
+                  {selectedSkill}
+                  <span className="ml-2 font-mono text-[11px] font-normal text-[var(--ink-3)]">
+                    {resources?.length ?? "…"} files
+                  </span>
+                </p>
+                <button
+                  onClick={closeResources}
+                  className="rounded-[4px] px-2 py-0.5 text-[11px] text-[var(--ink-3)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--ink)]"
+                  style={{ background: "none", border: "none", cursor: "pointer" }}
+                >
+                  Close
+                </button>
+              </div>
+              <div className="flex-1 overflow-auto">
+                {resourcesLoading ? (
+                  <p className="p-4 text-[12px] text-[var(--ink-3)]">Loading…</p>
+                ) : !resources?.length ? (
+                  <p className="p-4 text-[12px] text-[var(--ink-3)]">No files in this skill.</p>
+                ) : (
+                  resources.map((r) => (
+                    <button
+                      key={r.path}
+                      onClick={() => setPreviewPath(r.path)}
+                      className="flex w-full items-center gap-2 border-b border-[var(--border)]/50 px-3 py-2 text-left transition-colors hover:bg-[var(--surface)]"
+                      style={{ background: "none", cursor: "pointer" }}
+                    >
+                      <File className="h-3.5 w-3.5 shrink-0 text-[var(--ink-3)]" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-mono text-[12px] text-[var(--ink)]">
+                          {r.path}
+                        </span>
+                        <span className="text-[10px] text-[var(--ink-3)]">
+                          {r.mime} · {formatBytes(r.size)}
+                        </span>
+                      </span>
+                      <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[var(--ink-3)]" />
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
