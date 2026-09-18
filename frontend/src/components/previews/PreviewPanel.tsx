@@ -10,7 +10,9 @@ import {
   GitCompareArrows,
   History,
   Loader2,
+  Maximize2,
   MessageSquarePlus,
+  Minimize2,
   RefreshCcw,
   X,
 } from "lucide-react";
@@ -59,6 +61,9 @@ export function PreviewPanel({ agentId, source, backend, onClose, onAskRevise, c
   const [historyOpen, setHistoryOpen] = useState(false);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [viewing, setViewing] = useState<PreviewSource>(source);
+  // Expanded mode — the same panel floats over a backdrop for focused
+  // reading; Escape collapses back to the docked panel before closing.
+  const [expanded, setExpanded] = useState(false);
   // Compare mode — a revision-vs-current diff replaces the content area.
   const [compare, setCompare] = useState<{
     loading: boolean;
@@ -87,6 +92,7 @@ export function PreviewPanel({ agentId, source, backend, onClose, onAskRevise, c
     setHistoryOpen(false);
     setActionMsg(null);
     setCompare(null);
+    setExpanded(false);
   }, [source.path, source.artifactId, source.revisionId]);
 
   const fetchPreview = useCallback(async () => {
@@ -104,17 +110,18 @@ export function PreviewPanel({ agentId, source, backend, onClose, onAskRevise, c
     fetchPreview();
   }, [fetchPreview]);
 
-  // Escape closes the preview before whatever contains it.
+  // Escape collapses an expanded preview first, then closes the panel.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.stopPropagation();
-        onClose?.();
+        if (expanded) setExpanded(false);
+        else onClose?.();
       }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [onClose]);
+  }, [onClose, expanded]);
 
   // Close the history dropdown on outside click.
   useEffect(() => {
@@ -251,11 +258,24 @@ export function PreviewPanel({ agentId, source, backend, onClose, onAskRevise, c
   };
 
   return (
-    <div
-      className={`flex h-full flex-col border-l border-[var(--border)] bg-[var(--white)] ${className || ""}`}
-      role="complementary"
-      aria-label="File preview"
-    >
+    <>
+      {/* Backdrop for expanded mode — click collapses back to docked. */}
+      {expanded && (
+        <div
+          className="fixed inset-0 z-40 bg-black/50"
+          aria-hidden="true"
+          onClick={() => setExpanded(false)}
+        />
+      )}
+      <div
+        className={
+          expanded
+            ? "fixed left-1/2 top-[4vh] bottom-[4vh] z-50 flex w-[min(1100px,94vw)] -translate-x-1/2 flex-col overflow-hidden rounded-[8px] border border-[var(--border)] bg-[var(--white)] shadow-2xl"
+            : `flex h-full flex-col border-l border-[var(--border)] bg-[var(--white)] ${className || ""}`
+        }
+        role="complementary"
+        aria-label="File preview"
+      >
       {/* Header */}
       <div className="flex items-center gap-2 border-b border-[var(--border)] px-3 py-2">
         <FileText className="h-4 w-4 shrink-0 text-[var(--ink-3)]" />
@@ -282,6 +302,14 @@ export function PreviewPanel({ agentId, source, backend, onClose, onAskRevise, c
           title="Refresh preview"
         >
           <RefreshCcw className="h-4 w-4" />
+        </button>
+        <button
+          onClick={() => setExpanded((v) => !v)}
+          className="rounded-[4px] p-1 text-[var(--ink-3)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--ink)]"
+          aria-label={expanded ? "Restore panel size" : "Expand preview"}
+          title={expanded ? "Restore panel size" : "Expand preview"}
+        >
+          {expanded ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
         </button>
         {onClose && (
           <button
@@ -446,7 +474,8 @@ export function PreviewPanel({ agentId, source, backend, onClose, onAskRevise, c
           </div>
         )}
       </div>
-    </div>
+      </div>
+    </>
   );
 }
 
