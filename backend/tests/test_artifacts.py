@@ -510,7 +510,9 @@ async def test_imported_pdf_is_readable_but_not_editable(db, workspace, artifact
         )
 
 
-async def test_pdf_export_without_renderer_reports_unavailable(db, workspace, artifact_storage, monkeypatch):
+async def test_pdf_export_without_renderer_reports_unavailable(
+    db, workspace, artifact_storage, monkeypatch
+):
     """No LibreOffice → honest renderer_unavailable, no phantom artifact."""
     from agentos.artifacts import service
 
@@ -529,3 +531,113 @@ async def test_pdf_export_without_renderer_reports_unavailable(db, workspace, ar
     result = await service.export_pdf(db, art.id, workspace_path=workspace)
     assert result["export_status"] == "renderer_unavailable"
     assert "pdf_artifact_id" not in result
+
+
+# --- W2f: mediated capability path ---
+
+
+def _agent_config(caps: list[str]):
+    from agentos.config_schema import AgentConfig, CapabilityGrant, ModelConfig
+
+    return AgentConfig(
+        id="art-agent",
+        name="Artifact Agent",
+        model=ModelConfig(provider_id="test", name="test-model"),
+        capabilities=[CapabilityGrant(name=c, require_approval=False) for c in caps],
+    )
+
+
+def _session_stub():
+    from types import SimpleNamespace
+
+    return SimpleNamespace(contact_id="c1", id="sess-1", channel=None)
+
+
+async def test_mediated_artifact_roundtrip_with_provenance(db, workspace, artifact_storage):
+    """artifact_create → inspect → revise → history through the mediator,
+    with run/message provenance captured on revisions."""
+    from sqlalchemy import select
+
+    from agentos.artifacts.service import storage_root  # noqa: F401 — fixture touch
+    from agentos.models.artifact import ArtifactRevision
+    from agentos.syscall.mediator import SyscallHandler
+    from agentos.syscall.protocol import ToolCall
+
+    handler = SyscallHandler(db=db, workspace_path=workspace)
+    config = _agent_config(
+        ["artifact_create", "artifact_inspect", "artifact_revise", "artifact_history"]
+    )
+    session = _session_stub()
+
+    spec = {"blocks": [{"type": "heading", "level": 1, "text": "Hi"}]}
+    created = await handler.mediate(
+        call=ToolCall(
+            id="call-1",
+            name="artifact_create",
+            args={"path": "out.docx", "format": "docx", "spec": spec},
+        ),
+        session=session,
+        agent_config=config,
+        run_id="run-art",
+    )
+    assert created.allowed is True
+    art_id = created.output["artifact_id"]
+    rev1 = created.output["revision_id"]
+
+    # Provenance captured on the revision row.
+    rev_row = (
+        await db.execute(select(ArtifactRevision).where(ArtifactRevision.id == rev1))
+    ).scalar_one()
+    assert rev_row.source_run_id == "run-art"
+    assert rev_row.source_message_id == "call-1"
+
+    info = await handler.mediate(
+        call=ToolCall(id="call-2", name="artifact_inspect", args={"artifact_id": art_id}),
+        session=session,
+        agent_config=config,
+        run_id="run-art",
+    )
+    assert info.output["valid"] is True
+
+    revised = await handler.mediate(
+        call=ToolCall(
+            id="call-3",
+            name="artifact_revise",
+            args={
+                "artifact_id": art_id,
+                "base_revision_id": rev1,
+                "ops": [{"op": "append_blocks", "blocks": [{"type": "paragraph", "text": "body"}]}],
+            },
+        ),
+        session=session,
+        agent_config=config,
+        run_id="run-art",
+    )
+    assert revised.output["revision_number"] == 2
+
+    hist = await handler.mediate(
+        call=ToolCall(id="call-4", name="artifact_history", args={"artifact_id": art_id}),
+        session=session,
+        agent_config=config,
+        run_id="run-art",
+    )
+    assert len(hist.output["revisions"]) == 2
+    assert hist.output["revisions"][0]["current"] is True
+
+
+async def test_ungranted_artifact_call_is_denied(db, workspace, artifact_storage):
+    from agentos.syscall.mediator import SyscallHandler
+    from agentos.syscall.protocol import ToolCall
+
+    handler = SyscallHandler(db=db, workspace_path=workspace)
+    result = await handler.mediate(
+        call=ToolCall(
+            id="c1",
+            name="artifact_create",
+            args={"path": "x.docx", "format": "docx", "spec": {}},
+        ),
+        session=_session_stub(),
+        agent_config=_agent_config(["read_file"]),  # no artifact grants
+        run_id="run-art",
+    )
+    assert result.allowed is False

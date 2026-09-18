@@ -488,6 +488,40 @@ async def export_pdf(
     }
 
 
+async def history(db: AsyncSession, artifact_id: str) -> list[dict]:
+    """Revision list for an artifact — newest first."""
+    from sqlalchemy import select
+
+    artifact = await _get(db, artifact_id)
+    rows = (
+        (
+            await db.execute(
+                select(ArtifactRevision)
+                .where(ArtifactRevision.artifact_id == artifact.id)
+                .order_by(ArtifactRevision.revision_number.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        {
+            "revision_id": r.id,
+            "revision_number": r.revision_number,
+            "content_hash": r.content_hash[:12],
+            "byte_size": r.byte_size,
+            "change_summary": r.change_summary,
+            "created_by": r.created_by,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "source_run_id": r.source_run_id,
+            "source_message_id": r.source_message_id,
+            "base_revision_id": r.base_revision_id,
+            "current": r.id == artifact.current_revision_id,
+        }
+        for r in rows
+    ]
+
+
 async def _get(db: AsyncSession, artifact_id: str) -> Artifact:
     artifact = await db.get(Artifact, artifact_id)
     if artifact is None:

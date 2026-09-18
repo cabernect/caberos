@@ -45,9 +45,7 @@ def revise(data: bytes, ops: list[dict], workspace_path: str | Path) -> bytes:
             prs.slides[op["slide"]].shapes.title.text = op["text"]
         elif kind == "append_bullets":
             slide = prs.slides[op["slide"]]
-            body = next(
-                (s for s in slide.placeholders if s.placeholder_format.idx == 1), None
-            )
+            body = next((s for s in slide.placeholders if s.placeholder_format.idx == 1), None)
             if body is None:
                 raise ValueError("slide has no content placeholder")
             for item in op["items"]:
@@ -121,9 +119,7 @@ def _add_slide(prs: Presentation, slide_spec: dict, workspace_path: str | Path) 
     for block in slide_spec.get("blocks", []):
         kind = block["type"]
         if kind == "bullets":
-            body = next(
-                (s for s in slide.placeholders if s.placeholder_format.idx == 1), None
-            )
+            body = next((s for s in slide.placeholders if s.placeholder_format.idx == 1), None)
             if body is None:
                 body = slide.shapes.add_textbox(Inches(0.7), top, Inches(8.6), Inches(4))
             tf = body.text_frame
@@ -133,14 +129,21 @@ def _add_slide(prs: Presentation, slide_spec: dict, workspace_path: str | Path) 
         elif kind == "table":
             rows = [block.get("header", []), *block.get("rows", [])]
             shape = slide.shapes.add_table(
-                len(rows), max(len(r) for r in rows), Inches(0.7), top, Inches(8.6), Inches(0.4 * len(rows))
+                len(rows),
+                max(len(r) for r in rows),
+                Inches(0.7),
+                top,
+                Inches(8.6),
+                Inches(0.4 * len(rows)),
             )
             for i, row in enumerate(rows):
                 for j, cell in enumerate(row):
                     shape.table.rows[i].cells[j].text = str(cell)
         elif kind == "image":
             img = resolve_within(workspace_path, block["path"])
-            slide.shapes.add_picture(str(img), Inches(0.7), top, width=Inches(block.get("width_inches", 4)))
+            slide.shapes.add_picture(
+                str(img), Inches(0.7), top, width=Inches(block.get("width_inches", 4))
+            )
         elif kind == "chart":
             chart_data = CategoryChartData()
             chart_data.categories = block["categories"]
@@ -148,7 +151,11 @@ def _add_slide(prs: Presentation, slide_spec: dict, workspace_path: str | Path) 
                 chart_data.add_series(s["name"], s["values"])
             slide.shapes.add_chart(
                 _CHARTS[block.get("chart_type", "bar")],
-                Inches(0.7), top, Inches(8.6), Inches(4.5), chart_data,
+                Inches(0.7),
+                top,
+                Inches(8.6),
+                Inches(4.5),
+                chart_data,
             )
         elif kind == "notes":
             slide.notes_slide.notes_text_frame.text = block["text"]

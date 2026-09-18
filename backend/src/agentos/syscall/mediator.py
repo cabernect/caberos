@@ -292,6 +292,13 @@ class SyscallHandler:
             extra_kwargs["run_id"] = run_id
             extra_kwargs["session_id"] = getattr(session, "id", None)
 
+        # Artifact tools: DB + provenance (run/message linkage on revisions).
+        if call.name.startswith("artifact_"):
+            extra_kwargs["db"] = self.db
+            extra_kwargs["agent_id"] = agent_config.id
+            extra_kwargs["run_id"] = run_id
+            extra_kwargs["call_id"] = call.id
+
         if call.name in ("capabilities_search", "capabilities_load"):
             extra_kwargs["capability_catalog"] = capability_catalog
 
