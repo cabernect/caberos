@@ -91,6 +91,59 @@ def validate(data: bytes) -> dict:
     return {"valid": not errors, "errors": errors}
 
 
+def to_elements(data: bytes, workspace_path: str | Path) -> list[dict]:
+    """Extract the normalized render elements (pdf_render vocabulary) from
+    docx bytes — paragraphs/tables/images in document order."""
+    from docx.table import Table as DocxTable
+    from docx.text.paragraph import Paragraph as DocxParagraph
+
+    doc = Document(BytesIO(data))
+    elements: list[dict] = []
+    rels = doc.part.related_parts
+    embed = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed"
+
+    for child in doc.element.body.iterchildren():
+        if child.tag.endswith("}p"):
+            p = DocxParagraph(child, doc)
+            style = p.style.name if p.style is not None else ""
+            if style == "Title" or style.startswith("Heading"):
+                level = int(style[-1]) if style[-1:].isdigit() else 1
+                elements.append({"type": "heading", "text": p.text, "level": level})
+            elif style.startswith("List"):
+                elements.append(
+                    {
+                        "type": "list",
+                        "style": "number" if "Number" in style else "bullet",
+                        "items": [p.text],
+                    }
+                )
+            elif p.text.strip():
+                elements.append({"type": "paragraph", "text": p.text})
+            for blip in child.xpath('.//*[local-name()="blip"]'):
+                rid = blip.get(embed)
+                if rid and rid in rels:
+                    elements.append({"type": "image", "data": rels[rid].blob})
+        elif child.tag.endswith("}tbl"):
+            t = DocxTable(child, doc)
+            rows = [[c.text for c in r.cells] for r in t.rows]
+            if rows:
+                elements.append({"type": "table", "header": rows[0], "rows": rows[1:]})
+
+    # Merge consecutive same-style lists so numbering continues correctly.
+    merged: list[dict] = []
+    for el in elements:
+        if (
+            el["type"] == "list"
+            and merged
+            and merged[-1]["type"] == "list"
+            and merged[-1].get("style") == el.get("style")
+        ):
+            merged[-1]["items"].extend(el["items"])
+        else:
+            merged.append(el)
+    return merged
+
+
 def _add_block(doc, block: dict, workspace_path: str | Path) -> None:
     kind = block["type"]
     if kind == "heading":

@@ -980,7 +980,7 @@ def register_builtin_capabilities() -> None:
             name="artifact_export_pdf",
             effects=frozenset({"workspace_write", "local_execute"}),
             kind="tool",
-            description="Render an Office artifact to PDF via the managed renderer. Honest status: exported / renderer_unavailable / failed.",
+            description="Render an Office artifact to PDF. Uses LibreOffice when installed for layout fidelity, otherwise a pure-Python renderer. Honest status: exported / renderer_unavailable / failed, plus which renderer produced it.",
             parameters_schema={
                 "type": "object",
                 "properties": {

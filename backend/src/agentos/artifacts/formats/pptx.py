@@ -105,6 +105,53 @@ def validate(data: bytes) -> dict:
     return {"valid": not errors, "errors": errors}
 
 
+def to_elements(data: bytes, workspace_path: str | Path) -> list[dict]:
+    """Extract render elements — one PDF page per slide: title heading,
+    text/table/image content, chart data as tables, speaker notes."""
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+
+    prs = Presentation(BytesIO(data))
+    elements: list[dict] = []
+    for i, slide in enumerate(prs.slides):
+        if i:
+            elements.append({"type": "page_break"})
+        title_shape = slide.shapes.title
+        title = title_shape.text.strip() if title_shape is not None else ""
+        elements.append({"type": "heading", "text": title or f"Slide {i + 1}", "level": 1})
+        for shape in slide.shapes:
+            if shape is title_shape:
+                continue
+            if getattr(shape, "has_table", False):
+                rows = [[c.text for c in r.cells] for r in shape.table.rows]
+                if rows:
+                    elements.append({"type": "table", "header": rows[0], "rows": rows[1:]})
+            elif getattr(shape, "has_chart", False):
+                try:
+                    chart = shape.chart
+                    categories = [str(c) for c in chart.plots[0].categories]
+                    series = [
+                        {"name": str(s.name), "values": [v for v in s.values]} for s in chart.series
+                    ]
+                    elements.append({"type": "chart", "categories": categories, "series": series})
+                except Exception:
+                    elements.append({"type": "notes", "text": "[chart unreadable]"})
+            elif shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
+                try:
+                    elements.append({"type": "image", "data": shape.image.blob})
+                except Exception:
+                    pass
+            elif getattr(shape, "has_text_frame", False):
+                for para in shape.text_frame.paragraphs:
+                    text = "".join(r.text for r in para.runs) or para.text
+                    if text.strip():
+                        elements.append({"type": "paragraph", "text": text})
+        if slide.has_notes_slide:
+            notes = slide.notes_slide.notes_text_frame.text.strip()
+            if notes:
+                elements.append({"type": "notes", "text": notes})
+    return elements
+
+
 def _add_slide(prs: Presentation, slide_spec: dict, workspace_path: str | Path) -> None:
     layout = prs.slide_layouts[_LAYOUTS[slide_spec.get("layout", "title_content")]]
     slide = prs.slides.add_slide(layout)

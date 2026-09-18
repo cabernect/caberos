@@ -1,12 +1,25 @@
-"""PDF handler — read-only: inspect + validate via pypdf.
+"""PDF handler — build via reportlab + inspect/validate via pypdf.
 
-No build/revise: imported PDFs are retained read-only per the plan. PDF
-*export* of Office artifacts lives in the service (renderer-backed), not here.
+No revise: PDFs are write-once — a rendered end state, not an editable
+source. Direct creation takes the docx-style block spec and renders it
+through agentos.artifacts.pdf_render (same normalized element vocabulary).
+Office→PDF export of existing artifacts lives in the service.
 """
 
 from io import BytesIO
+from pathlib import Path
 
 from pypdf import PdfReader
+
+
+def build(spec: dict, workspace_path: str | Path) -> bytes:
+    from ..pdf_render import render_document
+
+    elements: list[dict] = []
+    if title := spec.get("title"):
+        elements.append({"type": "heading", "text": title, "level": 1})
+    elements.extend(spec.get("blocks", []))
+    return render_document(elements, workspace_path)
 
 
 def inspect(data: bytes) -> dict:

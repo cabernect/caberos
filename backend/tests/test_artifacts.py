@@ -510,11 +510,16 @@ async def test_imported_pdf_is_readable_but_not_editable(db, workspace, artifact
         )
 
 
-async def test_pdf_export_without_renderer_reports_unavailable(
+async def test_pdf_export_reportlab_fallback_without_soffice(
     db, workspace, artifact_storage, monkeypatch
 ):
-    """No LibreOffice → honest renderer_unavailable, no phantom artifact."""
+    """No LibreOffice → reportlab renders a valid, tracked PDF."""
+    from io import BytesIO
+
+    from pypdf import PdfReader
+
     from agentos.artifacts import service
+    from agentos.models.artifact import Artifact
 
     monkeypatch.setattr(service, "_find_soffice", lambda: None)
 
@@ -524,13 +529,83 @@ async def test_pdf_export_without_renderer_reports_unavailable(
         workspace_path=workspace,
         rel_path="report.docx",
         format="docx",
-        spec={"blocks": [{"type": "paragraph", "text": "x"}]},
+        spec={
+            "title": "Báo cáo quý",
+            "blocks": [
+                {"type": "heading", "level": 1, "text": "Tổng quan"},
+                {"type": "paragraph", "text": "Chuyên gia phân tích."},
+                {"type": "table", "header": ["K", "V"], "rows": [["ok", "1"]]},
+            ],
+        },
+        created_by="agent-1",
+    )
+
+    result = await service.export_pdf(db, art.id, workspace_path=workspace)
+    assert result["export_status"] == "exported"
+    assert result["renderer"] == "reportlab"
+
+    pdf_art = await db.get(Artifact, result["pdf_artifact_id"])
+    assert pdf_art.format == "pdf"
+    data = await service.revision_bytes(db, pdf_art.current_revision_id)
+    reader = PdfReader(BytesIO(data))
+    text = reader.pages[0].extract_text()
+    assert "Báo cáo quý" in text
+    assert "Tổng quan" in text
+
+
+async def test_pdf_export_unavailable_when_no_renderer_or_extractor(
+    db, workspace, artifact_storage, monkeypatch
+):
+    """renderer_unavailable only when neither soffice nor to_elements exists."""
+    from agentos.artifacts import service
+
+    monkeypatch.setattr(service, "_find_soffice", lambda: None)
+
+    art, _ = await service.create(
+        db,
+        workspace_id="agent-1",
+        workspace_path=workspace,
+        rel_path="data.csv",
+        data=b"a,b\n1,2\n",
         created_by="agent-1",
     )
 
     result = await service.export_pdf(db, art.id, workspace_path=workspace)
     assert result["export_status"] == "renderer_unavailable"
     assert "pdf_artifact_id" not in result
+
+
+async def test_create_pdf_directly_from_spec(db, workspace, artifact_storage):
+    """spec → PDF bytes — pdf is now a creatable (write-once) format."""
+    from io import BytesIO
+
+    from pypdf import PdfReader
+
+    from agentos.artifacts import service
+
+    art, rev = await service.create_structured(
+        db,
+        workspace_id="agent-1",
+        workspace_path=workspace,
+        rel_path="brief.pdf",
+        format="pdf",
+        spec={
+            "title": "Brief",
+            "blocks": [{"type": "paragraph", "text": "direct pdf"}],
+        },
+        created_by="agent-1",
+    )
+
+    assert art.format == "pdf"
+    data = await service.revision_bytes(db, rev.id)
+    reader = PdfReader(BytesIO(data))
+    assert "Brief" in reader.pages[0].extract_text()
+
+    # Still write-once: no structured revision path.
+    with pytest.raises(service.ArtifactError):
+        await service.revise_structured(
+            db, art.id, workspace_path=workspace, base_revision_id=rev.id, ops=[]
+        )
 
 
 # --- W2f: mediated capability path ---

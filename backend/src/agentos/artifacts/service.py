@@ -416,11 +416,13 @@ async def export_pdf(
     source_run_id: str | None = None,
     source_message_id: str | None = None,
 ) -> dict:
-    """Render the current revision to PDF via LibreOffice headless.
+    """Render the current revision to PDF.
 
-    Honest status reporting: renderer_unavailable / failed / exported. The
-    produced PDF is adopted as its own read-only artifact linked to the
-    source revision.
+    Renderer chain: LibreOffice headless (layout-faithful) when installed →
+    pure-Python reportlab render of the extracted elements (works anywhere,
+    document-grade fidelity) → renderer_unavailable only when neither can
+    handle the format. The produced PDF is tracked as its own read-only
+    artifact linked to the source run.
     """
     import asyncio
     import tempfile
@@ -429,45 +431,69 @@ async def export_pdf(
     if artifact.format == "pdf":
         raise ArtifactError("artifact is already pdf")
 
-    soffice = _find_soffice()
-    if soffice is None:
-        return {"export_status": "renderer_unavailable", "renderer": None}
-
     src = resolve_within(workspace_path, artifact.current_path)
     if not src.exists():
         raise ArtifactError(f"file missing: {artifact.current_path}")
 
-    with tempfile.TemporaryDirectory() as tmp:
-        proc = await asyncio.create_subprocess_exec(
-            soffice,
-            "--headless",
-            "--convert-to",
-            "pdf",
-            "--outdir",
-            tmp,
-            str(src),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+    pdf_data: bytes | None = None
+    renderer: str | None = None
+    soffice_error: str | None = None
+
+    soffice = _find_soffice()
+    if soffice is not None:
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = await asyncio.create_subprocess_exec(
+                soffice,
+                "--headless",
+                "--convert-to",
+                "pdf",
+                "--outdir",
+                tmp,
+                str(src),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                _, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+            except TimeoutError:
+                proc.kill()
+                soffice_error = "timeout"
+            else:
+                produced = Path(tmp) / f"{src.stem}.pdf"
+                if proc.returncode != 0:
+                    soffice_error = stderr.decode("utf-8", errors="replace")[-500:]
+                elif not produced.exists():
+                    soffice_error = "renderer produced no output"
+                else:
+                    pdf_data = produced.read_bytes()
+                    renderer = "libreoffice"
+
+    if pdf_data is None:
         try:
-            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
-        except TimeoutError:
-            proc.kill()
-            return {"export_status": "failed", "renderer": "libreoffice", "error": "timeout"}
-        if proc.returncode != 0:
-            return {
-                "export_status": "failed",
-                "renderer": "libreoffice",
-                "error": stderr.decode("utf-8", errors="replace")[-500:],
-            }
-        produced = Path(tmp) / f"{src.stem}.pdf"
-        if not produced.exists():
-            return {
-                "export_status": "failed",
-                "renderer": "libreoffice",
-                "error": "renderer produced no output",
-            }
-        pdf_data = produced.read_bytes()
+            handler = formats.get_handler(artifact.format)
+        except formats.UnsupportedFormatError:
+            handler = None
+        to_elements = getattr(handler, "to_elements", None)
+        if to_elements is not None:
+            try:
+                from .pdf_render import render_document
+
+                pdf_data = render_document(
+                    to_elements(src.read_bytes(), workspace_path), workspace_path
+                )
+                renderer = "reportlab"
+            except Exception as e:
+                if soffice_error is None:
+                    return {
+                        "export_status": "failed",
+                        "renderer": "reportlab",
+                        "error": str(e)[:500],
+                    }
+
+    if pdf_data is None:
+        if soffice_error is not None:
+            return {"export_status": "failed", "renderer": "libreoffice", "error": soffice_error}
+        return {"export_status": "renderer_unavailable", "renderer": None}
 
     pdf_rel = str(Path(artifact.current_path).with_suffix(".pdf"))
     pdf_artifact, _ = await create(
@@ -483,7 +509,7 @@ async def export_pdf(
     )
     return {
         "export_status": "exported",
-        "renderer": "libreoffice",
+        "renderer": renderer,
         "pdf_artifact_id": pdf_artifact.id,
     }
 

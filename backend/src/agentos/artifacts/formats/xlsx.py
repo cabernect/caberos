@@ -90,6 +90,28 @@ def validate(data: bytes) -> dict:
     return {"valid": not errors, "errors": errors}
 
 
+def to_elements(data: bytes, workspace_path: str | Path) -> list[dict]:
+    """Extract render elements — one section per sheet, data as tables.
+    Formula cells render as their formula string (unevaluated — same
+    honesty contract as inspect's formulas_recalculated: false)."""
+    wb = load_workbook(BytesIO(data))
+    elements: list[dict] = []
+    for i, ws in enumerate(wb.worksheets):
+        if i:
+            elements.append({"type": "page_break"})
+        elements.append({"type": "heading", "text": ws.title, "level": 2})
+        rows = []
+        for row in ws.iter_rows():
+            vals = ["" if c.value is None else str(c.value) for c in row]
+            if any(vals):
+                rows.append(vals)
+        if rows:
+            elements.append({"type": "table", "header": rows[0], "rows": rows[1:]})
+        else:
+            elements.append({"type": "paragraph", "text": "(empty sheet)"})
+    return elements
+
+
 def _build_sheet(wb: Workbook, sheet_spec: dict) -> None:
     ws = wb.create_sheet(sheet_spec.get("name", "Sheet"))
     for row in sheet_spec.get("rows", []):
