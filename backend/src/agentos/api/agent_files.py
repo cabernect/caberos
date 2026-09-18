@@ -245,6 +245,191 @@ async def list_workspace(
     }
 
 
+# --- File previews (W3) ---
+#
+# One endpoint family serves both ordinary workspace files and exact
+# artifact revisions: pass `path` for the current file, or
+# `artifact_id`+`revision_id` for managed revision bytes. The response
+# embeds artifact metadata so the panel can split tracked vs ordinary
+# actions and flag newer revisions.
+
+
+async def _resolve_source(
+    db: AsyncSession,
+    ws: Path,
+    agent_id: str,
+    path: str,
+    artifact_id: str | None,
+    revision_id: str | None,
+) -> tuple[bytes, str, object | None, Path | None]:
+    """Resolve preview bytes + owning artifact.
+
+    Returns (data, name, artifact, file_path). file_path is set only when
+    the bytes are the live workspace file (raw endpoint streams it without
+    a memory copy); revision bytes always load from managed storage.
+    """
+    from ..artifacts import service as artifact_service
+    from ..artifacts.service import ArtifactError
+    from ..sandbox.workspace import WorkspaceManager
+
+    if artifact_id or revision_id:
+        try:
+            if artifact_id:
+                artifact = await artifact_service._get(db, artifact_id)
+            else:
+                from ..models.artifact import ArtifactRevision
+
+                rev = await db.get(ArtifactRevision, revision_id)
+                if rev is None:
+                    raise ArtifactError(f"unknown revision: {revision_id}")
+                artifact = await artifact_service._get(db, rev.artifact_id)
+        except ArtifactError as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+        if artifact.workspace_id != agent_id:
+            raise HTTPException(status_code=404, detail="Artifact not found")
+        if revision_id:
+            from ..models.artifact import ArtifactRevision
+
+            rev = await db.get(ArtifactRevision, revision_id)
+            if rev is None or rev.artifact_id != artifact.id:
+                raise HTTPException(status_code=404, detail="Revision not found")
+            data = await artifact_service.revision_bytes(db, revision_id)
+        else:
+            target = _child_path(ws, artifact.current_path)
+            if not target.exists() or not target.is_file():
+                raise HTTPException(status_code=404, detail="File not found")
+            data = target.read_bytes()
+        return data, Path(artifact.current_path).name, artifact, None
+
+    try:
+        target = Path(WorkspaceManager().validate_path(str(ws), path))
+    except ValueError as error:
+        raise HTTPException(status_code=403, detail="Path outside workspace") from error
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    artifact = await artifact_service.get_by_path(db, agent_id, path)
+    return target.read_bytes(), target.name, artifact, target
+
+
+async def _artifact_meta(db: AsyncSession, artifact, revision_id: str | None) -> dict:
+    """Tracked-file metadata for the panel: revision position + newer flag."""
+    from sqlalchemy import func, select
+
+    from ..models.artifact import ArtifactRevision
+
+    count = (
+        await db.execute(
+            select(func.count(ArtifactRevision.id)).where(
+                ArtifactRevision.artifact_id == artifact.id
+            )
+        )
+    ).scalar_one()
+    current = (
+        await db.get(ArtifactRevision, artifact.current_revision_id)
+        if artifact.current_revision_id
+        else None
+    )
+    meta = {
+        "id": artifact.id,
+        "format": artifact.format,
+        "tracking_status": artifact.tracking_status,
+        "current_path": artifact.current_path,
+        "current_revision_id": artifact.current_revision_id,
+        "current_revision_number": current.revision_number if current else None,
+        "revision_count": count,
+        "viewing_revision_id": None,
+        "viewing_revision_number": None,
+        "newer_exists": False,
+    }
+    if revision_id:
+        viewing = await db.get(ArtifactRevision, revision_id)
+        if viewing is not None:
+            meta["viewing_revision_id"] = viewing.id
+            meta["viewing_revision_number"] = viewing.revision_number
+            meta["newer_exists"] = bool(
+                current and viewing.revision_number < current.revision_number
+            )
+    return meta
+
+
+@router.get("/{agent_id}/workspace/preview")
+async def preview_workspace_file(
+    agent_id: str,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+    path: str = "",
+    artifact_id: str | None = None,
+    revision_id: str | None = None,
+) -> dict:
+    """Bounded preview payload for a workspace file or artifact revision."""
+    from .. import previews
+
+    ws = _workspace_path(agent_id)
+    data, name, artifact, _ = await _resolve_source(
+        db, ws, agent_id, path, artifact_id, revision_id
+    )
+    payload = previews.preview_bytes(data, name)
+    payload["artifact"] = await _artifact_meta(db, artifact, revision_id) if artifact else None
+    if artifact and not artifact_id and not revision_id:
+        payload["path"] = artifact.current_path
+    else:
+        payload["path"] = path
+    return payload
+
+
+@router.get("/{agent_id}/workspace/raw")
+async def raw_workspace_file(
+    agent_id: str,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+    path: str = "",
+    artifact_id: str | None = None,
+    revision_id: str | None = None,
+):
+    """Raw bytes with the correct Content-Type — images/media/downloads
+    stream through object URLs on the client (Bearer auth blocks <img src>)."""
+    from fastapi.responses import FileResponse, Response
+
+    from .. import previews
+
+    ws = _workspace_path(agent_id)
+    data, name, _, file_path = await _resolve_source(
+        db, ws, agent_id, path, artifact_id, revision_id
+    )
+    mime = previews.media_type(name)
+    if file_path is not None:
+        return FileResponse(file_path, media_type=mime, filename=name)
+    return Response(content=data, media_type=mime)
+
+
+@router.get("/{agent_id}/workspace/pdf-page")
+async def pdf_page(
+    agent_id: str,
+    page: int,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+    path: str = "",
+    artifact_id: str | None = None,
+    revision_id: str | None = None,
+):
+    """One PDF page rendered to PNG — the paginated viewer's image source."""
+    from fastapi.responses import Response
+
+    from .. import previews
+
+    ws = _workspace_path(agent_id)
+    data, name, _, _ = await _resolve_source(db, ws, agent_id, path, artifact_id, revision_id)
+    if not name.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Not a PDF")
+    try:
+        png = previews.render_pdf_page(data, page)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"pdf render failed: {e}") from e
+    return Response(content=png, media_type="image/png")
+
+
 # --- Memory management (triples + recall entries) ---
 
 

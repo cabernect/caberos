@@ -571,6 +571,19 @@ async def _get(db: AsyncSession, artifact_id: str) -> Artifact:
     return artifact
 
 
+async def get_by_path(db: AsyncSession, workspace_id: str, rel_path: str) -> Artifact | None:
+    """Look up the artifact tracking a workspace path — None for ordinary
+    files. The preview API uses this to split tracked vs untracked actions."""
+    from sqlalchemy import select
+
+    return await db.scalar(
+        select(Artifact).where(
+            Artifact.workspace_id == workspace_id,
+            Artifact.current_path == rel_path,
+        )
+    )
+
+
 async def _store_revision(
     db: AsyncSession,
     artifact: Artifact,
