@@ -121,6 +121,10 @@ class DockerBackend(SandboxBackend):
             f"{workspace}:/workspace",
             "-w",
             "/workspace",
+            # Matches BwrapBackend/SeatbeltBackend: HOME is the workspace, not
+            # whatever the image's default user has (root's /root on Alpine).
+            "-e",
+            "HOME=/workspace",
         ]
         if not allow_network:
             args += ["--network", "none"]

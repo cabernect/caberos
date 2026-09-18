@@ -135,6 +135,7 @@ async def test_run_command_builds_expected_argv(tmp_path):
     mount_arg = args[args.index("-v") + 1]
     assert mount_arg.endswith(":/workspace")
     assert args[-4:] == ("alpine:3.20", "/bin/sh", "-c", "echo hello")
+    assert "-e" in args and args[args.index("-e") + 1] == "HOME=/workspace"
 
 
 @pytest.mark.asyncio
