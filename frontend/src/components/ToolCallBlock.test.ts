@@ -36,17 +36,15 @@ describe("collectFileRefs", () => {
     expect(refs).toEqual([]);
   });
 
-  it("collects consulted files from read_file, skipping dir listings", () => {
+  it("read_file calls never chip — inputs are not outputs", () => {
     const refs = collectFileRefs([
       call({ args: { path: "src/main.py" }, result: { content: "x" } }),
-      call({ args: { path: "src" }, result: { entries: [], mode: "list" } }),
+      call({ args: { path: "attachments/dup-test.txt" }, result: { content: "x" } }),
     ]);
-    expect(refs).toEqual([
-      { source: { path: "src/main.py" }, name: "main.py", produced: false },
-    ]);
+    expect(refs).toEqual([]);
   });
 
-  it("produced ref wins over a consulted ref for the same path", () => {
+  it("a file the run read then rewrote chips once, as produced", () => {
     const refs = collectFileRefs([
       call({ args: { path: "a.md" }, result: { content: "x" } }),
       call({

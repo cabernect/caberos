@@ -7,7 +7,7 @@ import { PreviewPanel } from "@/components/previews/PreviewPanel";
 import { formatBytes } from "@/components/previews/renderers";
 import { useObjectUrl } from "@/components/previews/useObjectUrl";
 import { FileTypeTile } from "@/components/FileTypeTile";
-import { ToolCallBlock, FileChips, collectFileRefs, type ToolCallData, type SubAgentStreamData } from "@/components/ToolCallBlock";
+import { ToolCallBlock, FileChips, collectFileRefs, type ToolCallData, type SubAgentStreamData, type FileRef } from "@/components/ToolCallBlock";
 import { Markdown } from "@/components/Markdown";
 import { ThinkingBlock } from "@/components/ThinkingBlock";
 import { ProcessSteps } from "@/components/ProcessSteps";
@@ -1371,8 +1371,37 @@ export function Conversation() {
               const rendered: React.ReactNode[] = [];
               let processGroup: { msg: ChatMessage; index: number }[] = [];
               let groupRunId: string | undefined;
+              // Output files accumulate per run — chips render once, at the
+              // END of the run (after the reply), not mid-run under the
+              // collapsed steps.
+              const runFiles = new Map<string, FileRef[]>();
+              const mergeRefs = (runId: string, refs: FileRef[]) => {
+                const acc = runFiles.get(runId) ?? [];
+                for (const r of refs) {
+                  const key = r.source.path ?? `a:${r.source.artifactId}`;
+                  const idx = acc.findIndex(
+                    (o) => (o.source.path ?? `a:${o.source.artifactId}`) === key
+                  );
+                  if (idx >= 0) acc[idx] = r;
+                  else acc.push(r);
+                }
+                runFiles.set(runId, acc);
+              };
+              const emitRunChips = (runId: string | undefined) => {
+                if (!runId) return;
+                const refs = runFiles.get(runId);
+                if (!refs?.length) return;
+                runFiles.delete(runId);
+                rendered.push(
+                  <FileChips
+                    key={`files-${runId}`}
+                    refs={refs}
+                    onPreview={openPreview}
+                  />
+                );
+              };
 
-              const flushGroup = () => {
+              const flushGroup = (nextRunId?: string) => {
                 if (processGroup.length === 0) return;
                 const steps = processGroup.map((g) => ({
                   type: g.msg.role as "thinking" | "tool_call",
@@ -1382,8 +1411,7 @@ export function Conversation() {
                 const subagentMsgs = groupRunId
                   ? messages.filter((m) => m.subagent_id && m.run_id === groupRunId)
                   : [];
-                // Files this step group produced/consulted — shown as chips so
-                // created files stay visible after the steps collapse.
+                // Output files this step group produced — accumulated per run.
                 const fileRefs = collectFileRefs(
                   processGroup
                     .filter((g) => g.msg.role === "tool_call")
@@ -1396,6 +1424,9 @@ export function Conversation() {
                     })
                     .filter((c): c is ToolCallData => c !== null)
                 );
+                if (groupRunId && fileRefs.length > 0) {
+                  mergeRefs(groupRunId, fileRefs);
+                }
                 rendered.push(
                   <ProcessSteps
                     key={`process-${processGroup[0].index}`}
@@ -1404,14 +1435,10 @@ export function Conversation() {
                     onPreview={openPreview}
                   />
                 );
-                if (fileRefs.length > 0) {
-                  rendered.push(
-                    <FileChips
-                      key={`files-${processGroup[0].index}`}
-                      refs={fileRefs}
-                      onPreview={openPreview}
-                    />
-                  );
+                // Run ended on tool calls (no reply follows) — emit its
+                // output chips right here, at the run boundary.
+                if (groupRunId && nextRunId !== groupRunId) {
+                  emitRunChips(groupRunId);
                 }
                 processGroup = [];
                 groupRunId = undefined;
@@ -1426,7 +1453,7 @@ export function Conversation() {
                   processGroup.push({ msg, index: i });
                 } else {
                   // Flush any pending process group
-                  flushGroup();
+                  flushGroup(msg.run_id);
 
                   // Find sub-agent messages for run_subagent tool calls
                   let subagentMessages: ChatMessage[] | undefined;
@@ -1440,19 +1467,33 @@ export function Conversation() {
                       }
                     } catch { /* ignore */ }
                   }
+                  const isLastInRun =
+                    i === filtered.length - 1 ||
+                    filtered[i + 1].run_id !== msg.run_id;
+                  const runRefs =
+                    isLastInRun && msg.run_id ? runFiles.get(msg.run_id) : undefined;
+                  if (runRefs) runFiles.delete(msg.run_id!);
                   rendered.push(
                     <MessageRow
                       key={msg.id}
                       message={msg}
-                      isLastInRun={
-                        i === filtered.length - 1 ||
-                        filtered[i + 1].run_id !== msg.run_id
-                      }
+                      isLastInRun={isLastInRun}
                       subagentMessages={subagentMessages}
                       onPreview={openPreview}
                       agentId={agentId}
+                      runFileRefs={msg.role === "assistant" ? runRefs : undefined}
                     />
                   );
+                  // Non-assistant run tail — chips still land at the end.
+                  if (isLastInRun && runRefs?.length && msg.role !== "assistant") {
+                    rendered.push(
+                      <FileChips
+                        key={`files-${msg.run_id}`}
+                        refs={runRefs}
+                        onPreview={openPreview}
+                      />
+                    );
+                  }
                 }
               });
               // Flush any remaining process group
@@ -1733,7 +1774,7 @@ function StreamingMessage({
         </div>
       )}
 
-      {/* Files produced/consulted — visible after the run ends, not buried
+      {/* Output files the run produced — at the end of the run, not buried
           inside collapsed tool-call steps. */}
       {fileRefs.length > 0 && <FileChips refs={fileRefs} onPreview={onPreview} />}
 
@@ -1774,12 +1815,15 @@ function MessageRow({
   subagentMessages,
   onPreview,
   agentId,
+  runFileRefs,
 }: {
   message: ChatMessage;
   isLastInRun?: boolean;
   subagentMessages?: ChatMessage[];
   onPreview?: (source: PreviewSource) => void;
   agentId?: string;
+  /** Output files this run produced — rendered at the end of the run. */
+  runFileRefs?: FileRef[];
 }) {
   if (message.role === "user") {
     // Parse attachment metadata (JSON string from the API)
@@ -1893,6 +1937,10 @@ function MessageRow({
       <div className="markdown-body text-[14px] leading-[1.65] text-[var(--ink)]">
         <Markdown>{message.content}</Markdown>
       </div>
+      {/* Output files the run produced — end of the run, above sources. */}
+      {runFileRefs && runFileRefs.length > 0 && (
+        <FileChips refs={runFileRefs} onPreview={onPreview} />
+      )}
       {message.citations && message.citations.length > 0 && <CitationList citations={message.citations} />}
       {hasCost && (
         <div className="mt-1.5 font-mono text-[11px]" style={{ color: "var(--ink-3)" }}>

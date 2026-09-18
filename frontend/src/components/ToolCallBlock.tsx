@@ -84,17 +84,11 @@ const FILE_ARTIFACT_PRODUCERS = new Set([
   "artifact_revise",
   "artifact_restore",
 ]);
-const FILE_ARTIFACT_SKIP = new Set([
-  "artifact_history",
-  "artifact_adopt",
-  "artifact_list",
-]);
-
 /**
- * Collect the files a set of completed tool calls produced or consulted —
- * rendered as chips below the run so created files stay visible after the
- * tool-call steps collapse. Deduped by path/artifact; produced wins over
- * consulted, and for artifacts the latest produced revision wins.
+ * Collect the output files a set of completed tool calls produced — chips
+ * tag only files the run created/modified, never inputs it merely read
+ * (the user's own attachments are inputs, shown on their message card).
+ * Deduped by path/artifact; for artifacts the latest produced revision wins.
  */
 export function collectFileRefs(calls: ToolCallData[]): FileRef[] {
   const seen = new Map<string, FileRef>();
@@ -113,11 +107,6 @@ export function collectFileRefs(calls: ToolCallData[]): FileRef[] {
       if (path && result.action !== "unchanged") {
         add(`p:${path}`, { source: { path }, name: base(path), produced: true });
       }
-    } else if (call.capability === "read_file") {
-      const path = call.args.path as string | undefined;
-      if (path && result.mode !== "list") {
-        add(`p:${path}`, { source: { path }, name: base(path), produced: false });
-      }
     } else if (call.capability === "artifact_export_pdf") {
       const id = result.pdf_artifact_id as string | undefined;
       const path = result.pdf_path as string | undefined;
@@ -128,13 +117,9 @@ export function collectFileRefs(calls: ToolCallData[]): FileRef[] {
           produced: true,
         });
       }
-    } else if (
-      call.capability.startsWith("artifact_") &&
-      !FILE_ARTIFACT_SKIP.has(call.capability)
-    ) {
+    } else if (FILE_ARTIFACT_PRODUCERS.has(call.capability)) {
       const id = (result.artifact_id ?? call.args.artifact_id) as string | undefined;
       if (!id) continue;
-      const produced = FILE_ARTIFACT_PRODUCERS.has(call.capability);
       const path = result.path as string | undefined;
       add(`a:${id}`, {
         source: {
@@ -142,14 +127,14 @@ export function collectFileRefs(calls: ToolCallData[]): FileRef[] {
           revisionId: (result.revision_id as string | undefined) ?? undefined,
         },
         name: path ? base(path) : "artifact",
-        produced,
+        produced: true,
       });
     }
   }
   return [...seen.values()];
 }
 
-/** Chips row of files a run produced or consulted — click opens the preview. */
+/** Chips row of output files a run produced — click opens the preview. */
 export function FileChips({
   refs,
   onPreview,
@@ -173,7 +158,7 @@ export function FileChips({
         >
           <FileText
             className="h-3 w-3 shrink-0"
-            style={{ color: ref.produced ? "var(--accent)" : "var(--ink-3)" }}
+            style={{ color: "var(--accent)" }}
           />
           <span className="max-w-[200px] truncate">{ref.name}</span>
         </button>
