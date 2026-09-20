@@ -33,12 +33,33 @@ CaberOS tries backends in platform-specific order: native sandboxes first (faste
 | Candidate | Name | Status | Notes |
 |---|---|---|---|
 | — | WSL2 + bwrap | ✗ Not yet | Planned for future release (PR #31, separate from this branch). |
-| `docker` | Docker Desktop | ✓ Only option | Requires Docker Desktop installed and running. |
-| — | Shell disabled | ✗ Unavailable | Docker Desktop not found or daemon not running. |
+| `docker` | Docker Desktop | ✓ Only trusted option | Requires Docker Desktop installed and running. |
+| `mxc` | Microsoft Execution Containers | ⚠ Experimental, opt-in only | Never auto-selected — see below. Not a substitute for Docker. |
+| — | Shell disabled | ✗ Unavailable | No candidate found or usable. |
 
-**Today:** Docker is the only sandbox option on Windows. **Important caveat:** Docker Desktop on Windows commonly runs its own Linux VM via WSL2 by default (see below).
+**Today:** Docker is the only *trusted* sandbox option on Windows. **Important caveat:** Docker Desktop on Windows commonly runs its own Linux VM via WSL2 by default (see below).
 
 > **Note on WSL2:** If you install Docker Desktop on Windows, it typically uses WSL2 internally to run the Linux Docker daemon. Choosing `docker` as the sandbox backend means you're using Docker's container isolation, not "zero WSL anywhere on the machine." To use a native WSL2 sandbox (without Docker), wait for the WSL2+bubblewrap PR to be merged.
+
+#### MXC — genuinely no WSL, but experimental (opt-in only)
+
+[Microsoft Execution Containers](https://github.com/microsoft/mxc) is a real, working Windows-native sandbox with **no WSL involved at all** — verified by hand on this machine (Windows build 26200, `ProcessContainer`/"base-container" tier). Two things are both true:
+
+1. **It works.** A real command executed inside the container and a real file landed on the real host filesystem, with zero elevation needed at runtime.
+2. **Microsoft's own SDK says, verbatim: "no MXC profiles should be treated as security boundaries currently."** That directly conflicts with this project's rule that shell must never run unprotected. So CaberOS never auto-selects it, even when it works — an operator must explicitly set `CABEROS_ENABLE_EXPERIMENTAL_MXC=1`, and `GET /api/health` reports it as `state: "experimental"`, never `"available"`, with Microsoft's caveat included in `reason`.
+
+**Setup (one-time, elevated):**
+
+```powershell
+# Requires @microsoft/mxc-sdk installed (npm install @microsoft/mxc-sdk);
+# there is no standalone installer yet — CaberOS does not bundle this binary.
+# From an elevated ("Run as administrator") prompt, once:
+wxc-host-prep.exe prepare-system-drive
+```
+
+This is a single command, verified to persist without elevation on every run afterward — comparable in cost to WSL2's `wsl --install`, but no reboot and no Linux distribution to configure.
+
+**Known limitation, verified by hand:** `prepare-system-drive` only grants access to the Windows *system drive* (`C:` on virtually every install). A workspace on any other drive (e.g. `D:`) fails with "Access is denied" — CaberOS detects this and fails fast with an explanation instead of the bare OS error, rather than attempting the doomed call.
 
 ## How to tell what you have
 
@@ -75,10 +96,11 @@ Or when no sandbox is available:
 
 | Field | Value | Meaning |
 |---|---|---|
-| `kind` | `seatbelt`, `bwrap`, `docker`, `none` | The backend CaberOS is using (or would use). |
-| `state` | `available` | Sandbox is ready for shell commands. |
+| `kind` | `seatbelt`, `bwrap`, `docker`, `mxc`, `none` | The backend CaberOS is using (or would use). |
+| `state` | `available` | Sandbox is ready for shell commands and is a trusted security boundary. |
+| `state` | `experimental` | Commands genuinely run, but the backend's own vendor does not yet call it a security boundary (MXC only, opt-in). See `reason` for the caveat. |
 | `state` | `unavailable` | Shell commands will be refused. See `reason`. |
-| `reason` | string or null | Why the sandbox is unavailable (when `state` is `unavailable`). Lists every candidate backend that was tried. |
+| `reason` | string or null | For `unavailable`: why, listing every candidate tried. For `experimental`: the trust caveat to show the operator. Null only when `state` is `available`. |
 
 ### Full health response
 
@@ -118,6 +140,17 @@ The `/api/health` endpoint also reports provider and agent counts:
 - **Performance:** Native namespace-based isolation, ~1ms per sandbox setup
 - **Filesystem access:** Read-only to system; writes limited to agent workspace + shared temp dirs
 - **Container caveat:** bwrap may not work inside containers or GitHub Actions runners (namespace limitations). Docker is a fallback in those environments.
+
+### MXC (Windows, experimental, opt-in)
+
+- **Platform:** Windows 11 24H2+ (build 26100+) for the stable `ProcessContainer` tier — verified on build 26200. Not Windows Insider-only for this tier (only Microsoft's `IsolationSession` backend requires Insider Preview, and CaberOS does not use it).
+- **Enable:** Set `CABEROS_ENABLE_EXPERIMENTAL_MXC=1`. Never auto-selected otherwise.
+- **Install:** No standalone installer — `npm install @microsoft/mxc-sdk`, then either add its `bin/<arch>/wxc-exec.exe` to PATH or set `CABEROS_MXC_EXE_PATH` to it directly. CaberOS's Windows desktop packaging does not yet bundle this.
+- **One-time setup:** `wxc-host-prep.exe prepare-system-drive`, elevated, once. Verified persistent afterward with zero elevation.
+- **Trust:** Not a verified security boundary — Microsoft's own words, not CaberOS's caution. Reported as `state: "experimental"`, never `"available"`.
+- **Filesystem access:** System-drive workspaces only (verified limitation of `prepare-system-drive`). A workspace on a different drive is refused with an explanation before ever calling the binary.
+- **Network:** Disabled by default (`network.defaultPolicy: "block"`); agents can request `allow_network=True` per-command.
+- **Timeout behavior:** Best-effort process kill on timeout — unlike Docker, there is no separate "container kill" verb in this CLI, and whether killing `wxc-exec.exe` reliably tears down everything it spawned has not been verified live.
 
 ### Docker (all platforms)
 
@@ -268,10 +301,10 @@ The `docker run` → `alpine` container start sequence on Windows can be slow (2
 | Local dev (Linux) | bwrap | docker | Native if bwrap works |
 | Docker (any platform) | none (inside container) | docker (host docker socket) | Requires `--network host` or socket mount to reach host Docker |
 | CI/CD (Linux, GitHub Actions) | bwrap fails (no namespaces) | docker | Docker only |
-| Windows + local dev | none | docker | Docker only |
+| Windows + local dev | none | docker | Docker is the trusted default; MXC available opt-in only |
 
 ## See also
 
 - `docs/spec-v0.1.md` — D28 (Sandbox layer) for architecture details
-- `backend/src/agentos/sandbox/` — Backend implementations (seatbelt.py, bwrap.py, docker.py, base.py)
+- `backend/src/agentos/sandbox/` — Backend implementations (seatbelt.py, bwrap.py, docker.py, mxc.py, base.py)
 - `AGENTS.md` — syscall layer and sandbox integration

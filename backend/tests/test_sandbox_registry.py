@@ -143,6 +143,75 @@ def test_get_backend_refresh_forces_a_new_probe():
     assert first is not second
 
 
+def test_mxc_not_tried_by_default():
+    """The opt-in gate must actually gate — MXC never even gets constructed
+    without CABEROS_ENABLE_EXPERIMENTAL_MXC=1, since Microsoft's own SDK says
+    its profiles are not yet a real security boundary."""
+    from agentos.sandbox.docker import DockerBackend as _Docker
+
+    with (
+        patch.dict("os.environ", {}, clear=True),
+        patch.object(sys, "platform", "win32"),
+        patch.object(_Docker, "is_available", return_value=False),
+        patch("agentos.sandbox.mxc.MxcBackend") as mocked_mxc,
+    ):
+        get_backend()
+
+    mocked_mxc.assert_not_called()
+
+
+def test_mxc_tried_when_opted_in_and_docker_unavailable():
+    from agentos.sandbox.docker import DockerBackend as _Docker
+
+    with (
+        patch.dict("os.environ", {"CABEROS_ENABLE_EXPERIMENTAL_MXC": "1"}),
+        patch.object(sys, "platform", "win32"),
+        patch.object(_Docker, "is_available", return_value=False),
+    ):
+        from agentos.sandbox.mxc import MxcBackend
+
+        with patch.object(MxcBackend, "is_available", return_value=True):
+            backend = get_backend()
+
+    assert backend.kind == "mxc"
+
+
+def test_docker_still_preferred_over_mxc_when_opted_in():
+    """Even opted in, a trusted backend must win over the untrusted one."""
+    from agentos.sandbox.docker import DockerBackend as _Docker
+    from agentos.sandbox.mxc import MxcBackend
+
+    with (
+        patch.dict("os.environ", {"CABEROS_ENABLE_EXPERIMENTAL_MXC": "1"}),
+        patch.object(sys, "platform", "win32"),
+        patch.object(_Docker, "is_available", return_value=True),
+        patch.object(MxcBackend, "is_available", return_value=True),
+    ):
+        backend = get_backend()
+
+    assert backend.kind == "docker"
+
+
+def test_probe_reports_experimental_for_an_untrusted_working_backend():
+    """A backend that works but isn't vendor-trusted must never be reported
+    as plain 'available' — that would overclaim isolation strength."""
+    from agentos.sandbox.docker import DockerBackend as _Docker
+    from agentos.sandbox.mxc import MxcBackend
+
+    with (
+        patch.dict("os.environ", {"CABEROS_ENABLE_EXPERIMENTAL_MXC": "1"}),
+        patch.object(sys, "platform", "win32"),
+        patch.object(_Docker, "is_available", return_value=False),
+        patch.object(MxcBackend, "is_available", return_value=True),
+        patch.object(MxcBackend, "experimental_notice", return_value="not a real boundary yet"),
+    ):
+        result = probe(refresh=True)
+
+    assert result.kind == "mxc"
+    assert result.state == "experimental"
+    assert result.reason == "not a real boundary yet"
+
+
 def test_probe_reports_state_and_reason():
     """probe() always yields a kind and a valid state."""
     result = probe(refresh=True)

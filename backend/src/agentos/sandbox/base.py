@@ -12,10 +12,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
-# "unavailable" means shell is refused but the rest of the product works —
-# get_backend() only ever returns a fully-working backend or UnavailableBackend,
-# so there is no distinct "installed but degraded" middle state to report.
-SandboxState = Literal["available", "unavailable"]
+# "unavailable" means shell is refused but the rest of the product works.
+# "experimental" means the backend genuinely executed the command — this is
+# not a fallback-with-a-caveat state — but its own vendor has not yet
+# published it as a real security boundary (see MxcBackend.trusted). It is
+# reported distinctly from "available" so CaberOS never silently claims
+# isolation strength it cannot back up.
+SandboxState = Literal["available", "experimental", "unavailable"]
 
 
 @dataclass
@@ -45,6 +48,11 @@ class SandboxBackend(ABC):
     # Short identifier surfaced through the health endpoint.
     kind: str = "unknown"
 
+    # False means: this backend genuinely runs commands, but its own vendor
+    # has not published it as a real security boundary yet. A working
+    # backend is not automatically a trusted one — see MxcBackend.
+    trusted: bool = True
+
     @abstractmethod
     async def run_command(
         self, workspace_path: str, command: str, timeout: int = 30, allow_network: bool = False
@@ -57,6 +65,10 @@ class SandboxBackend(ABC):
 
     def unavailable_reason(self) -> str | None:
         """Why this backend cannot isolate, when it cannot. None when it can."""
+        return None
+
+    def experimental_notice(self) -> str | None:
+        """Caveat to surface for a working but untrusted (trusted=False) backend."""
         return None
 
 
@@ -96,6 +108,8 @@ class UnavailableBackend(SandboxBackend):
 
 def _candidates_for(platform: str) -> list[Callable[[], SandboxBackend]]:
     """Ordered constructors to try for this platform, native backend first."""
+    import os
+
     from .docker import DockerBackend
 
     native: Callable[[], SandboxBackend] | None = None
@@ -112,6 +126,16 @@ def _candidates_for(platform: str) -> list[Callable[[], SandboxBackend]]:
     if native is not None:
         candidates.append(native)
     candidates.append(DockerBackend)
+
+    # MXC (Windows only) is never auto-selected ahead of a trusted backend:
+    # Microsoft's own SDK says "no MXC profiles should be treated as security
+    # boundaries currently." An operator opts in explicitly; it is never the
+    # default even when it would technically work.
+    if platform == "win32" and os.environ.get("CABEROS_ENABLE_EXPERIMENTAL_MXC") == "1":
+        from .mxc import MxcBackend
+
+        candidates.append(MxcBackend)
+
     return candidates
 
 
@@ -176,7 +200,14 @@ def probe(refresh: bool = False) -> SandboxProbe:
 
     backend = get_backend(refresh=refresh)
     if backend.is_available():
-        _probe_cache = SandboxProbe(kind=backend.kind, state="available")
+        if backend.trusted:
+            _probe_cache = SandboxProbe(kind=backend.kind, state="available")
+        else:
+            _probe_cache = SandboxProbe(
+                kind=backend.kind,
+                state="experimental",
+                reason=backend.experimental_notice(),
+            )
     else:
         _probe_cache = SandboxProbe(
             kind=backend.kind,
