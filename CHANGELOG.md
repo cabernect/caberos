@@ -5,6 +5,29 @@ All notable changes to CaberOS are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Windows x64 desktop app (Tier 2, beta): NSIS installer, packaged gateway, WebView2 bootstrapper, per-user install
+- Prioritized shell-sandbox backends with graceful degradation: native (Seatbelt/bwrap) first, then a cross-platform Docker fallback; Windows shell needs Docker Desktop, not WSL
+- Experimental, opt-in Microsoft Execution Containers (MXC) backend for Windows (`CABEROS_ENABLE_EXPERIMENTAL_MXC=1`), reported as `experimental`, never `available`
+- `GET /api/health` reports `sandbox` (`kind`, `state`, `reason`) and the gateway `version`; the dashboard flags a shell/gateway version mismatch
+- Multi-platform release matrix; the updater manifest is built in a dedicated job that fails when a platform is missing
+- `docs/platform-support.md` — canonical platform and sandbox-backend contract
+
+### Fixed
+
+- `get_backend()` raised `RuntimeError` on Windows and any non-macOS/Linux platform instead of degrading
+- Packaged gateway lookup on Windows joined the `.exe` name to the directory name
+- Windows process cleanup left orphaned gateways holding the fixed port; the gateway now runs inside a kill-on-close Job Object
+- `RunEvent::Reopen` was compiled on every platform though it exists only on macOS
+- Bundled YAML/JSON/manifest reads used the locale codepage on Windows (mojibake); now explicit UTF-8
+- The Fernet key was left readable by other local users on Windows, where `chmod(0o600)` is a no-op; now restricted with an ACL
+- Open-mode shell used `/bin/sh` on Windows; now `cmd.exe /c`
+- `scripts/smoke.py` granted a non-existent capability name so the shell step silently did nothing
+- `check-version.sh` assumed `python3`, which Windows does not provide
+
 ## [0.1.8] - Unreleased
 
 ### Added

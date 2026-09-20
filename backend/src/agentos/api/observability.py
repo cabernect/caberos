@@ -147,6 +147,11 @@ class HealthStatus(BaseModel):
     agents: int
     active_runs: int
     sandbox: SandboxStatus
+    # The desktop shell compares this against its own version. An installer that
+    # replaces the shell but leaves the bundled gateway stale would otherwise
+    # run a new frontend against an old backend — silently, and across schema
+    # patches applied by init_db() at startup.
+    version: str | None = None
     timestamp: datetime
 
 
@@ -448,7 +453,8 @@ async def system_health(
     db: AsyncSession = Depends(get_db),
     _op=Depends(require_operator),
 ) -> HealthStatus:
-    """System health check — DB, provider count, agent count, active runs."""
+    """System health check — DB, provider count, agent count, active runs, sandbox."""
+    from .. import __version__
     from ..run_manager import list_active_runs
 
     provider_count = (await db.execute(select(func.count(Provider.id)))).scalar() or 0
@@ -463,6 +469,7 @@ async def system_health(
         agents=agent_count,
         active_runs=active_runs,
         sandbox=SandboxStatus(kind=sandbox.kind, state=sandbox.state, reason=sandbox.reason),
+        version=__version__,
         timestamp=datetime.now(UTC),
     )
 

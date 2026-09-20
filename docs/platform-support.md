@@ -37,6 +37,8 @@ CaberOS tries backends in platform-specific order: native sandboxes first (faste
 | `mxc` | Microsoft Execution Containers | ⚠ Experimental, opt-in only | Never auto-selected — see below. Not a substitute for Docker. |
 | — | Shell disabled | ✗ Unavailable | No candidate found or usable. |
 
+**Desktop app:** the Windows installer (`CaberOS_<version>_x64-setup.exe`, per-user, no admin prompt) is built by `npm run desktop:build:windows` and needs neither WSL nor Python. It installs and runs without Docker; only the `terminal` capability depends on a sandbox backend from the table above. Verified by installing the built installer and querying the packaged gateway: `GET /api/health` → `sandbox: {kind: "docker", state: "available"}`, `version` matching the shell.
+
 **Today:** Docker is the only *trusted* sandbox option on Windows. **Important caveat:** Docker Desktop on Windows commonly runs its own Linux VM via WSL2 by default (see below).
 
 > **Note on WSL2:** If you install Docker Desktop on Windows, it typically uses WSL2 internally to run the Linux Docker daemon. Choosing `docker` as the sandbox backend means you're using Docker's container isolation, not "zero WSL anywhere on the machine." To use a native WSL2 sandbox (without Docker), wait for the WSL2+bubblewrap PR to be merged.
