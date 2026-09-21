@@ -11,7 +11,7 @@ import { Markdown } from "@/components/Markdown";
 import { ThinkingBlock } from "@/components/ThinkingBlock";
 import { ProcessSteps } from "@/components/ProcessSteps";
 import { ChatSidebar } from "@/components/ChatSidebar";
-import { ChatInputBar, type ChatInputBarHandle, type ContextItem } from "@/components/ChatInputBar";
+import { ChatInputBar, type Attachment, type ChatInputBarHandle, type ContextItem } from "@/components/ChatInputBar";
 import { SettingsOverlay } from "@/components/SettingsOverlay";
 import { useDesktopFileDrop } from "@/lib/desktopFileDrop";
 import { refreshNotifications } from "@/lib/notificationStore";
@@ -1095,7 +1095,7 @@ export function Conversation() {
     text: string,
     modelOverride: { provider_id: string; name: string; thinking_enabled?: boolean | null; thinking_effort?: string | null } | null,
     _context: ContextItem[],
-    attachments?: { type: string; mimeType: string; data: string; filename: string }[],
+    attachments?: Attachment[],
     skill?: string,
   ): Promise<boolean> => {
     if (!agentId) return false;
@@ -1156,7 +1156,7 @@ export function Conversation() {
             ...(a.type === "image" && a.data
               ? { preview_url: `data:${a.mimeType};base64,${a.data}` }
               : a.thumb ? { preview_url: a.thumb } : {}),
-            ...(a.type === "url" || a.type === "image_url" ? { url: a.data } : {}),
+            ...(a.type === "url" ? { url: a.data } : {}),
           })))
           : null,
       },
