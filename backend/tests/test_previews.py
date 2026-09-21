@@ -232,6 +232,7 @@ def test_pptx_preview_untitled_slide_falls_back_to_text():
     )
     # title_only has a title placeholder; drop it to simulate a text-box deck.
     from io import BytesIO
+
     from pptx import Presentation
 
     prs = Presentation(BytesIO(data))
@@ -685,3 +686,129 @@ async def test_skill_raw_and_pdf_page(client, skills_dir):
 
     resp = await client.get("/api/skills/demo-skill/pdf-page?path=refs/data.csv&page=1")
     assert resp.status_code == 400
+
+
+def test_pptx_preview_reports_slide_dims():
+    """The payload carries canvas dims so the panel can frame the true aspect."""
+    from agentos import previews
+    from agentos.artifacts.formats import pptx
+
+    data = pptx.build({"slides": [{"layout": "title", "title": "T"}]}, ".")
+    payload = previews.preview_bytes(data, "deck.pptx")
+    assert payload["slide_width"] == 12192000
+    assert payload["slide_height"] == 6858000
+
+
+def test_pptx_preview_dedupes_title_text():
+    """A body element repeating the resolved title verbatim is dropped —
+    the card header already shows it."""
+    from agentos import previews
+    from agentos.artifacts.formats import pptx
+
+    data = pptx.build(
+        {
+            "slides": [
+                {
+                    "layout": "title_content",
+                    "title": "Same",
+                    "blocks": [{"type": "text", "text": "Same"}],
+                }
+            ]
+        },
+        ".",
+    )
+    payload = previews.preview_bytes(data, "deck.pptx")
+    s1 = payload["slides"][0]
+    assert s1["title"] == "Same"
+    assert not any(
+        e["type"] == "paragraph" and e.get("text", "").strip() == "Same"
+        for e in s1["elements"]
+    )
+
+
+# --- Workspace delete (operator file management) ---
+
+
+async def test_workspace_delete_file(client, workspace_root):
+    ws = _agent_workspace(workspace_root)
+    (ws / "old.txt").write_text("gone")
+
+    resp = await client.delete("/api/agents/agent-1/workspace?path=old.txt")
+    assert resp.status_code == 200
+    assert resp.json()["deleted"] is True
+    assert not (ws / "old.txt").exists()
+
+
+async def test_workspace_delete_dir_recursive(client, workspace_root):
+    ws = _agent_workspace(workspace_root)
+    (ws / "scratch" / "sub").mkdir(parents=True)
+    (ws / "scratch" / "a.txt").write_text("a")
+    (ws / "scratch" / "sub" / "b.txt").write_text("b")
+
+    resp = await client.delete("/api/agents/agent-1/workspace?path=scratch")
+    assert resp.status_code == 200
+    assert not (ws / "scratch").exists()
+
+
+async def test_workspace_delete_missing_returns_404(client, workspace_root):
+    _agent_workspace(workspace_root)
+    resp = await client.delete("/api/agents/agent-1/workspace?path=nope.txt")
+    assert resp.status_code == 404
+
+
+async def test_workspace_delete_requires_path(client, workspace_root):
+    _agent_workspace(workspace_root)
+    resp = await client.delete("/api/agents/agent-1/workspace")
+    assert resp.status_code == 400
+
+
+async def test_workspace_delete_rejects_escape(client, workspace_root):
+    _agent_workspace(workspace_root)
+    resp = await client.delete("/api/agents/agent-1/workspace?path=../outside.txt")
+    assert resp.status_code == 403
+
+
+async def test_workspace_delete_refuses_tracked_artifact(client, workspace_root, db):
+    from agentos.models.artifact import Artifact
+
+    ws = _agent_workspace(workspace_root)
+    (ws / "artifacts").mkdir()
+    (ws / "artifacts" / "deck.pptx").write_bytes(b"pptx-bytes")
+    db.add(Artifact(workspace_id="agent-1", current_path="artifacts/deck.pptx", format="pptx"))
+    await db.commit()
+
+    resp = await client.delete("/api/agents/agent-1/workspace?path=artifacts/deck.pptx")
+    assert resp.status_code == 409
+    assert "tracked" in resp.json()["detail"]
+    assert (ws / "artifacts" / "deck.pptx").exists()
+
+
+async def test_workspace_delete_dir_refuses_when_artifact_inside(client, workspace_root, db):
+    from agentos.models.artifact import Artifact
+
+    ws = _agent_workspace(workspace_root)
+    (ws / "artifacts").mkdir()
+    (ws / "artifacts" / "deck.pptx").write_bytes(b"pptx-bytes")
+    db.add(Artifact(workspace_id="agent-1", current_path="artifacts/deck.pptx", format="pptx"))
+    await db.commit()
+
+    resp = await client.delete("/api/agents/agent-1/workspace?path=artifacts")
+    assert resp.status_code == 409
+    assert (ws / "artifacts" / "deck.pptx").exists()
+
+
+async def test_workspace_delete_allows_untracked_sibling(client, workspace_root, db):
+    """An untracked file next to a tracked artifact still deletes."""
+    from agentos.models.artifact import Artifact
+
+    ws = _agent_workspace(workspace_root)
+    (ws / "artifacts").mkdir()
+    (ws / "artifacts" / "deck.pptx").write_bytes(b"pptx-bytes")
+    (ws / "artifacts" / "notes.txt").write_text("loose")
+    db.add(Artifact(workspace_id="agent-1", current_path="artifacts/deck.pptx", format="pptx"))
+    await db.commit()
+
+    resp = await client.delete("/api/agents/agent-1/workspace?path=artifacts/notes.txt")
+    assert resp.status_code == 200
+    assert not (ws / "artifacts" / "notes.txt").exists()
+    assert (ws / "artifacts" / "deck.pptx").exists()

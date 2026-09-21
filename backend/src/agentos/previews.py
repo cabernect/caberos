@@ -239,13 +239,25 @@ def _preview_office(data: bytes, fmt: str) -> dict:
 
 
 def _preview_slides(data: bytes) -> dict:
-    """PPTX → slides grouped on page_break markers from to_elements."""
+    """PPTX → slides grouped on page_break markers from to_elements, plus
+    the deck's canvas dims so the panel can frame slides at their true
+    aspect ratio."""
     try:
         from .artifacts import formats
 
         elements = formats.get_handler("pptx").to_elements(data, "")
     except Exception as e:
         return {"slides": [], "error": f"presentation unreadable: {e}"[:300]}
+
+    slide_width = slide_height = None
+    try:
+        from pptx import Presentation
+
+        prs = Presentation(io.BytesIO(data))
+        slide_width, slide_height = int(prs.slide_width), int(prs.slide_height)
+        prs = None  # release the package refs promptly
+    except Exception:
+        pass  # dims are best-effort — the wireframe still renders without them
 
     slides: list[dict] = [{"title": None, "elements": []}]
     for el in elements:
@@ -290,8 +302,25 @@ def _preview_slides(data: bytes) -> dict:
             )
             and not (e["type"] == "image" and _near_blank_image(e.get("data")))
         ]
+        # A body element repeating the resolved title verbatim (title
+        # placeholders that also flow through the text path) renders as a
+        # duplicate under the card header — drop it.
+        title_text = (slide["title"] or "").strip()
+        if title_text:
+            slide["elements"] = [
+                e
+                for e in slide["elements"]
+                if not (
+                    e["type"] in ("heading", "paragraph")
+                    and e.get("text", "").strip() == title_text
+                )
+            ]
         slide["elements"], slide["truncated"] = _cap_elements(slide["elements"])
-    return {"slides": slides, "slide_count": len(slides)}
+    result = {"slides": slides, "slide_count": len(slides)}
+    if slide_width and slide_height:
+        result["slide_width"] = slide_width
+        result["slide_height"] = slide_height
+    return result
 
 
 def _preview_workbook(data: bytes) -> dict:

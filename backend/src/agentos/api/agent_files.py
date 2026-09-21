@@ -245,6 +245,68 @@ async def list_workspace(
     }
 
 
+@router.delete("/{agent_id}/workspace")
+async def delete_workspace_entry(
+    agent_id: str,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+    path: str = "",
+) -> dict:
+    """Delete a file or directory in the agent's workspace.
+
+    Tracked artifact files refuse deletion — their revisions would point at
+    a missing file. Directories delete recursively, but refuse when any
+    tracked artifact lives inside. Attachment files may be deleted; chat
+    cards referencing them degrade to a missing-file state.
+    """
+    import shutil
+
+    from sqlalchemy import select
+
+    from ..models.artifact import Artifact
+    from ..sandbox.workspace import WorkspaceManager
+
+    rel = (path or "").strip().strip("/")
+    if not rel:
+        raise HTTPException(status_code=400, detail="path is required")
+
+    ws = _workspace_path(agent_id)
+    try:
+        target = Path(WorkspaceManager().validate_path(str(ws), rel))
+    except ValueError as error:
+        raise HTTPException(status_code=403, detail="Path outside workspace") from error
+
+    if target == ws:
+        raise HTTPException(status_code=400, detail="Cannot delete the workspace root")
+    if not target.exists() and not target.is_symlink():
+        raise HTTPException(status_code=404, detail="Path not found")
+
+    tracked = (
+        await db.execute(
+            select(Artifact.current_path).where(
+                Artifact.workspace_id == agent_id,
+                (Artifact.current_path == rel)
+                | (Artifact.current_path.like(f"{rel}/%")),
+            )
+        )
+    ).scalars().all()
+    if tracked:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"'{rel}' is tracked as an artifact ({len(tracked)} file(s)). "
+                "Artifact history would point at a missing file — remove it "
+                "from artifact tracking first."
+            ),
+        )
+
+    if target.is_symlink() or target.is_file():
+        target.unlink()
+    else:
+        shutil.rmtree(target)
+    return {"deleted": True, "path": rel}
+
+
 # --- File previews (W3) ---
 #
 # One endpoint family serves both ordinary workspace files and exact
