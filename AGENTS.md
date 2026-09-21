@@ -97,7 +97,7 @@ Registered in `capabilities/builtin.py`. Two kinds: `tool` (workspace/shell/web 
 | `skills_list` | tool | no | no | List available skills (name + description only — menu) |
 | `skills_load` | tool | no | no | Load a skill's full content + resource listing |
 | `skills_read_resource` | tool | no | no | Read a resource file from a skill directory (scoped to skill dir) |
-| `artifact_create` | tool | no | no | Create a tracked deliverable (docx/xlsx/pptx/pdf) from a structured spec — never raw Office XML |
+| `artifact_create` | tool | no | no | Create a tracked deliverable (docx/xlsx/pptx/pdf) from a structured spec — never raw Office XML; saves under `artifacts/` |
 | `artifact_inspect` | tool | no | no | Reopen + validate an artifact; report structure + tracking state honestly |
 | `artifact_revise` | tool | no | no | Apply structured ops against a base revision — conflict on external edits, never overwrite |
 | `artifact_adopt` | tool | no | no | Start tracking an existing workspace file (revision 1 snapshot) |
@@ -116,11 +116,26 @@ metadata and workspace-relative references.
 - **Web URLs**: use the existing `web_fetch` capability; URLs are never sent as
   image inputs automatically.
 - **Images**: `read_file` returns image content only when the selected model
-  supports vision. Otherwise it returns a clear limitation.
+  supports vision. Otherwise it returns a clear limitation. Images >15 MB are
+  refused; oversized/high-resolution images are downscaled to ≤1568px before
+  base64 (Pillow).
+- **Documents**: `read_file` never returns raw binary. PDF → per-page text
+  extraction with `start_page`/`end_page` paging (image-only pages report
+  honestly); DOCX/PPTX/XLSX → text flattened from the artifact `to_elements`
+  pipeline; unknown binaries are refused. All reads cap at 50k chars with
+  truncation hints; tool results in history are capped at the same 50k.
+- **Context overflow**: if a mid-run model call exceeds the context window,
+  the harness force-compacts once and retries; unrecoverable overflow fails
+  the run with a clear message.
 
 The `messages.attachments` column stores metadata (type, MIME type, filename,
 and URL when applicable), never base64 content. Uploaded bytes are stored under
 the workspace `attachments/` directory.
+
+Workspace layout convention: `attachments/` holds user-supplied inputs;
+`artifacts/` holds agent-produced deliverables (`artifact_create` prefixes the
+path automatically — subdirs preserved, `attachments/` refused); the workspace
+root and other dirs are scratch space (scripts, drafts, `write_file` output).
 
 ## Storage summary
 
