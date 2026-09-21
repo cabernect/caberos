@@ -208,9 +208,7 @@ async def read_file(args: dict[str, Any], workspace_path: str, **kwargs: Any) ->
             if max(im.size) > _IMAGE_MAX_EDGE or size > 2 * 1024 * 1024:
                 im.thumbnail((_IMAGE_MAX_EDGE, _IMAGE_MAX_EDGE))
                 buf = io.BytesIO()
-                if im.mode in ("RGBA", "LA") or (
-                    im.mode == "P" and "transparency" in im.info
-                ):
+                if im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info):
                     im.save(buf, format="PNG", optimize=True)
                 else:
                     im.convert("RGB").save(buf, format="JPEG", quality=85)
@@ -309,8 +307,7 @@ async def read_file(args: dict[str, Any], workspace_path: str, **kwargs: Any) ->
     if content_truncated:
         result["truncated"] = True
         result["hint"] = (
-            f"Range output exceeds {_READ_MAX_CHARS} chars — narrow the "
-            "start_line/end_line range."
+            f"Range output exceeds {_READ_MAX_CHARS} chars — narrow the start_line/end_line range."
         )
     if result["has_more"]:
         result["next_start_line"] = selected_end + 1

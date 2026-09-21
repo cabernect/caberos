@@ -282,14 +282,17 @@ async def delete_workspace_entry(
         raise HTTPException(status_code=404, detail="Path not found")
 
     tracked = (
-        await db.execute(
-            select(Artifact.current_path).where(
-                Artifact.workspace_id == agent_id,
-                (Artifact.current_path == rel)
-                | (Artifact.current_path.like(f"{rel}/%")),
+        (
+            await db.execute(
+                select(Artifact.current_path).where(
+                    Artifact.workspace_id == agent_id,
+                    (Artifact.current_path == rel) | (Artifact.current_path.like(f"{rel}/%")),
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     if tracked:
         raise HTTPException(
             status_code=409,

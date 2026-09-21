@@ -44,9 +44,7 @@ def _deliverable_path(rel_path: str) -> str:
     for user inputs. Subdirs are preserved; `attachments/` is refused."""
     rel = rel_path.strip().lstrip("/")
     if rel.startswith("attachments/"):
-        raise ArtifactError(
-            "artifact paths can't live under attachments/ — that's the inputs dir"
-        )
+        raise ArtifactError("artifact paths can't live under attachments/ — that's the inputs dir")
     if not rel.startswith("artifacts/"):
         rel = f"artifacts/{rel}"
     return rel

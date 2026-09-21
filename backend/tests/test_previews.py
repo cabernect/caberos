@@ -588,9 +588,7 @@ async def test_ephemeral_preview_pdf_carries_thumbnail(client, workspace_root):
 
 async def test_url_preview_requires_http(client, workspace_root):
     _agent_workspace(workspace_root)
-    resp = await client.get(
-        "/api/agents/agent-1/attachments/url-preview?url=file:///etc/passwd"
-    )
+    resp = await client.get("/api/agents/agent-1/attachments/url-preview?url=file:///etc/passwd")
     assert resp.status_code == 400
 
 
@@ -721,8 +719,7 @@ def test_pptx_preview_dedupes_title_text():
     s1 = payload["slides"][0]
     assert s1["title"] == "Same"
     assert not any(
-        e["type"] == "paragraph" and e.get("text", "").strip() == "Same"
-        for e in s1["elements"]
+        e["type"] == "paragraph" and e.get("text", "").strip() == "Same" for e in s1["elements"]
     )
 
 

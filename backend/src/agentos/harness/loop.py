@@ -395,9 +395,7 @@ class Harness:
                         str(e)[:200],
                     )
                     system_msgs = (
-                        [history[0]]
-                        if history and history[0].get("role") == "system"
-                        else []
+                        [history[0]] if history and history[0].get("role") == "system" else []
                     )
                     compaction_result = await compact_context(
                         messages=history[len(system_msgs) :],

@@ -284,11 +284,7 @@ def _preview_slides(data: bytes) -> dict:
         if slide["title"] is None or generic_title.match(slide["title"] or ""):
             for j, e in enumerate(els):
                 t = e.get("text", "").strip()
-                if (
-                    e["type"] == "paragraph"
-                    and 0 < len(t) <= 80
-                    and not bare_bullet.match(t)
-                ):
+                if e["type"] == "paragraph" and 0 < len(t) <= 80 and not bare_bullet.match(t):
                     slide["title"] = t
                     els.pop(j)
                     break
@@ -297,9 +293,7 @@ def _preview_slides(data: bytes) -> dict:
         slide["elements"] = [
             e
             for e in els
-            if not (
-                e["type"] == "paragraph" and bare_bullet.match(e.get("text", "").strip())
-            )
+            if not (e["type"] == "paragraph" and bare_bullet.match(e.get("text", "").strip()))
             and not (e["type"] == "image" and _near_blank_image(e.get("data")))
         ]
         # A body element repeating the resolved title verbatim (title

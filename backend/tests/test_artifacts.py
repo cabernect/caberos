@@ -729,8 +729,15 @@ def test_pptx_build_uses_widescreen_canvas():
     from agentos.artifacts.formats import pptx
 
     data = pptx.build(
-        {"slides": [{"layout": "title_content", "title": "T",
-                     "blocks": [{"type": "bullets", "items": ["a"]}]}]},
+        {
+            "slides": [
+                {
+                    "layout": "title_content",
+                    "title": "T",
+                    "blocks": [{"type": "bullets", "items": ["a"]}],
+                }
+            ]
+        },
         ".",
     )
     prs = Presentation(BytesIO(data))

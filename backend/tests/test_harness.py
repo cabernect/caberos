@@ -889,9 +889,7 @@ async def test_tool_result_hard_cap(db, workspace):
 
 
 @pytest.mark.asyncio
-async def test_context_overflow_forces_compaction_and_retries(
-    db, workspace, monkeypatch
-):
+async def test_context_overflow_forces_compaction_and_retries(db, workspace, monkeypatch):
     """A mid-run context-window error triggers one forced compaction + retry."""
     from types import SimpleNamespace
 
