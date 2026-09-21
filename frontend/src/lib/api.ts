@@ -238,6 +238,11 @@ export const api = {
     request<{ type: "dir" | "file"; path: string; entries?: WorkspaceEntry[]; content?: string; size?: number }>(
       `/api/agents/${id}/workspace${path ? `?path=${encodeURIComponent(path)}` : ""}`,
     ),
+  deleteWorkspaceEntry: (id: string, path: string) =>
+    request<{ deleted: boolean; path: string }>(
+      `/api/agents/${id}/workspace?path=${encodeURIComponent(path)}`,
+      { method: "DELETE" },
+    ),
 
   // File previews (W3) — one param object shared by the whole family:
   // {path} for live files, {artifactId, revisionId} for managed bytes.
@@ -281,12 +286,6 @@ export const api = {
       `/api/agents/${id}/artifacts/adopt`,
       { method: "POST", body: JSON.stringify({ path }) },
     ),
-  ingestWorkspaceToVault: (id: string, path: string) =>
-    request<KnowledgeDocument>(`/api/knowledge/from-workspace/${id}`, {
-      method: "POST",
-      body: JSON.stringify({ path }),
-    }),
-
   // Composer attachment previews (W3c) — ephemeral, nothing persisted.
   previewAttachment: async (id: string, file: File): Promise<PreviewPayload> => {
     const formData = new FormData();

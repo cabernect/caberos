@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
-  BookPlus,
   Download,
   ExternalLink,
   FileClock,
@@ -11,14 +10,15 @@ import {
   History,
   Loader2,
   Maximize2,
-  MessageSquarePlus,
   Minimize2,
   RefreshCcw,
+  Trash2,
   X,
 } from "lucide-react";
 import { DiffBlock } from "@/components/DiffBlock";
 import { api, workspaceBackend, type PreviewBackend, type PreviewSource } from "@/lib/api";
-import type { ArtifactMeta, ArtifactRevisionInfo, PreviewPayload } from "@/lib/types";
+import { useConfirm } from "@/lib/confirmHook";
+import type { ArtifactRevisionInfo, PreviewPayload } from "@/lib/types";
 import { formatBytes, PreviewBody } from "./renderers";
 
 const isDesktopShell =
@@ -36,9 +36,9 @@ interface PreviewPanelProps {
   backend?: PreviewBackend;
   /** Called when the panel wants to close (Escape or ✕). */
   onClose?: () => void;
-  /** Prefills the composer with a revise request — only offered where a
-   *  composer exists (chat surface). */
-  onAskRevise?: (artifact: ArtifactMeta) => void;
+  /** Workspace surfaces only — enables the Delete action; called after a
+   *  successful delete so the parent can refresh its listing. */
+  onDeleted?: (path: string) => void;
   /** Extra classes for the outer container (sizing lives with the caller). */
   className?: string;
 }
@@ -48,7 +48,8 @@ interface PreviewPanelProps {
  * Skills. It owns the fetch lifecycle, artifact banner/actions, and
  * delegates content to the kind renderers.
  */
-export function PreviewPanel({ agentId, source, backend, onClose, onAskRevise, className }: PreviewPanelProps) {
+export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, className }: PreviewPanelProps) {
+  const { confirm } = useConfirm();
   const isWorkspace = !backend;
   // Memoize — a fresh backend object every render would retrigger the
   // fetch effect below and loop forever.
@@ -236,22 +237,30 @@ export function PreviewPanel({ agentId, source, backend, onClose, onAskRevise, c
     }
   };
 
-  const addToVault = async () => {
-    if (!currentPath) return;
-    try {
-      await api.ingestWorkspaceToVault(agentId, currentPath);
-      setActionMsg("Added to Vault");
-    } catch (e) {
-      setActionMsg(e instanceof Error ? e.message : String(e));
-    }
-  };
-
   const trackHistory = async () => {
     if (!currentPath) return;
     try {
       await api.adoptWorkspaceFile(agentId, currentPath);
       setActionMsg("Now tracking revisions");
       fetchPreview();
+    } catch (e) {
+      setActionMsg(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const deleteFile = async () => {
+    const rel = viewing.path;
+    if (!rel || !onDeleted) return;
+    const ok = await confirm({
+      title: "Delete file?",
+      message: `Delete "${rel}"? This cannot be undone.`,
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await api.deleteWorkspaceEntry(agentId, rel);
+      onDeleted(rel);
     } catch (e) {
       setActionMsg(e instanceof Error ? e.message : String(e));
     }
@@ -405,18 +414,11 @@ export function PreviewPanel({ agentId, source, backend, onClose, onAskRevise, c
             <ActionButton icon={FolderOpen} label="Reveal" onClick={revealFile} />
           </>
         )}
-        {isWorkspace && (
-          <ActionButton icon={BookPlus} label="Add to Vault" onClick={addToVault} />
-        )}
         {isWorkspace && !artifact && currentPath && (
           <ActionButton icon={FileClock} label="Track history" onClick={trackHistory} />
         )}
-        {isWorkspace && artifact && onAskRevise && (
-          <ActionButton
-            icon={MessageSquarePlus}
-            label="Ask agent to revise"
-            onClick={() => onAskRevise(artifact)}
-          />
+        {isWorkspace && viewing.path && onDeleted && (
+          <ActionButton icon={Trash2} label="Delete" onClick={deleteFile} />
         )}
       </div>
       {actionMsg && (
@@ -490,7 +492,14 @@ export function PreviewPanel({ agentId, source, backend, onClose, onAskRevise, c
           <PreviewBody payload={payload} backend={be} source={viewing} expanded={expanded} />
         ) : error ? (
           <div className="rounded-[5px] border border-[var(--border)] bg-[var(--surface)] p-3 text-[12px] text-[var(--ink-2)]">
-            {error}
+            {/^404\b/.test(error) ? (
+              <>
+                <p className="font-medium text-[var(--ink)]">File not found</p>
+                <p className="mt-1">It may have been moved or deleted from the workspace.</p>
+              </>
+            ) : (
+              error
+            )}
           </div>
         ) : (
           <div className="flex h-full items-center justify-center">

@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect, useImperativeHandle, useCallback, forwardRef } from "react";
-import { Paperclip, FileText, Image as ImageIcon, Link, Wrench, ArrowUp, HelpCircle, Check, Sparkles, Square, ChevronLeft, ChevronRight, X } from "lucide-react";
+import { Paperclip, FileText, Image as ImageIcon, Link, Wrench, ArrowUp, HelpCircle, Check, Sparkles, Square } from "lucide-react";
 import { ModelSelector } from "@/components/ModelSelector";
 import { ThinkingToggle } from "@/components/ThinkingToggle";
-import { FileTypeTile } from "@/components/FileTypeTile";
+import { AttachmentCard } from "@/components/AttachmentCard";
 import { api } from "@/lib/api";
-import { attachmentKind, fileHash, formatAttachmentSize, moveItem } from "@/lib/attachmentUtils";
+import { fileHash, formatAttachmentSize, moveItem } from "@/lib/attachmentUtils";
 import type { SkillInfo } from "@/lib/types";
 
 export interface Attachment {
@@ -730,77 +730,24 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
           <div className="flex flex-wrap gap-1.5">
             {attachments.map((att, i) => {
               const item = contextItems[i];
-              const kind = att.type === "url" ? "url" : attachmentKind(att.filename, att.mimeType);
               return (
-                <div
+                <AttachmentCard
                   key={att.id || i}
-                  className="group flex items-center gap-2 rounded-[6px] border px-2 py-1.5"
-                  style={{
-                    borderColor: "var(--border)",
-                    background: "var(--white)",
+                  type={att.type}
+                  filename={att.filename}
+                  mimeType={att.mimeType}
+                  size={att.size}
+                  url={att.type === "url" ? att.data : undefined}
+                  title={att.type === "url" ? att.urlTitle || item?.label : undefined}
+                  thumbUrl={att.previewUrl || att.thumb}
+                  controls={{
+                    onMoveLeft: () => moveAttachment(i, -1),
+                    onMoveRight: () => moveAttachment(i, 1),
+                    onRemove: () => removeAttachment(i),
+                    canMoveLeft: i > 0,
+                    canMoveRight: i < attachments.length - 1,
                   }}
-                >
-                  {/* Thumbnail — image object URL, rendered page, or a
-                      file-type tile (ext badge) for documents */}
-                  {att.previewUrl || att.thumb ? (
-                    <img
-                      src={att.previewUrl || att.thumb}
-                      alt=""
-                      className="h-9 w-9 shrink-0 rounded-[4px] border border-[var(--border)] object-cover"
-                    />
-                  ) : att.type === "image" ? (
-                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[4px] bg-[var(--surface)] text-[var(--ink-3)]">
-                      <ImageIcon className="h-4 w-4" />
-                    </span>
-                  ) : att.type === "url" ? (
-                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[4px] bg-[var(--surface)] text-[var(--ink-3)]">
-                      <Link className="h-4 w-4" />
-                    </span>
-                  ) : (
-                    <FileTypeTile filename={att.filename} />
-                  )}
-                  <span className="min-w-0">
-                    <span
-                      className="block max-w-[140px] truncate text-[11px] font-medium text-[var(--ink)]"
-                      title={att.type === "url" ? att.data : item?.title || att.filename}
-                    >
-                      {att.type === "url" ? att.urlTitle || item?.label || att.data : att.filename}
-                    </span>
-                    <span className="block text-[10px] text-[var(--ink-3)]">
-                      {att.type === "url"
-                        ? (() => { try { return new URL(att.data).hostname; } catch { return att.data; } })()
-                        : `${kind}${att.size != null ? ` · ${formatAttachmentSize(att.size)}` : ""}`}
-                    </span>
-                  </span>
-                  <span className="flex items-center">
-                    <button
-                      onClick={() => moveAttachment(i, -1)}
-                      disabled={i === 0}
-                      aria-label={`Move ${att.filename || "attachment"} earlier`}
-                      className="rounded-[3px] p-0.5 text-[var(--ink-3)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--ink)] disabled:opacity-30"
-                      style={{ border: "none", background: "none", cursor: "pointer" }}
-                    >
-                      <ChevronLeft className="h-3 w-3" />
-                    </button>
-                    <button
-                      onClick={() => moveAttachment(i, 1)}
-                      disabled={i === attachments.length - 1}
-                      aria-label={`Move ${att.filename || "attachment"} later`}
-                      className="rounded-[3px] p-0.5 text-[var(--ink-3)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--ink)] disabled:opacity-30"
-                      style={{ border: "none", background: "none", cursor: "pointer" }}
-                    >
-                      <ChevronRight className="h-3 w-3" />
-                    </button>
-                    <button
-                      onClick={() => removeAttachment(i)}
-                      aria-label={`Remove ${att.filename || "attachment"}`}
-                      className="rounded-[3px] p-0.5 text-[var(--ink-3)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--danger)]"
-                      style={{ border: "none", background: "none", cursor: "pointer" }}
-                    >
-                      <X className="h-3 w-3" />
-                    </button>
-                  </span>
-                </div>
+                />
               );
             })}
           </div>

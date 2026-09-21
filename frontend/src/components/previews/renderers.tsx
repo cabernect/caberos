@@ -375,6 +375,12 @@ function SlidesView({ payload }: { payload: PreviewPayload }) {
   const slides = payload.slides || [];
   const [selected, setSelected] = useState(0);
   const slide = slides[selected];
+  // Frame the wireframe at the deck's real aspect — a 4:3 file reads
+  // visibly different from a 16:9 one; overflow scrolls inside the frame.
+  const aspect =
+    payload.slide_width && payload.slide_height
+      ? `${payload.slide_width} / ${payload.slide_height}`
+      : undefined;
   return (
     <div>
       <div className="mb-2 flex gap-1 overflow-x-auto pb-1">
@@ -395,7 +401,10 @@ function SlidesView({ payload }: { payload: PreviewPayload }) {
         ))}
       </div>
       {slide && (
-        <div className="rounded-[5px] border border-[var(--border)] bg-[var(--surface)]/40 p-3">
+        <div
+          className="rounded-[5px] border border-[var(--border)] bg-[var(--surface)]/40 p-3"
+          style={aspect ? { aspectRatio: aspect, overflowY: "auto" } : undefined}
+        >
           {slide.title && (
             <div className="mb-2 text-[15px] font-semibold text-[var(--ink)]">{slide.title}</div>
           )}

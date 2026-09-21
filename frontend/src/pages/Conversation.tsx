@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { ArrowDown, PanelLeft, AlertCircle, BookOpen, ChevronDown, Link as LinkIcon, Paperclip, Loader2, MessageSquare } from "lucide-react";
+import { ArrowDown, PanelLeft, AlertCircle, BookOpen, ChevronDown, Paperclip, Loader2, MessageSquare } from "lucide-react";
 import { api, workspaceBackend, type PreviewSource } from "@/lib/api";
 import type { Agent, Message, Provider, SessionInfo } from "@/lib/types";
 import { PreviewPanel } from "@/components/previews/PreviewPanel";
-import { formatBytes } from "@/components/previews/renderers";
 import { useObjectUrl } from "@/components/previews/useObjectUrl";
-import { FileTypeTile } from "@/components/FileTypeTile";
+import { AttachmentCard } from "@/components/AttachmentCard";
 import { ToolCallBlock, FileChips, collectFileRefs, type ToolCallData, type SubAgentStreamData, type FileRef } from "@/components/ToolCallBlock";
 import { Markdown } from "@/components/Markdown";
 import { ThinkingBlock } from "@/components/ThinkingBlock";
@@ -240,7 +239,21 @@ export function Conversation() {
               !apiUserContents.has(m.content) &&
               !mapped.some((mm) => mm.id === m.id),
           );
-          return [...mapped, ...optimistic];
+          // The pipeline persists attachment metadata after the message row —
+          // a reload in that window returns the user message with
+          // attachments=null. Carry the optimistic copy's attachments forward
+          // so the card doesn't flash out mid-run and return on completion.
+          // Only the latest user message can be the in-flight one — patching
+          // older same-text twins would mislabel them.
+          const lastUserIdx = mapped.map((m, i) => (m.role === "user" ? i : -1)).filter((i) => i >= 0).pop();
+          const carried = mapped.map((m, i) => {
+            if (i !== lastUserIdx || m.attachments) return m;
+            const twin = prev.find(
+              (o) => o.role === "user" && o.content === m.content && o.attachments,
+            );
+            return twin ? { ...m, attachments: twin.attachments } : m;
+          });
+          return [...carried, ...optimistic];
         });
       })
       .catch(() => {});
@@ -1077,10 +1090,6 @@ export function Conversation() {
     [previewWidth],
   );
 
-  const askRevise = useCallback((artifact: { current_path: string }) => {
-    inputBarRef.current?.prefill(`Revise ${artifact.current_path} — `);
-  }, []);
-
   // Returns success so the composer can keep the draft + tray on failure.
   const handleSend = async (
     text: string,
@@ -1138,6 +1147,15 @@ export function Conversation() {
             type: a.type,
             mime_type: a.mimeType,
             filename: a.filename,
+            size: a.size,
+            // Ephemeral thumbnail — the composer's object URL is revoked on
+            // send, so carry a self-owned data URL instead: image bytes are
+            // already base64 for transport; PDF/Office drafts reuse the
+            // backend-rendered thumb. Dropped once the persisted record
+            // (with path) replaces this optimistic one.
+            ...(a.type === "image" && a.data
+              ? { preview_url: `data:${a.mimeType};base64,${a.data}` }
+              : a.thumb ? { preview_url: a.thumb } : {}),
             ...(a.type === "url" || a.type === "image_url" ? { url: a.data } : {}),
           })))
           : null,
@@ -1659,7 +1677,6 @@ export function Conversation() {
             agentId={agentId || ""}
             source={previewSource}
             onClose={closePreview}
-            onAskRevise={askRevise}
           />
         </div>
       )}
@@ -1844,7 +1861,7 @@ function MessageRow({
         {attachmentFiles.length > 0 && (
           <div className="flex flex-wrap justify-end gap-1.5">
             {attachmentFiles.map((f, i) => (
-              <AttachmentCard key={i} file={f} agentId={agentId} onPreview={onPreview} />
+              <MessageAttachmentCard key={i} file={f} agentId={agentId} onPreview={onPreview} />
             ))}
           </div>
         )}
@@ -2016,100 +2033,38 @@ function TypingIndicator() {
   );
 }
 
-/** Message-level attachment card — a real card (tile + name + meta), not a
-    bare chip. Images get a real thumbnail through the preview backend's
-    blob read; other files show an extension tile; URLs keep link treatment. */
-function AttachmentCard({
+/** Message-level attachment card — the shared AttachmentCard in open mode.
+ *  Images fetch a real thumbnail through the preview backend's blob read;
+ *  files with a stored path open the preview panel; URLs open a new tab. */
+function MessageAttachmentCard({
   file,
   agentId,
   onPreview,
 }: {
-  file: { type: string; mime_type: string; filename: string; url?: string; path?: string; size?: number };
+  file: { type: string; mime_type: string; filename: string; url?: string; path?: string; size?: number; preview_url?: string };
   agentId?: string;
   onPreview?: (source: PreviewSource) => void;
 }) {
   const isUrl = file.type === "url" || file.type === "image_url";
   const isImage = !isUrl && (file.type === "image" || file.mime_type?.startsWith("image/"));
-  const { url: thumbUrl } = useObjectUrl(
+  // Persisted blob wins once path exists; `preview_url` is the draft's
+  // ephemeral data URL covering the window before persistence lands.
+  const { url: blobUrl } = useObjectUrl(
     isImage && file.path && agentId
       ? () => workspaceBackend(agentId).blob({ path: file.path! })
       : null,
     [file.path, agentId]
   );
 
-  let urlLabel = file.url || "";
-  try {
-    if (file.url) urlLabel = new URL(file.url).hostname;
-  } catch { /* keep raw */ }
-
-  const ext = file.filename?.includes(".")
-    ? file.filename.split(".").pop()!.toUpperCase()
-    : "";
-  const meta = isUrl
-    ? "link"
-    : `${ext && ext.length <= 5 ? ext : file.mime_type?.split("/")[0] || file.type}${
-        file.size != null ? ` · ${formatBytes(file.size)}` : ""
-      }`;
-
-  const inner = (
-    <>
-      {isUrl ? (
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[4px] border border-[var(--border)] bg-[var(--surface)] text-[var(--ink-3)]">
-          <LinkIcon className="h-4 w-4" />
-        </span>
-      ) : thumbUrl ? (
-        <img
-          src={thumbUrl}
-          alt={file.filename}
-          className="h-9 w-9 shrink-0 rounded-[4px] border border-[var(--border)] object-cover"
-        />
-      ) : (
-        <FileTypeTile filename={file.filename} />
-      )}
-      <span className="min-w-0 flex-1">
-        <span
-          className="block truncate text-[12px] font-medium text-[var(--ink)]"
-          title={isUrl ? file.url : file.filename}
-        >
-          {isUrl ? urlLabel : file.filename}
-        </span>
-        <span className="block text-[10px]" style={{ color: "var(--ink-3)" }}>
-          {meta}
-        </span>
-      </span>
-    </>
-  );
-
-  const cardClass =
-    "flex w-[220px] max-w-full items-center gap-2 rounded-md border px-2.5 py-2 text-left transition hover:opacity-80";
-  const cardStyle: React.CSSProperties = {
-    background: "var(--white)",
-    borderColor: "var(--border)",
-    textDecoration: "none",
-  };
-
-  if (isUrl && file.url) {
-    return (
-      <a href={file.url} target="_blank" rel="noopener noreferrer" className={cardClass} style={cardStyle}>
-        {inner}
-      </a>
-    );
-  }
-  if (file.path && onPreview) {
-    return (
-      <button
-        onClick={() => onPreview({ path: file.path! })}
-        className={cardClass}
-        style={{ ...cardStyle, cursor: "pointer" }}
-        title={`Preview ${file.filename}`}
-      >
-        {inner}
-      </button>
-    );
-  }
   return (
-    <div className={cardClass} style={cardStyle} title={file.url || file.filename}>
-      {inner}
-    </div>
+    <AttachmentCard
+      type={file.type}
+      filename={file.filename}
+      mimeType={file.mime_type}
+      size={file.size}
+      url={isUrl ? file.url : undefined}
+      thumbUrl={blobUrl ?? file.preview_url}
+      onOpen={!isUrl && file.path && onPreview ? () => onPreview({ path: file.path! }) : undefined}
+    />
   );
 }

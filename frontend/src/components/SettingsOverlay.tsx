@@ -129,7 +129,7 @@ export function SettingsOverlay({ agent, open, onClose, onSaved, providers }: Se
           )}
           {tab === "Memory" && <MemoryTab agentId={agent?.id || ""} onClose={onClose} showSaved={showSaved} />}
           {tab === "Skills" && <SkillsTab agentId={agent?.id || ""} showSaved={showSaved} />}
-          {tab === "Workspace" && <WorkspaceTab agentId={agent?.id || ""} />}
+          {tab === "Workspace" && <WorkspaceTab agentId={agent?.id || ""} showSaved={showSaved} />}
           {tab === "Channels" && <ChannelsTab agentId={agent?.id || ""} />}
         </div>
       </div>
@@ -1214,7 +1214,8 @@ function SkillsTab({ agentId, showSaved }: { agentId: string; showSaved: (msg: s
 // left while the shared PreviewPanel renders the selected file on the
 // right. Narrow layouts fall back to a full-width preview with Back.
 
-function WorkspaceTab({ agentId }: { agentId: string }) {
+function WorkspaceTab({ agentId, showSaved }: { agentId: string; showSaved: (msg: string) => void }) {
+  const { confirm } = useConfirm();
   const [path, setPath] = useState("");
   const [entries, setEntries] = useState<WorkspaceEntry[]>([]);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
@@ -1281,6 +1282,34 @@ function WorkspaceTab({ agentId }: { agentId: string }) {
     load(up);
   };
 
+  const errDetail = (e: unknown) => {
+    const m = e instanceof Error ? e.message : String(e);
+    try {
+      return JSON.parse(m.replace(/^\d+:\s*/, "")).detail ?? m;
+    } catch {
+      return m;
+    }
+  };
+
+  const handleDelete = async (entry: WorkspaceEntry) => {
+    const rel = path ? `${path}/${entry.name}` : entry.name;
+    const ok = await confirm({
+      title: `Delete ${entry.type === "dir" ? "folder" : "file"}?`,
+      message: `Delete "${rel}"${entry.type === "dir" ? " and everything inside it" : ""}? This cannot be undone.`,
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await api.deleteWorkspaceEntry(agentId, rel);
+      if (previewPath === rel || previewPath?.startsWith(`${rel}/`)) closePreview();
+      showSaved(`Deleted ${entry.name}`);
+      load(path);
+    } catch (e) {
+      showSaved(`Delete failed: ${errDetail(e)}`);
+    }
+  };
+
   const breadcrumbs = path ? path.split("/").filter(Boolean) : [];
 
   const fileList = (
@@ -1295,33 +1324,44 @@ function WorkspaceTab({ agentId }: { agentId: string }) {
         </button>
       )}
       {entries.map((entry) => (
-        <button
+        <div
           key={entry.name}
-          data-path={path ? `${path}/${entry.name}` : entry.name}
-          onClick={() => navigate(entry)}
-          className="flex w-full items-center gap-2 rounded-[5px] px-3 py-2 text-[13px] transition hover:bg-[var(--surface)]"
+          className="group flex w-full items-center rounded-[5px] transition hover:bg-[var(--surface)]"
           style={{
-            border: "none",
             background:
               previewPath === (path ? `${path}/${entry.name}` : entry.name)
                 ? "var(--surface)"
                 : "none",
-            cursor: "pointer",
-            color: "var(--ink)",
           }}
         >
-          {entry.type === "dir" ? (
-            <Folder className="h-4 w-4" style={{ color: "var(--accent)" }} />
-          ) : (
-            <FileText className="h-4 w-4" style={{ color: "var(--ink-3)" }} />
-          )}
-          <span className="truncate">{entry.name}</span>
-          {entry.type === "file" && (
-            <span className="ml-auto shrink-0 font-mono text-[11px] text-[var(--ink-3)]">
-              {entry.size > 1024 ? `${(entry.size / 1024).toFixed(1)}KB` : `${entry.size}B`}
-            </span>
-          )}
-        </button>
+          <button
+            data-path={path ? `${path}/${entry.name}` : entry.name}
+            onClick={() => navigate(entry)}
+            className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-[13px]"
+            style={{ border: "none", background: "none", cursor: "pointer", color: "var(--ink)" }}
+          >
+            {entry.type === "dir" ? (
+              <Folder className="h-4 w-4" style={{ color: "var(--accent)" }} />
+            ) : (
+              <FileText className="h-4 w-4" style={{ color: "var(--ink-3)" }} />
+            )}
+            <span className="truncate">{entry.name}</span>
+            {entry.type === "file" && (
+              <span className="ml-auto shrink-0 font-mono text-[11px] text-[var(--ink-3)]">
+                {entry.size > 1024 ? `${(entry.size / 1024).toFixed(1)}KB` : `${entry.size}B`}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={() => void handleDelete(entry)}
+            aria-label={`Delete ${entry.name}`}
+            title={`Delete ${entry.name}`}
+            className="mr-1 shrink-0 rounded-[3px] p-1 text-[var(--ink-3)] opacity-0 transition hover:bg-[var(--white)] hover:text-[var(--danger)] group-hover:opacity-100"
+            style={{ border: "none", cursor: "pointer" }}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
       ))}
       {entries.length === 0 && !loading && (
         <p className="py-8 text-center text-[13px] text-[var(--ink-3)]">Empty directory.</p>
@@ -1374,6 +1414,11 @@ function WorkspaceTab({ agentId }: { agentId: string }) {
                 agentId={agentId}
                 source={{ path: previewPath }}
                 onClose={closePreview}
+                onDeleted={(p) => {
+                  closePreview();
+                  showSaved(`Deleted ${p.split("/").pop()}`);
+                  load(path);
+                }}
               />
             </div>
           </div>

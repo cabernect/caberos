@@ -184,6 +184,9 @@ export interface PreviewPayload {
   elements?: PreviewElement[];
   slides?: PreviewSlide[];
   slide_count?: number;
+  /** PPTX canvas dims in EMU — lets the panel frame slides at their true aspect. */
+  slide_width?: number;
+  slide_height?: number;
   sheets?: PreviewSheet[];
   formulas_recalculated?: boolean;
   media?: "audio" | "video";
