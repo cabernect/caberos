@@ -39,6 +39,19 @@ def _format_of(rel_path: str) -> str:
     return suffix if suffix in _FORMATS else "other"
 
 
+def _deliverable_path(rel_path: str) -> str:
+    """Deliverables live under `artifacts/` — the mirror of `attachments/`
+    for user inputs. Subdirs are preserved; `attachments/` is refused."""
+    rel = rel_path.strip().lstrip("/")
+    if rel.startswith("attachments/"):
+        raise ArtifactError(
+            "artifact paths can't live under attachments/ — that's the inputs dir"
+        )
+    if not rel.startswith("artifacts/"):
+        rel = f"artifacts/{rel}"
+    return rel
+
+
 async def create(
     db: AsyncSession,
     *,
@@ -312,7 +325,7 @@ async def create_structured(
         db,
         workspace_id=workspace_id,
         workspace_path=workspace_path,
-        rel_path=rel_path,
+        rel_path=_deliverable_path(rel_path),
         data=data,
         created_by=created_by,
         source_run_id=source_run_id,

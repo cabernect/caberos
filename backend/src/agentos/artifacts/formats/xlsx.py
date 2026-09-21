@@ -114,6 +114,14 @@ def to_elements(data: bytes, workspace_path: str | Path) -> list[dict]:
 
 def _build_sheet(wb: Workbook, sheet_spec: dict) -> None:
     ws = wb.create_sheet(sheet_spec.get("name", "Sheet"))
+    # Print/page defaults — a sheet that paginates sanely on export or print:
+    # landscape, shrink columns to one page wide, modest margins.
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_margins.left = ws.page_margins.right = 0.5
+    ws.page_margins.top = ws.page_margins.bottom = 0.6
     for row in sheet_spec.get("rows", []):
         ws.append(row)
     for ref, cell_spec in sheet_spec.get("cells", {}).items():

@@ -8,7 +8,7 @@ from xml.etree import ElementTree
 from pptx import Presentation
 from pptx.chart.data import CategoryChartData
 from pptx.enum.chart import XL_CHART_TYPE
-from pptx.util import Inches
+from pptx.util import Emu, Inches
 
 from ...sandbox.workspace import resolve_within
 
@@ -20,9 +20,18 @@ _CHARTS = {
     "pie": XL_CHART_TYPE.PIE,
 }
 
+# 16:9 widescreen canvas — the modern PowerPoint/Google Slides new-deck
+# default. python-pptx's built-in template is dated 4:3, which reads as
+# "wrong slide size" to anyone opening the file today.
+_SLIDE_W = Emu(12192000)
+_SLIDE_H = Emu(6858000)
+_MARGIN = Inches(0.7)
+
 
 def build(spec: dict, workspace_path: str | Path) -> bytes:
     prs = Presentation()
+    prs.slide_width = _SLIDE_W
+    prs.slide_height = _SLIDE_H
     for slide_spec in spec.get("slides", []):
         _add_slide(prs, slide_spec, workspace_path)
     buf = BytesIO()
@@ -152,9 +161,21 @@ def to_elements(data: bytes, workspace_path: str | Path) -> list[dict]:
     return elements
 
 
+def _fit_to_canvas(prs: Presentation, slide) -> None:
+    """The default template's layout placeholders are sized for its native
+    4:3 canvas — cloned onto a wider canvas they would leave dead space on
+    the right. Stretch each placeholder's width to span the canvas using
+    its own left offset as the margin (position/height untouched)."""
+    for ph in slide.placeholders:
+        if ph.left is None or ph.width is None:
+            continue
+        ph.width = prs.slide_width - 2 * ph.left
+
+
 def _add_slide(prs: Presentation, slide_spec: dict, workspace_path: str | Path) -> None:
     layout = prs.slide_layouts[_LAYOUTS[slide_spec.get("layout", "title_content")]]
     slide = prs.slides.add_slide(layout)
+    _fit_to_canvas(prs, slide)
     if title := slide_spec.get("title"):
         slide.shapes.title.text = title
     if subtitle := slide_spec.get("subtitle"):
@@ -162,13 +183,14 @@ def _add_slide(prs: Presentation, slide_spec: dict, workspace_path: str | Path) 
         if ph is not None:
             ph.text = subtitle
 
+    content_w = prs.slide_width - 2 * _MARGIN
     top = Inches(1.8)
     for block in slide_spec.get("blocks", []):
         kind = block["type"]
         if kind == "bullets":
             body = next((s for s in slide.placeholders if s.placeholder_format.idx == 1), None)
             if body is None:
-                body = slide.shapes.add_textbox(Inches(0.7), top, Inches(8.6), Inches(4))
+                body = slide.shapes.add_textbox(_MARGIN, top, content_w, Inches(4))
             tf = body.text_frame
             for i, item in enumerate(block["items"]):
                 p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
@@ -178,9 +200,9 @@ def _add_slide(prs: Presentation, slide_spec: dict, workspace_path: str | Path) 
             shape = slide.shapes.add_table(
                 len(rows),
                 max(len(r) for r in rows),
-                Inches(0.7),
+                _MARGIN,
                 top,
-                Inches(8.6),
+                content_w,
                 Inches(0.4 * len(rows)),
             )
             for i, row in enumerate(rows):
@@ -189,7 +211,7 @@ def _add_slide(prs: Presentation, slide_spec: dict, workspace_path: str | Path) 
         elif kind == "image":
             img = resolve_within(workspace_path, block["path"])
             slide.shapes.add_picture(
-                str(img), Inches(0.7), top, width=Inches(block.get("width_inches", 4))
+                str(img), _MARGIN, top, width=Inches(block.get("width_inches", 4))
             )
         elif kind == "chart":
             chart_data = CategoryChartData()
@@ -198,16 +220,16 @@ def _add_slide(prs: Presentation, slide_spec: dict, workspace_path: str | Path) 
                 chart_data.add_series(s["name"], s["values"])
             slide.shapes.add_chart(
                 _CHARTS[block.get("chart_type", "bar")],
-                Inches(0.7),
+                _MARGIN,
                 top,
-                Inches(8.6),
+                content_w,
                 Inches(4.5),
                 chart_data,
             )
         elif kind == "notes":
             slide.notes_slide.notes_text_frame.text = block["text"]
         elif kind == "text":
-            box = slide.shapes.add_textbox(Inches(0.7), top, Inches(8.6), Inches(1))
+            box = slide.shapes.add_textbox(_MARGIN, top, content_w, Inches(1))
             box.text_frame.text = block["text"]
         else:
             raise ValueError(f"unknown pptx block: {kind}")
