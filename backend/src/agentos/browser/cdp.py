@@ -40,6 +40,17 @@ MAX_ELEMENTS = 80
 LOAD_TIMEOUT_S = 30.0
 CMD_TIMEOUT_S = 15.0
 
+
+def _display_available() -> bool:
+    """Visible mode needs a real display — headed Chrome on a displayless
+    Linux host exits at startup with a cryptic error. Check first."""
+    import sys
+
+    if sys.platform.startswith("linux"):
+        return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    return True  # macOS/Windows sessions always have a window server
+
+
 # Research mode — heavy non-content resources blocked to cut load time and
 # bandwidth. URL glob patterns for Network.setBlockedURLs.
 RESEARCH_BLOCKLIST = [
@@ -195,6 +206,12 @@ class BrowserSession:
     ) -> Observation:
         import websockets
 
+        if visible and not _display_available():
+            raise BrowserError(
+                "visible mode needs a desktop session — this host has no "
+                "display (use headless on web/Docker deployments)"
+            )
+
         port_file = self._profile_dir / "DevToolsActivePort"
         # Persistent profiles carry a stale port file from the last launch —
         # drop it before spawning so we wait on the new process's port.
@@ -216,10 +233,19 @@ class BrowserSession:
             f"ws://127.0.0.1:{port}{ws_path}", max_size=64 * 1024 * 1024
         )
         self._reader_task = asyncio.create_task(self._reader_loop())
-        target = await self._send("Target.createTarget", {"url": "about:blank"}, session=False)
+        # Chrome opens with an about:blank tab — attach to THAT target
+        # instead of creating a second tab we'd just orphan.
+        targets = await self._send("Target.getTargets", session=False)
+        page = next(
+            (t for t in targets["targetInfos"] if t.get("type") == "page"),
+            None,
+        )
+        if page is None:
+            target = await self._send("Target.createTarget", {"url": "about:blank"}, session=False)
+            page = {"targetId": target["targetId"]}
         attached = await self._send(
             "Target.attachToTarget",
-            {"targetId": target["targetId"], "flatten": True},
+            {"targetId": page["targetId"], "flatten": True},
             session=False,
         )
         self._session = attached["sessionId"]
