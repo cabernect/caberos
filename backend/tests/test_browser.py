@@ -209,3 +209,42 @@ async def test_live_browser_open_capability_roundtrip(tmp_path):
 
         await browser_registry.close_for_run("cap-run")
         httpd.shutdown()
+
+
+@needs_browser
+async def test_live_visual_observe_saves_artifact(tmp_path):
+    """visual=True stores a PNG under artifacts/ and attaches image content
+    for vision models only."""
+    httpd, url = _serve(tmp_path / "srv")
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    try:
+        await browser_open({"url": url}, agent_id="a1", session_id="s1", run_id="vis-run")
+        out = await browser_observe(
+            {"visual": True},
+            agent_id="a1",
+            session_id="s1",
+            run_id="vis-run",
+            workspace_path=str(ws),
+            supports_vision=True,
+        )
+        shot = ws / out["screenshot"]
+        assert shot.exists() and shot.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+        assert out["screenshot"].startswith("artifacts/browser/")
+        assert out["_model_content"][1]["type"] == "image_url"
+
+        out2 = await browser_observe(
+            {"visual": True},
+            agent_id="a1",
+            session_id="s1",
+            run_id="vis-run",
+            workspace_path=str(ws),
+            supports_vision=False,
+        )
+        assert "_model_content" not in out2
+        assert "lacks vision" in out2["note"]
+    finally:
+        from agentos.browser.registry import browser_registry
+
+        await browser_registry.close_for_run("vis-run")
+        httpd.shutdown()

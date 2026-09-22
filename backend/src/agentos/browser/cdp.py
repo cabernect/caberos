@@ -266,3 +266,12 @@ class BrowserSession:
         if "exceptionDetails" in res:
             raise BrowserError("extract expression threw")
         return json.dumps(res["result"].get("value"))
+
+    async def screenshot(self) -> bytes:
+        """On-demand visual observation — PNG bytes of the current viewport.
+        Callers persist it as a traceable file; pixels never ride tool output."""
+        self.last_activity = time.monotonic()
+        res = await self._send("Page.captureScreenshot", {"format": "png"})
+        import base64
+
+        return base64.b64decode(res["data"])

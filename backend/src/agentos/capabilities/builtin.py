@@ -473,6 +473,10 @@ def register_builtin_capabilities() -> None:
                         "type": "string",
                         "description": "Optional region hint to inspect omitted elements",
                     },
+                    "visual": {
+                        "type": "boolean",
+                        "description": "Capture a screenshot — saved to artifacts/browser/ and shown to vision-capable models",
+                    },
                 },
             },
             egress=False,

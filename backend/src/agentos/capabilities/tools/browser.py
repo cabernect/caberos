@@ -36,6 +36,37 @@ async def browser_open(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
 async def browser_observe(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     agent_id, _, run_id = _ids(kwargs)
     session = browser_registry.get_owned(run_id, agent_id)
+
+    if args.get("visual"):
+        # On-demand visual observation (plan: screenshots are stored as
+        # traceable artifacts, pixels never inline in tool output; the image
+        # reaches the model only via _model_content on vision-capable models).
+        import base64
+        import time
+        from pathlib import Path
+
+        png = await session.screenshot()
+        shot_dir = Path(kwargs["workspace_path"]) / "artifacts" / "browser"
+        shot_dir.mkdir(parents=True, exist_ok=True)
+        path = shot_dir / f"shot-{int(time.time())}.png"
+        path.write_bytes(png)
+        rel = path.relative_to(kwargs["workspace_path"])
+        result: dict[str, Any] = {
+            "screenshot": str(rel),
+            "bytes": len(png),
+        }
+        if kwargs.get("supports_vision"):
+            result["_model_content"] = [
+                {"type": "text", "text": f"Page screenshot saved to {rel}"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{base64.b64encode(png).decode()}"},
+                },
+            ]
+        else:
+            result["note"] = "saved to workspace; model lacks vision — not sent inline"
+        return result
+
     obs = await session.observe()
     return {"observation": obs.serialize()}
 

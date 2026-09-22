@@ -309,7 +309,7 @@ class SyscallHandler:
         if call.name in ("capabilities_search", "capabilities_load"):
             extra_kwargs["capability_catalog"] = capability_catalog
 
-        if call.name in ("read_file", "doc_search", "doc_inspect"):
+        if call.name in ("read_file", "doc_search", "doc_inspect", "browser_observe"):
             extra_kwargs["supports_vision"] = self.supports_vision
 
         try:
