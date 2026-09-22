@@ -196,11 +196,30 @@ scratch). Spike results in `scripts/spike_browser/RESULTS.md`.
 - Token economics (spike-validated): interactive+landmark AX projection,
   80-element cap + omission marker, delta observations (~13 tokens),
   scoped observe, extract staging.
+- Full action set: click/type/select/keypress/hover/navigate/scroll —
+  real `Input.dispatch*` events, Enter submits forms (rawKeyDown→char→keyUp).
+- Takeover: `browser_open(visible=true)` + `agent_ask_user` composes the
+  pause-for-user flow; visible sessions exempt from the idle reaper;
+  `visible` refused on non-interactive triggers (no surprise windows
+  from scheduled work).
+- iframe/shadow-DOM: shadow DOM is flattened into the default observation
+  by a11y; `observe(scope=<iframe-ref|selector>)` swaps to the frame's own
+  AX tree — works for same-origin AND cross-origin frames (browser-side
+  a11y + backendNodeId routing); only JS extract stays top-frame-scoped.
+- Domain redirect pause: out-of-scope navigation is blocked + recorded;
+  `browser_act(navigate, url, allow_domain=true)` widens the session
+  scope — the approval prompt is the operator's decision point.
+- Crash: process loss → all pending/waiting calls fail with an honest
+  BrowserError and the run can reopen; container flags
+  (`AGENTOS_BROWSER_NO_SANDBOX` → --no-sandbox/--disable-dev-shm-usage)
+  + Chromium shared libs in `backend/Dockerfile` for Docker parity.
+- Untrusted-content stance is stated in `browser_open`/`browser_observe`
+  descriptions (page text is never operator instruction).
 
-**Still open:** takeover/pause UX flow (visible flag exists; no run-level
-pause-for-user yet), crash→interrupted run events, Docker runtime parity,
-visible-mode UI ("Watch Browser"), approval-bridging for blocked domains,
-broader action set (select/hover/keypress), iframe/shadow-DOM handling.
+**Still open:** visible-mode UI ("Watch Browser" — not required for
+v0.2.0 per Client behavior; runtime/profile management UI lands with
+W12 Dependencies). Remaining validation: real-world E2E runs against
+live sites per `test_plan/04-browser-automation-test-plan.md`.
 
 ## Done when
 

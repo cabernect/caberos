@@ -27,6 +27,18 @@ async def browser_open(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     ws = kwargs.get("workspace_path")
     staging = Path(ws) / "downloads" if ws else None
 
+    # Scheduled/heartbeat runs must never pop a surprise window (plan:
+    # "scheduled work never opens surprise windows"). Refuse honestly —
+    # the agent can proceed headless or ask the user via agent_ask_user.
+    if args.get("visible") and kwargs.get("trigger", "user_message") != "user_message":
+        return {
+            "status": "visible_refused",
+            "detail": (
+                "visible browser sessions require an interactive run — "
+                "open headless or ask the user to take over explicitly"
+            ),
+        }
+
     allowed: list[str] | None = None
     profile_name = args.get("profile")
     if profile_name:
@@ -115,12 +127,20 @@ async def browser_observe(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]
 async def browser_act(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     agent_id, _, run_id = _ids(kwargs)
     session = browser_registry.get_owned(run_id, agent_id)
+    # Domain-scope widening: an out-of-scope navigation was blocked by the
+    # profile's domain policy. Retrying with allow_domain=True widens the
+    # session scope — the operator's approval of this call is the decision.
+    if args["action"] == "navigate" and args.get("allow_domain"):
+        session.allow_domain_for(args.get("value") or "")
     delta = await session.act(
         action=args["action"],
         ref=args.get("target", ""),
         value=args.get("value"),
     )
-    return {"delta": delta}
+    out: dict[str, Any] = {"delta": delta}
+    if session.blocked_navigations:
+        out["blocked_navigations"] = list(session.blocked_navigations)
+    return out
 
 
 async def browser_extract(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:

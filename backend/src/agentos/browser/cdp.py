@@ -34,6 +34,7 @@ KEEP_ROLES = {
     "main",
     "img",
     "status",
+    "Iframe",
 }
 MAX_ELEMENTS = 80
 LOAD_TIMEOUT_S = 30.0
@@ -383,6 +384,15 @@ class BrowserSession:
         host = (urlparse(url).hostname or "").lower()
         return any(host == d or host.endswith("." + d) for d in self._allowed_domains)
 
+    def allow_domain_for(self, url: str) -> None:
+        """Widen this session's domain scope to the given URL's host. Only
+        reachable through an approval-gated act call — the approval prompt
+        is the operator's decision point ('domain redirect pause')."""
+        if self._allowed_domains is not None:
+            host = (urlparse(url).hostname or "").lower()
+            if host:
+                self._allowed_domains.add(host)
+
     async def _intercept_loop(self) -> None:
         while True:
             ev = await self._fetch_queue.get()
@@ -413,39 +423,21 @@ class BrowserSession:
         url, _, title = doc["result"]["value"].partition("|")
         nodes = tree.get("nodes", [])
 
-        scope_ids: set[str] | None = None
         if scope:
-            backend_id = await self._resolve_scope(scope)
-            by_id = {n["nodeId"]: n for n in nodes}
-            root = next((n for n in nodes if n.get("backendDOMNodeId") == backend_id), None)
-            if root is None:
-                raise BrowserError(f"scope not in accessibility tree: {scope}")
-            # AX subtree walk — project every non-ignored role inside the
-            # region (scoped observe exists to reach role-filtered content
-            # like table rows; the element cap still applies).
-            scope_ids = set()
-            stack = [root["nodeId"]]
-            while stack:
-                nid = stack.pop()
-                if nid in scope_ids or nid not in by_id:
-                    continue
-                scope_ids.add(nid)
-                stack.extend(by_id[nid].get("childIds") or [])
+            nodes = await self._scoped_nodes(scope, nodes)
 
         elements: list[Element] = []
         omitted = 0
         for node in nodes:
             if node.get("ignored"):
                 continue
-            if scope_ids is not None:
-                if node["nodeId"] not in scope_ids:
-                    continue
-            elif (node.get("role") or {}).get("value", "") not in KEEP_ROLES:
+            if scope is None and (node.get("role") or {}).get("value", "") not in KEEP_ROLES:
                 continue
             role = (node.get("role") or {}).get("value", "")
             name = (node.get("name") or {}).get("value", "")
             value = (node.get("value") or {}).get("value")
-            ref = f"e{node.get('backendDOMNodeId') or node['nodeId']}"
+            backend = node.get("backendDOMNodeId")
+            ref = f"e{backend}" if backend else "-"
             if len(elements) >= MAX_ELEMENTS:
                 omitted += 1
                 continue
@@ -463,6 +455,42 @@ class BrowserSession:
         obs = Observation(url=url, title=title, elements=elements)
         self._last_obs = obs
         return obs
+
+    async def _scoped_nodes(self, scope: str, nodes: list[dict]) -> list[dict]:
+        """Scope string → AX nodes to project. Ordinary scopes walk the main
+        tree; an iframe scope swaps to the frame's own AX tree (Chrome keeps
+        each frame's tree separate). Browser-side a11y and backendNodeId
+        resolution reach into cross-origin frames too — observe and act both
+        work; only JS extract is confined to the top frame's origin."""
+        backend_id = await self._resolve_scope(scope)
+        desc = await self._send("DOM.describeNode", {"backendNodeId": backend_id, "depth": 1})
+        if desc["node"].get("nodeName") == "IFRAME":
+            cd = desc["node"].get("contentDocument")
+            if cd is None:
+                raise BrowserError("frame has no loaded document")
+            # Chrome's a11y is browser-side and backendNodeId resolution
+            # routes into OOPIF contexts — cross-origin frame contents are
+            # observable and actionable the same as same-origin ones.
+            q = await self._send(
+                "Accessibility.queryAXTree", {"backendNodeId": cd["backendNodeId"]}
+            )
+            return q.get("nodes", [])
+        by_id = {n["nodeId"]: n for n in nodes}
+        root = next((n for n in nodes if n.get("backendDOMNodeId") == backend_id), None)
+        if root is None:
+            raise BrowserError(f"scope not in accessibility tree: {scope}")
+        # AX subtree walk — project every non-ignored role inside the
+        # region (scoped observe exists to reach role-filtered content
+        # like table rows; the element cap still applies).
+        scope_ids: set[str] = set()
+        stack = [root["nodeId"]]
+        while stack:
+            nid = stack.pop()
+            if nid in scope_ids or nid not in by_id:
+                continue
+            scope_ids.add(nid)
+            stack.extend(by_id[nid].get("childIds") or [])
+        return [n for n in nodes if n["nodeId"] in scope_ids]
 
     async def _resolve_scope(self, scope: str) -> int:
         """Scope string → backendDOMNodeId. Accepts an element ref (`e123`)

@@ -74,6 +74,7 @@ class SyscallHandler:
         parent_config: AgentConfig | None = None,
         capability_catalog: Any = None,
         approval_batch: Any = None,
+        trigger: str = "user_message",
     ) -> SyscallResult:
         start = time.monotonic()
         self._event_emitter = event_emitter
@@ -288,6 +289,7 @@ class SyscallHandler:
             extra_kwargs["run_id"] = run_id
             extra_kwargs["session_id"] = getattr(session, "id", None)
             extra_kwargs["db"] = self.db
+            extra_kwargs["trigger"] = trigger
 
         # Terminal tools: registry + ownership scope (agent/session/run) so a
         # terminal can only be read or closed by the run that started it.

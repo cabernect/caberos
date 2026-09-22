@@ -586,6 +586,7 @@ class Harness:
                         event_emitter=event_emitter,
                         capability_catalog=capability_catalog,
                         approval_batch=approval_batch,
+                        trigger=trigger,
                     )
 
                 syscall_results = await asyncio.gather(*[_mediate_one(c) for c in calls])

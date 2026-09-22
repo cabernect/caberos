@@ -694,3 +694,154 @@ def test_launch_args_container_flags(monkeypatch, tmp_path):
         assert flag in args
     # visible drops headless
     assert "--headless=new" not in s._launch_args(visible=True)
+
+
+@needs_browser
+async def test_live_iframe_and_shadow_dom(tmp_path):
+    """Scoped observe reaches into iframes (frame AX tree via contentDocument)
+    and shadow DOM (flattened by a11y); cross-origin frames are observable
+    and actionable through browser-side a11y + backendNodeId routing."""
+    import http.server
+
+    inner = (
+        "<button id='in' onclick=\"document.body.dataset.hit='yes';"
+        "this.textContent='CLICKED-IN-XO'\">Frame button</button>"
+        "<a href='#'>Frame link</a>"
+    )
+    outer = """<html><body><main>
+<button id="top">Top</button>
+<div id="sh"></div>
+<iframe id="f" src="/inner"></iframe>
+<iframe id="xf" src="http://127.0.0.1:{XPORT}/inner"></iframe>
+<script>
+document.getElementById('sh').attachShadow({mode:'open'}).innerHTML =
+  '<button>Shadow button</button>';
+</script>
+</main></body></html>"""
+
+    class Inner(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = inner.encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    # second server = different port = different origin for the cross-origin frame
+    xsrv = http.server.HTTPServer(("127.0.0.1", 0), Inner)
+    threading.Thread(target=xsrv.serve_forever, daemon=True).start()
+    page = outer.replace("{XPORT}", str(xsrv.server_port))
+
+    class Outer(Inner):
+        def do_GET(self):
+            body = inner.encode() if self.path == "/inner" else page.encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    httpd = http.server.HTTPServer(("127.0.0.1", 0), Outer)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{httpd.server_port}/"
+
+    session = BrowserSession(_browser, tmp_path / "prof")
+    (tmp_path / "prof").mkdir()
+    try:
+        obs = await session.open(url)
+        await asyncio.sleep(0.5)
+        names = [e.name for e in obs.elements]
+        assert "Shadow button" in names
+        assert any(e.role == "Iframe" for e in obs.elements)
+
+        # scope into the same-origin frame → its AX subtree is projected
+        frame_obs = await session.observe(scope="#f")
+        btn = next(e for e in frame_obs.elements if e.name == "Frame button")
+        assert any(e.name == "Frame link" for e in frame_obs.elements)
+
+        # refs inside the frame resolve and act
+        await session.act("click", btn.ref)
+        assert "yes" in await session.extract(
+            "document.querySelector('#f').contentDocument.body.dataset.hit"
+        )
+
+        # cross-origin frame (different port = different origin) → fully
+        # observable and actionable via browser-side a11y + backendNodeId
+        xo_obs = await session.observe(scope="#xf")
+        xo_btn = next(e for e in xo_obs.elements if e.name == "Frame button")
+        await session.act("click", xo_btn.ref)
+        xo_after = await session.observe(scope="#xf")
+        assert any(e.name == "CLICKED-IN-XO" for e in xo_after.elements)
+    finally:
+        await session.close()
+        httpd.shutdown()
+        xsrv.shutdown()
+
+
+@needs_browser
+async def test_live_browser_crash_fails_honestly(tmp_path):
+    """Killing the browser process mid-session → subsequent calls fail with a
+    clear BrowserError, and close() stays safe."""
+    httpd, url = _serve(tmp_path)
+    session = BrowserSession(_browser, tmp_path / "prof")
+    (tmp_path / "prof").mkdir()
+    try:
+        await session.open(url)
+        session._proc.kill()
+        await asyncio.sleep(0.3)
+        with pytest.raises(BrowserError, match="not running|connection lost"):
+            await session.observe()
+        await session.close()  # must not raise on a dead session
+    finally:
+        httpd.shutdown()
+
+
+@needs_browser
+async def test_domain_redirect_pause_and_widen(tmp_path):
+    """Out-of-scope navigation is blocked + recorded; the operator-approved
+    retry (allow_domain) widens the session scope and the nav proceeds."""
+    srv = tmp_path / "srv"
+    srv.mkdir(parents=True)
+    (srv / "index.html").write_text("<html><body><h1>in scope</h1></body></html>")
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(srv))
+    httpd = http.server.HTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{httpd.server_port}/index.html"
+
+    session = BrowserSession(_browser, tmp_path / "profile")
+    try:
+        await session.open(url, allowed_domains=["127.0.0.1"])
+        # out-of-scope host (localhost ≠ 127.0.0.1 as a hostname) is blocked
+        blocked_url = f"http://localhost:{httpd.server_port}/index.html"
+        try:
+            await session.navigate(blocked_url)
+        except BrowserError:
+            pass
+        await asyncio.sleep(0.5)
+        await session.observe()
+        assert any("localhost" in u for u in session.blocked_navigations)
+
+        # operator approves widening — the retry proceeds
+        session.allow_domain_for(blocked_url)
+        await session.navigate(blocked_url)
+        obs = await session.observe()
+        assert "localhost" in obs.url
+    finally:
+        await session.close()
+        httpd.shutdown()
+
+
+async def test_browser_open_visible_refused_on_scheduled_run():
+    """Heartbeat/scheduled runs must never pop a surprise window (plan:
+    'scheduled work never opens surprise windows')."""
+    result = await browser_open(
+        {"url": "http://x", "visible": True},
+        agent_id="a",
+        run_id="r",
+        trigger="heartbeat",
+    )
+    assert result["status"] == "visible_refused"
