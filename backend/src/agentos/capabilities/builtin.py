@@ -455,6 +455,13 @@ def register_builtin_capabilities() -> None:
                             "if the site breaks."
                         ),
                     },
+                    "profile": {
+                        "type": "string",
+                        "description": (
+                            "Named persistent profile (operator-managed) — keeps logins "
+                            "for its allowed domains; navigations outside them are blocked"
+                        ),
+                    },
                 },
                 "required": ["url"],
             },

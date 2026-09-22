@@ -465,3 +465,81 @@ async def test_download_lands_in_staging(tmp_path):
     finally:
         await session.close()
         httpd.shutdown()
+
+
+# --- profiles: domain scope + lock -----------------------------------------
+
+
+def test_url_in_scope_subdomain_rules():
+    from agentos.browser.registry import _url_in_scope
+
+    domains = ["tradingview.com"]
+    assert _url_in_scope("https://tradingview.com/chart", domains)
+    assert _url_in_scope("https://www.tradingview.com/", domains)
+    assert not _url_in_scope("https://eviltradingview.com/", domains)
+    assert not _url_in_scope("https://example.com/", domains)
+
+
+@needs_browser
+async def test_domain_scope_blocks_out_of_scope_navigation(tmp_path):
+    """Fetch interception must fail a Document request to an out-of-scope
+    domain and record it — not silently follow."""
+    srv = tmp_path / "srv"
+    srv.mkdir(parents=True)
+    (srv / "index.html").write_text("<html><body><h1>in scope</h1></body></html>")
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(srv))
+    httpd = http.server.HTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{httpd.server_port}/index.html"
+
+    session = BrowserSession(_browser, tmp_path / "profile")
+    try:
+        await session.open(url, allowed_domains=["127.0.0.1"])
+        assert session.blocked_navigations == []
+        # in-scope navigate continues normally
+        await session.navigate(url)
+        # out-of-scope navigate is failed by interception
+        try:
+            await session.navigate("https://example.com/")
+        except BrowserError:
+            pass  # load may not fire on a failed request — either way it must be recorded
+        await asyncio.sleep(0.5)
+        await session.observe()
+        assert any("example.com" in u for u in session.blocked_navigations)
+    finally:
+        await session.close()
+        httpd.shutdown()
+
+
+@needs_browser
+async def test_profile_lock_refuses_second_run(tmp_path, monkeypatch):
+    """A named profile held by one run must refuse a second run honestly."""
+    from agentos.browser import registry as reg_mod
+    from agentos.browser.registry import BrowserRegistry
+
+    monkeypatch.setattr(reg_mod, "_profiles_root", lambda: tmp_path / "profiles")
+    httpd, url = _serve(tmp_path / "srv")
+    reg = BrowserRegistry()
+    try:
+        await reg.get_or_open(
+            url,
+            agent_id="a",
+            session_id="s",
+            run_id="r1",
+            profile="locked",
+            allowed_domains=None,
+        )
+        with pytest.raises(BrowserError, match="in use by another run"):
+            await reg.get_or_open(
+                url,
+                agent_id="a",
+                session_id="s",
+                run_id="r2",
+                profile="locked",
+                allowed_domains=None,
+            )
+        # and the profile dir persists after close (not a temp dir)
+        assert (tmp_path / "profiles" / "locked").exists()
+    finally:
+        await reg.shutdown_all()
+        httpd.shutdown()

@@ -14,6 +14,7 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 # Interactive + landmark roles only — spike-validated: structural roles
 # (row/cell/listitem) blew HN's observation to 3853 tokens; this projection
@@ -125,7 +126,14 @@ class BrowserSession:
         self._ws = None
         self._session: str | None = None
         self._msg_id = 0
+        self._waiters: dict[int, asyncio.Future] = {}
+        self._reader_task: asyncio.Task | None = None
         self._pending: list[dict] = []
+        self._event_flag = asyncio.Event()
+        self._fetch_queue: asyncio.Queue | None = None
+        self._intercept_task: asyncio.Task | None = None
+        self._allowed_domains: set[str] | None = None
+        self.blocked_navigations: list[str] = []
         self._last_obs: Observation | None = None
         self._research = False
         self.fell_back = False
@@ -135,9 +143,18 @@ class BrowserSession:
 
     # -- lifecycle ----------------------------------------------------------
 
-    async def open(self, url: str, research: bool = False) -> Observation:
+    async def open(
+        self,
+        url: str,
+        research: bool = False,
+        allowed_domains: list[str] | None = None,
+    ) -> Observation:
         import websockets
 
+        port_file = self._profile_dir / "DevToolsActivePort"
+        # Persistent profiles carry a stale port file from the last launch —
+        # drop it before spawning so we wait on the new process's port.
+        port_file.unlink(missing_ok=True)
         self._proc = subprocess.Popen(
             [
                 str(self._binary),
@@ -152,7 +169,6 @@ class BrowserSession:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        port_file = self._profile_dir / "DevToolsActivePort"
         deadline = time.monotonic() + LOAD_TIMEOUT_S
         while not port_file.exists():
             if self._proc.poll() is not None:
@@ -164,6 +180,7 @@ class BrowserSession:
         self._ws = await websockets.connect(
             f"ws://127.0.0.1:{port}{ws_path}", max_size=64 * 1024 * 1024
         )
+        self._reader_task = asyncio.create_task(self._reader_loop())
         target = await self._send("Target.createTarget", {"url": "about:blank"}, session=False)
         attached = await self._send(
             "Target.attachToTarget",
@@ -189,6 +206,10 @@ class BrowserSession:
         if research:
             await self._send("Network.enable")
             await self._send("Network.setBlockedURLs", {"urls": RESEARCH_BLOCKLIST})
+        if allowed_domains:
+            # Arm interception before the first navigation — a redirect
+            # chain during initial load must not escape the profile scope.
+            await self.set_domain_scope(allowed_domains)
         try:
             await self.navigate(url)
         except BrowserError:
@@ -207,6 +228,9 @@ class BrowserSession:
         await self._wait_load()
 
     async def close(self) -> None:
+        for task in (self._intercept_task, self._reader_task):
+            if task and not task.done():
+                task.cancel()
         if self._proc:
             self._proc.terminate()
             try:
@@ -218,22 +242,52 @@ class BrowserSession:
         return self._proc is not None and self._proc.poll() is None
 
     # -- protocol -----------------------------------------------------------
+    # One reader task owns the socket: command responses resolve keyed
+    # futures, events land in _pending (or the interception queue). This is
+    # what lets the interception loop answer Fetch.requestPaused while a
+    # navigate command is in flight — a request/response pump can't.
+
+    async def _reader_loop(self) -> None:
+        try:
+            async for raw in self._ws:
+                data = json.loads(raw)
+                if "id" in data:
+                    fut = self._waiters.pop(data["id"], None)
+                    if fut is not None and not fut.done():
+                        fut.set_result(data)
+                elif self._fetch_queue is not None and data.get("method") == "Fetch.requestPaused":
+                    await self._fetch_queue.put(data)
+                else:
+                    self._pending.append(data)
+                    self._event_flag.set()
+        except Exception:
+            pass
+        finally:
+            for fut in self._waiters.values():
+                if not fut.done():
+                    fut.set_exception(BrowserError("browser connection lost"))
+            self._waiters.clear()
+            self._event_flag.set()
 
     async def _send(self, method: str, params: dict | None = None, session: bool = True) -> dict:
+        if not self.alive():
+            raise BrowserError("browser is not running")
         self._msg_id += 1
         mid = self._msg_id
+        fut = asyncio.get_running_loop().create_future()
+        self._waiters[mid] = fut
         msg: dict = {"id": mid, "method": method, "params": params or {}}
         if session and self._session:
             msg["sessionId"] = self._session
-        await self._ws.send(json.dumps(msg))
-        while True:
-            raw = await asyncio.wait_for(self._ws.recv(), timeout=CMD_TIMEOUT_S)
-            data = json.loads(raw)
-            if data.get("id") == mid:
-                if "error" in data:
-                    raise BrowserError(f"{method}: {data['error'].get('message', data['error'])}")
-                return data.get("result", {})
-            self._pending.append(data)
+        try:
+            await self._ws.send(json.dumps(msg))
+            data = await asyncio.wait_for(fut, timeout=CMD_TIMEOUT_S)
+        except TimeoutError:
+            self._waiters.pop(mid, None)
+            raise BrowserError(f"{method}: timed out") from None
+        if "error" in data:
+            raise BrowserError(f"{method}: {data['error'].get('message', data['error'])}")
+        return data.get("result", {})
 
     async def _wait_load(self) -> None:
         deadline = time.monotonic() + LOAD_TIMEOUT_S
@@ -242,9 +296,9 @@ class BrowserSession:
                 if ev.get("method") == "Page.loadEventFired":
                     self._pending.pop(i)
                     return
+            self._event_flag.clear()
             try:
-                raw = await asyncio.wait_for(self._ws.recv(), timeout=0.5)
-                self._pending.append(json.loads(raw))
+                await asyncio.wait_for(self._event_flag.wait(), timeout=0.5)
             except TimeoutError:
                 if not self.alive():
                     raise BrowserError("browser exited while loading") from None
@@ -266,6 +320,52 @@ class BrowserSession:
             else:
                 keep.append(ev)
         self._pending = keep
+
+    # -- domain scoping -------------------------------------------------------
+    # Persistent profiles declare allowed domains; every Document request is
+    # paused at Request stage and either continued or failed. Blocked targets
+    # are recorded so observations can report them honestly.
+
+    async def set_domain_scope(self, domains: list[str]) -> None:
+        self._allowed_domains = {d.lower().lstrip("*.") for d in domains}
+        self._fetch_queue = asyncio.Queue()
+        await self._send(
+            "Fetch.enable",
+            {
+                "patterns": [
+                    {
+                        "urlPattern": "*",
+                        "requestStage": "Request",
+                        "resourceType": "Document",
+                    }
+                ]
+            },
+        )
+        self._intercept_task = asyncio.create_task(self._intercept_loop())
+
+    def domain_allowed(self, url: str) -> bool:
+        if self._allowed_domains is None:
+            return True
+        host = (urlparse(url).hostname or "").lower()
+        return any(host == d or host.endswith("." + d) for d in self._allowed_domains)
+
+    async def _intercept_loop(self) -> None:
+        while True:
+            ev = await self._fetch_queue.get()
+            params = ev.get("params", {})
+            rid = params.get("requestId")
+            url = params.get("request", {}).get("url", "")
+            try:
+                if self.domain_allowed(url):
+                    await self._send("Fetch.continueRequest", {"requestId": rid})
+                else:
+                    self.blocked_navigations.append(url)
+                    await self._send(
+                        "Fetch.failRequest",
+                        {"requestId": rid, "errorReason": "BlockedByClient"},
+                    )
+            except Exception:
+                pass  # browser gone mid-intercept — shutdown handles it
 
     # -- module verbs --------------------------------------------------------
 

@@ -26,6 +26,30 @@ async def browser_open(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     research = args.get("mode") == "research"
     ws = kwargs.get("workspace_path")
     staging = Path(ws) / "downloads" if ws else None
+
+    allowed: list[str] | None = None
+    profile_name = args.get("profile")
+    if profile_name:
+        import json
+
+        from sqlalchemy import select
+
+        from ...models.browser_profile import BrowserProfile
+
+        row = (
+            await kwargs["db"].execute(
+                select(BrowserProfile).where(BrowserProfile.name == profile_name)
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            return {
+                "status": "profile_not_found",
+                "detail": (
+                    f"no browser profile named '{profile_name}' — the operator creates profiles"
+                ),
+            }
+        allowed = json.loads(row.allowed_domains or "[]") or None
+
     try:
         _, result = await browser_registry.get_or_open(
             url,
@@ -34,6 +58,8 @@ async def browser_open(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
             run_id=run_id,
             research=research,
             staging_dir=staging,
+            profile=profile_name,
+            allowed_domains=allowed,
         )
     except BrowserError as e:
         if str(e).startswith("runtime_unavailable"):
@@ -80,6 +106,8 @@ async def browser_observe(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]
     out: dict[str, Any] = {"observation": obs.serialize()}
     if session.downloads:
         out["downloads"] = [f"downloads/{d['filename']}" for d in session.downloads]
+    if session.blocked_navigations:
+        out["blocked_navigations"] = list(session.blocked_navigations)
     return out
 
 

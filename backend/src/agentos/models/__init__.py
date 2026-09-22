@@ -5,6 +5,7 @@ from .approval import ApprovalRequest
 from .artifact import Artifact, ArtifactRevision
 from .audit import AuditRecord
 from .base import Base, IdMixin, TimestampMixin
+from .browser_profile import BrowserProfile
 from .capability import AgentCapability, Capability
 from .channel_config import ChannelConfig
 from .contact import Contact
@@ -30,6 +31,7 @@ __all__ = [
     "Base",
     "IdMixin",
     "TimestampMixin",
+    "BrowserProfile",
     "Agent",
     "AgentVersion",
     "Artifact",
