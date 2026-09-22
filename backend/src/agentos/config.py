@@ -72,6 +72,13 @@ class Settings(BaseSettings):
     # Can be toggled at runtime via PUT /api/settings/yolo.
     yolo_mode: bool = False
 
+    # Browser runtime override — path to a Chromium-family binary (Chrome,
+    # Chromium, Edge, Brave). When set, the managed Chrome-for-Testing
+    # install and Playwright cache are skipped. The browser still launches
+    # with its own --user-data-dir, so the operator's personal profile is
+    # never touched. Set via AGENTOS_BROWSER_BINARY in .env or the env.
+    browser_binary: str = ""
+
     @property
     def db_url(self) -> str:
         """Active database URL — custom backend if set, SQLite default otherwise."""

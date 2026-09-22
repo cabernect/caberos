@@ -272,6 +272,9 @@ def test_runtime_status_reports_state(monkeypatch, tmp_path):
     from agentos.browser import runtime
 
     monkeypatch.delenv("AGENTOS_BROWSER_BINARY", raising=False)
+    from agentos.config import settings
+
+    monkeypatch.setattr(settings, "browser_binary", "")
     monkeypatch.setattr(runtime, "_playwright_cache_roots", lambda: [])
     monkeypatch.setattr(runtime, "runtime_root", lambda: tmp_path / "brt")
     status = runtime.runtime_status()
@@ -343,7 +346,11 @@ async def test_install_runtime_fetches_extracts_and_healthchecks(monkeypatch, tm
     assert out["status"] == "installed"
     assert Path(out["binary"]).exists()
     assert "sha256" in out and out["signature"] == "signature: stubbed"
-    # and the managed install is now discoverable
+    # and the managed install is now discoverable (no binary override set)
+    monkeypatch.delenv("AGENTOS_BROWSER_BINARY", raising=False)
+    from agentos.config import settings
+
+    monkeypatch.setattr(settings, "browser_binary", "")
     monkeypatch.setattr(runtime, "_playwright_cache_roots", lambda: [])
     assert runtime.find_browser_binary() == Path(out["binary"])
 

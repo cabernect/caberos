@@ -75,7 +75,12 @@ def _playwright_cache_roots() -> list[Path]:
 
 def find_browser_binary() -> Path | None:
     """Locate a compatible Chromium-family binary, or None."""
-    if override := os.environ.get("AGENTOS_BROWSER_BINARY"):
+    override = os.environ.get("AGENTOS_BROWSER_BINARY")
+    if not override:
+        from ..config import settings
+
+        override = settings.browser_binary
+    if override:
         p = Path(override).expanduser()
         return p if p.is_file() else None
 
