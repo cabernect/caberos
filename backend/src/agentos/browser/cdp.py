@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -166,6 +167,24 @@ class BrowserSession:
 
     # -- lifecycle ----------------------------------------------------------
 
+    def _launch_args(self, visible: bool) -> list[str]:
+        args = [
+            str(self._binary),
+            "--remote-debugging-port=0",
+            f"--user-data-dir={self._profile_dir}",
+            "--no-first-run",
+            "--disable-extensions",
+            "--mute-audio",
+            "about:blank",
+        ]
+        if not visible:
+            args.insert(1, "--headless=new")
+        # Containers can't run Chrome's sandbox (no userns/CAP_SYS_ADMIN) and
+        # /dev/shm is tiny — both are launch-fatal without these flags.
+        if os.environ.get("AGENTOS_BROWSER_NO_SANDBOX"):
+            args += ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
+        return args
+
     async def open(
         self,
         url: str,
@@ -179,19 +198,8 @@ class BrowserSession:
         # Persistent profiles carry a stale port file from the last launch —
         # drop it before spawning so we wait on the new process's port.
         port_file.unlink(missing_ok=True)
-        args = [
-            str(self._binary),
-            "--remote-debugging-port=0",
-            f"--user-data-dir={self._profile_dir}",
-            "--no-first-run",
-            "--disable-extensions",
-            "--mute-audio",
-            "about:blank",
-        ]
-        if not visible:
-            args.insert(1, "--headless=new")
         self._proc = subprocess.Popen(
-            args,
+            self._launch_args(visible),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )

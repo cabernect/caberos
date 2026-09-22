@@ -677,3 +677,20 @@ async def test_form_actions_select_keypress_hover(tmp_path):
     finally:
         await session.close()
         httpd.shutdown()
+
+
+def test_launch_args_container_flags(monkeypatch, tmp_path):
+    """Container flag adds the launch-fatal-in-Docker trio; headless default."""
+    from agentos.browser.cdp import BrowserSession
+
+    s = BrowserSession(tmp_path / "bin", tmp_path / "prof")
+    monkeypatch.delenv("AGENTOS_BROWSER_NO_SANDBOX", raising=False)
+    args = s._launch_args(visible=False)
+    assert "--headless=new" in args
+    assert "--no-sandbox" not in args
+    monkeypatch.setenv("AGENTOS_BROWSER_NO_SANDBOX", "1")
+    args = s._launch_args(visible=False)
+    for flag in ("--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"):
+        assert flag in args
+    # visible drops headless
+    assert "--headless=new" not in s._launch_args(visible=True)
