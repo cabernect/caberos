@@ -68,6 +68,29 @@ RESEARCH_BLOCKLIST = [
     "*segment.io*",
 ]
 
+# windowsVirtualKeyCode for named keys — form submission and focus movement
+# key off the vk code, not just the key name.
+_KEY_CODES = {
+    "Enter": 13,
+    "Tab": 9,
+    "Escape": 27,
+    "Backspace": 8,
+    "Delete": 46,
+    "ArrowUp": 38,
+    "ArrowDown": 40,
+    "ArrowLeft": 37,
+    "ArrowRight": 39,
+    "Home": 36,
+    "End": 35,
+    "PageUp": 33,
+    "PageDown": 34,
+    " ": 32,
+}
+
+# Named keys that produce a char event — Enter/space. This is what triggers
+# form submission; a raw down/up alone doesn't.
+_KEY_TEXT = {"Enter": "\r", " ": " "}
+
 
 @dataclass
 class Element:
@@ -460,7 +483,12 @@ class BrowserSession:
                 raise BrowserError("click requires a target ref")
             await self._send(
                 "Runtime.callFunctionOn",
-                {"objectId": oid, "functionDeclaration": "function(){this.click()}"},
+                {
+                    "objectId": oid,
+                    "functionDeclaration": (
+                        "function(){(this.nodeType===1?this:this.parentElement).click()}"
+                    ),
+                },
             )
         elif action == "type":
             if oid is None:
@@ -470,11 +498,79 @@ class BrowserSession:
                 {
                     "objectId": oid,
                     "functionDeclaration": (
-                        "function(v){this.focus();this.value=v;"
-                        "this.dispatchEvent(new Event('input',{bubbles:true}))}"
+                        "function(v){const el=this.nodeType===1?this:this.parentElement;"
+                        "el.focus();el.value=v;"
+                        "el.dispatchEvent(new Event('input',{bubbles:true}))}"
                     ),
                     "arguments": [{"value": value}],
                 },
+            )
+        elif action == "select":
+            if oid is None:
+                raise BrowserError("select requires a target ref (the <select> element)")
+            await self._send(
+                "Runtime.callFunctionOn",
+                {
+                    "objectId": oid,
+                    "functionDeclaration": (
+                        "function(v){const el=this.nodeType===1?this:this.parentElement;"
+                        "el.value=v;"
+                        "el.dispatchEvent(new Event('change',{bubbles:true}))}"
+                    ),
+                    "arguments": [{"value": value}],
+                },
+            )
+        elif action == "keypress":
+            # Trusted key events via Input domain — Enter submits forms,
+            # Tab moves focus, Escape dismisses. Named keys only; for text
+            # use 'type'. dispatchKeyEvent targets the *focused* element —
+            # focus the ref first when one is given.
+            if oid is not None:
+                await self._send(
+                    "Runtime.callFunctionOn",
+                    {
+                        "objectId": oid,
+                        "functionDeclaration": (
+                            "function(){(this.nodeType===1?this:this.parentElement).focus()}"
+                        ),
+                    },
+                )
+            key = value or "Enter"
+            vk = _KEY_CODES.get(key)
+            # Puppeteer's sequence: down → char (if the key produces text,
+            # which is what triggers form submission on Enter) → up.
+            seq: list[tuple[str, dict]] = [("rawKeyDown", {})]
+            if key in _KEY_TEXT:
+                seq.append(("char", {"text": _KEY_TEXT[key]}))
+            seq.append(("keyUp", {}))
+            for t, extra in seq:
+                params: dict = {"type": t, "key": key, "code": key, **extra}
+                if vk is not None:
+                    params["windowsVirtualKeyCode"] = vk
+                await self._send("Input.dispatchKeyEvent", params)
+        elif action == "hover":
+            if oid is None:
+                raise BrowserError("hover requires a target ref")
+            box = await self._send(
+                "Runtime.callFunctionOn",
+                {
+                    "objectId": oid,
+                    "functionDeclaration": (
+                        # AX refs can resolve to text nodes — climb to the
+                        # element before measuring.
+                        "function(){const el=this.nodeType===1?this:this.parentElement;"
+                        "const r=el.getBoundingClientRect();"
+                        "return {x:r.x+r.width/2,y:r.y+r.height/2}}"
+                    ),
+                    "returnByValue": True,
+                },
+            )
+            if "exceptionDetails" in box or "value" not in box.get("result", {}):
+                raise BrowserError("hover target has no measurable box")
+            pt = box["result"]["value"]
+            await self._send(
+                "Input.dispatchMouseEvent",
+                {"type": "mouseMoved", "x": pt["x"], "y": pt["y"]},
             )
         elif action == "navigate":
             if not value:
@@ -487,7 +583,10 @@ class BrowserSession:
                     "Runtime.callFunctionOn",
                     {
                         "objectId": oid,
-                        "functionDeclaration": "function(){this.scrollIntoView({block:'center'})}",
+                        "functionDeclaration": (
+                            "function(){const el=this.nodeType===1?this:"
+                            "this.parentElement;el.scrollIntoView({block:'center'})}"
+                        ),
                     },
                 )
             else:

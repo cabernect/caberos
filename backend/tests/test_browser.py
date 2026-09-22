@@ -633,3 +633,47 @@ async def test_visible_session_survives_idle_reaper(tmp_path, monkeypatch):
     finally:
         await reg.shutdown_all()
         httpd.shutdown()
+
+
+@needs_browser
+async def test_form_actions_select_keypress_hover(tmp_path):
+    """select picks an option, keypress submits a form, hover reveals content."""
+    srv = tmp_path / "srv"
+    srv.mkdir(parents=True)
+    (srv / "index.html").write_text("""<html><body>
+<select id="s" aria-label="choice" onchange="document.getElementById('out').textContent=this.value">
+  <option value="">pick</option><option value="b">bee</option></select>
+<div id="out"></div>
+<form id="f" onsubmit="document.getElementById('sub').textContent='yes';return false">
+  <input id="q" aria-label="q"></form>
+<div id="sub"></div>
+<div id="hov" onmouseover="document.getElementById('hid').textContent='shown'">hover me</div>
+<div id="hid"></div>
+</body></html>""")
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(srv))
+    httpd = http.server.HTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{httpd.server_port}/index.html"
+
+    session = BrowserSession(_browser, tmp_path / "profile")
+    try:
+        obs = await session.open(url)
+        sel = next(e for e in obs.elements if e.role == "combobox")
+        inp = next(e for e in obs.elements if e.role == "textbox")
+
+        await session.act("select", sel.ref, "b")
+        assert "b" in await session.extract("document.getElementById('out').textContent")
+
+        await session.act("type", inp.ref, "hello")
+        await session.act("keypress", inp.ref, "Enter")
+        assert "yes" in await session.extract("document.getElementById('sub').textContent")
+
+        # hover target isn't a KEEP role — reach it via a CSS-scoped observe
+        obs2 = await session.observe(scope="#hov")
+        hov_ref = next(e for e in obs2.elements if "hover me" in e.name)
+        await session.act("hover", hov_ref.ref)
+        await asyncio.sleep(0.2)
+        assert "shown" in await session.extract("document.getElementById('hid').textContent")
+    finally:
+        await session.close()
+        httpd.shutdown()

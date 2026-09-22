@@ -521,26 +521,41 @@ def register_builtin_capabilities() -> None:
             effects=frozenset({"external_write"}),
             kind="tool",
             description=(
-                "Perform exactly one browser action — click/type/navigate/scroll — "
-                "on an element ref from the last observation. Returns the "
-                "post-action change only. Actions that submit, publish, "
-                "purchase, or delete require operator approval."
+                "Perform exactly one browser action — click/type/select/"
+                "keypress/hover/navigate/scroll — on an element ref from the "
+                "last observation. Returns the post-action change only. "
+                "Actions that submit, publish, purchase, or delete require "
+                "operator approval."
             ),
             parameters_schema={
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["click", "type", "navigate", "scroll"],
+                        "enum": [
+                            "click",
+                            "type",
+                            "select",
+                            "keypress",
+                            "hover",
+                            "navigate",
+                            "scroll",
+                        ],
                         "description": "The action to perform",
                     },
                     "target": {
                         "type": "string",
-                        "description": "Element ref (e.g. e14) — required for click/type; for scroll, scrolls that element into view (omit to scroll the viewport)",
+                        "description": (
+                            "Element ref (e.g. e14) — required for click/type/select/hover; "
+                            "for scroll, scrolls that element into view (omit to scroll the viewport)"
+                        ),
                     },
                     "value": {
                         "type": "string",
-                        "description": "Text for type, URL for navigate, up/down/pixels for viewport scroll",
+                        "description": (
+                            "Text for type, URL for navigate, option value for select, "
+                            "key name for keypress (Enter/Tab/Escape/…), up/down/pixels for scroll"
+                        ),
                     },
                 },
                 "required": ["action"],
