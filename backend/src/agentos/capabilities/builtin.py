@@ -466,7 +466,9 @@ def register_builtin_capabilities() -> None:
                         "type": "boolean",
                         "description": (
                             "Open a visible window so the user can take over — for login, "
-                            "MFA, CAPTCHA, or consent flows. Default is headless."
+                            "MFA, CAPTCHA, or consent flows. Default is headless. "
+                            "After opening visible, use agent_ask_user to wait for the "
+                            "user to finish, then re-observe."
                         ),
                     },
                 },

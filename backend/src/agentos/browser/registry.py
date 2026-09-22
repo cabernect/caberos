@@ -22,6 +22,7 @@ from .cdp import BrowserSession
 from .runtime import find_browser_binary
 
 IDLE_TIMEOUT_S = 120.0  # reap sessions silent this long — RSS is expensive
+REAP_INTERVAL_S = 15.0
 
 
 def _url_in_scope(url: str, domains: list[str]) -> bool:
@@ -39,6 +40,9 @@ class _Managed:
     run_id: str
     profile_dir: tempfile.TemporaryDirectory | None
     profile_name: str | None = None  # persistent profile in use, if any
+    visible: bool = False  # windowed sessions exist for human takeover —
+    # exempt from idle reaping (the user may be mid-MFA); run-end,
+    # cancel, and shutdown cleanup still apply
 
 
 def _profiles_root() -> Path:
@@ -117,6 +121,7 @@ class BrowserRegistry:
             run_id=run_id,
             profile_dir=tmp,
             profile_name=profile,
+            visible=visible,
         )
         self._ensure_reaper()
         note = obs.serialize()
@@ -154,10 +159,12 @@ class BrowserRegistry:
 
     async def _reap_idle(self) -> None:
         while self._sessions:
-            await asyncio.sleep(15)
+            await asyncio.sleep(REAP_INTERVAL_S)
             now = time.monotonic()
             for run_id, m in list(self._sessions.items()):
-                if not m.session.alive() or now - m.session.last_activity > IDLE_TIMEOUT_S:
+                if not m.session.alive() or (
+                    not m.visible and now - m.session.last_activity > IDLE_TIMEOUT_S
+                ):
                     await self.close_for_run(run_id)
 
 

@@ -608,3 +608,28 @@ async def test_large_extract_stages_to_workspace(tmp_path):
     finally:
         await browser_registry.close_for_run("ext-run")
         httpd.shutdown()
+
+
+@needs_browser
+async def test_visible_session_survives_idle_reaper(tmp_path, monkeypatch):
+    """A windowed session exists for human takeover — the 120s reaper must
+    not kill it mid-MFA. Headless sessions still reap."""
+    from agentos.browser import registry as reg_mod
+    from agentos.browser.registry import BrowserRegistry
+
+    monkeypatch.setattr(reg_mod, "IDLE_TIMEOUT_S", 0.3)
+    monkeypatch.setattr(reg_mod, "REAP_INTERVAL_S", 0.05)
+    httpd, url = _serve(tmp_path / "srv")
+    reg = BrowserRegistry()
+    try:
+        await reg.get_or_open(url, agent_id="a", session_id="s", run_id="vis")
+        # mark it visible post-hoc (same flag the real open path sets)
+        reg._sessions["vis"].visible = True
+        await reg.get_or_open(url, agent_id="a", session_id="s", run_id="head")
+        await asyncio.sleep(0.6)  # several reap ticks past the timeout
+        assert "head" not in reg._sessions  # headless reaped
+        assert "vis" in reg._sessions  # visible survived
+        assert reg._sessions["vis"].session.alive()
+    finally:
+        await reg.shutdown_all()
+        httpd.shutdown()
