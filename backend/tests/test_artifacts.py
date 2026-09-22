@@ -716,3 +716,121 @@ async def test_ungranted_artifact_call_is_denied(db, workspace, artifact_storage
         run_id="run-art",
     )
     assert result.allowed is False
+
+
+def test_pptx_build_uses_widescreen_canvas():
+    """artifact_create decks default to 16:9 — the modern slide standard,
+    not python-pptx's dated 4:3 template. Placeholder widths stretch to the
+    canvas so content doesn't bunch left."""
+    from io import BytesIO
+
+    from pptx import Presentation
+
+    from agentos.artifacts.formats import pptx
+
+    data = pptx.build(
+        {
+            "slides": [
+                {
+                    "layout": "title_content",
+                    "title": "T",
+                    "blocks": [{"type": "bullets", "items": ["a"]}],
+                }
+            ]
+        },
+        ".",
+    )
+    prs = Presentation(BytesIO(data))
+    assert prs.slide_width == 12192000
+    assert prs.slide_height == 6858000
+    for ph in prs.slides[0].placeholders:
+        assert ph.width == prs.slide_width - 2 * ph.left
+
+
+def test_docx_build_sets_letter_geometry():
+    """Page geometry is a deliberate default — US Letter, uniform 1" margins."""
+    from io import BytesIO
+
+    import docx
+
+    from agentos.artifacts.formats import docx as docx_fmt
+
+    data = docx_fmt.build({"blocks": [{"type": "paragraph", "text": "hi"}]}, ".")
+    section = docx.Document(BytesIO(data)).sections[0]
+    assert section.page_width == docx.shared.Inches(8.5)
+    assert section.page_height == docx.shared.Inches(11)
+    for m in ("left_margin", "right_margin", "top_margin", "bottom_margin"):
+        assert getattr(section, m) == docx.shared.Inches(1)
+
+
+def test_xlsx_build_sets_print_defaults():
+    """Sheets paginate sanely: landscape, fit-to-width, modest margins."""
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    from agentos.artifacts.formats import xlsx as xlsx_fmt
+
+    data = xlsx_fmt.build({"sheets": [{"name": "S", "rows": [["a"]]}]}, ".")
+    ws = load_workbook(BytesIO(data)).active
+    assert ws.page_setup.orientation == "landscape"
+    assert ws.page_setup.fitToWidth == 1
+    assert ws.page_setup.fitToHeight == 0
+    assert ws.page_margins.left == 0.5
+
+
+async def test_create_structured_lands_under_artifacts_dir(db, workspace, artifact_storage):
+    """artifact_create paths are rooted at artifacts/ — the deliverables dir,
+    mirroring attachments/ for inputs."""
+    from agentos.artifacts import service
+
+    spec = {"blocks": [{"type": "paragraph", "text": "hi"}]}
+    art, _ = await service.create_structured(
+        db,
+        workspace_id="agent-1",
+        workspace_path=workspace,
+        rel_path="report.docx",
+        format="docx",
+        spec=spec,
+    )
+    assert art.current_path == "artifacts/report.docx"
+    assert (Path(workspace) / "artifacts/report.docx").exists()
+
+
+async def test_create_structured_preserves_subdirs_and_prefix(db, workspace, artifact_storage):
+    from agentos.artifacts import service
+
+    spec = {"blocks": [{"type": "paragraph", "text": "hi"}]}
+    nested, _ = await service.create_structured(
+        db,
+        workspace_id="agent-1",
+        workspace_path=workspace,
+        rel_path="reports/q3.docx",
+        format="docx",
+        spec=spec,
+    )
+    assert nested.current_path == "artifacts/reports/q3.docx"
+
+    already, _ = await service.create_structured(
+        db,
+        workspace_id="agent-1",
+        workspace_path=workspace,
+        rel_path="artifacts/explicit.docx",
+        format="docx",
+        spec=spec,
+    )
+    assert already.current_path == "artifacts/explicit.docx"
+
+
+async def test_create_structured_refuses_attachments_dir(db, workspace, artifact_storage):
+    from agentos.artifacts import service
+
+    with pytest.raises(service.ArtifactError, match="attachments"):
+        await service.create_structured(
+            db,
+            workspace_id="agent-1",
+            workspace_path=workspace,
+            rel_path="attachments/upload.docx",
+            format="docx",
+            spec={"blocks": [{"type": "paragraph", "text": "hi"}]},
+        )

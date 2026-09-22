@@ -1,6 +1,6 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import {
-  X, Save, Copy, Download, Upload, Power, Trash2,
+  X, Save, Copy, Download, Upload, Power, Trash2, ArrowLeft,
   FileText, Folder, ChevronRight, ChevronDown, FolderOpen,
 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -18,6 +18,7 @@ import type {
 } from "@/lib/types";
 import { ModelSelect } from "@/components/ModelSelect";
 import { ThinkingToggle } from "@/components/ThinkingToggle";
+import { PreviewPanel } from "@/components/previews/PreviewPanel";
 
 interface SettingsOverlayProps {
   agent: Agent | null;
@@ -128,7 +129,7 @@ export function SettingsOverlay({ agent, open, onClose, onSaved, providers }: Se
           )}
           {tab === "Memory" && <MemoryTab agentId={agent?.id || ""} onClose={onClose} showSaved={showSaved} />}
           {tab === "Skills" && <SkillsTab agentId={agent?.id || ""} showSaved={showSaved} />}
-          {tab === "Workspace" && <WorkspaceTab agentId={agent?.id || ""} />}
+          {tab === "Workspace" && <WorkspaceTab agentId={agent?.id || ""} showSaved={showSaved} />}
           {tab === "Channels" && <ChannelsTab agentId={agent?.id || ""} />}
         </div>
       </div>
@@ -1208,24 +1209,33 @@ function SkillsTab({ agentId, showSaved }: { agentId: string; showSaved: (msg: s
 }
 
 // --- Workspace Tab ---
+//
+// Split file-browser/preview (W3): the directory stays navigable on the
+// left while the shared PreviewPanel renders the selected file on the
+// right. Narrow layouts fall back to a full-width preview with Back.
 
-function WorkspaceTab({ agentId }: { agentId: string }) {
+function WorkspaceTab({ agentId, showSaved }: { agentId: string; showSaved: (msg: string) => void }) {
+  const { confirm } = useConfirm();
   const [path, setPath] = useState("");
   const [entries, setEntries] = useState<WorkspaceEntry[]>([]);
-  const [fileContent, setFileContent] = useState<string | null>(null);
+  const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const listRef = useRef<HTMLDivElement>(null);
+  // Saved when the preview opens: where the browser was scrolled and which
+  // row was selected, so closing the preview lands the operator back
+  // exactly where they left off.
+  const browseStateRef = useRef<{ scrollTop: number; selected: string | null }>({
+    scrollTop: 0,
+    selected: null,
+  });
 
   const load = useCallback(async (p: string) => {
     if (!agentId) return;
     setLoading(true);
-    setFileContent(null);
     try {
       const result = await api.listWorkspace(agentId, p);
       if (result.type === "dir") {
         setEntries(result.entries || []);
-      } else {
-        setFileContent(result.content || "");
-        setEntries([]);
       }
     } catch {
       setEntries([]);
@@ -1236,10 +1246,32 @@ function WorkspaceTab({ agentId }: { agentId: string }) {
 
   useEffect(() => { load(""); }, [load]);
 
-  const navigate = (name: string) => {
-    const newPath = path ? `${path}/${name}` : name;
-    setPath(newPath);
-    load(newPath);
+  const navigate = (entry: WorkspaceEntry) => {
+    const newPath = path ? `${path}/${entry.name}` : entry.name;
+    if (entry.type === "dir") {
+      setPath(newPath);
+      load(newPath);
+    } else {
+      browseStateRef.current = {
+        scrollTop: listRef.current?.scrollTop ?? 0,
+        selected: newPath,
+      };
+      setPreviewPath(newPath);
+    }
+  };
+
+  const closePreview = () => {
+    const saved = browseStateRef.current;
+    setPreviewPath(null);
+    // Restore the browser's scroll + focus after React remounts the list.
+    requestAnimationFrame(() => {
+      if (listRef.current) listRef.current.scrollTop = saved.scrollTop;
+      if (saved.selected) {
+        listRef.current
+          ?.querySelector<HTMLButtonElement>(`[data-path="${CSS.escape(saved.selected)}"]`)
+          ?.focus();
+      }
+    });
   };
 
   const goUp = () => {
@@ -1250,7 +1282,92 @@ function WorkspaceTab({ agentId }: { agentId: string }) {
     load(up);
   };
 
+  const errDetail = (e: unknown) => {
+    const m = e instanceof Error ? e.message : String(e);
+    try {
+      return JSON.parse(m.replace(/^\d+:\s*/, "")).detail ?? m;
+    } catch {
+      return m;
+    }
+  };
+
+  const handleDelete = async (entry: WorkspaceEntry) => {
+    const rel = path ? `${path}/${entry.name}` : entry.name;
+    const ok = await confirm({
+      title: `Delete ${entry.type === "dir" ? "folder" : "file"}?`,
+      message: `Delete "${rel}"${entry.type === "dir" ? " and everything inside it" : ""}? This cannot be undone.`,
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await api.deleteWorkspaceEntry(agentId, rel);
+      if (previewPath === rel || previewPath?.startsWith(`${rel}/`)) closePreview();
+      showSaved(`Deleted ${entry.name}`);
+      load(path);
+    } catch (e) {
+      showSaved(`Delete failed: ${errDetail(e)}`);
+    }
+  };
+
   const breadcrumbs = path ? path.split("/").filter(Boolean) : [];
+
+  const fileList = (
+    <div ref={listRef} className="h-full space-y-1 overflow-auto">
+      {path && (
+        <button
+          onClick={goUp}
+          className="flex w-full items-center gap-2 rounded-[5px] px-3 py-2 text-[13px] text-[var(--ink-2)] transition hover:bg-[var(--surface)]"
+          style={{ border: "none", background: "none", cursor: "pointer" }}
+        >
+          <FolderOpen className="h-4 w-4" /> ..
+        </button>
+      )}
+      {entries.map((entry) => (
+        <div
+          key={entry.name}
+          className="group flex w-full items-center rounded-[5px] transition hover:bg-[var(--surface)]"
+          style={{
+            background:
+              previewPath === (path ? `${path}/${entry.name}` : entry.name)
+                ? "var(--surface)"
+                : "none",
+          }}
+        >
+          <button
+            data-path={path ? `${path}/${entry.name}` : entry.name}
+            onClick={() => navigate(entry)}
+            className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-[13px]"
+            style={{ border: "none", background: "none", cursor: "pointer", color: "var(--ink)" }}
+          >
+            {entry.type === "dir" ? (
+              <Folder className="h-4 w-4" style={{ color: "var(--accent)" }} />
+            ) : (
+              <FileText className="h-4 w-4" style={{ color: "var(--ink-3)" }} />
+            )}
+            <span className="truncate">{entry.name}</span>
+            {entry.type === "file" && (
+              <span className="ml-auto shrink-0 font-mono text-[11px] text-[var(--ink-3)]">
+                {entry.size > 1024 ? `${(entry.size / 1024).toFixed(1)}KB` : `${entry.size}B`}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={() => void handleDelete(entry)}
+            aria-label={`Delete ${entry.name}`}
+            title={`Delete ${entry.name}`}
+            className="mr-1 shrink-0 rounded-[3px] p-1 text-[var(--ink-3)] opacity-0 transition hover:bg-[var(--white)] hover:text-[var(--danger)] group-hover:opacity-100"
+            style={{ border: "none", cursor: "pointer" }}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      ))}
+      {entries.length === 0 && !loading && (
+        <p className="py-8 text-center text-[13px] text-[var(--ink-3)]">Empty directory.</p>
+      )}
+    </div>
+  );
 
   return (
     <div className="space-y-3">
@@ -1277,52 +1394,37 @@ function WorkspaceTab({ agentId }: { agentId: string }) {
 
       {loading ? (
         <p className="text-[13px] text-[var(--ink-2)]">Loading…</p>
-      ) : fileContent !== null ? (
+      ) : previewPath ? (
         <div>
-          <button onClick={goUp} className="mb-2 flex items-center gap-1 text-[12px] text-[var(--accent)]" style={{ border: "none", background: "none", cursor: "pointer" }}>
-            <FolderOpen className="h-3.5 w-3.5" /> Back
-          </button>
-          <pre
-            className="max-h-[60vh] overflow-auto rounded-[5px] border p-3 font-mono text-[12px] leading-[1.5] text-[var(--ink)]"
-            style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+          {/* Narrow layouts get a full-width preview with a way back —
+              the split browser column only exists at md+. */}
+          <button
+            onClick={closePreview}
+            className="mb-2 flex items-center gap-1.5 rounded-[5px] px-2 py-1 text-[12px] text-[var(--ink-2)] transition hover:bg-[var(--surface)] md:hidden"
+            style={{ border: "none", background: "none", cursor: "pointer" }}
           >
-            {fileContent}
-          </pre>
+            <ArrowLeft className="h-3.5 w-3.5" /> Back to Workspace
+          </button>
+          <div className="flex gap-0 overflow-hidden rounded-[5px] border border-[var(--border)]" style={{ height: "60vh" }}>
+            <div className="hidden w-56 shrink-0 overflow-auto border-r border-[var(--border)] p-2 md:block">
+              {fileList}
+            </div>
+            <div className="min-w-0 flex-1">
+              <PreviewPanel
+                agentId={agentId}
+                source={{ path: previewPath }}
+                onClose={closePreview}
+                onDeleted={(p) => {
+                  closePreview();
+                  showSaved(`Deleted ${p.split("/").pop()}`);
+                  load(path);
+                }}
+              />
+            </div>
+          </div>
         </div>
-      ) : entries.length === 0 ? (
-        <p className="py-8 text-center text-[13px] text-[var(--ink-3)]">Empty directory.</p>
       ) : (
-        <div className="space-y-1">
-          {path && (
-            <button
-              onClick={goUp}
-              className="flex w-full items-center gap-2 rounded-[5px] px-3 py-2 text-[13px] text-[var(--ink-2)] transition hover:bg-[var(--surface)]"
-              style={{ border: "none", background: "none", cursor: "pointer" }}
-            >
-              <FolderOpen className="h-4 w-4" /> ..
-            </button>
-          )}
-          {entries.map((entry) => (
-            <button
-              key={entry.name}
-              onClick={() => navigate(entry.name)}
-              className="flex w-full items-center gap-2 rounded-[5px] px-3 py-2 text-[13px] text-[var(--ink)] transition hover:bg-[var(--surface)]"
-              style={{ border: "none", background: "none", cursor: "pointer" }}
-            >
-              {entry.type === "dir" ? (
-                <Folder className="h-4 w-4" style={{ color: "var(--accent)" }} />
-              ) : (
-                <FileText className="h-4 w-4" style={{ color: "var(--ink-3)" }} />
-              )}
-              <span>{entry.name}</span>
-              {entry.type === "file" && (
-                <span className="ml-auto font-mono text-[11px] text-[var(--ink-3)]">
-                  {entry.size > 1024 ? `${(entry.size / 1024).toFixed(1)}KB` : `${entry.size}B`}
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
+        <div style={{ maxHeight: "60vh" }}>{fileList}</div>
       )}
     </div>
   );

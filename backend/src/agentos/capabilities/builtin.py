@@ -42,18 +42,32 @@ def register_builtin_capabilities() -> None:
             name="read_file",
             effects=frozenset({"read"}),
             kind="tool",
-            description="Read a full file or an inclusive line range from the agent's workspace",
+            description=(
+                "Read a file from the agent's workspace. Text files support an "
+                "inclusive line range; PDFs extract text per page (start_page/"
+                "end_page); DOCX/PPTX/XLSX return extracted text; images return "
+                "image content on vision-capable models. Output is capped at "
+                "50k chars — page through large files."
+            ),
             parameters_schema={
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "Relative path within the workspace"},
                     "start_line": {
                         "type": "integer",
-                        "description": "First line to read, 1-based and inclusive",
+                        "description": "First line to read, 1-based and inclusive (text files)",
                     },
                     "end_line": {
                         "type": "integer",
-                        "description": "Last line to read, 1-based and inclusive",
+                        "description": "Last line to read, 1-based and inclusive (text files)",
+                    },
+                    "start_page": {
+                        "type": "integer",
+                        "description": "First PDF page to extract, 1-based and inclusive",
+                    },
+                    "end_page": {
+                        "type": "integer",
+                        "description": "Last PDF page to extract, 1-based and inclusive",
                     },
                 },
                 "required": ["path"],
@@ -831,14 +845,15 @@ def register_builtin_capabilities() -> None:
             kind="tool",
             description=(
                 "Create a versioned Office deliverable (docx/xlsx/pptx) in the "
-                "workspace from a structured spec — never raw file bytes. " + _doc_spec_hint
+                "workspace from a structured spec — never raw file bytes. Files "
+                "are saved under artifacts/ (prefix added automatically). " + _doc_spec_hint
             ),
             parameters_schema={
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Workspace-relative output path (e.g. report.docx)",
+                        "description": "Output path relative to artifacts/ (e.g. report.docx → artifacts/report.docx)",
                     },
                     "format": {
                         "type": "string",

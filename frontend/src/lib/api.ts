@@ -5,6 +5,7 @@ import type {
   Agent,
   AgentVersion,
   Approval,
+  ArtifactRevisionInfo,
   AuditOut,
   CapabilityGrant,
   CapabilityInfo,
@@ -22,6 +23,7 @@ import type {
   Notification,
   Operator,
   OperatorAuditOut,
+  PreviewPayload,
   Provider,
   RunDetail,
   RunSummary,
@@ -35,6 +37,46 @@ import type {
   KnowledgeScope,
   WorkspaceEntry,
 } from "./types";
+
+// Preview source selector shared by the workspace/preview|raw|pdf-page
+// family — {path} for live files, {artifactId, revisionId} for managed
+// revision bytes.
+export interface PreviewSource {
+  path?: string;
+  artifactId?: string;
+  revisionId?: string;
+}
+
+function sourceQuery(opts: PreviewSource): string {
+  const params = new URLSearchParams();
+  if (opts.path) params.set("path", opts.path);
+  if (opts.artifactId) params.set("artifact_id", opts.artifactId);
+  if (opts.revisionId) params.set("revision_id", opts.revisionId);
+  return params.toString();
+}
+
+/**
+ * The three reads every preview surface needs. Workspace and skill
+ * resources each get an implementation so the same renderers serve
+ * chat, Workspace, and Skills Studio.
+ */
+export interface PreviewBackend {
+  preview(source: PreviewSource): Promise<import("./types").PreviewPayload>;
+  /** Object URL for the source bytes — caller revokes. */
+  blob(source: PreviewSource): Promise<string>;
+  /** Object URL of a rendered PDF page PNG. */
+  pdfPage(page: number, source: PreviewSource): Promise<string>;
+}
+
+async function fetchBlob(path: string): Promise<string> {
+  const base = await baseReady;
+  const resp = await fetch(`${base}${path}`, {
+    credentials: "include",
+    headers: authHeaders(),
+  });
+  if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text()}`);
+  return URL.createObjectURL(await resp.blob());
+}
 
 const isDesktopShell =
   typeof window !== "undefined" &&
@@ -195,6 +237,72 @@ export const api = {
   listWorkspace: (id: string, path?: string) =>
     request<{ type: "dir" | "file"; path: string; entries?: WorkspaceEntry[]; content?: string; size?: number }>(
       `/api/agents/${id}/workspace${path ? `?path=${encodeURIComponent(path)}` : ""}`,
+    ),
+  deleteWorkspaceEntry: (id: string, path: string) =>
+    request<{ deleted: boolean; path: string }>(
+      `/api/agents/${id}/workspace?path=${encodeURIComponent(path)}`,
+      { method: "DELETE" },
+    ),
+
+  // File previews (W3) — one param object shared by the whole family:
+  // {path} for live files, {artifactId, revisionId} for managed bytes.
+  previewFile: (id: string, opts: PreviewSource = {}) =>
+    request<PreviewPayload>(`/api/agents/${id}/workspace/preview?${sourceQuery(opts)}`),
+
+  // Binary content can't ride <img src>/<video src> — Bearer auth has no
+  // cookie fallback in the desktop shell. Fetch the blob, hand the caller
+  // an object URL, and let them revoke it on unmount.
+  fetchFileBlob: (id: string, opts: PreviewSource = {}): Promise<string> =>
+    fetchBlob(`/api/agents/${id}/workspace/raw?${sourceQuery(opts)}`),
+
+  fetchPdfPage: (id: string, page: number, opts: PreviewSource = {}): Promise<string> =>
+    fetchBlob(`/api/agents/${id}/workspace/pdf-page?page=${page}&${sourceQuery(opts)}`),
+
+  listArtifactRevisions: (id: string, artifactId: string) =>
+    request<{ revisions: ArtifactRevisionInfo[] }>(
+      `/api/agents/${id}/artifacts/${artifactId}/revisions`,
+    ),
+  restoreArtifactRevision: (id: string, artifactId: string, revisionId: string) =>
+    request<{ revision_id: string; revision_number: number }>(
+      `/api/agents/${id}/artifacts/${artifactId}/restore`,
+      { method: "POST", body: JSON.stringify({ revision_id: revisionId }) },
+    ),
+  compareArtifactRevisions: (id: string, artifactId: string, fromRevision: string, toRevision?: string) => {
+    const qs = new URLSearchParams({ from_revision: fromRevision });
+    if (toRevision) qs.set("to_revision", toRevision);
+    return request<{
+      comparable: boolean;
+      reason?: string;
+      diff?: string;
+      from_revision_number: number | null;
+      to_revision_number: number | null;
+      from_bytes: number;
+      to_bytes: number;
+      identical: boolean;
+    }>(`/api/agents/${id}/artifacts/${artifactId}/compare?${qs.toString()}`);
+  },
+  adoptWorkspaceFile: (id: string, path: string) =>
+    request<{ artifact_id: string; revision_id: string; path: string }>(
+      `/api/agents/${id}/artifacts/adopt`,
+      { method: "POST", body: JSON.stringify({ path }) },
+    ),
+  // Composer attachment previews (W3c) — ephemeral, nothing persisted.
+  previewAttachment: async (id: string, file: File): Promise<PreviewPayload> => {
+    const formData = new FormData();
+    formData.append("file", file);
+    const base = await baseReady;
+    const resp = await fetch(`${base}/api/agents/${id}/attachments/preview`, {
+      method: "POST",
+      credentials: "include",
+      headers: { ...authHeaders() },
+      body: formData,
+    });
+    if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text()}`);
+    return resp.json();
+  },
+  previewUrl: (id: string, url: string) =>
+    request<{ url: string; domain: string; title: string | null }>(
+      `/api/agents/${id}/attachments/url-preview?url=${encodeURIComponent(url)}`,
     ),
 
   // Knowledge Vault
@@ -478,6 +586,19 @@ export const api = {
       method: "POST",
     }),
 
+  // Skill resource previews (W3) — same payload shape as workspace previews,
+  // rooted at the skill dir instead of an agent workspace.
+  listSkillResources: (name: string) =>
+    request<{ skill: string; resources: { path: string; size: number; mime: string }[] }>(
+      `/api/skills/${name}/resources`,
+    ),
+  previewSkillResource: (name: string, opts: PreviewSource = {}) =>
+    request<PreviewPayload>(`/api/skills/${name}/preview?${sourceQuery(opts)}`),
+  fetchSkillBlob: (name: string, opts: PreviewSource = {}): Promise<string> =>
+    fetchBlob(`/api/skills/${name}/raw?${sourceQuery(opts)}`),
+  fetchSkillPdfPage: (name: string, page: number, opts: PreviewSource = {}): Promise<string> =>
+    fetchBlob(`/api/skills/${name}/pdf-page?page=${page}&${sourceQuery(opts)}`),
+
   // Scheduler — heartbeat
   listHeartbeats: () =>
     request<HeartbeatStatus[]>("/api/scheduler/heartbeat"),
@@ -648,3 +769,20 @@ export const api = {
       body: JSON.stringify({ yolo_mode: enabled }),
     }),
 };
+
+/** PreviewBackend implementations — one per content root. */
+export function workspaceBackend(agentId: string): PreviewBackend {
+  return {
+    preview: (source) => api.previewFile(agentId, source),
+    blob: (source) => api.fetchFileBlob(agentId, source),
+    pdfPage: (page, source) => api.fetchPdfPage(agentId, page, source),
+  };
+}
+
+export function skillBackend(skillName: string): PreviewBackend {
+  return {
+    preview: (source) => api.previewSkillResource(skillName, source),
+    blob: (source) => api.fetchSkillBlob(skillName, source),
+    pdfPage: (page, source) => api.fetchSkillPdfPage(skillName, page, source),
+  };
+}

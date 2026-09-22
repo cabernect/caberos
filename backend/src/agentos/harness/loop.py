@@ -47,6 +47,35 @@ class RunResult:
 # SSE event emitter type: async callable that takes (event_type: str, payload: dict)
 EventEmitter = Callable[[str, dict[str, Any]], Any] | None
 
+# Hard ceiling on a single tool result's serialized size in the history —
+# matches read_file/web_fetch's 50k budget so one call can never overflow
+# the context window on its own.
+TOOL_RESULT_MAX_CHARS = 50_000
+
+_CONTEXT_OVERFLOW_PATTERNS = (
+    "context length",
+    "context_length",
+    "context window",
+    "maximum context",
+    "contextwindowexceeded",
+    "too many tokens",
+    "request too large",
+    "reduce the length",
+    "input is too long",
+    "prompt is too long",
+    "exceeds the limit",
+    "exceeded the token",
+)
+
+
+def _is_context_overflow(err: Exception) -> bool:
+    """Provider rejected the request for exceeding the context window —
+    recoverable via forced compaction, unlike generic errors."""
+    if type(err).__name__ == "ContextWindowExceededError":
+        return True
+    msg = str(err).lower()
+    return any(p in msg for p in _CONTEXT_OVERFLOW_PATTERNS)
+
 
 class ApprovalBatch:
     """Barrier for all calls emitted by one model turn."""
@@ -316,6 +345,7 @@ class Harness:
         )
         consecutive_tool_failures = 0
         max_consecutive_failures = 5
+        overflow_retried = False
 
         # Steps 8-11: the loop
         while result.total_turns < max_turns:
@@ -351,6 +381,49 @@ class Harness:
                     if response.thinking and event_emitter:
                         await self._emit(event_emitter, "thinking", {"content": response.thinking})
             except Exception as e:
+                # Mid-run context overflow: a tool result or accumulated turns
+                # pushed the request over the window after the pre-loop
+                # compaction ran. Force-compact once and retry the call —
+                # the tail is protected, so if compaction can't shrink it,
+                # there is no recovery and the run must fail.
+                if not overflow_retried and _is_context_overflow(e):
+                    overflow_retried = True
+                    import logging as _log
+
+                    _log.getLogger("agentos.harness.loop").warning(
+                        "Context window exceeded mid-run; forcing compaction and retrying once: %s",
+                        str(e)[:200],
+                    )
+                    system_msgs = (
+                        [history[0]] if history and history[0].get("role") == "system" else []
+                    )
+                    compaction_result = await compact_context(
+                        messages=history[len(system_msgs) :],
+                        agent_config=agent_config,
+                        model_str=model_str,
+                        previous_summary=compaction_summary,
+                        api_key=api_key,
+                        base_url=base_url,
+                        force=True,
+                    )
+                    if compaction_result.compacted:
+                        history = system_msgs + compaction_result.messages
+                        compaction_summary = compaction_result.summary
+                        result.compacted = True
+                        if hasattr(syscall_handler, "db") and hasattr(session, "id"):
+                            from sqlalchemy import update as sa_update
+
+                            from ..models.session import Session as SessionModel
+
+                            await syscall_handler.db.execute(
+                                sa_update(SessionModel)
+                                .where(SessionModel.id == session.id)
+                                .values(conversation_summary=compaction_result.summary)
+                            )
+                            await syscall_handler.db.flush()
+                            session.conversation_summary = compaction_result.summary
+                        result.total_turns -= 1  # the retry reuses this turn
+                        continue
                 await self._record_model_call(
                     syscall_handler,
                     run_id=run_id,
@@ -404,6 +477,13 @@ class Harness:
                     result.final_answer = (
                         "This model doesn't support tool use (function calling). "
                         "Please select a model that supports tools, or use a different provider."
+                    )
+                elif _is_context_overflow(e):
+                    result.final_answer = (
+                        "I ran out of context — the conversation plus recent tool "
+                        "results exceeded the model's context window and could not "
+                        "be compacted far enough. Start a fresh session or use a "
+                        "model with a larger context window."
                     )
                 else:
                     # Include the actual error so the user can diagnose the issue
@@ -562,16 +642,24 @@ class Harness:
                             consecutive_tool_failures += 1
                         else:
                             consecutive_tool_failures = 0
+                        content: Any = (
+                            syscall_result.model_content
+                            if syscall_result.model_content is not None
+                            else json.dumps(output)
+                            if output
+                            else ""
+                        )
+                        if isinstance(content, str) and len(content) > TOOL_RESULT_MAX_CHARS:
+                            content = (
+                                content[:TOOL_RESULT_MAX_CHARS]
+                                + f"\n\n[truncated — result was {len(content)} chars; "
+                                f"the {TOOL_RESULT_MAX_CHARS}-char limit applies. "
+                                "Narrow the call or page through the data.]"
+                            )
                         history.append(
                             {
                                 "role": "tool",
-                                "content": (
-                                    syscall_result.model_content
-                                    if syscall_result.model_content is not None
-                                    else json.dumps(output)
-                                    if output
-                                    else ""
-                                ),
+                                "content": content,
                                 "tool_call_id": call.id,
                                 "name": call.name,
                             }

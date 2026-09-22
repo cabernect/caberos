@@ -39,6 +39,17 @@ def _format_of(rel_path: str) -> str:
     return suffix if suffix in _FORMATS else "other"
 
 
+def _deliverable_path(rel_path: str) -> str:
+    """Deliverables live under `artifacts/` — the mirror of `attachments/`
+    for user inputs. Subdirs are preserved; `attachments/` is refused."""
+    rel = rel_path.strip().lstrip("/")
+    if rel.startswith("attachments/"):
+        raise ArtifactError("artifact paths can't live under attachments/ — that's the inputs dir")
+    if not rel.startswith("artifacts/"):
+        rel = f"artifacts/{rel}"
+    return rel
+
+
 async def create(
     db: AsyncSession,
     *,
@@ -312,7 +323,7 @@ async def create_structured(
         db,
         workspace_id=workspace_id,
         workspace_path=workspace_path,
-        rel_path=rel_path,
+        rel_path=_deliverable_path(rel_path),
         data=data,
         created_by=created_by,
         source_run_id=source_run_id,
@@ -527,6 +538,7 @@ async def export_pdf(
         "export_status": "exported",
         "renderer": renderer,
         "pdf_artifact_id": pdf_artifact.id,
+        "pdf_path": pdf_artifact.current_path,
     }
 
 
@@ -569,6 +581,19 @@ async def _get(db: AsyncSession, artifact_id: str) -> Artifact:
     if artifact is None:
         raise ArtifactError(f"unknown artifact: {artifact_id}")
     return artifact
+
+
+async def get_by_path(db: AsyncSession, workspace_id: str, rel_path: str) -> Artifact | None:
+    """Look up the artifact tracking a workspace path — None for ordinary
+    files. The preview API uses this to split tracked vs untracked actions."""
+    from sqlalchemy import select
+
+    return await db.scalar(
+        select(Artifact).where(
+            Artifact.workspace_id == workspace_id,
+            Artifact.current_path == rel_path,
+        )
+    )
 
 
 async def _store_revision(

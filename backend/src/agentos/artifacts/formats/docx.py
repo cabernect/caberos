@@ -17,6 +17,13 @@ from ...sandbox.workspace import resolve_within
 
 def build(spec: dict, workspace_path: str | Path) -> bytes:
     doc = Document()
+    # US Letter + uniform 1" margins — set explicitly so page geometry is a
+    # deliberate default, not whatever the python-docx template happens to ship.
+    section = doc.sections[0]
+    section.page_width = Inches(8.5)
+    section.page_height = Inches(11)
+    for margin in ("left_margin", "right_margin", "top_margin", "bottom_margin"):
+        setattr(section, margin, Inches(1))
     if title := spec.get("title"):
         doc.add_heading(title, level=0)
     for block in spec.get("blocks", []):

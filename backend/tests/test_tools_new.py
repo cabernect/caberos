@@ -480,3 +480,161 @@ async def test_web_fetch_hard_ceiling(monkeypatch):
     # Requesting more than the hard ceiling should be capped
     result = await web_module.web_fetch({"url": "https://example.com", "max_chars": 999_999})
     assert result["total_chars"] < 50_000
+
+
+# --- read_file: document-aware extraction + bounds ---
+
+
+@pytest.mark.asyncio
+async def test_read_file_docx_extracts_text(workspace):
+    """DOCX reads return extracted text, never raw binary."""
+    import docx
+
+    doc = docx.Document()
+    doc.add_heading("Quarterly Report", level=1)
+    doc.add_paragraph("Revenue grew 12% year over year.")
+    doc.save(os.path.join(workspace, "report.docx"))
+
+    result = await read_file({"path": "report.docx"}, workspace_path=workspace)
+    assert result["format"] == "docx"
+    assert "Quarterly Report" in result["content"]
+    assert "Revenue grew 12%" in result["content"]
+    assert "\x00" not in result["content"]
+
+
+@pytest.mark.asyncio
+async def test_read_file_pptx_extracts_text(workspace):
+    from pptx import Presentation
+
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[1])
+    slide.shapes.title.text = "Launch Plan"
+    slide.placeholders[1].text = "Milestone one\nMilestone two"
+    prs.save(os.path.join(workspace, "deck.pptx"))
+
+    result = await read_file({"path": "deck.pptx"}, workspace_path=workspace)
+    assert result["format"] == "pptx"
+    assert "Launch Plan" in result["content"]
+    assert "Milestone one" in result["content"]
+
+
+@pytest.mark.asyncio
+async def test_read_file_xlsx_extracts_text(workspace):
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Skills"
+    ws.append(["Skill", "Rating"])
+    ws.append(["TypeScript", 5])
+    wb.save(os.path.join(workspace, "matrix.xlsx"))
+
+    result = await read_file({"path": "matrix.xlsx"}, workspace_path=workspace)
+    assert result["format"] == "xlsx"
+    assert "Skills" in result["content"]
+    assert "TypeScript" in result["content"]
+    assert "5" in result["content"]
+
+
+def _make_pdf(path: str, page_texts: list[str]) -> None:
+    from reportlab.lib.pagesizes import letter
+    from reportlab.pdfgen import canvas
+
+    c = canvas.Canvas(path, pagesize=letter)
+    for text in page_texts:
+        c.drawString(72, 720, text)
+        c.showPage()
+    c.save()
+
+
+@pytest.mark.asyncio
+async def test_read_file_pdf_extracts_text(workspace):
+    path = os.path.join(workspace, "doc.pdf")
+    _make_pdf(path, ["Hello from page one", "Second page here"])
+
+    result = await read_file({"path": "doc.pdf"}, workspace_path=workspace)
+    assert result["format"] == "pdf"
+    assert result["page_count"] == 2
+    assert "Hello from page one" in result["content"]
+    assert "Second page here" in result["content"]
+    assert "truncated" not in result
+
+
+@pytest.mark.asyncio
+async def test_read_file_pdf_page_range(workspace):
+    path = os.path.join(workspace, "paged.pdf")
+    _make_pdf(path, [f"content of page {i}" for i in range(1, 6)])
+
+    result = await read_file(
+        {"path": "paged.pdf", "start_page": 2, "end_page": 3}, workspace_path=workspace
+    )
+    assert "content of page 2" in result["content"]
+    assert "content of page 3" in result["content"]
+    assert "content of page 1" not in result["content"]
+    assert result["truncated"] is True
+    assert result["next_start_page"] == 4
+
+
+@pytest.mark.asyncio
+async def test_read_file_pdf_start_beyond_doc(workspace):
+    path = os.path.join(workspace, "short.pdf")
+    _make_pdf(path, ["only page"])
+
+    result = await read_file({"path": "short.pdf", "start_page": 9}, workspace_path=workspace)
+    assert "beyond" in result["error"]
+    assert result["page_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_read_file_binary_refused(workspace):
+    """Unknown binary files are refused instead of dumped as mojibake."""
+    with open(os.path.join(workspace, "blob.bin"), "wb") as f:
+        f.write(bytes(range(256)) * 8)
+
+    result = await read_file({"path": "blob.bin"}, workspace_path=workspace)
+    assert "Binary file" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_read_file_text_hard_cap(workspace):
+    """A text file over the char ceiling returns a bounded page + hint."""
+    with open(os.path.join(workspace, "big.txt"), "w") as f:
+        for i in range(3000):
+            f.write(f"line {i} " + "x" * 30 + "\n")
+
+    result = await read_file({"path": "big.txt"}, workspace_path=workspace)
+    assert result["truncated"] is True
+    assert len(result["content"]) <= 50_000
+    assert "start_line" in result["hint"]
+
+
+@pytest.mark.asyncio
+async def test_read_file_image_too_large_refused(workspace):
+    """Images beyond the provider-safe input size are refused honestly."""
+    path = os.path.join(workspace, "huge.png")
+    with open(path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n" + b"\x00" * (15 * 1024 * 1024 + 1))
+
+    result = await read_file({"path": "huge.png"}, workspace_path=workspace, supports_vision=True)
+    assert "too large" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_read_file_image_downscales(workspace):
+    """Oversized-but-decodable images are downscaled before base64."""
+    from PIL import Image
+
+    path = os.path.join(workspace, "photo.png")
+    # Noise doesn't compress — a genuinely large source image.
+    Image.frombytes("RGB", (2000, 2000), os.urandom(2000 * 2000 * 3)).save(path, format="PNG")
+
+    result = await read_file({"path": "photo.png"}, workspace_path=workspace, supports_vision=True)
+    assert result.get("resized") is True
+    assert result["sent_bytes"] < result["bytes"]
+    url = result["_model_content"][1]["image_url"]["url"]
+    assert url.startswith("data:image/")
+    import base64 as b64
+
+    decoded = b64.b64decode(url.split(",", 1)[1])
+    probe = Image.open(__import__("io").BytesIO(decoded))
+    assert max(probe.size) <= 1568

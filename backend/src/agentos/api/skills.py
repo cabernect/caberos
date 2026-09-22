@@ -11,6 +11,7 @@ itself via write_file (in the workspace sandbox).
 import io
 import shutil
 import zipfile
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
@@ -23,6 +24,27 @@ router = APIRouter(prefix="/api/skills", tags=["skills"])
 
 # System-level skills directory (from config — repo root/skills)
 SKILLS_DIR = settings.skills_dir
+
+
+def _skill_dir(skill_name: str) -> Path:
+    """Resolve a skill dir, rejecting names that escape skills/."""
+    skill_dir = (SKILLS_DIR / skill_name).resolve()
+    if not str(skill_dir).startswith(str(SKILLS_DIR.resolve()) + "/"):
+        raise HTTPException(status_code=400, detail="Invalid skill name")
+    if not skill_dir.is_dir():
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+    return skill_dir
+
+
+def _resolve_resource(skill_name: str, path: str) -> Path:
+    """Resolve a resource path inside the skill dir (containment)."""
+    skill_dir = _skill_dir(skill_name)
+    target = (skill_dir / path).resolve()
+    if not str(target).startswith(str(skill_dir) + "/"):
+        raise HTTPException(status_code=403, detail="Path outside skill directory")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="Resource not found")
+    return target
 
 
 @router.get("")
@@ -219,3 +241,99 @@ async def promote_skill(
         "from": str(agent_skill_dir),
         "to": str(target_dir),
     }
+
+
+# --- Skill resource previews (W3) ---
+#
+# Same bounded renderers as workspace previews, rooted at the skill dir.
+# Skills are operator-managed content so all reads require the operator.
+
+
+@router.get("/{skill_name}/resources")
+async def list_skill_resources(
+    skill_name: str,
+    operator: Operator = Depends(require_operator),
+) -> dict:
+    """File listing for a skill — SKILL.md plus bundled resources."""
+    skill_dir = _skill_dir(skill_name)
+    resources = []
+    for f in sorted(skill_dir.rglob("*")):
+        if not f.is_file():
+            continue
+        try:
+            resolved = f.resolve()
+            if not str(resolved).startswith(str(skill_dir) + "/"):
+                continue
+            size = resolved.stat().st_size
+        except OSError:
+            continue
+        resources.append(
+            {
+                "path": f.relative_to(skill_dir).as_posix(),
+                "size": size,
+                "mime": _resource_mime(f.name),
+            }
+        )
+    return {"skill": skill_name, "resources": resources}
+
+
+def _resource_mime(name: str) -> str:
+    from .. import previews
+
+    return previews.media_type(name)
+
+
+@router.get("/{skill_name}/preview")
+async def preview_skill_resource(
+    skill_name: str,
+    operator: Operator = Depends(require_operator),
+    path: str = "",
+) -> dict:
+    """Bounded preview payload for one skill resource."""
+    from .. import previews
+
+    target = _resolve_resource(skill_name, path)
+    payload = previews.preview_bytes(target.read_bytes(), target.name)
+    payload["path"] = path
+    payload["absolute_path"] = str(target)
+    payload["artifact"] = None
+    return payload
+
+
+@router.get("/{skill_name}/raw")
+async def raw_skill_resource(
+    skill_name: str,
+    operator: Operator = Depends(require_operator),
+    path: str = "",
+):
+    """Raw resource bytes — images/media stream via object URLs."""
+    from fastapi.responses import FileResponse
+
+    from .. import previews
+
+    target = _resolve_resource(skill_name, path)
+    return FileResponse(target, media_type=previews.media_type(target.name), filename=target.name)
+
+
+@router.get("/{skill_name}/pdf-page")
+async def skill_pdf_page(
+    skill_name: str,
+    page: int,
+    operator: Operator = Depends(require_operator),
+    path: str = "",
+):
+    """One PDF page rendered to PNG for the paginated viewer."""
+    from fastapi.responses import Response
+
+    from .. import previews
+
+    target = _resolve_resource(skill_name, path)
+    if not target.name.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Not a PDF")
+    try:
+        png = previews.render_pdf_page(target.read_bytes(), page)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"pdf render failed: {e}") from e
+    return Response(content=png, media_type="image/png")

@@ -212,12 +212,12 @@ def test_workspace_attachment_references_are_used():
                 "type": "file",
                 "mime_type": "text/plain",
                 "filename": "notes.txt",
-                "path": "attachments/attachment_1_notes.txt",
+                "path": "attachments/notes.txt",
             }
         ],
     )
     content = history[1]["content"]
-    assert "attachments/attachment_1_notes.txt" in content
+    assert "attachments/notes.txt" in content
     assert "Hello world" not in content
 
 
@@ -836,3 +836,158 @@ async def test_agent_answers_question_using_doc_search(db, workspace, tmp_path):
     assert result.tool_calls_made[0]["name"] == "doc_search"
     assert result.tool_calls_made[0]["allowed"] is True
     assert result.tool_calls_made[0]["result"]["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_tool_result_hard_cap(db, workspace):
+    """A single tool result can never exceed TOOL_RESULT_MAX_CHARS in history."""
+    from agentos.harness.loop import TOOL_RESULT_MAX_CHARS
+    from agentos.syscall.protocol import SyscallResult
+
+    class RecordingModel(ScriptedModel):
+        def __init__(self, responses):
+            super().__init__(responses)
+            self.seen: list[list[dict]] = []
+
+        async def complete_stream(self, agent_model=None, messages=None, tools=None, **kw):
+            self.seen.append(messages)
+            async for item in super().complete_stream(
+                agent_model=agent_model, messages=messages, tools=tools
+            ):
+                yield item
+
+    class GiantSyscall:
+        async def mediate(self, call, **kwargs):
+            return SyscallResult(output={"content": "x" * 60_000}, allowed=True)
+
+    config = AgentConfig(
+        id="cap-test",
+        name="Cap Test",
+        model=ModelConfig(provider_id="test", name="scripted"),
+        capabilities=[CapabilityGrant(name="read_file")],
+    )
+    model = RecordingModel(
+        [
+            ScriptedResponse(
+                tool_calls=[{"id": "r1", "name": "read_file", "args": {"path": "big.txt"}}]
+            ),
+            ScriptedResponse(content="done"),
+        ]
+    )
+    result = await Harness(model=model).run(
+        agent_config=config,
+        session=None,
+        message="read big.txt",
+        syscall_handler=GiantSyscall(),
+        run_id=str(uuid.uuid4()),
+    )
+    assert result.status == "completed"
+    tool_msg = next(m for m in model.seen[1] if m["role"] == "tool")
+    assert len(tool_msg["content"]) < 60_000
+    assert "[truncated" in tool_msg["content"]
+    assert str(TOOL_RESULT_MAX_CHARS) in tool_msg["content"]
+
+
+@pytest.mark.asyncio
+async def test_context_overflow_forces_compaction_and_retries(db, workspace, monkeypatch):
+    """A mid-run context-window error triggers one forced compaction + retry."""
+    from types import SimpleNamespace
+
+    from agentos.harness import compaction as compaction_mod
+
+    async def fake_summary(middle, previous_summary, model_str, api_key=None, base_url=None):
+        return "condensed earlier conversation"
+
+    monkeypatch.setattr(compaction_mod, "generate_summary", fake_summary)
+
+    class OverflowOnceModel(ScriptedModel):
+        def __init__(self, responses):
+            super().__init__(responses)
+            self.overflows = 0
+            self.seen: list[list[dict]] = []
+
+        async def complete_stream(self, agent_model=None, messages=None, tools=None, **kw):
+            if self.overflows == 0:
+                self.overflows += 1
+                raise Exception(
+                    "Error code: 400 — this model's maximum context length is 8192 tokens"
+                )
+            self.seen.append(messages)
+            async for item in super().complete_stream(
+                agent_model=agent_model, messages=messages, tools=tools
+            ):
+                yield item
+
+    # Prior messages fat enough that the token-budget tail walk stops before
+    # reaching the head — leaving a middle section for compaction to summarize
+    # (tail budget ≈ 18k tokens; ~4k chars ≈ ~1k tokens per message).
+    recent = [
+        SimpleNamespace(
+            role="user" if i % 2 == 0 else "assistant", content=f"msg {i} " + "y" * 4000
+        )
+        for i in range(26)
+    ]
+    config = AgentConfig(
+        id="overflow-test",
+        name="Overflow Test",
+        model=ModelConfig(provider_id="test", name="scripted"),
+        capabilities=[],
+    )
+    model = OverflowOnceModel([ScriptedResponse(content="recovered")])
+    result = await Harness(model=model).run(
+        agent_config=config,
+        session=None,
+        message="continue",
+        syscall_handler=StubSyscallHandler(db=db, workspace_path=workspace),
+        run_id=str(uuid.uuid4()),
+        recent_messages=recent,
+    )
+    assert result.status == "completed"
+    assert result.final_answer == "recovered"
+    assert result.compacted is True
+    assert model.overflows == 1
+    # The retry saw a compacted history — the summary stub replaced the middle.
+    retry_text = str(model.seen[0])
+    assert "condensed earlier conversation" in retry_text
+    assert "msg 25" in retry_text  # tail survived
+
+
+@pytest.mark.asyncio
+async def test_context_overflow_fails_clearly_when_unrecoverable(db, workspace):
+    """If compaction cannot shrink the context, the run fails with a clear message."""
+
+    class AlwaysOverflowModel:
+        async def complete_stream(self, **_kwargs):
+            raise Exception("request too large for model context window")
+            yield
+
+    config = AgentConfig(
+        id="overflow-fail",
+        name="Overflow Fail",
+        model=ModelConfig(provider_id="test", name="scripted"),
+        capabilities=[],
+    )
+    result = await Harness(model=AlwaysOverflowModel()).run(
+        agent_config=config,
+        session=None,
+        message="hi",
+        syscall_handler=StubSyscallHandler(db=db, workspace_path=workspace),
+        run_id=str(uuid.uuid4()),
+    )
+    assert result.status == "failed"
+    assert "context" in result.final_answer.lower()
+
+
+def test_is_context_overflow_patterns():
+    from agentos.harness.loop import _is_context_overflow
+
+    assert _is_context_overflow(Exception("maximum context length is 8192"))
+    assert _is_context_overflow(Exception("Request too large for model"))
+    assert _is_context_overflow(Exception("reduce the length of the messages"))
+
+    class ContextWindowExceededError(Exception):
+        pass
+
+    assert _is_context_overflow(ContextWindowExceededError("litellm style"))
+    assert not _is_context_overflow(Exception("rate limit exceeded"))
+    assert not _is_context_overflow(TimeoutError("idle"))

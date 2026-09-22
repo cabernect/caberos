@@ -2,7 +2,9 @@ import { useState, useRef, useEffect, useImperativeHandle, useCallback, forwardR
 import { Paperclip, FileText, Image as ImageIcon, Link, Wrench, ArrowUp, HelpCircle, Check, Sparkles, Square } from "lucide-react";
 import { ModelSelector } from "@/components/ModelSelector";
 import { ThinkingToggle } from "@/components/ThinkingToggle";
+import { AttachmentCard } from "@/components/AttachmentCard";
 import { api } from "@/lib/api";
+import { fileHash, formatAttachmentSize, moveItem } from "@/lib/attachmentUtils";
 import type { SkillInfo } from "@/lib/types";
 
 export interface Attachment {
@@ -10,10 +12,22 @@ export interface Attachment {
   mimeType: string;
   data: string; // base64 for uploaded files/images, URL for URL attachments
   filename: string;
+  /** Stable key — async preview/hash updates match on this, not index. */
+  id?: string;
+  /** Card metadata — populated when the attachment is staged. */
+  size?: number;
+  hash?: string;
+  /** Object URL for image thumbnails — revoked on remove/send. */
+  previewUrl?: string;
+  /** Backend-rendered mini preview (e.g. PDF page 1 as data-url). */
+  thumb?: string;
+  /** Fetched <title> for URL attachments — falls back to the domain. */
+  urlTitle?: string;
 }
 
 export interface ChatInputBarHandle {
   addFiles: (files: File[]) => void;
+  prefill: (text: string) => void;
 }
 
 export interface ContextItem {
@@ -48,7 +62,7 @@ interface ChatInputBarProps {
     context: ContextItem[],
     attachments?: Attachment[],
     skill?: string,
-  ) => void;
+  ) => boolean | void | Promise<boolean | void>;
   onStop?: () => void;
   activeElicitation?: ActiveElicitation | null;
   onElicitationRespond?: (response: string) => void;
@@ -90,6 +104,8 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
   const [thinkingEffort, setThinkingEffort] = useState<string>(defaultThinkingEffort || "medium");
   const [contextItems, setContextItems] = useState<ContextItem[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  // Transient tray note — e.g. "duplicate skipped". Auto-clears.
+  const [trayNote, setTrayNote] = useState<string | null>(null);
   const [showContextMenu, setShowContextMenu] = useState(false);
   const [showUrlInput, setShowUrlInput] = useState(false);
   const [urlValue, setUrlValue] = useState("");
@@ -175,7 +191,29 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
     }
   }, [activeElicitation?.id, isElicitation]);
 
-  const handleSend = () => {
+  // Auto-clear tray notes.
+  useEffect(() => {
+    if (!trayNote) return;
+    const t = setTimeout(() => setTrayNote(null), 4000);
+    return () => clearTimeout(t);
+  }, [trayNote]);
+
+  // Object URLs outlive their cards only while the attachment exists —
+  // revoked on remove and after a successful send.
+  const revokePreviewUrls = useCallback((list: Attachment[]) => {
+    for (const a of list) {
+      if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+    }
+  }, []);
+
+  // Unmount cleanup — any staged attachments' object URLs are released.
+  const attachmentsRef = useRef<Attachment[]>([]);
+  attachmentsRef.current = attachments;
+  useEffect(() => {
+    return () => revokePreviewUrls(attachmentsRef.current);
+  }, [revokePreviewUrls]);
+
+  const handleSend = async () => {
     if (isElicitation) {
       // Elicitation mode — send as elicitation response
       if (activeElicitation?.multiSelect && activeElicitation.options) {
@@ -221,9 +259,18 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
         }
       : null;
 
-    onSend(messageText, overrideWithThinking, contextItems, attachments.length > 0 ? attachments : undefined, skill);
+    const sent = await onSend(
+      messageText,
+      overrideWithThinking,
+      contextItems,
+      attachments.length > 0 ? attachments : undefined,
+      skill,
+    );
+    // Failed sends keep the draft and the tray — nothing is silently lost.
+    if (sent === false) return;
     setText("");
     setContextItems([]);
+    revokePreviewUrls(attachments);
     setAttachments([]);
   };
 
@@ -256,129 +303,186 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
     });
   }, []);
 
-  // Process dropped/selected files and add them as attachments.
+  // Process dropped/pasted/selected files into the attachment tray.
   // Exposed via ref so the parent (Conversation) can forward drops
   // from the entire chat view, not just the input bar.
+  //
+  // Pipeline per file: content-hash dedupe → stage card immediately
+  // (object URL for images) → read bytes for transport → lazily fetch
+  // a bounded backend preview for PDF/Office thumbnails.
   const addFiles = useCallback(async (files: File[]) => {
     if (isElicitation) return;
+    // Staged hashes live outside state — React batches the setAttachments
+    // calls below, so the ref alone can't catch dupes within one batch.
+    const staged = new Set<string>();
     for (const file of files) {
-      if (file.type.startsWith("image/")) {
-        const base64 = await fileToBase64(file);
-        setAttachments((prev) => [...prev, {
-          type: "image",
-          mimeType: file.type || "image/png",
-          data: base64,
-          filename: file.name,
-        }]);
-      } else if (file.type.startsWith("text/") || file.type === "application/json") {
-        const content = await file.text();
-        setAttachments((prev) => [...prev, {
-          type: "file",
-          mimeType: file.type || "text/plain",
-          data: content,
-          filename: file.name,
-        }]);
-      } else {
-        const base64 = await fileToBase64(file);
-        setAttachments((prev) => [...prev, {
-          type: "file",
-          mimeType: file.type || "application/octet-stream",
-          data: base64,
-          filename: file.name,
-        }]);
+      // Content-hash dedupe — same bytes pasted/dropped twice collapse.
+      let hash = "";
+      try {
+        hash = await fileHash(file);
+      } catch {}
+      const dupe =
+        hash &&
+        (staged.has(hash) || attachmentsRef.current.some((a) => a.hash === hash));
+      if (dupe) {
+        setTrayNote(`"${file.name}" already attached — duplicate skipped`);
+        continue;
       }
-      setContextItems((prev) => [...prev, { type: "file", label: file.name }]);
-    }
-  }, [fileToBase64, isElicitation]);
+      if (hash) staged.add(hash);
 
-  useImperativeHandle(ref, () => ({ addFiles }), [addFiles]);
+      const isImage = file.type.startsWith("image/");
+      const isText = file.type.startsWith("text/") || file.type === "application/json";
+      const att: Attachment = {
+        type: isImage ? "image" : "file",
+        mimeType: file.type || (isImage ? "image/png" : "application/octet-stream"),
+        data: "",
+        filename: file.name || "pasted-image.png",
+        id: crypto.randomUUID(),
+        size: file.size,
+        hash,
+        previewUrl: isImage ? URL.createObjectURL(file) : undefined,
+      };
+      setAttachments((prev) => [...prev, att]);
+      setContextItems((prev) => [
+        ...prev,
+        {
+          type: isImage ? "image" : "file",
+          label: att.filename,
+          title: `${att.filename} · ${formatAttachmentSize(file.size)}`,
+        },
+      ]);
+
+      // Transport payload — text files go as text, everything else base64.
+      const data = isText ? await file.text() : await fileToBase64(file);
+      setAttachments((prev) =>
+        prev.map((a) => (a.id === att.id ? { ...a, data } : a)),
+      );
+
+      // Lazy bounded preview for non-image kinds (PDF first page, Office
+      // first slide/sheet/elements) — best-effort card thumbnail.
+      if (!isImage && agentId) {
+        api
+          .previewAttachment(agentId, file)
+          .then((p) => {
+            if (p.thumb_png) {
+              setAttachments((prev) =>
+                prev.map((a) =>
+                  a.id === att.id
+                    ? { ...a, thumb: `data:image/png;base64,${p.thumb_png}` }
+                    : a,
+                ),
+              );
+            }
+          })
+          .catch(() => {});
+      }
+    }
+  }, [fileToBase64, isElicitation, agentId]);
+
+  const prefill = useCallback((value: string) => {
+    setText(value);
+    textareaRef.current?.focus();
+  }, []);
+
+  useImperativeHandle(ref, () => ({ addFiles, prefill }), [addFiles, prefill]);
 
   const handleImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
-    if (!files) return;
-    for (const file of Array.from(files)) {
-      const base64 = await fileToBase64(file);
-      const att: Attachment = {
-        type: "image",
-        mimeType: file.type || "image/png",
-        data: base64,
-        filename: file.name,
-      };
-      setAttachments((prev) => [...prev, att]);
-      setContextItems((prev) => [...prev, { type: "image", label: file.name }]);
-    }
+    if (files) await addFiles(Array.from(files));
     setShowContextMenu(false);
     if (imageInputRef.current) imageInputRef.current.value = "";
   };
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
-    if (!files) return;
-    for (const file of Array.from(files)) {
-      if (file.type.startsWith("text/") || file.type === "application/json") {
-        // Text file — read as text
-        const content = await file.text();
-        setAttachments((prev) => [...prev, {
-          type: "file",
-          mimeType: file.type || "text/plain",
-          data: content,
-          filename: file.name,
-        }]);
-      } else {
-        // Binary file (PDF, docx, image, etc.) — read as base64, backend saves to workspace
-        const base64 = await fileToBase64(file);
-        setAttachments((prev) => [...prev, {
-          type: "file",
-          mimeType: file.type || "application/octet-stream",
-          data: base64,
-          filename: file.name,
-        }]);
-      }
-      setContextItems((prev) => [...prev, { type: "file", label: file.name }]);
-    }
+    if (files) await addFiles(Array.from(files));
     setShowContextMenu(false);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
+  const addUrlAttachment = useCallback(
+    (url: string) => {
+      let label = url;
+      try {
+        label = new URL(url).hostname;
+      } catch {}
+      const att: Attachment = {
+        type: "url",
+        mimeType: "text/uri-list",
+        data: url,
+        filename: "",
+        id: crypto.randomUUID(),
+      };
+      setAttachments((prev) => [...prev, att]);
+      setContextItems((prev) => [...prev, { type: "url", label, title: url }]);
+      // Best-effort <title> fetch — the card upgrades from bare domain.
+      if (agentId) {
+        api
+          .previewUrl(agentId, url)
+          .then((meta) => {
+            if (meta.title) {
+              setAttachments((prev) =>
+                prev.map((a) => (a.id === att.id ? { ...a, urlTitle: meta.title! } : a)),
+              );
+              setContextItems((prev) =>
+                prev.map((c) =>
+                  c.type === "url" && c.title === url
+                    ? { ...c, label: meta.title || c.label }
+                    : c,
+                ),
+              );
+            }
+          })
+          .catch(() => {});
+      }
+    },
+    [agentId],
+  );
+
   const handleUrlSubmit = () => {
     const url = urlValue.trim();
     if (!url) return;
-    let label = url;
-    try {
-      label = new URL(url).hostname;
-    } catch {}
-    setAttachments((prev) => [...prev, {
-      type: "url",
-      mimeType: "text/uri-list",
-      data: url,
-      filename: "",
-    }]);
-    setContextItems((prev) => [...prev, { type: "url", label, title: url }]);
+    addUrlAttachment(url);
     setUrlValue("");
     setShowUrlInput(false);
     setShowContextMenu(false);
   };
 
   const removeAttachment = (index: number) => {
+    const att = attachments[index];
+    if (att?.previewUrl) URL.revokeObjectURL(att.previewUrl);
     setAttachments(attachments.filter((_, i) => i !== index));
     setContextItems(contextItems.filter((_, i) => i !== index));
   };
 
-  // Pasting a bare URL auto-attaches it as a chip (labelled by domain) instead
-  // of dropping it into the text. URLs inside longer pasted text stay in text.
+  // Keyboard-accessible reorder — attachments and their context chips
+  // move together so the parallel arrays never drift.
+  const moveAttachment = (index: number, delta: number) => {
+    setAttachments((prev) => moveItem(prev, index, delta));
+    setContextItems((prev) => moveItem(prev, index, delta));
+  };
+
+  // Clipboard handling (W3c): files in the clipboard (screenshots, copied
+  // images, dragged files) become attachments instead of dead base64.
+  // Mixed text+image pastes attach the image AND insert the text — the
+  // event isn't consumed so the text still lands in the textarea.
+  // A bare URL alone still becomes a URL chip.
   const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (isElicitation) return;
+    const files = Array.from(e.clipboardData.files || []);
+    if (files.length > 0) {
+      const clipboardText = e.clipboardData.getData("text").trim();
+      if (!clipboardText) {
+        // Pure file paste — consume so nothing tries to insert a path.
+        e.preventDefault();
+      }
+      void addFiles(files);
+      return;
+    }
     const pasted = e.clipboardData.getData("text").trim();
     if (!/^https?:\/\/\S+$/.test(pasted)) return;
     e.preventDefault();
-    let label = pasted;
-    try {
-      label = new URL(pasted).hostname;
-    } catch {}
-    setAttachments((prev) => [
-      ...prev,
-      { type: "url", mimeType: "text/uri-list", data: pasted, filename: "" },
-    ]);
-    setContextItems((prev) => [...prev, { type: "url", label, title: pasted }]);
+    addUrlAttachment(pasted);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -613,34 +717,40 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
         </div>
       )}
 
-      {/* Attachment chips stay in normal flow below the model controls. */}
-      {!isElicitation && contextItems.length > 0 && (
-        <div className="mx-auto mb-1 flex max-w-[672px] flex-wrap gap-1.5">
-          {contextItems.map((item, i) => (
-            <span
-              key={i}
-              className="flex items-center gap-1 rounded-[5px] border px-2 py-1 text-[11px]"
-              style={{
-                borderColor: "var(--border)",
-                background: "var(--white)",
-                color: "var(--ink-2)",
-              }}
-            >
-              {item.type === "file" && <FileText className="h-3 w-3" />}
-              {item.type === "image" && <ImageIcon className="h-3 w-3" />}
-              {item.type === "url" && <Link className="h-3 w-3" />}
-              {item.type === "skill" && <Wrench className="h-3 w-3" />}
-              <span className="max-w-[150px] truncate font-mono" title={item.title}>
-                {item.label}
-              </span>
-              <button
-                onClick={() => removeAttachment(i)}
-                className="text-[var(--ink-3)] hover:text-[var(--ink)]"
-              >
-                ×
-              </button>
-            </span>
-          ))}
+      {/* Attachment tray (W3c) — cards with thumbnails, size, kind,
+          reorder, remove. Attachments and context chips share index
+          order; the card reads from the richer attachment record. */}
+      {!isElicitation && attachments.length > 0 && (
+        <div className="mx-auto mb-1.5 max-w-[672px]">
+          {trayNote && (
+            <p className="mb-1 text-[11px] text-[var(--ink-3)]" role="status">
+              {trayNote}
+            </p>
+          )}
+          <div className="flex flex-wrap gap-1.5">
+            {attachments.map((att, i) => {
+              const item = contextItems[i];
+              return (
+                <AttachmentCard
+                  key={att.id || i}
+                  type={att.type}
+                  filename={att.filename}
+                  mimeType={att.mimeType}
+                  size={att.size}
+                  url={att.type === "url" ? att.data : undefined}
+                  title={att.type === "url" ? att.urlTitle || item?.label : undefined}
+                  thumbUrl={att.previewUrl || att.thumb}
+                  controls={{
+                    onMoveLeft: () => moveAttachment(i, -1),
+                    onMoveRight: () => moveAttachment(i, 1),
+                    onRemove: () => removeAttachment(i),
+                    canMoveLeft: i > 0,
+                    canMoveRight: i < attachments.length - 1,
+                  }}
+                />
+              );
+            })}
+          </div>
         </div>
       )}
 
@@ -1134,3 +1244,4 @@ function ContextCircle({
     </div>
   );
 }
+

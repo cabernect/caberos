@@ -120,6 +120,23 @@ class Attachment:
     filename: str = ""  # original filename (for display + audit)
 
 
+def _dedupe_attachment_target(workspace_path: str, filename: str, index: int) -> str:
+    """First free workspace-relative path under attachments/ — the original
+    filename, with Finder-style " (n)" suffixes on collision. The storer
+    writes sequentially, so the disk check also dedupes same-name files
+    within one message."""
+    base = Path(filename).name or f"attachment_{index}"
+    stem, suffix = Path(base).stem, Path(base).suffix
+    workspace = Path(workspace_path)
+    n = 0
+    while True:
+        name = base if n == 0 else f"{stem} ({n}){suffix}"
+        rel = f"attachments/{name}"
+        if not (workspace / rel).exists():
+            return rel
+        n += 1
+
+
 async def _prepare_attachment_context(
     attachments: list[Attachment], workspace_path: str
 ) -> list[dict[str, Any]]:
@@ -127,7 +144,6 @@ async def _prepare_attachment_context(
     import asyncio
     import base64
 
-    attachment_dir = Path(workspace_path) / "attachments"
     records: list[dict[str, Any]] = []
 
     for index, attachment in enumerate(attachments, start=1):
@@ -144,8 +160,9 @@ async def _prepare_attachment_context(
             records.append(record)
             continue
 
-        safe_name = Path(attachment.filename).name or attachment_id
-        file_path = attachment_dir / f"{attachment_id}_{safe_name}"
+        file_path = Path(workspace_path) / _dedupe_attachment_target(
+            workspace_path, attachment.filename or "", index
+        )
 
         if attachment.type == "file" and (
             attachment.mime_type.startswith("text/") or attachment.mime_type == "application/json"
@@ -169,6 +186,7 @@ async def _prepare_attachment_context(
             record["error"] = f"Could not save attachment: {exc}"
         else:
             record["path"] = str(file_path.relative_to(Path(workspace_path)))
+            record["filename"] = file_path.name
             record["size"] = len(raw)
         records.append(record)
 
@@ -287,28 +305,11 @@ class Pipeline:
             if hasattr(result_emit, "__await__"):
                 await result_emit
 
-        # Store the user message (with secrets redacted, if any)
-        # Persist attachment metadata (not the base64 data — too large for SQLite)
-        import json as _json
-
+        # Store the user message (with secrets redacted, if any). Attachment
+        # metadata is populated after uploads are stored — the storer resolves
+        # the real workspace paths (deduped), and persisting guesses would
+        # point preview chips at the wrong file on collisions.
         attachment_meta = None
-        if message.attachments:
-            attachment_meta = _json.dumps(
-                [
-                    {
-                        "id": f"attachment_{index}",
-                        "type": attachment.type,
-                        "mime_type": attachment.mime_type,
-                        "filename": attachment.filename,
-                        **(
-                            {"url": attachment.data}
-                            if attachment.type in ("url", "image_url")
-                            else {}
-                        ),
-                    }
-                    for index, attachment in enumerate(message.attachments, start=1)
-                ]
-            )
 
         user_msg = Message(
             id=str(uuid.uuid4()),
@@ -412,6 +413,31 @@ class Pipeline:
                 attachment_context = await _prepare_attachment_context(
                     message.attachments or [], str(workspace_path)
                 )
+
+                # Persist attachment metadata with the resolved workspace
+                # paths so preview chips resolve the stored file.
+                if attachment_context:
+                    import json as _json
+
+                    user_msg.attachments = _json.dumps(
+                        [
+                            {
+                                k: r[k]
+                                for k in (
+                                    "id",
+                                    "type",
+                                    "mime_type",
+                                    "filename",
+                                    "url",
+                                    "path",
+                                    "size",
+                                )
+                                if k in r
+                            }
+                            for r in attachment_context
+                        ]
+                    )
+                    await self.db.flush()
 
                 # Set up syscall handler
                 syscall_handler = SyscallHandler(
