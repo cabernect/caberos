@@ -191,19 +191,45 @@ class BrowserSession:
 
     # -- module verbs --------------------------------------------------------
 
-    async def observe(self) -> Observation:
+    async def observe(self, scope: str | None = None) -> Observation:
         self.last_activity = time.monotonic()
         tree = await self._send("Accessibility.getFullAXTree")
         doc = await self._send(
             "Runtime.evaluate", {"expression": "location.href + '|' + document.title"}
         )
         url, _, title = doc["result"]["value"].partition("|")
+        nodes = tree.get("nodes", [])
+
+        scope_ids: set[str] | None = None
+        if scope:
+            backend_id = await self._resolve_scope(scope)
+            by_id = {n["nodeId"]: n for n in nodes}
+            root = next((n for n in nodes if n.get("backendDOMNodeId") == backend_id), None)
+            if root is None:
+                raise BrowserError(f"scope not in accessibility tree: {scope}")
+            # AX subtree walk — project every non-ignored role inside the
+            # region (scoped observe exists to reach role-filtered content
+            # like table rows; the element cap still applies).
+            scope_ids = set()
+            stack = [root["nodeId"]]
+            while stack:
+                nid = stack.pop()
+                if nid in scope_ids or nid not in by_id:
+                    continue
+                scope_ids.add(nid)
+                stack.extend(by_id[nid].get("childIds") or [])
+
         elements: list[Element] = []
         omitted = 0
-        for node in tree.get("nodes", []):
-            role = (node.get("role") or {}).get("value", "")
-            if role not in KEEP_ROLES or node.get("ignored"):
+        for node in nodes:
+            if node.get("ignored"):
                 continue
+            if scope_ids is not None:
+                if node["nodeId"] not in scope_ids:
+                    continue
+            elif (node.get("role") or {}).get("value", "") not in KEEP_ROLES:
+                continue
+            role = (node.get("role") or {}).get("value", "")
             name = (node.get("name") or {}).get("value", "")
             value = (node.get("value") or {}).get("value")
             ref = f"e{node.get('backendDOMNodeId') or node['nodeId']}"
@@ -224,6 +250,21 @@ class BrowserSession:
         obs = Observation(url=url, title=title, elements=elements)
         self._last_obs = obs
         return obs
+
+    async def _resolve_scope(self, scope: str) -> int:
+        """Scope string → backendDOMNodeId. Accepts an element ref (`e123`)
+        or a CSS selector resolved against the live DOM."""
+        if scope.startswith("e") and scope[1:].isdigit():
+            return int(scope[1:])
+        root = await self._send("DOM.getDocument", {"depth": 0})
+        hit = await self._send(
+            "DOM.querySelector",
+            {"nodeId": root["root"]["nodeId"], "selector": scope},
+        )
+        if not hit.get("nodeId"):
+            raise BrowserError(f"scope matched nothing: {scope}")
+        described = await self._send("DOM.describeNode", {"nodeId": hit["nodeId"]})
+        return described["node"]["backendNodeId"]
 
     async def act(self, action: str, ref: str, value: str | None = None) -> str:
         self.last_activity = time.monotonic()

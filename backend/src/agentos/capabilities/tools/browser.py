@@ -67,7 +67,7 @@ async def browser_observe(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]
             result["note"] = "saved to workspace; model lacks vision — not sent inline"
         return result
 
-    obs = await session.observe()
+    obs = await session.observe(scope=args.get("scope"))
     return {"observation": obs.serialize()}
 
 

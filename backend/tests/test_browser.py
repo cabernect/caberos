@@ -357,3 +357,45 @@ async def test_install_runtime_unsupported_platform(monkeypatch):
     monkeypatch.setattr(runtime, "_platform_key", lambda: None)
     out = await runtime.install_runtime()
     assert out["status"] == "unsupported_platform"
+
+
+SCOPED_PAGE = """<!DOCTYPE html><html><head><title>scoped</title></head><body>
+<main><h1>Report</h1><button id="go">Go</button>
+<ul id="items"><li>alpha</li><li>beta</li><li>gamma</li></ul></main>
+</body></html>"""
+
+
+@needs_browser
+async def test_scoped_observe_reaches_role_filtered_content(tmp_path):
+    """Default obs drops listitems; scope (CSS or landmark ref) reveals them."""
+    srv = tmp_path / "srv"
+    srv.mkdir(parents=True)
+    (srv / "index.html").write_text(SCOPED_PAGE)
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(srv))
+    httpd = http.server.HTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{httpd.server_port}/index.html"
+
+    session = BrowserSession(_browser, tmp_path / "profile")
+    try:
+        obs = await session.open(url)
+        # default projection: no listitem role survives
+        assert not any(e.role == "listitem" for e in obs.elements)
+
+        # scope by CSS selector into the list
+        scoped = await session.observe(scope="#items")
+        names = {e.name for e in scoped.elements}
+        assert {"alpha", "beta", "gamma"} <= names
+
+        # scope by a visible landmark ref (main) — same content reachable
+        main_ref = next(e.ref for e in obs.elements if e.role == "main")
+        scoped2 = await session.observe(scope=main_ref)
+        names2 = {e.name for e in scoped2.elements}
+        assert {"alpha", "beta", "gamma"} <= names2
+
+        # bad scope errors honestly
+        with pytest.raises(BrowserError, match="matched nothing"):
+            await session.observe(scope="#nope")
+    finally:
+        await session.close()
+        httpd.shutdown()

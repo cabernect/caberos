@@ -471,7 +471,11 @@ def register_builtin_capabilities() -> None:
                 "properties": {
                     "scope": {
                         "type": "string",
-                        "description": "Optional region hint to inspect omitted elements",
+                        "description": (
+                            "Drill into a region: an element ref (e.g. 'e42' — landmarks like "
+                            "main/navigation are the usual handles) or a CSS selector. Shows all "
+                            "roles in that subtree, including ones filtered from the default view"
+                        ),
                     },
                     "visual": {
                         "type": "boolean",
