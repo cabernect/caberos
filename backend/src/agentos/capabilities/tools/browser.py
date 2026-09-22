@@ -127,6 +127,24 @@ async def browser_extract(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]
     agent_id, _, run_id = _ids(kwargs)
     session = browser_registry.get_owned(run_id, agent_id)
     data = await session.extract(args["expression"])
+    ws = kwargs.get("workspace_path")
+
+    # Large extracts are staged as workspace artifacts with a bounded
+    # preview — never dumped wholesale into context (plan: extract staging).
+    if len(data) > _MAX_EXTRACT_CHARS and ws:
+        import time
+
+        out_dir = Path(ws) / "artifacts" / "browser"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / f"extract-{int(time.time())}.json"
+        path.write_text(data)
+        return {
+            "staged": str(path.relative_to(ws)),
+            "bytes": len(data),
+            "preview": data[:_MAX_EXTRACT_CHARS],
+            "truncated": True,
+            "note": "full result written to workspace — read_file for the rest",
+        }
     truncated = len(data) > _MAX_EXTRACT_CHARS
     return {
         "data": data[:_MAX_EXTRACT_CHARS],

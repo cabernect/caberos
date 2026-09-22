@@ -576,3 +576,35 @@ async def test_scroll_moves_viewport_and_reveals(tmp_path):
     finally:
         await session.close()
         httpd.shutdown()
+
+
+@needs_browser
+async def test_large_extract_stages_to_workspace(tmp_path):
+    """>20k extract lands as a workspace artifact + bounded preview."""
+    from agentos.browser.registry import browser_registry
+    from agentos.capabilities.tools.browser import browser_extract
+
+    httpd, url = _serve(tmp_path / "srv")
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    try:
+        await browser_open(
+            {"url": url},
+            agent_id="a",
+            session_id="s",
+            run_id="ext-run",
+            workspace_path=str(ws),
+        )
+        out = await browser_extract(
+            {"expression": "Array(5000).fill('row-data-here').join(',')"},
+            agent_id="a",
+            run_id="ext-run",
+            workspace_path=str(ws),
+        )
+        assert out["staged"].startswith("artifacts/browser/extract-")
+        assert len(out["preview"]) == 20_000
+        staged = ws / out["staged"]
+        assert staged.exists() and len(staged.read_text()) > 20_000
+    finally:
+        await browser_registry.close_for_run("ext-run")
+        httpd.shutdown()
