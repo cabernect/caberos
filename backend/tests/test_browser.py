@@ -94,7 +94,7 @@ def test_runtime_status_honest(monkeypatch):
     from agentos.browser import runtime
 
     monkeypatch.setenv("AGENTOS_BROWSER_BINARY", "/nonexistent/chrome")
-    monkeypatch.setattr(runtime, "_playwright_cache_roots", lambda: [Path("/nonexistent")])
+    monkeypatch.setattr(runtime, "runtime_root", lambda: Path("/nonexistent"))
     status = runtime.runtime_status()
     assert status["status"] == "runtime_unavailable"
 
@@ -275,7 +275,6 @@ def test_runtime_status_reports_state(monkeypatch, tmp_path):
     from agentos.config import settings
 
     monkeypatch.setattr(settings, "browser_binary", "")
-    monkeypatch.setattr(runtime, "_playwright_cache_roots", lambda: [])
     monkeypatch.setattr(runtime, "runtime_root", lambda: tmp_path / "brt")
     status = runtime.runtime_status()
     assert status["status"] == "runtime_unavailable"
@@ -351,7 +350,6 @@ async def test_install_runtime_fetches_extracts_and_healthchecks(monkeypatch, tm
     from agentos.config import settings
 
     monkeypatch.setattr(settings, "browser_binary", "")
-    monkeypatch.setattr(runtime, "_playwright_cache_roots", lambda: [])
     assert runtime.find_browser_binary() == Path(out["binary"])
 
     # remove

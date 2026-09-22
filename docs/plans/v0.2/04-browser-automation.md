@@ -174,10 +174,13 @@ scratch). Spike results in `scripts/spike_browser/RESULTS.md`.
 **Implemented:**
 - `browser/` module: `cdp.py` (session core — launch/attach/observe/act/
   extract/screenshot, dedicated reader task, event-driven waits, Fetch
-  interception), `runtime.py` (discovery + managed install of pinned
-  Chrome for Testing 145.0.7632.6 → `data/browser-runtime/`, sha256 +
-  codesign + `--version` health check), `registry.py` (run-scoped
-  ownership, 120s idle reaper, run-cancel + gateway-shutdown cleanup).
+  interception), `runtime.py` (managed install of pinned Chrome for
+  Testing 145.0.7632.6 → `data/browser-runtime/`, sha256 + codesign +
+  `--version` health check; binary resolution is exactly two auditable
+  sources: `AGENTOS_BROWSER_BINARY`/`browser_binary` operator override or
+  the managed install — no third-party cache scanning), `registry.py`
+  (run-scoped ownership, 120s idle reaper, run-cancel + gateway-shutdown
+  cleanup).
 - Five capabilities: `browser_open` (egress+approval; `mode=research`,
   `profile`, `visible`), `browser_observe` (`scope` ref-or-CSS drill-in,
   `visual` screenshots → `artifacts/browser/`, vision-gated

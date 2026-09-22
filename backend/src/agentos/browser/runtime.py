@@ -2,10 +2,15 @@
 
 Resolution order for ``find_browser_binary``:
 
-1. ``AGENTOS_BROWSER_BINARY`` env override — explicit operator choice.
+1. ``AGENTOS_BROWSER_BINARY`` / ``settings.browser_binary`` — the
+   operator's explicit choice of any Chromium-family binary.
 2. The CaberOS-managed install under ``data/browser-runtime/``.
-3. Playwright-managed cache — a Chromium-family binary already present.
-4. ``runtime_unavailable`` — callers report honestly, never silently install.
+3. ``runtime_unavailable`` — callers report honestly, never silently install.
+
+Two sources, both auditable: operator-picked or pinned-and-verified. We
+deliberately do NOT scan other tools' caches (e.g. Playwright's) — a binary
+we didn't install, can't pin, and don't control the lifecycle of is not a
+dependency worth having.
 
 Install path downloads the pinned Chrome for Testing build (the version the
 W4 spike validated), verifies the downloaded zip's integrity, installs under
@@ -64,22 +69,9 @@ def _binary_in_install(root: Path, plat: str) -> Path | None:
     return hits[0] if hits and hits[0].is_file() else None
 
 
-def _playwright_cache_roots() -> list[Path]:
-    roots = []
-    if custom := os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
-        roots.append(Path(custom))
-    roots.append(Path.home() / "Library" / "Caches" / "ms-playwright")  # macOS
-    roots.append(Path.home() / ".cache" / "ms-playwright")  # Linux
-    return roots
-
-
 def find_browser_binary() -> Path | None:
     """Locate a compatible Chromium-family binary, or None."""
-    override = os.environ.get("AGENTOS_BROWSER_BINARY")
-    if not override:
-        from ..config import settings
-
-        override = settings.browser_binary
+    override = os.environ.get("AGENTOS_BROWSER_BINARY") or settings.browser_binary
     if override:
         p = Path(override).expanduser()
         return p if p.is_file() else None
@@ -89,21 +81,6 @@ def find_browser_binary() -> Path | None:
         managed = _binary_in_install(runtime_root() / RUNTIME_VERSION, plat)
         if managed:
             return managed
-
-    for root in _playwright_cache_roots():
-        if not root.is_dir():
-            continue
-        # Top-level .app only — `**` reaches into Helpers/*.app and returns
-        # helper binaries (Alerts/Renderer/GPU), which exit immediately.
-        candidates = (
-            sorted(root.glob("chromium-*/chrome-mac*/*.app/Contents/MacOS/*"))
-            + sorted(root.glob("chromium-*/chrome-linux*/chrome"))
-            + sorted(root.glob("chromium_headless_shell-*/chrome-linux*/headless_shell"))
-            + sorted(root.glob("chromium_headless_shell-*/chrome-mac*/headless_shell*"))
-        )
-        for candidate in candidates:
-            if candidate.is_file() and os.access(candidate, os.X_OK):
-                return candidate
     return None
 
 
