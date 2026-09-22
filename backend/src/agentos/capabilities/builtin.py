@@ -14,6 +14,13 @@ from .tools.artifact import (
     artifact_restore,
     artifact_revise,
 )
+from .tools.browser import (
+    browser_act,
+    browser_close,
+    browser_extract,
+    browser_observe,
+    browser_open,
+)
 from .tools.catalog import capabilities_load, capabilities_search
 from .tools.datetime_tool import datetime_now
 from .tools.file import read_file, search_files, write_file
@@ -416,6 +423,140 @@ def register_builtin_capabilities() -> None:
             require_approval=True,
             subject_scoped=False,
             execute=web_fetch,
+        )
+    )
+
+    # --- Browser module (W4) ---
+    # web_fetch stays the cheap static read; browser_open is the deliberate
+    # upgrade for JS-rendered/interactive pages — the descriptions state the
+    # boundary explicitly so the model doesn't pick wrong.
+
+    registry.register(
+        CapabilityDef(
+            name="browser_open",
+            effects=frozenset({"read"}),
+            kind="tool",
+            description=(
+                "Open a URL in the managed browser for JavaScript-rendered "
+                "content or page interaction. Starts or reuses a browser "
+                "session for this run. For static pages, prefer web_fetch — "
+                "it is cheaper and does not start a browser."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "The URL to open"},
+                },
+                "required": ["url"],
+            },
+            egress=True,
+            require_approval=True,
+            subject_scoped=False,
+            execute=browser_open,
+        )
+    )
+
+    registry.register(
+        CapabilityDef(
+            name="browser_observe",
+            effects=frozenset({"read"}),
+            kind="tool",
+            description=(
+                "Get the current page's semantic observation — interactive "
+                "elements with stable refs, bounded. Re-observes after "
+                "navigation or to inspect a page region."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "scope": {
+                        "type": "string",
+                        "description": "Optional region hint to inspect omitted elements",
+                    },
+                },
+            },
+            egress=False,
+            require_approval=False,
+            subject_scoped=False,
+            execute=browser_observe,
+        )
+    )
+
+    registry.register(
+        CapabilityDef(
+            name="browser_act",
+            effects=frozenset({"external_write"}),
+            kind="tool",
+            description=(
+                "Perform exactly one browser action — click/type/navigate — "
+                "on an element ref from the last observation. Returns the "
+                "post-action change only. Actions that submit, publish, "
+                "purchase, or delete require operator approval."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["click", "type", "navigate"],
+                        "description": "The action to perform",
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": "Element ref (e.g. e14) from the observation — required for click/type",
+                    },
+                    "value": {
+                        "type": "string",
+                        "description": "Text for type, URL for navigate",
+                    },
+                },
+                "required": ["action"],
+            },
+            egress=True,
+            require_approval=True,
+            subject_scoped=False,
+            execute=browser_act,
+        )
+    )
+
+    registry.register(
+        CapabilityDef(
+            name="browser_extract",
+            effects=frozenset({"read"}),
+            kind="tool",
+            description=(
+                "Run a JavaScript expression on the open page and return its "
+                "JSON-serialized value — for structured pulls (tables, lists) "
+                "that don't fit the semantic observation."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "expression": {
+                        "type": "string",
+                        "description": "JS expression evaluated in page context",
+                    },
+                },
+                "required": ["expression"],
+            },
+            egress=False,
+            require_approval=False,
+            subject_scoped=False,
+            execute=browser_extract,
+        )
+    )
+
+    registry.register(
+        CapabilityDef(
+            name="browser_close",
+            effects=frozenset({"read"}),
+            kind="tool",
+            description="Close this run's managed browser session.",
+            parameters_schema={"type": "object", "properties": {}},
+            egress=False,
+            require_approval=False,
+            subject_scoped=False,
+            execute=browser_close,
         )
     )
 

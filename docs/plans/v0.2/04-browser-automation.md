@@ -160,6 +160,12 @@ A reopened persistent session must re-observe before acting. Browser crashes bec
 - Docker runtime parity
 - Repeatable spike benchmark for latency, memory, turns, tokens, and completion reliability
 
+## Deferred (v0.2.+)
+
+- **Recorded browser flows** — capture an act sequence once, replay it
+  deterministically without model turns (durable role+name targeting, not
+  short-lived refs). Composes with Scheduler for repeated research runs.
+
 ## Done when
 
 An agent can research a JavaScript site headlessly within validated latency, resource, and context budgets; request visible takeover for a persistent login on desktop without sending the live visual stream or credentials to the model; resume safely; and produce auditable browser evidence without accessing personal browser data.

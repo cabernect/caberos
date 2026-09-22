@@ -229,11 +229,15 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Shutdown: kill every background terminal process group first — agents
-    # must not orphan processes on gateway exit.
+    # Shutdown: kill every background terminal process group and browser
+    # session first — agents must not orphan processes on gateway exit.
     from .terminal.registry import terminal_registry
 
     await terminal_registry.shutdown_all()
+
+    from .browser.registry import browser_registry
+
+    await browser_registry.shutdown_all()
 
     # Shutdown: disconnect all MCP servers
     await mcp_registry.disconnect_all()

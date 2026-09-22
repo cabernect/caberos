@@ -280,6 +280,13 @@ class SyscallHandler:
         if call.name in ("skills_list", "skills_load", "skills_read_resource"):
             extra_kwargs["agent_id"] = agent_config.id
 
+        # Browser tools: ownership scope (agent/session/run) so a browser
+        # session can only be driven by the run that opened it.
+        if call.name.startswith("browser_"):
+            extra_kwargs["agent_id"] = agent_config.id
+            extra_kwargs["run_id"] = run_id
+            extra_kwargs["session_id"] = getattr(session, "id", None)
+
         # Terminal tools: registry + ownership scope (agent/session/run) so a
         # terminal can only be read or closed by the run that started it.
         if call.name in ("terminal", "read_terminal", "close_terminal"):

@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head><title>Spike — Dynamic Test Page</title></head>
+<body>
+<!-- Deterministic dynamic page: nothing below renders without JS.
+     Exercises: JS render, state-changing click, input echo, data table. -->
+<div id="app">booting…</div>
+<script>
+  const items = Array.from({length: 30}, (_, i) => ({
+    sku: "SKU-" + (1000 + i), name: "Item " + i, price: (i * 3.7).toFixed(2)
+  }));
+  let count = 0;
+  document.getElementById("app").innerHTML = `
+    <h1>Dynamic Catalog</h1>
+    <nav><a href="#a">Home</a> <a href="#b">Docs</a> <a href="#c">About</a></nav>
+    <button id="counter">Count: 0</button>
+    <label>Filter <input id="filter" type="text" placeholder="type to filter"></label>
+    <p id="echo" aria-live="polite" role="status"></p>
+    <table id="grid"><thead><tr><th>SKU</th><th>Name</th><th>Price</th></tr></thead>
+    <tbody>${items.map(i => `<tr><td>${i.sku}</td><td>${i.name}</td><td>${i.price}</td></tr>`).join("")}</tbody></table>
+    <section id="lazy"><p>Lazy section rendered after mount.</p></section>`;
+  document.getElementById("counter").addEventListener("click", () => {
+    count++;
+    document.getElementById("counter").textContent = "Count: " + count;
+    document.getElementById("echo").textContent = "clicked " + count;
+  });
+  document.getElementById("filter").addEventListener("input", (e) => {
+    document.getElementById("echo").textContent = "typed: " + e.target.value;
+  });
+</script>
+</body>
+</html>
