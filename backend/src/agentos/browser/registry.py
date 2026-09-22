@@ -39,7 +39,12 @@ class BrowserRegistry:
         self._reaper_task: asyncio.Task | None = None
 
     async def get_or_open(
-        self, url: str, agent_id: str, session_id: str | None, run_id: str
+        self,
+        url: str,
+        agent_id: str,
+        session_id: str | None,
+        run_id: str,
+        research: bool = False,
     ) -> tuple[BrowserSession, str]:
         """Return the run's live session, or launch one and navigate."""
         existing = self._sessions.get(run_id)
@@ -56,7 +61,7 @@ class BrowserRegistry:
             )
         profile = tempfile.TemporaryDirectory(prefix=f"agentos-browser-{run_id[:8]}-")
         session = BrowserSession(binary, Path(profile.name))
-        obs = await session.open(url)
+        obs = await session.open(url, research=research)
         self._sessions[run_id] = _Managed(
             session=session,
             agent_id=agent_id,
@@ -65,7 +70,13 @@ class BrowserRegistry:
             profile_dir=profile,
         )
         self._ensure_reaper()
-        return session, obs.serialize()
+        note = obs.serialize()
+        if session.fell_back:
+            note += (
+                "\n(note: research mode fell back to normal load — "
+                "site broke with resource blocking)"
+            )
+        return session, note
 
     def get_owned(self, run_id: str, agent_id: str) -> BrowserSession:
         m = self._sessions.get(run_id)

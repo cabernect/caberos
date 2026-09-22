@@ -22,9 +22,14 @@ def _ids(kwargs: dict[str, Any]) -> tuple[str, str | None, str]:
 async def browser_open(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     agent_id, session_id, run_id = _ids(kwargs)
     url = args["url"]
+    research = args.get("mode") == "research"
     try:
         _, result = await browser_registry.get_or_open(
-            url, agent_id=agent_id, session_id=session_id, run_id=run_id
+            url,
+            agent_id=agent_id,
+            session_id=session_id,
+            run_id=run_id,
+            research=research,
         )
     except BrowserError as e:
         if str(e).startswith("runtime_unavailable"):

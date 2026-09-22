@@ -37,6 +37,36 @@ MAX_ELEMENTS = 80
 LOAD_TIMEOUT_S = 30.0
 CMD_TIMEOUT_S = 15.0
 
+# Research mode — heavy non-content resources blocked to cut load time and
+# bandwidth. URL glob patterns for Network.setBlockedURLs.
+RESEARCH_BLOCKLIST = [
+    "*.png",
+    "*.jpg",
+    "*.jpeg",
+    "*.gif",
+    "*.webp",
+    "*.avif",
+    "*.ico",
+    "*.svg",
+    "*.mp4",
+    "*.webm",
+    "*.mov",
+    "*.mp3",
+    "*.wav",
+    "*.ogg",
+    "*.woff",
+    "*.woff2",
+    "*.ttf",
+    "*.otf",
+    "*.eot",
+    "*google-analytics*",
+    "*googletagmanager*",
+    "*doubleclick*",
+    "*facebook.net*",
+    "*hotjar*",
+    "*segment.io*",
+]
+
 
 @dataclass
 class Element:
@@ -96,11 +126,13 @@ class BrowserSession:
         self._msg_id = 0
         self._pending: list[dict] = []
         self._last_obs: Observation | None = None
+        self._research = False
+        self.fell_back = False
         self.last_activity = time.monotonic()
 
     # -- lifecycle ----------------------------------------------------------
 
-    async def open(self, url: str) -> Observation:
+    async def open(self, url: str, research: bool = False) -> Observation:
         import websockets
 
         self._proc = subprocess.Popen(
@@ -138,7 +170,21 @@ class BrowserSession:
         self._session = attached["sessionId"]
         await self._send("Page.enable")
         await self._send("Runtime.enable")
-        await self.navigate(url)
+        self._research = research
+        if research:
+            await self._send("Network.enable")
+            await self._send("Network.setBlockedURLs", {"urls": RESEARCH_BLOCKLIST})
+        try:
+            await self.navigate(url)
+        except BrowserError:
+            if not research:
+                raise
+            # Plan-mandated normal-load fallback — some sites break when
+            # media/fonts are blocked. Degrade honestly rather than fail.
+            self._research = False
+            self.fell_back = True
+            await self._send("Network.setBlockedURLs", {"urls": []})
+            await self.navigate(url)
         return await self.observe()
 
     async def navigate(self, url: str) -> None:

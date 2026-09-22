@@ -6,6 +6,7 @@ Unit tests cover the observation machinery and honest error paths without a
 browser.
 """
 
+import asyncio
 import functools
 import http.server
 import json
@@ -398,4 +399,39 @@ async def test_scoped_observe_reaches_role_filtered_content(tmp_path):
             await session.observe(scope="#nope")
     finally:
         await session.close()
+        httpd.shutdown()
+
+
+@needs_browser
+async def test_research_mode_blocks_media(tmp_path):
+    """research mode must actually block — verify via a real image fetch."""
+    srv = tmp_path / "srv"
+    srv.mkdir(parents=True)
+    (srv / "index.html").write_text('<html><body><h1>t</h1><img id="im" src="x.png"></body></html>')
+    # a real decodable 1x1 PNG so naturalWidth distinguishes load-vs-block
+    import base64 as _b64
+
+    (srv / "x.png").write_bytes(
+        _b64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        )
+    )
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(srv))
+    httpd = http.server.HTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{httpd.server_port}/index.html"
+
+    async def img_width(research: bool) -> str:
+        session = BrowserSession(_browser, tmp_path / f"p{research}")
+        try:
+            await session.open(url, research=research)
+            await asyncio.sleep(0.3)  # let the img attempt resolve
+            return await session.extract("document.getElementById('im').naturalWidth")
+        finally:
+            await session.close()
+
+    try:
+        assert json.loads(await img_width(False)) > 0  # normal load: image loads
+        assert json.loads(await img_width(True)) == 0  # research: blocked
+    finally:
         httpd.shutdown()

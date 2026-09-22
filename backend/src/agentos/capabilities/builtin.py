@@ -446,6 +446,15 @@ def register_builtin_capabilities() -> None:
                 "type": "object",
                 "properties": {
                     "url": {"type": "string", "description": "The URL to open"},
+                    "mode": {
+                        "type": "string",
+                        "enum": ["default", "research"],
+                        "description": (
+                            "'research' blocks media/fonts/trackers for faster, cheaper "
+                            "loads — use for text extraction. Falls back to normal load "
+                            "if the site breaks."
+                        ),
+                    },
                 },
                 "required": ["url"],
             },
