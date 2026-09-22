@@ -45,6 +45,7 @@ class BrowserRegistry:
         session_id: str | None,
         run_id: str,
         research: bool = False,
+        staging_dir: Path | None = None,
     ) -> tuple[BrowserSession, str]:
         """Return the run's live session, or launch one and navigate."""
         existing = self._sessions.get(run_id)
@@ -60,7 +61,7 @@ class BrowserRegistry:
                 "install it via Settings → Dependencies or set AGENTOS_BROWSER_BINARY"
             )
         profile = tempfile.TemporaryDirectory(prefix=f"agentos-browser-{run_id[:8]}-")
-        session = BrowserSession(binary, Path(profile.name))
+        session = BrowserSession(binary, Path(profile.name), staging_dir=staging_dir)
         obs = await session.open(url, research=research)
         self._sessions[run_id] = _Managed(
             session=session,

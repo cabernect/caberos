@@ -435,3 +435,33 @@ async def test_research_mode_blocks_media(tmp_path):
         assert json.loads(await img_width(True)) == 0  # research: blocked
     finally:
         httpd.shutdown()
+
+
+@needs_browser
+async def test_download_lands_in_staging(tmp_path):
+    """Click a download link → file staged under workspace downloads/,
+    surfaced in the post-action delta, never executed."""
+    srv = tmp_path / "srv"
+    srv.mkdir(parents=True)
+    (srv / "index.html").write_text(
+        '<html><body><a href="data.csv" download="report.csv">Get data</a></body></html>'
+    )
+    (srv / "data.csv").write_text("a,b\n1,2\n")
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(srv))
+    httpd = http.server.HTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{httpd.server_port}/index.html"
+
+    staging = tmp_path / "downloads"
+    session = BrowserSession(_browser, tmp_path / "profile", staging_dir=staging)
+    try:
+        obs = await session.open(url)
+        link = next(e for e in obs.elements if e.role == "link")
+        await session.act("click", link.ref)
+        await asyncio.sleep(1.0)  # download events arrive async
+        await session.observe()  # drains the event queue
+        assert (staging / "report.csv").read_text() == "a,b\n1,2\n"
+        assert session.downloads[0]["filename"] == "report.csv"
+    finally:
+        await session.close()
+        httpd.shutdown()

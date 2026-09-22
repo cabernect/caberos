@@ -7,6 +7,7 @@ return post-action deltas so one act never costs a redundant observe.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from ...browser.cdp import BrowserError
@@ -23,6 +24,8 @@ async def browser_open(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     agent_id, session_id, run_id = _ids(kwargs)
     url = args["url"]
     research = args.get("mode") == "research"
+    ws = kwargs.get("workspace_path")
+    staging = Path(ws) / "downloads" if ws else None
     try:
         _, result = await browser_registry.get_or_open(
             url,
@@ -30,6 +33,7 @@ async def browser_open(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
             session_id=session_id,
             run_id=run_id,
             research=research,
+            staging_dir=staging,
         )
     except BrowserError as e:
         if str(e).startswith("runtime_unavailable"):
@@ -73,7 +77,10 @@ async def browser_observe(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]
         return result
 
     obs = await session.observe(scope=args.get("scope"))
-    return {"observation": obs.serialize()}
+    out: dict[str, Any] = {"observation": obs.serialize()}
+    if session.downloads:
+        out["downloads"] = [f"downloads/{d['filename']}" for d in session.downloads]
+    return out
 
 
 async def browser_act(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:

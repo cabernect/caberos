@@ -117,9 +117,10 @@ class BrowserError(Exception):
 class BrowserSession:
     """One Chromium process + one page, driven over one CDP websocket."""
 
-    def __init__(self, binary: Path, profile_dir: Path) -> None:
+    def __init__(self, binary: Path, profile_dir: Path, staging_dir: Path | None = None) -> None:
         self._binary = binary
         self._profile_dir = profile_dir
+        self._staging_dir = staging_dir
         self._proc: subprocess.Popen | None = None
         self._ws = None
         self._session: str | None = None
@@ -128,6 +129,8 @@ class BrowserSession:
         self._last_obs: Observation | None = None
         self._research = False
         self.fell_back = False
+        self.downloads: list[dict] = []
+        self._download_guids: dict[str, str] = {}
         self.last_activity = time.monotonic()
 
     # -- lifecycle ----------------------------------------------------------
@@ -170,6 +173,18 @@ class BrowserSession:
         self._session = attached["sessionId"]
         await self._send("Page.enable")
         await self._send("Runtime.enable")
+        if self._staging_dir:
+            # Plan: downloads enter run staging and never execute automatically.
+            self._staging_dir.mkdir(parents=True, exist_ok=True)
+            await self._send(
+                "Browser.setDownloadBehavior",
+                {
+                    "behavior": "allow",
+                    "downloadPath": str(self._staging_dir),
+                    "eventsEnabled": True,
+                },
+                session=False,
+            )
         self._research = research
         if research:
             await self._send("Network.enable")
@@ -235,11 +250,29 @@ class BrowserSession:
                     raise BrowserError("browser exited while loading") from None
         raise BrowserError("page load timed out")
 
+    def _drain_events(self) -> None:
+        """Consume queued browser-level events (downloads) into state."""
+        keep = []
+        for ev in self._pending:
+            method = ev.get("method")
+            params = ev.get("params", {})
+            if method == "Browser.downloadWillBegin":
+                self._download_guids[params["guid"]] = params.get("suggestedFilename", "download")
+            elif method == "Browser.downloadProgress" and params.get("state") == "completed":
+                name = self._download_guids.pop(params["guid"], "download")
+                self.downloads.append({"filename": name, "state": "completed"})
+            elif method == "Browser.downloadProgress" and params.get("state") == "canceled":
+                self._download_guids.pop(params["guid"], None)
+            else:
+                keep.append(ev)
+        self._pending = keep
+
     # -- module verbs --------------------------------------------------------
 
     async def observe(self, scope: str | None = None) -> Observation:
         self.last_activity = time.monotonic()
         tree = await self._send("Accessibility.getFullAXTree")
+        self._drain_events()
         doc = await self._send(
             "Runtime.evaluate", {"expression": "location.href + '|' + document.title"}
         )
@@ -342,7 +375,11 @@ class BrowserSession:
             raise BrowserError(f"unknown action: {action}")
         prev = self._last_obs
         obs = await self.observe()
-        return obs.delta(prev) if prev else obs.serialize()
+        delta = obs.delta(prev) if prev else obs.serialize()
+        if self.downloads:
+            names = ", ".join(d["filename"] for d in self.downloads)
+            delta += f"\n(downloads staged: {names} — in workspace downloads/, never executed)"
+        return delta
 
     async def extract(self, expression: str) -> str:
         """Run a JS expression and return its JSON-serialized value."""
