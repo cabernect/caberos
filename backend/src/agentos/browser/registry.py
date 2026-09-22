@@ -73,7 +73,11 @@ class BrowserRegistry:
 
         existing = self._sessions.get(run_id)
         if existing and existing.session.alive():
-            return existing.session, "reused"
+            # Reopening a different URL on the same run means "go there" —
+            # navigate the live session rather than silently staying put.
+            await existing.session.navigate(url)
+            obs = await existing.session.observe()
+            return existing.session, obs.serialize()
 
         if profile:
             # One live session per named profile — a second run gets an

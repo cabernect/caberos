@@ -325,12 +325,22 @@ class BrowserSession:
         return data.get("result", {})
 
     async def _wait_load(self) -> None:
+        # Prefer the full load event; DOMContentLoaded + a short settle is the
+        # fallback so slow third-party resources don't stall every navigation
+        # (e.g. analytics beacons keeping `load` pending for 15s+).
         deadline = time.monotonic() + LOAD_TIMEOUT_S
+        dom_ready_at: float | None = None
         while time.monotonic() < deadline:
             for i, ev in enumerate(self._pending):
-                if ev.get("method") == "Page.loadEventFired":
+                method = ev.get("method")
+                if method == "Page.loadEventFired":
                     self._pending.pop(i)
                     return
+                if method == "Page.domContentEventFired":
+                    self._pending.pop(i)
+                    dom_ready_at = dom_ready_at or time.monotonic()
+            if dom_ready_at and time.monotonic() - dom_ready_at >= 1.5:
+                return
             self._event_flag.clear()
             try:
                 await asyncio.wait_for(self._event_flag.wait(), timeout=0.5)
@@ -529,18 +539,20 @@ class BrowserSession:
         elif action == "type":
             if oid is None:
                 raise BrowserError("type requires a target ref")
+            # Focus + select existing text, then Input.insertText — the
+            # trusted input pipeline, so React/Vue controlled inputs see a
+            # real text insertion (a raw el.value= write is invisible to them).
             await self._send(
                 "Runtime.callFunctionOn",
                 {
                     "objectId": oid,
                     "functionDeclaration": (
-                        "function(v){const el=this.nodeType===1?this:this.parentElement;"
-                        "el.focus();el.value=v;"
-                        "el.dispatchEvent(new Event('input',{bubbles:true}))}"
+                        "function(){const el=this.nodeType===1?this:this.parentElement;"
+                        "el.focus();if(el.select)el.select()}"
                     ),
-                    "arguments": [{"value": value}],
                 },
             )
+            await self._send("Input.insertText", {"text": value or ""})
         elif action == "select":
             if oid is None:
                 raise BrowserError("select requires a target ref (the <select> element)")
