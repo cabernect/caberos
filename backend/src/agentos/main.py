@@ -26,6 +26,7 @@ from .api import (  # noqa: E402
     agent_files,
     agents,
     approvals,
+    browser,
     channels,
     chat,
     data,
@@ -323,6 +324,7 @@ app.include_router(channels.router)
 app.include_router(observability.router)
 app.include_router(settings.router)
 app.include_router(data.router)
+app.include_router(browser.router)
 
 
 @app.get("/health")

@@ -248,3 +248,112 @@ async def test_live_visual_observe_saves_artifact(tmp_path):
 
         await browser_registry.close_for_run("vis-run")
         httpd.shutdown()
+
+
+# --- runtime discovery/install --------------------------------------------
+
+
+def test_platform_key_maps_this_machine():
+    import platform as _platform
+    import sys
+
+    from agentos.browser import runtime
+
+    key = runtime._platform_key()
+    if sys.platform == "darwin":
+        expected = "mac-arm64" if _platform.machine() == "arm64" else "mac-x64"
+        assert key == expected
+    else:
+        assert key in ("linux64", "win64", "win32", None)
+
+
+def test_runtime_status_reports_state(monkeypatch, tmp_path):
+    from agentos.browser import runtime
+
+    monkeypatch.delenv("AGENTOS_BROWSER_BINARY", raising=False)
+    monkeypatch.setattr(runtime, "_playwright_cache_roots", lambda: [])
+    monkeypatch.setattr(runtime, "runtime_root", lambda: tmp_path / "brt")
+    status = runtime.runtime_status()
+    assert status["status"] == "runtime_unavailable"
+    assert status["installable"] is True
+
+
+async def test_install_runtime_fetches_extracts_and_healthchecks(monkeypatch, tmp_path):
+    """The installer path end to end — network faked with a real zip built
+    in-memory, signature/health checks stubbed at the platform boundary."""
+    import zipfile as zf
+
+    from agentos.browser import runtime
+
+    plat = runtime._platform_key()
+    inner = {
+        "mac-arm64": "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+        "mac-x64": "chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+        "linux64": "chrome-linux64/chrome",
+        "win64": "chrome-win64/chrome.exe",
+        "win32": "chrome-win32/chrome.exe",
+    }[plat]
+
+    zip_path = tmp_path / "chrome.zip"
+    with zf.ZipFile(zip_path, "w") as z:
+        z.writestr(inner, b"#!/bin/sh\necho 'Google Chrome for Testing 145.0.7632.6'\n")
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "versions": [
+                    {
+                        "version": runtime.RUNTIME_VERSION,
+                        "downloads": {"chrome": [{"platform": plat, "url": "https://x/zip"}]},
+                    }
+                ]
+            }
+
+    class _Client:
+        def __init__(self, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url):
+            return _Resp()
+
+    monkeypatch.setattr(runtime, "runtime_root", lambda: tmp_path / "brt")
+    monkeypatch.setitem(__import__("sys").modules, "httpx", type("m", (), {"AsyncClient": _Client}))
+
+    async def fake_download(url, dest):
+        dest.write_bytes(zip_path.read_bytes())
+        return "deadbeef"
+
+    monkeypatch.setattr(runtime, "_download", fake_download)
+    monkeypatch.setattr(runtime, "_verify_signature", lambda b, p: "signature: stubbed")
+    monkeypatch.setattr(
+        runtime, "_health_check", lambda b: "Google Chrome for Testing 145.0.7632.6"
+    )
+
+    out = await runtime.install_runtime()
+    assert out["status"] == "installed"
+    assert Path(out["binary"]).exists()
+    assert "sha256" in out and out["signature"] == "signature: stubbed"
+    # and the managed install is now discoverable
+    monkeypatch.setattr(runtime, "_playwright_cache_roots", lambda: [])
+    assert runtime.find_browser_binary() == Path(out["binary"])
+
+    # remove
+    assert runtime.remove_runtime()["status"] == "removed"
+    assert not (tmp_path / "brt" / runtime.RUNTIME_VERSION).exists()
+
+
+async def test_install_runtime_unsupported_platform(monkeypatch):
+    from agentos.browser import runtime
+
+    monkeypatch.setattr(runtime, "_platform_key", lambda: None)
+    out = await runtime.install_runtime()
+    assert out["status"] == "unsupported_platform"
