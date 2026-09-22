@@ -543,3 +543,36 @@ async def test_profile_lock_refuses_second_run(tmp_path, monkeypatch):
     finally:
         await reg.shutdown_all()
         httpd.shutdown()
+
+
+@needs_browser
+async def test_scroll_moves_viewport_and_reveals(tmp_path):
+    srv = tmp_path / "srv"
+    srv.mkdir(parents=True)
+    # tall page — content below the fold
+    (srv / "index.html").write_text(
+        '<html><body style="margin:0"><div style="height:3000px">top</div>'
+        '<button id="b">Bottom</button></body></html>'
+    )
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(srv))
+    httpd = http.server.HTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{httpd.server_port}/index.html"
+
+    session = BrowserSession(_browser, tmp_path / "profile")
+    try:
+        await session.open(url)
+        assert json.loads(await session.extract("window.scrollY")) == 0
+        await session.act("scroll", "", "down")
+        assert json.loads(await session.extract("window.scrollY")) > 0
+        # scroll the button into view by ref
+        obs = await session.observe()
+        btn = next(e for e in obs.elements if e.role == "button")
+        await session.act("scroll", btn.ref)
+        top = json.loads(
+            await session.extract("document.getElementById('b').getBoundingClientRect().top")
+        )
+        assert 0 <= top < 800  # inside the viewport
+    finally:
+        await session.close()
+        httpd.shutdown()

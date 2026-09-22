@@ -60,6 +60,7 @@ async def browser_open(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
             staging_dir=staging,
             profile=profile_name,
             allowed_domains=allowed,
+            visible=bool(args.get("visible")),
         )
     except BrowserError as e:
         if str(e).startswith("runtime_unavailable"):

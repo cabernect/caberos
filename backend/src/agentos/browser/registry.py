@@ -62,6 +62,7 @@ class BrowserRegistry:
         staging_dir: Path | None = None,
         profile: str | None = None,
         allowed_domains: list[str] | None = None,
+        visible: bool = False,
     ) -> tuple[BrowserSession, str]:
         """Return the run's live session, or launch one and navigate."""
         from .cdp import BrowserError
@@ -106,7 +107,9 @@ class BrowserRegistry:
             tmp = tempfile.TemporaryDirectory(prefix=f"agentos-browser-{run_id[:8]}-")
             session_dir = Path(tmp.name)
         session = BrowserSession(binary, session_dir, staging_dir=staging_dir)
-        obs = await session.open(url, research=research, allowed_domains=allowed_domains)
+        obs = await session.open(
+            url, research=research, allowed_domains=allowed_domains, visible=visible
+        )
         self._sessions[run_id] = _Managed(
             session=session,
             agent_id=agent_id,

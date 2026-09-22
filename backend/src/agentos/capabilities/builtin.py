@@ -462,6 +462,13 @@ def register_builtin_capabilities() -> None:
                             "for its allowed domains; navigations outside them are blocked"
                         ),
                     },
+                    "visible": {
+                        "type": "boolean",
+                        "description": (
+                            "Open a visible window so the user can take over — for login, "
+                            "MFA, CAPTCHA, or consent flows. Default is headless."
+                        ),
+                    },
                 },
                 "required": ["url"],
             },
@@ -512,7 +519,7 @@ def register_builtin_capabilities() -> None:
             effects=frozenset({"external_write"}),
             kind="tool",
             description=(
-                "Perform exactly one browser action — click/type/navigate — "
+                "Perform exactly one browser action — click/type/navigate/scroll — "
                 "on an element ref from the last observation. Returns the "
                 "post-action change only. Actions that submit, publish, "
                 "purchase, or delete require operator approval."
@@ -522,16 +529,16 @@ def register_builtin_capabilities() -> None:
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["click", "type", "navigate"],
+                        "enum": ["click", "type", "navigate", "scroll"],
                         "description": "The action to perform",
                     },
                     "target": {
                         "type": "string",
-                        "description": "Element ref (e.g. e14) from the observation — required for click/type",
+                        "description": "Element ref (e.g. e14) — required for click/type; for scroll, scrolls that element into view (omit to scroll the viewport)",
                     },
                     "value": {
                         "type": "string",
-                        "description": "Text for type, URL for navigate",
+                        "description": "Text for type, URL for navigate, up/down/pixels for viewport scroll",
                     },
                 },
                 "required": ["action"],

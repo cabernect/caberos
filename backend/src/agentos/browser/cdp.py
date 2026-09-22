@@ -148,6 +148,7 @@ class BrowserSession:
         url: str,
         research: bool = False,
         allowed_domains: list[str] | None = None,
+        visible: bool = False,
     ) -> Observation:
         import websockets
 
@@ -155,17 +156,19 @@ class BrowserSession:
         # Persistent profiles carry a stale port file from the last launch —
         # drop it before spawning so we wait on the new process's port.
         port_file.unlink(missing_ok=True)
+        args = [
+            str(self._binary),
+            "--remote-debugging-port=0",
+            f"--user-data-dir={self._profile_dir}",
+            "--no-first-run",
+            "--disable-extensions",
+            "--mute-audio",
+            "about:blank",
+        ]
+        if not visible:
+            args.insert(1, "--headless=new")
         self._proc = subprocess.Popen(
-            [
-                str(self._binary),
-                "--headless=new",
-                "--remote-debugging-port=0",
-                f"--user-data-dir={self._profile_dir}",
-                "--no-first-run",
-                "--disable-extensions",
-                "--mute-audio",
-                "about:blank",
-            ],
+            args,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
@@ -445,17 +448,23 @@ class BrowserSession:
         described = await self._send("DOM.describeNode", {"nodeId": hit["nodeId"]})
         return described["node"]["backendNodeId"]
 
-    async def act(self, action: str, ref: str, value: str | None = None) -> str:
+    async def act(self, action: str, ref: str = "", value: str | None = None) -> str:
         self.last_activity = time.monotonic()
-        backend_id = int(ref[1:])
-        node = await self._send("DOM.resolveNode", {"backendNodeId": backend_id})
-        oid = node["object"]["objectId"]
+        oid = None
+        if ref:
+            backend_id = int(ref[1:])
+            node = await self._send("DOM.resolveNode", {"backendNodeId": backend_id})
+            oid = node["object"]["objectId"]
         if action == "click":
+            if oid is None:
+                raise BrowserError("click requires a target ref")
             await self._send(
                 "Runtime.callFunctionOn",
                 {"objectId": oid, "functionDeclaration": "function(){this.click()}"},
             )
         elif action == "type":
+            if oid is None:
+                raise BrowserError("type requires a target ref")
             await self._send(
                 "Runtime.callFunctionOn",
                 {
@@ -471,6 +480,29 @@ class BrowserSession:
             if not value:
                 raise BrowserError("navigate requires a url value")
             await self.navigate(value)
+        elif action == "scroll":
+            if ref:
+                # scroll the element into view
+                await self._send(
+                    "Runtime.callFunctionOn",
+                    {
+                        "objectId": oid,
+                        "functionDeclaration": "function(){this.scrollIntoView({block:'center'})}",
+                    },
+                )
+            else:
+                # no ref — scroll the viewport; value: up/down/pixels
+                delta = {"up": -600, "down": 600}.get(value or "down")
+                try:
+                    px = delta if delta is not None else int(value)
+                except (TypeError, ValueError):
+                    raise BrowserError(
+                        "scroll value must be 'up', 'down', or pixel count"
+                    ) from None
+                await self._send(
+                    "Runtime.evaluate",
+                    {"expression": f"window.scrollBy(0,{px})"},
+                )
         else:
             raise BrowserError(f"unknown action: {action}")
         prev = self._last_obs
