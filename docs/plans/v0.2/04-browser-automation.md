@@ -166,6 +166,42 @@ A reopened persistent session must re-observe before acting. Browser crashes bec
   deterministically without model turns (durable role+name targeting, not
   short-lived refs). Composes with Scheduler for repeated research runs.
 
+## Implementation status (branch `feat/v0.2-browser`)
+
+Built on raw CDP — no Playwright/Selenium dependency (decision: build from
+scratch). Spike results in `scripts/spike_browser/RESULTS.md`.
+
+**Implemented:**
+- `browser/` module: `cdp.py` (session core — launch/attach/observe/act/
+  extract/screenshot, dedicated reader task, event-driven waits, Fetch
+  interception), `runtime.py` (discovery + managed install of pinned
+  Chrome for Testing 145.0.7632.6 → `data/browser-runtime/`, sha256 +
+  codesign + `--version` health check), `registry.py` (run-scoped
+  ownership, 120s idle reaper, run-cancel + gateway-shutdown cleanup).
+- Five capabilities: `browser_open` (egress+approval; `mode=research`,
+  `profile`, `visible`), `browser_observe` (`scope` ref-or-CSS drill-in,
+  `visual` screenshots → `artifacts/browser/`, vision-gated
+  `_model_content`), `browser_act` (click/type/navigate/scroll →
+  post-action delta), `browser_extract` (>20k staged to workspace),
+  `browser_close`.
+- Persistent profiles: `browser_profiles` DB table + operator CRUD at
+  `/api/browser/profiles`; profile dirs under `data/browser-profiles/`;
+  one live session per profile (honest lock refusal); `allowed_domains`
+  enforced via Fetch interception armed before first navigation —
+  out-of-scope Document requests are failed and recorded.
+- Downloads → `Browser.setDownloadBehavior` into workspace `downloads/`,
+  surfaced in deltas/observe, never executed.
+- Research mode: `Network.setBlockedURLs` media/font/tracker blocklist
+  with honest normal-load fallback.
+- Token economics (spike-validated): interactive+landmark AX projection,
+  80-element cap + omission marker, delta observations (~13 tokens),
+  scoped observe, extract staging.
+
+**Still open:** takeover/pause UX flow (visible flag exists; no run-level
+pause-for-user yet), crash→interrupted run events, Docker runtime parity,
+visible-mode UI ("Watch Browser"), approval-bridging for blocked domains,
+broader action set (select/hover/keypress), iframe/shadow-DOM handling.
+
 ## Done when
 
 An agent can research a JavaScript site headlessly within validated latency, resource, and context budgets; request visible takeover for a persistent login on desktop without sending the live visual stream or credentials to the model; resume safely; and produce auditable browser evidence without accessing personal browser data.
