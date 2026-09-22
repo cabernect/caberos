@@ -42,7 +42,12 @@ export function PreviewBody({
       );
     case "table":
       return (
-        <GridTable header={payload.header || []} rows={payload.rows || []} />
+        <TableView
+          header={payload.header || []}
+          rows={payload.rows || []}
+          truncated={payload.truncated}
+          totalRows={payload.total_rows}
+        />
       );
     case "image":
       return <ImageView backend={backend} source={source} name={payload.name} expanded={expanded} />;
@@ -135,6 +140,31 @@ function TextView({
         {content}
       </pre>
       {truncated && <TruncatedFlag />}
+    </div>
+  );
+}
+
+function TableView({
+  header,
+  rows,
+  truncated,
+  totalRows,
+}: {
+  header: unknown[];
+  rows: unknown[][];
+  truncated?: boolean;
+  totalRows?: number;
+}) {
+  return (
+    <div>
+      <GridTable header={header} rows={rows} />
+      {truncated && (
+        <p className="mt-2 text-[11px] italic text-[var(--ink-3)]">
+          Showing {rows.length.toLocaleString()}
+          {totalRows != null ? ` of ${totalRows.toLocaleString()}` : ""} rows —
+          download the file for the full contents.
+        </p>
+      )}
     </div>
   );
 }

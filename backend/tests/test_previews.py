@@ -809,3 +809,55 @@ async def test_workspace_delete_allows_untracked_sibling(client, workspace_root,
     assert resp.status_code == 200
     assert not (ws / "artifacts" / "notes.txt").exists()
     assert (ws / "artifacts" / "deck.pptx").exists()
+
+
+async def test_workspace_delete_symlink_leaf_unlinks_not_follows(client, workspace_root):
+    """A symlink whose target escapes the workspace is itself a workspace
+    entry — deleting must unlink the link, never follow it (A20)."""
+    outside = workspace_root / "outside-secret.txt"
+    outside.write_text("secret")
+    ws = _agent_workspace(workspace_root)
+    link = ws / "escape-link"
+    link.symlink_to(outside)
+
+    resp = await client.delete("/api/agents/agent-1/workspace?path=escape-link")
+    assert resp.status_code == 200
+    assert not link.exists() and not link.is_symlink()
+    assert outside.exists()  # target untouched
+
+
+async def test_workspace_delete_symlink_dir_leaf_unlinks(client, workspace_root):
+    """A symlinked directory leaf is unlinked — rmtree must never follow it."""
+    outside_dir = workspace_root / "outside-dir"
+    outside_dir.mkdir()
+    (outside_dir / "keep.txt").write_text("keep")
+    ws = _agent_workspace(workspace_root)
+    (ws / "dir-link").symlink_to(outside_dir, target_is_directory=True)
+
+    resp = await client.delete("/api/agents/agent-1/workspace?path=dir-link")
+    assert resp.status_code == 200
+    assert (outside_dir / "keep.txt").exists()
+
+
+async def test_workspace_delete_through_symlinked_dir_still_blocked(client, workspace_root):
+    """Containment still applies through intermediate components — a file
+    reached via a symlinked directory escapes and must refuse."""
+    outside_dir = workspace_root / "outside-dir"
+    outside_dir.mkdir()
+    (outside_dir / "victim.txt").write_text("victim")
+    ws = _agent_workspace(workspace_root)
+    (ws / "dir-link").symlink_to(outside_dir, target_is_directory=True)
+
+    resp = await client.delete("/api/agents/agent-1/workspace?path=dir-link/victim.txt")
+    assert resp.status_code == 403
+    assert (outside_dir / "victim.txt").exists()
+
+
+async def test_workspace_delete_normalizes_dotdot(client, workspace_root):
+    ws = _agent_workspace(workspace_root)
+    (ws / "sub").mkdir()
+    (ws / "target.txt").write_text("x")
+
+    resp = await client.delete("/api/agents/agent-1/workspace?path=sub/../target.txt")
+    assert resp.status_code == 200
+    assert not (ws / "target.txt").exists()
