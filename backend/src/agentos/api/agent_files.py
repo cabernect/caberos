@@ -1,5 +1,6 @@
 """Agent files API — MEMORY.md, skills, workspace browser, memory management (D34, D37)."""
 
+import os
 import re
 from pathlib import Path
 
@@ -271,10 +272,17 @@ async def delete_workspace_entry(
         raise HTTPException(status_code=400, detail="path is required")
 
     ws = _workspace_path(agent_id)
+    # Containment applies to the parent directory (fully resolved — '..'
+    # and symlinked dirs still can't escape), never to the leaf: a symlink
+    # leaf is a workspace entry and must be unlinked without being followed.
+    norm = os.path.normpath(rel)
+    if os.path.isabs(norm) or norm == "." or norm.startswith(".."):
+        raise HTTPException(status_code=403, detail="Path outside workspace")
     try:
-        target = Path(WorkspaceManager().validate_path(str(ws), rel))
+        parent = Path(WorkspaceManager().validate_path(str(ws), os.path.dirname(norm) or "."))
     except ValueError as error:
         raise HTTPException(status_code=403, detail="Path outside workspace") from error
+    target = parent / os.path.basename(norm)
 
     if target == ws:
         raise HTTPException(status_code=400, detail="Cannot delete the workspace root")
@@ -286,7 +294,7 @@ async def delete_workspace_entry(
             await db.execute(
                 select(Artifact.current_path).where(
                     Artifact.workspace_id == agent_id,
-                    (Artifact.current_path == rel) | (Artifact.current_path.like(f"{rel}/%")),
+                    (Artifact.current_path == norm) | (Artifact.current_path.like(f"{norm}/%")),
                 )
             )
         )
@@ -297,7 +305,7 @@ async def delete_workspace_entry(
         raise HTTPException(
             status_code=409,
             detail=(
-                f"'{rel}' is tracked as an artifact ({len(tracked)} file(s)). "
+                f"'{norm}' is tracked as an artifact ({len(tracked)} file(s)). "
                 "Artifact history would point at a missing file — remove it "
                 "from artifact tracking first."
             ),
