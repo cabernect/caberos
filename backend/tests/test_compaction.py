@@ -349,3 +349,42 @@ class TestCompactContext:
         # The large tool result should have been pruned before summarization
         # (We can't directly check the pruned content, but the compaction should succeed)
         assert result.compacted
+
+    async def test_summary_uses_responses_api_when_flagged(self, monkeypatch):
+        """api.openai.com models route summaries through /v1/responses —
+        reasoning models reject chat completions entirely."""
+        from types import SimpleNamespace
+
+        from agentos.harness.compaction import generate_summary
+
+        captured = {}
+
+        async def fake_aresponses(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                output=[
+                    SimpleNamespace(
+                        type="message",
+                        content=[SimpleNamespace(type="output_text", text="## Goal\nSummary")],
+                    )
+                ]
+            )
+
+        async def acompletion_should_not_run(**_kwargs):
+            raise AssertionError("chat completions must not run when use_responses is set")
+
+        monkeypatch.setattr("litellm.aresponses", fake_aresponses)
+        monkeypatch.setattr("litellm.acompletion", acompletion_should_not_run)
+
+        summary = await generate_summary(
+            [{"role": "user", "content": "old stuff"}],
+            previous_summary=None,
+            model_str="openai/gpt-6-luna",
+            api_key="k",
+            use_responses=True,
+        )
+
+        assert summary == "## Goal\nSummary"
+        assert captured["model"] == "openai/gpt-6-luna"
+        assert "input" in captured and "messages" not in captured
+        assert captured["max_output_tokens"] == 2000
