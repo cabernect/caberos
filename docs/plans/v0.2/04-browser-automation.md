@@ -219,10 +219,15 @@ scratch). Spike results in `scripts/spike_browser/RESULTS.md`.
 - Untrusted-content stance is stated in `browser_open`/`browser_observe`
   descriptions (page text is never operator instruction).
 
-**Still open:** visible-mode UI ("Watch Browser" — not required for
-v0.2.0 per Client behavior; runtime/profile management UI lands with
-W12 Dependencies). Remaining validation: real-world E2E runs against
-live sites per `test_plan/04-browser-automation-test-plan.md`.
+- Operator browser settings: `Settings → Browser` tab —
+  runtime status + install/remove, custom binary override persisted to
+  `data/app-settings.json` (env/`.env` pins win; UI shows the pin and
+  disables editing), and profile CRUD (name + allowed domains).
+
+**Still open:** visible-mode UI ("Watch Browser" streamed viewer — not
+required for v0.2.0 per Client behavior). Remaining validation:
+real-world E2E runs against live sites per
+`test_plan/04-browser-automation-test-plan.md`.
 
 ## Done when
 

@@ -24,6 +24,7 @@ from agentos.capabilities.tools.browser import (
     browser_observe,
     browser_open,
 )
+from agentos.config_schema import AgentConfig, ModelConfig
 
 SPIKE_PAGE = Path(__file__).parents[2] / "scripts" / "spike_browser" / "page.html"
 
@@ -276,9 +277,43 @@ def test_runtime_status_reports_state(monkeypatch, tmp_path):
 
     monkeypatch.setattr(settings, "browser_binary", "")
     monkeypatch.setattr(runtime, "runtime_root", lambda: tmp_path / "brt")
+    monkeypatch.setattr(runtime, "_system_browser_candidates", lambda: [])
     status = runtime.runtime_status()
     assert status["status"] == "runtime_unavailable"
     assert status["installable"] is True
+
+
+def test_system_browser_detected_before_managed(monkeypatch, tmp_path):
+    """A Chromium browser already installed beats the managed install —
+    zero download for anyone with Chrome/Edge/Brave."""
+    from agentos.browser import runtime
+    from agentos.config import settings
+
+    fake_sys = tmp_path / "chrome"
+    fake_sys.write_text("#!/bin/sh\n")
+    monkeypatch.delenv("AGENTOS_BROWSER_BINARY", raising=False)
+    monkeypatch.setattr(settings, "browser_binary", "")
+    monkeypatch.setattr(runtime, "_system_browser_candidates", lambda: [("Chrome", fake_sys)])
+    monkeypatch.setattr(runtime, "runtime_root", lambda: tmp_path / "brt")
+
+    assert runtime.find_browser_binary() == fake_sys
+    assert runtime.runtime_status()["source"] == "system"
+
+
+def test_override_beats_system_and_managed(monkeypatch, tmp_path):
+    from agentos.browser import runtime
+    from agentos.config import settings
+
+    fake_sys = tmp_path / "sys-chrome"
+    fake_sys.write_text("x")
+    override = tmp_path / "my-chromium"
+    override.write_text("x")
+    monkeypatch.delenv("AGENTOS_BROWSER_BINARY", raising=False)
+    monkeypatch.setattr(settings, "browser_binary", str(override))
+    monkeypatch.setattr(runtime, "_system_browser_candidates", lambda: [("Chrome", fake_sys)])
+
+    assert runtime.find_browser_binary() == override
+    assert runtime.runtime_status()["source"] == "override"
 
 
 async def test_install_runtime_fetches_extracts_and_healthchecks(monkeypatch, tmp_path):
@@ -345,11 +380,13 @@ async def test_install_runtime_fetches_extracts_and_healthchecks(monkeypatch, tm
     assert out["status"] == "installed"
     assert Path(out["binary"]).exists()
     assert "sha256" in out and out["signature"] == "signature: stubbed"
-    # and the managed install is now discoverable (no binary override set)
+    # and the managed install is now discoverable (no binary override set,
+    # no system browser detected)
     monkeypatch.delenv("AGENTOS_BROWSER_BINARY", raising=False)
     from agentos.config import settings
 
     monkeypatch.setattr(settings, "browser_binary", "")
+    monkeypatch.setattr(runtime, "_system_browser_candidates", lambda: [])
     assert runtime.find_browser_binary() == Path(out["binary"])
 
     # remove
@@ -850,3 +887,69 @@ async def test_browser_open_visible_refused_on_scheduled_run():
         trigger="heartbeat",
     )
     assert result["status"] == "visible_refused"
+
+
+# --- unit: saved-login prompt injection -------------------------------------
+
+
+def _agent_config() -> AgentConfig:
+    return AgentConfig(
+        id="test",
+        name="Test",
+        model=ModelConfig(provider_id="test", name="scripted"),
+        capabilities=[],
+    )
+
+
+def test_saved_logins_injected_when_browser_open_enabled():
+    from agentos.harness.context import assemble_system_prompt
+
+    prompt = assemble_system_prompt(
+        _agent_config(),
+        enabled_caps=["browser_open"],
+        browser_profiles=[
+            {
+                "name": "amazon",
+                "allowed_domains": ["amazon.com"],
+                "description": "personal shopping",
+            }
+        ],
+    )
+    assert "## Saved Browser Logins" in prompt
+    assert "amazon" in prompt
+    assert "amazon.com" in prompt
+    assert "personal shopping" in prompt
+    assert 'profile="' not in prompt  # rendered as prose, not a template hole
+    assert "visible=true" in prompt
+
+
+def test_saved_logins_omitted_without_browser_open():
+    """No point spending tokens on logins the agent can't use."""
+    from agentos.harness.context import assemble_system_prompt
+
+    prompt = assemble_system_prompt(
+        _agent_config(),
+        enabled_caps=["read_file"],
+        browser_profiles=[{"name": "amazon", "allowed_domains": ["amazon.com"]}],
+    )
+    assert "Saved Browser Logins" not in prompt
+
+
+def test_saved_logins_omitted_when_empty():
+    from agentos.harness.context import assemble_system_prompt
+
+    prompt = assemble_system_prompt(
+        _agent_config(), enabled_caps=["browser_open"], browser_profiles=[]
+    )
+    assert "Saved Browser Logins" not in prompt
+
+
+def test_saved_login_empty_domains_means_any_site():
+    from agentos.harness.context import assemble_system_prompt
+
+    prompt = assemble_system_prompt(
+        _agent_config(),
+        enabled_caps=["browser_open"],
+        browser_profiles=[{"name": "free", "allowed_domains": []}],
+    )
+    assert "any site" in prompt

@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Plus, Trash2, Save, X, RefreshCw, Check, ChevronDown, Info, Settings, Server, Cpu, Download, Upload, HardDrive } from "lucide-react";
+import { Plus, Trash2, Save, X, RefreshCw, Check, ChevronDown, Info, Settings, Server, Cpu, Download, Upload, HardDrive, Globe } from "lucide-react";
 import { api } from "@/lib/api";
 import { useConfirm } from "@/lib/confirmHook";
 import { openUrl } from "@/lib/openUrl";
@@ -72,7 +72,7 @@ const PRESET_PROVIDERS: ProviderPreset[] = [
   { type: "openai", name: "Ollama Cloud", description: "Hosted Ollama — gpt-oss, kimi-k2, llama4, and more", defaultBaseUrl: "https://ollama.com/v1", needsKey: true, compatOnly: true },
 ];
 
-type SettingsTab = "general" | "providers" | "models" | "migration" | "about";
+type SettingsTab = "general" | "providers" | "models" | "browser" | "migration" | "about";
 
 export function ProvidersSettings() {
   const [providers, setProviders] = useState<Provider[]>([]);
@@ -142,6 +142,7 @@ export function ProvidersSettings() {
     { key: "general", label: "General", icon: Settings },
     { key: "providers", label: "Providers", icon: Server },
     { key: "models", label: "Models", icon: Cpu },
+    { key: "browser", label: "Browser", icon: Globe },
     { key: "migration", label: "Migration", icon: HardDrive },
     { key: "about", label: "About", icon: Info },
   ];
@@ -220,6 +221,8 @@ export function ProvidersSettings() {
           {activeTab === "models" && (
             <ModelsTab providers={providers} loading={loading} onChanged={load} />
           )}
+
+          {activeTab === "browser" && <BrowserTab />}
 
           {activeTab === "migration" && <MigrationTab />}
 
@@ -301,6 +304,402 @@ function GeneralTab({ operator, loading }: { operator: Operator | null; loading:
             >
               DuckDuckGo
             </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- Browser automation (W4) -----------------------------------------------
+
+interface BrowserRuntime {
+  status: string;
+  binary?: string;
+  managed?: boolean;
+  managed_binary?: string | null;
+  source?: "override" | "system" | "managed";
+  version?: string;
+  installable?: boolean;
+  detail?: string;
+}
+
+interface BrowserProfileRow {
+  id: string;
+  name: string;
+  allowed_domains: string[];
+  description: string | null;
+}
+
+function BrowserTab() {
+  const { confirm } = useConfirm();
+  const [runtime, setRuntime] = useState<BrowserRuntime | null>(null);
+  const [binaryOverride, setBinaryOverride] = useState("");
+  const [overrideSource, setOverrideSource] = useState<"env" | "persisted" | "none">("none");
+  const [resolvedBinary, setResolvedBinary] = useState<string | null>(null);
+  const [detected, setDetected] = useState<{ name: string; path: string }[]>([]);
+  const [profiles, setProfiles] = useState<BrowserProfileRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [installing, setInstalling] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const [newName, setNewName] = useState("");
+  const [newDomains, setNewDomains] = useState("");
+  const [newDesc, setNewDesc] = useState("");
+  const [customPath, setCustomPath] = useState("");
+  const [pickingCustom, setPickingCustom] = useState(false);
+  const [pickingBuiltin, setPickingBuiltin] = useState(false);
+
+  const loadAll = useCallback(async () => {
+    try {
+      const [settings, profileList] = await Promise.all([
+        api.getBrowserSettings(),
+        api.listBrowserProfiles(),
+      ]);
+      setBinaryOverride(settings.binary_override);
+      setOverrideSource(settings.override_source);
+      setResolvedBinary(settings.resolved_binary);
+      setDetected(settings.detected);
+      if (
+        settings.binary_override &&
+        !settings.detected.some((d) => d.path === settings.binary_override)
+      ) {
+        setCustomPath(settings.binary_override);
+      }
+      setRuntime(settings.runtime);
+      setProfiles(profileList);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadAll();
+  }, [loadAll]);
+
+  const applyOverride = async (path: string) => {
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await api.updateBrowserSettings(path.trim());
+      setBinaryOverride(result.binary_override);
+      setOverrideSource(result.override_source);
+      setResolvedBinary(result.resolved_binary);
+      setDetected(result.detected);
+      setRuntime(result.runtime);
+      setNotice(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const managedBinary = runtime?.managed_binary ?? null;
+  const engineValue = pickingCustom
+    ? "custom"
+    : pickingBuiltin
+      ? "builtin"
+      : !binaryOverride
+        ? "auto"
+        : managedBinary && binaryOverride === managedBinary
+          ? "builtin"
+          : detected.some((d) => d.path === binaryOverride)
+            ? binaryOverride
+            : "custom";
+
+  const install = async () => {
+    setInstalling(true);
+    setError(null);
+    try {
+      const result = await api.installBrowserRuntime();
+      if ((result.status === "installed" || result.status === "ok") && result.binary) {
+        setPickingBuiltin(false);
+        await applyOverride(result.binary);
+        setNotice("Browser installed — agents can now browse the web.");
+      } else {
+        setNotice(result.detail ?? `Status: ${result.status}`);
+        await loadAll();
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setInstalling(false);
+    }
+  };
+
+  const removeRuntime = async () => {
+    if (!(await confirm("Remove the built-in browser? Agents won't be able to browse until you install it again or pick your own browser."))) {
+      return;
+    }
+    try {
+      await api.removeBrowserRuntime();
+      if (managedBinary && binaryOverride === managedBinary) {
+        await applyOverride("");
+      }
+      setNotice("Built-in browser removed.");
+      await loadAll();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const createProfile = async () => {
+    setError(null);
+    try {
+      const domains = newDomains
+        .split(",")
+        .map((d) => d.trim())
+        .filter(Boolean);
+      await api.createBrowserProfile(newName.trim(), domains, newDesc.trim() || undefined);
+      setNewName("");
+      setNewDomains("");
+      setNewDesc("");
+      await loadAll();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const removeProfile = async (id: string) => {
+    if (!(await confirm("Forget this saved login? The agent will be logged out of these sites."))) return;
+    try {
+      await api.deleteBrowserProfile(id);
+      await loadAll();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  if (loading) {
+    return <p className="text-[13px] text-[var(--ink-2)]">Loading…</p>;
+  }
+
+  const status = runtime?.status ?? "runtime_unavailable";
+  const available = status === "ok" || status === "installed";
+
+  return (
+    <div className="max-w-2xl space-y-6">
+      {error && (
+        <div className="rounded-lg border px-4 py-3 text-[12px]" style={{ borderColor: "#dc2626", background: "#fef2f2", color: "#b91c1c" }}>
+          {error}
+        </div>
+      )}
+      {notice && (
+        <div className="rounded-lg border px-4 py-3 text-[12px]" style={{ borderColor: "var(--border)", background: "var(--accent-bg)", color: "var(--ink)" }}>
+          {notice}
+        </div>
+      )}
+
+      {/* Runtime */}
+      <div>
+        <h2 className="mb-3 text-[14px] font-semibold text-[var(--ink)]">Agent browser</h2>
+        <div className="rounded-lg border p-5 space-y-3" style={{ borderColor: "var(--border)", background: "var(--white)" }}>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-[13px] font-medium text-[var(--ink)]">
+                {available
+                  ? runtime?.managed
+                    ? "Built-in browser"
+                    : runtime?.source === "system"
+                      ? "Your browser (auto-detected)"
+                      : "Your own browser"
+                  : "No browser set up"}
+              </p>
+              <p className="mt-0.5 text-[12px] text-[var(--ink-3)] break-all">
+                {available
+                  ? runtime?.managed
+                    ? `CaberOS's own copy of Chrome ${runtime.version ?? ""} — kept separate from your personal browser.`.trim()
+                    : runtime?.source === "system"
+                      ? `${resolvedBinary} — found on this machine, nothing to install`
+                      : resolvedBinary
+                  : "Install a browser and your agents can open websites, fill forms, and read pages for you."}
+              </p>
+            </div>
+            <span
+              className="rounded-full px-3 py-1 text-[11px] font-medium shrink-0"
+              style={
+                available
+                  ? { background: "#dcfce7", color: "#166534" }
+                  : { background: "#fef3c7", color: "#92400e" }
+              }
+            >
+              {available ? "Ready" : "Not installed"}
+            </span>
+          </div>
+          {/* Engine picker */}
+          <div className="border-t pt-3" style={{ borderColor: "var(--border)" }}>
+            <p className="text-[12px] font-medium text-[var(--ink)] mb-1.5">Browser engine</p>
+            <select
+              value={engineValue}
+              disabled={overrideSource === "env"}
+              onChange={(e) => {
+                const v = e.target.value;
+                setPickingCustom(false);
+                setPickingBuiltin(false);
+                if (v === "custom") {
+                  setPickingCustom(true);
+                  setCustomPath(
+                    binaryOverride && binaryOverride !== managedBinary && !detected.some((d) => d.path === binaryOverride)
+                      ? binaryOverride
+                      : "",
+                  );
+                } else if (v === "builtin" && !managedBinary) {
+                  setPickingBuiltin(true);
+                } else {
+                  void applyOverride(v === "auto" ? "" : v === "builtin" ? managedBinary ?? "" : v);
+                }
+              }}
+              className="w-full rounded-md border px-3 py-2 text-[12px] disabled:opacity-60"
+              style={{ borderColor: "var(--border)", background: "var(--surface)", color: "var(--ink)" }}
+            >
+              <option value="auto">Automatic — pick the best available</option>
+              {detected.map((d) => (
+                <option key={d.path} value={d.path}>
+                  {d.name}
+                </option>
+              ))}
+              <option value="builtin">
+                CaberOS browser{managedBinary ? " (built-in)" : " (not installed — downloads on select)"}
+              </option>
+              <option value="custom">Custom path…</option>
+            </select>
+
+            {engineValue === "builtin" && !managedBinary && (
+              <div className="mt-2 flex items-center gap-2">
+                <button
+                  onClick={install}
+                  disabled={installing}
+                  className="rounded-md px-3 py-1.5 text-[12px] font-medium disabled:opacity-50"
+                  style={{ background: "var(--accent)", color: "var(--white)" }}
+                >
+                  {installing ? "Downloading & installing…" : "Download & install (~160 MB)"}
+                </button>
+                <p className="text-[11px] text-[var(--ink-3)]">CaberOS's own private copy of Chrome — one-time download.</p>
+              </div>
+            )}
+            {engineValue === "builtin" && managedBinary && (
+              <div className="mt-2 flex items-center justify-between">
+                <p className="text-[11px] text-[var(--ink-3)] break-all">{managedBinary}</p>
+                <button
+                  onClick={removeRuntime}
+                  className="ml-2 shrink-0 text-[11px] text-[var(--ink-3)] hover:text-red-600 underline"
+                >
+                  Remove
+                </button>
+              </div>
+            )}
+            {engineValue === "custom" && (
+              <div className="flex items-center gap-2 mt-2">
+                <input
+                  type="text"
+                  value={customPath}
+                  onChange={(e) => setCustomPath(e.target.value)}
+                  disabled={overrideSource === "env"}
+                  placeholder="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+                  className="flex-1 rounded-md border px-3 py-2 font-mono text-[12px] disabled:opacity-60"
+                  style={{ borderColor: "var(--border)", background: "var(--surface)", color: "var(--ink)" }}
+                />
+                <button
+                  onClick={() => {
+                    setPickingCustom(false);
+                    void applyOverride(customPath);
+                  }}
+                  disabled={overrideSource === "env" || !customPath.trim()}
+                  className="flex items-center gap-1 rounded-md px-3 py-2 text-[12px] font-medium disabled:opacity-50"
+                  style={{ background: "var(--accent)", color: "var(--white)" }}
+                >
+                  <Save className="h-3.5 w-3.5" /> Save
+                </button>
+              </div>
+            )}
+            {overrideSource === "env" && (
+              <p className="mt-2 rounded-md border px-3 py-2 text-[12px]" style={{ borderColor: "#f59e0b", background: "#fffbeb", color: "#92400e" }}>
+                Set by <code>AGENTOS_BROWSER_BINARY</code> in your environment or <code>.env</code> file — remove it there to change it here.
+              </p>
+            )}
+            <p className="mt-2 text-[11px] text-[var(--ink-3)]">
+              Automatic prefers a browser already on this machine, then the built-in one. Pick a specific engine to pin it, or Custom path for a browser we didn't detect.
+            </p>
+          </div>
+
+          <p className="text-[11px] text-[var(--ink-3)]">
+            Agents browse in their own private copy of Chrome — your personal browser, passwords, and logins are never touched. Works even if you only have Safari.
+          </p>
+        </div>
+      </div>
+
+      {/* Profiles */}
+      <div>
+        <h2 className="mb-3 text-[14px] font-semibold text-[var(--ink)]">Saved logins</h2>
+        <div className="rounded-lg border p-5 space-y-4" style={{ borderColor: "var(--border)", background: "var(--white)" }}>
+          <p className="text-[12px] text-[var(--ink-3)]">
+            Let an agent stay logged into websites between runs — you log in once yourself, the agent reuses it. Each login only works on the sites you list, so it can't wander off.
+          </p>
+
+          {profiles.length === 0 ? (
+            <p className="text-[12px] text-[var(--ink-3)]">No saved logins — agents start logged out every run.</p>
+          ) : (
+            <div className="space-y-2">
+              {profiles.map((p) => (
+                <div key={p.id} className="flex items-center justify-between rounded-md border px-3 py-2" style={{ borderColor: "var(--border)" }}>
+                  <div className="min-w-0">
+                    <p className="text-[13px] font-medium text-[var(--ink)]">{p.name}</p>
+                    <p className="text-[11px] text-[var(--ink-3)] truncate">
+                      {p.allowed_domains.length > 0 ? `only: ${p.allowed_domains.join(", ")}` : "any website"}
+                      {p.description ? ` — ${p.description}` : ""}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => removeProfile(p.id)}
+                    className="rounded-md p-1.5 text-[var(--ink-3)] hover:text-red-600"
+                    title="Forget this login"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="space-y-2 border-t pt-3" style={{ borderColor: "var(--border)" }}>
+            <p className="text-[12px] font-medium text-[var(--ink)]">Add a saved login</p>
+            <div className="grid grid-cols-2 gap-2">
+              <input
+                type="text"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                placeholder="name (e.g. shopping)"
+                className="rounded-md border px-3 py-2 text-[12px]"
+                style={{ borderColor: "var(--border)", background: "var(--surface)", color: "var(--ink)" }}
+              />
+              <input
+                type="text"
+                value={newDesc}
+                onChange={(e) => setNewDesc(e.target.value)}
+                placeholder="note (optional)"
+                className="rounded-md border px-3 py-2 text-[12px]"
+                style={{ borderColor: "var(--border)", background: "var(--surface)", color: "var(--ink)" }}
+              />
+            </div>
+            <input
+              type="text"
+              value={newDomains}
+              onChange={(e) => setNewDomains(e.target.value)}
+              placeholder="websites it's allowed on, comma-separated (e.g. saucedemo.com, github.com) — empty = anywhere"
+              className="w-full rounded-md border px-3 py-2 text-[12px]"
+              style={{ borderColor: "var(--border)", background: "var(--surface)", color: "var(--ink)" }}
+            />
+            <button
+              onClick={createProfile}
+              disabled={!newName.trim()}
+              className="flex items-center gap-1 rounded-md px-3 py-1.5 text-[12px] font-medium disabled:opacity-50"
+              style={{ background: "var(--accent)", color: "var(--white)" }}
+            >
+              <Plus className="h-3.5 w-3.5" /> Add login
+            </button>
           </div>
         </div>
       </div>

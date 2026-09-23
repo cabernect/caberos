@@ -763,6 +763,50 @@ export const api = {
   // Global settings
   getYoloMode: () =>
     request<{ yolo_mode: boolean }>("/api/settings/yolo"),
+
+  // --- Browser (W4) ---
+  getBrowserSettings: () =>
+    request<{
+      binary_override: string;
+      override_source: "env" | "persisted" | "none";
+      resolved_binary: string | null;
+      detected: { name: string; path: string }[];
+      runtime: { status: string; binary?: string; managed?: boolean; source?: string; version?: string; installable?: boolean; detail?: string };
+    }>("/api/settings/browser"),
+  updateBrowserSettings: (binaryOverride: string) =>
+    request<{
+      binary_override: string;
+      override_source: "env" | "persisted" | "none";
+      resolved_binary: string | null;
+      detected: { name: string; path: string }[];
+      runtime: { status: string };
+    }>(
+      "/api/settings/browser",
+      { method: "PUT", body: JSON.stringify({ binary_override: binaryOverride }) },
+    ),
+  installBrowserRuntime: () =>
+    request<{ status: string; version?: string; binary?: string; detail?: string }>(
+      "/api/browser/runtime/install",
+      { method: "POST" },
+    ),
+  removeBrowserRuntime: () =>
+    request<{ status: string }>("/api/browser/runtime", { method: "DELETE" }),
+  listBrowserProfiles: () =>
+    request<{ id: string; name: string; allowed_domains: string[]; description: string | null }[]>(
+      "/api/browser/profiles",
+    ),
+  createBrowserProfile: (name: string, allowedDomains: string[], description?: string) =>
+    request<{ id: string }>("/api/browser/profiles", {
+      method: "POST",
+      body: JSON.stringify({
+        name,
+        allowed_domains: allowedDomains,
+        description: description || null,
+      }),
+    }),
+  deleteBrowserProfile: (id: string) =>
+    request<{ deleted: string }>(`/api/browser/profiles/${id}`, { method: "DELETE" }),
+
   setYoloMode: (enabled: boolean) =>
     request<{ yolo_mode: boolean }>("/api/settings/yolo", {
       method: "PUT",

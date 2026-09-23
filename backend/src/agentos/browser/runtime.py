@@ -1,16 +1,19 @@
-"""Managed browser runtime: discovery + first-use install.
+"""Browser runtime: discovery + operator-driven install.
 
 Resolution order for ``find_browser_binary``:
 
 1. ``AGENTOS_BROWSER_BINARY`` / ``settings.browser_binary`` — the
    operator's explicit choice of any Chromium-family binary.
-2. The CaberOS-managed install under ``data/browser-runtime/``.
-3. ``runtime_unavailable`` — callers report honestly, never silently install.
+2. A Chromium-family browser already installed on the machine (Chrome,
+   Edge, Brave, Chromium) — detected, never modified; every launch still
+   gets our own ``--user-data-dir``.
+3. The CaberOS-managed install under ``data/browser-runtime/`` — pinned,
+   verified, installed only on operator request.
+4. ``runtime_unavailable`` — callers report honestly, never silently install.
 
-Two sources, both auditable: operator-picked or pinned-and-verified. We
-deliberately do NOT scan other tools' caches (e.g. Playwright's) — a binary
-we didn't install, can't pin, and don't control the lifecycle of is not a
-dependency worth having.
+We deliberately do NOT scan other tools' caches (e.g. Playwright's) — a
+binary we didn't install, can't pin, and don't control the lifecycle of is
+not a dependency worth having.
 
 Install path downloads the pinned Chrome for Testing build (the version the
 W4 spike validated), verifies the downloaded zip's integrity, installs under
@@ -69,12 +72,80 @@ def _binary_in_install(root: Path, plat: str) -> Path | None:
     return hits[0] if hits and hits[0].is_file() else None
 
 
+def _system_browser_candidates() -> list[tuple[str, Path]]:
+    """Chromium-family browsers already installed on this machine, as
+    (display name, binary path) pairs.
+
+    Launched with our own --user-data-dir, so the operator's personal
+    profile is never touched — detection only picks the binary."""
+    if sys.platform == "darwin":
+        apps = [
+            ("Google Chrome", "Google Chrome.app", "Google Chrome"),
+            ("Microsoft Edge", "Microsoft Edge.app", "Microsoft Edge"),
+            ("Brave", "Brave Browser.app", "Brave Browser"),
+            ("Chromium", "Chromium.app", "Chromium"),
+        ]
+        return [
+            (name, Path(f"/Applications/{app}/Contents/MacOS/{exe}")) for name, app, exe in apps
+        ]
+    if sys.platform == "win32":
+        candidates: list[tuple[str, Path]] = []
+        for root in (
+            os.environ.get("PROGRAMFILES"),
+            os.environ.get("PROGRAMFILES(X86)"),
+            os.environ.get("LOCALAPPDATA"),
+        ):
+            if not root:
+                continue
+            r = Path(root)
+            candidates += [
+                ("Google Chrome", r / "Google/Chrome/Application/chrome.exe"),
+                ("Microsoft Edge", r / "Microsoft/Edge/Application/msedge.exe"),
+                ("Brave", r / "BraveSoftware/Brave-Browser/Application/brave.exe"),
+                ("Chromium", r / "Chromium/Application/chrome.exe"),
+            ]
+        return candidates
+    import shutil
+
+    names = (
+        ("Google Chrome", ("google-chrome", "google-chrome-stable")),
+        ("Microsoft Edge", ("microsoft-edge", "microsoft-edge-stable")),
+        ("Brave", ("brave-browser", "brave")),
+        ("Chromium", ("chromium", "chromium-browser")),
+    )
+    out: list[tuple[str, Path]] = []
+    for display, binaries in names:
+        for n in binaries:
+            if p := shutil.which(n):
+                out.append((display, Path(p)))
+                break
+    return out
+
+
+def detected_browsers() -> list[dict]:
+    """Installed Chromium-family browsers, for the settings dropdown."""
+    seen: set[str] = set()
+    out: list[dict] = []
+    for name, path in _system_browser_candidates():
+        if path.is_file() and name not in seen:
+            seen.add(name)
+            out.append({"name": name, "path": str(path)})
+    return out
+
+
 def find_browser_binary() -> Path | None:
-    """Locate a compatible Chromium-family binary, or None."""
+    """Locate a compatible Chromium-family binary, or None.
+
+    Order: explicit operator override → browser already on this machine →
+    CaberOS-managed pinned install."""
     override = os.environ.get("AGENTOS_BROWSER_BINARY") or settings.browser_binary
     if override:
         p = Path(override).expanduser()
         return p if p.is_file() else None
+
+    for _, candidate in _system_browser_candidates():
+        if candidate.is_file():
+            return candidate
 
     plat = _platform_key()
     if plat:
@@ -192,22 +263,38 @@ def remove_runtime() -> dict:
     return {"status": "removed", "version": RUNTIME_VERSION}
 
 
+def _resolution_source(binary: Path) -> str:
+    """How the resolved binary was picked: explicit operator override,
+    auto-detected system browser, or the managed install."""
+    override = os.environ.get("AGENTOS_BROWSER_BINARY") or settings.browser_binary
+    if override and binary == Path(override).expanduser():
+        return "override"
+    if binary.is_relative_to((runtime_root() / RUNTIME_VERSION).resolve()):
+        return "managed"
+    return "system"
+
+
 def runtime_status() -> dict:
     binary = find_browser_binary()
+    managed = (runtime_root() / RUNTIME_VERSION).resolve()
+    plat = _platform_key()
+    managed_bin = _binary_in_install(managed, plat) if plat else None
     if binary is None:
         return {
             "status": "runtime_unavailable",
             "detail": (
-                "No managed browser runtime found. Install the CaberOS "
-                "browser runtime or set AGENTOS_BROWSER_BINARY."
+                "No browser runtime found. CaberOS can install its own "
+                "browser, or point it at a Chromium-family browser."
             ),
             "version": RUNTIME_VERSION,
-            "installable": _platform_key() is not None,
+            "installable": plat is not None,
+            "managed_binary": str(managed_bin.resolve()) if managed_bin else None,
         }
-    managed = runtime_root() / RUNTIME_VERSION
     return {
         "status": "ok",
         "binary": str(binary),
         "managed": binary.is_relative_to(managed),
+        "managed_binary": str(managed_bin.resolve()) if managed_bin else None,
+        "source": _resolution_source(binary),
         "version": RUNTIME_VERSION,
     }
