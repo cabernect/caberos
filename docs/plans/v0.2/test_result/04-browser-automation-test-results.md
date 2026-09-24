@@ -2,7 +2,7 @@
 
 Initial W4 run 2026-09-23; independent recheck 2026-09-24 on `feat/v0.2-browser` — macOS, backend `:8081`, frontend `:5173`, managed Chrome for Testing `145.0.7632.6`. Fixture agents: `browser-test` (`5b93f207`, OpenAI `gpt-5.6-luna`, vision), `browser-test-41mini` (`12caf4f4`, `gpt-4.1-mini`), plus earlier fixture `browser-test` (`3eb4feef`). UI cases driven via Playwright MCP; visible-window "human hand" steps driven by a second CDP client attached to the debug port (credentials typed straight into the browser, never through the agent).
 
-This supersedes the earlier same-day draft at `docs/plans/v0.2/04-browser-automation-test-results.md` (wrong path, older fixture). That draft judged `/` rather than `/inventory.html`. Later `/inventory.html` checks were run after SauceDemo's ~16-minute session cookie had expired; those login redirects are expected and are not valid R4 failures.
+This supersedes an earlier same-day draft (fixture `3eb4feef`, wrong path — since removed). That draft judged `/` rather than `/inventory.html`. Later `/inventory.html` checks were run after SauceDemo's ~16-minute session cookie had expired; those login redirects are expected and are not valid R4 failures.
 
 **Coding-agent run: all executable cases passed except R1 (Reddit CAPTCHA).** Six real defects were found and fixed during that run (see **Findings**). The recorded within-window R4 pass stands; the later expired-session probes and their timestamps are documented under **Independent post-report verification**.
 
