@@ -48,7 +48,7 @@ class _Managed:
 def _profiles_root() -> Path:
     from ..config import settings
 
-    return settings.db_path.parent / "browser-profiles"
+    return (settings.db_path.parent / "browser-profiles").resolve()
 
 
 class BrowserRegistry:
@@ -98,13 +98,14 @@ class BrowserRegistry:
             if allowed_domains and not _url_in_scope(url, allowed_domains):
                 raise BrowserError(
                     f"url outside profile '{profile}' scope ({', '.join(allowed_domains)}): {url}"
+                    " — retry without the profile arg for an isolated session"
                 )
 
         binary = find_browser_binary()
         if binary is None:
             raise BrowserError(
                 "runtime_unavailable: no managed browser runtime found — "
-                "install it via Settings → Dependencies or set AGENTOS_BROWSER_BINARY"
+                "install it via Settings → Browser or set AGENTOS_BROWSER_BINARY"
             )
         if profile:
             profile_dir = _profiles_root() / profile

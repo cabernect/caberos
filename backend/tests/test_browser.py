@@ -10,6 +10,7 @@ import asyncio
 import functools
 import http.server
 import json
+import sys
 import threading
 from pathlib import Path
 
@@ -372,9 +373,11 @@ async def test_install_runtime_fetches_extracts_and_healthchecks(monkeypatch, tm
 
     monkeypatch.setattr(runtime, "_download", fake_download)
     monkeypatch.setattr(runtime, "_verify_signature", lambda b, p: "signature: stubbed")
-    monkeypatch.setattr(
-        runtime, "_health_check", lambda b: "Google Chrome for Testing 145.0.7632.6"
-    )
+
+    async def fake_health(b):
+        return "Google Chrome for Testing 145.0.7632.6"
+
+    monkeypatch.setattr(runtime, "_health_check", fake_health)
 
     out = await runtime.install_runtime()
     assert out["status"] == "installed"
@@ -392,6 +395,41 @@ async def test_install_runtime_fetches_extracts_and_healthchecks(monkeypatch, tm
     # remove
     assert runtime.remove_runtime()["status"] == "removed"
     assert not (tmp_path / "brt" / runtime.RUNTIME_VERSION).exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="unix symlink/mode semantics")
+def test_extract_zip_preserves_symlinks_and_exec_bits(tmp_path):
+    """CfT's macOS zip stores bundle symlinks — plain extractall writes them
+    as text files, producing a browser that launches then crashes on first
+    page. The extractor must recreate links and unix modes."""
+    import zipfile as zf
+
+    from agentos.browser import runtime
+
+    zip_path = tmp_path / "cft.zip"
+    with zf.ZipFile(zip_path, "w") as z:
+        # a real file with exec bits
+        exe = zf.ZipInfo("app/Contents/MacOS/chrome")
+        exe.external_attr = 0o100755 << 16
+        z.writestr(exe, b"#!/bin/sh\nexit 0\n")
+        # a symlink entry (unix S_IFLNK) whose content is the link target
+        link = zf.ZipInfo("app/Contents/Current")
+        link.external_attr = 0o120777 << 16
+        z.writestr(link, b"Versions/A")
+        # a plain data file
+        data = zf.ZipInfo("app/Contents/Resources/x.pak")
+        data.external_attr = 0o100644 << 16
+        z.writestr(data, b"pak")
+
+    dest = tmp_path / "out"
+    dest.mkdir()
+    runtime._extract_zip(zip_path, dest)
+
+    exe = dest / "app/Contents/MacOS/chrome"
+    assert exe.stat().st_mode & 0o111  # exec bit restored
+    link = dest / "app/Contents/Current"
+    assert link.is_symlink() and link.readlink() == Path("Versions/A")
+    assert (dest / "app/Contents/Resources/x.pak").read_bytes() == b"pak"
 
 
 async def test_install_runtime_unsupported_platform(monkeypatch):

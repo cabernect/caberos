@@ -546,7 +546,9 @@ class BrowserSession:
     async def act(self, action: str, ref: str = "", value: str | None = None) -> str:
         self.last_activity = time.monotonic()
         oid = None
-        if ref:
+        if ref and action != "navigate":
+            if not ref[1:].isdigit() or not ref.startswith("e"):
+                raise BrowserError(f"unknown element ref: {ref!r}")
             backend_id = int(ref[1:])
             node = await self._send("DOM.resolveNode", {"backendNodeId": backend_id})
             oid = node["object"]["objectId"]
@@ -647,9 +649,12 @@ class BrowserSession:
                 {"type": "mouseMoved", "x": pt["x"], "y": pt["y"]},
             )
         elif action == "navigate":
-            if not value:
+            # Models routinely put the URL in `target` instead of `value` —
+            # accept either rather than erroring on a predictable mistake.
+            url = value or (ref if "://" in ref else "")
+            if not url:
                 raise BrowserError("navigate requires a url value")
-            await self.navigate(value)
+            await self.navigate(url)
         elif action == "scroll":
             if ref:
                 # scroll the element into view

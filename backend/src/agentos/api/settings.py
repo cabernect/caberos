@@ -61,11 +61,14 @@ def _override_source() -> str:
 async def get_browser_settings(
     operator: Operator = Depends(require_operator),
 ) -> BrowserSettingsOut:
+    from pathlib import Path
+
     from ..browser.runtime import detected_browsers, find_browser_binary, runtime_status
 
     resolved = find_browser_binary()
+    override = settings.browser_binary
     return BrowserSettingsOut(
-        binary_override=settings.browser_binary,
+        binary_override=str(Path(override).expanduser().resolve()) if override else "",
         override_source=_override_source(),
         resolved_binary=str(resolved) if resolved else None,
         detected=detected_browsers(),
@@ -98,12 +101,13 @@ async def set_browser_settings(
             status_code=422,
             detail=f"not a file: {override} — point at a Chromium-family binary",
         )
+    override = str(Path(override).expanduser().resolve()) if override else ""
     persist_setting("browser_binary", override)
     resolved = find_browser_binary()
     from ..browser.runtime import detected_browsers
 
     return BrowserSettingsOut(
-        binary_override=settings.browser_binary,
+        binary_override=override,
         override_source=_override_source(),
         resolved_binary=str(resolved) if resolved else None,
         detected=detected_browsers(),

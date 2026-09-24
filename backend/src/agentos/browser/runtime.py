@@ -24,7 +24,6 @@ platform signature check (``codesign -v`` on macOS) + a real launch.
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import os
 import platform
@@ -44,9 +43,13 @@ _CFT_VERSIONS_URL = (
     "https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json"
 )
 
+# Live install status for the settings UI to poll — one install at a time.
+# {phase: preparing|downloading|extracting|verifying, downloaded: int, total: int|None}
+_install_progress: dict = {}
+
 
 def runtime_root() -> Path:
-    return settings.db_path.parent / "browser-runtime"
+    return (settings.db_path.parent / "browser-runtime").resolve()
 
 
 def _platform_key() -> str | None:
@@ -140,7 +143,7 @@ def find_browser_binary() -> Path | None:
     CaberOS-managed pinned install."""
     override = os.environ.get("AGENTOS_BROWSER_BINARY") or settings.browser_binary
     if override:
-        p = Path(override).expanduser()
+        p = Path(override).expanduser().resolve()
         return p if p.is_file() else None
 
     for _, candidate in _system_browser_candidates():
@@ -163,32 +166,79 @@ async def _download(url: str, dest: Path) -> str:
     async with httpx.AsyncClient(follow_redirects=True, timeout=None) as client:
         async with client.stream("GET", url) as resp:
             resp.raise_for_status()
+            total = int(resp.headers.get("content-length") or 0) or None
+            _install_progress.update({"phase": "downloading", "downloaded": 0, "total": total})
             with open(dest, "wb") as f:
                 async for chunk in resp.aiter_bytes(1 << 20):
                     digest.update(chunk)
                     f.write(chunk)
+                    _install_progress["downloaded"] += len(chunk)
     return digest.hexdigest()
 
 
+def _extract_zip(zip_path: Path, dest_dir: Path) -> None:
+    """Extract the CfT zip, recreating symlinks — ``zipfile.extractall``
+    writes them as text files, which silently corrupts the .app bundle
+    (launches, then crashes when a page actually loads)."""
+    root = dest_dir.resolve()
+    with zipfile.ZipFile(zip_path) as zf:
+        for info in zf.infolist():
+            mode = info.external_attr >> 16
+            if stat.S_ISLNK(mode):
+                out = (dest_dir / info.filename).resolve()
+                if not out.is_relative_to(root):
+                    continue
+                target = zf.read(info).decode()
+                if Path(target).is_absolute():
+                    continue
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.unlink(missing_ok=True)
+                out.symlink_to(target)
+            else:
+                extracted = Path(zf.extract(info, dest_dir))
+                perm = mode & 0o7777
+                if perm and extracted.is_file() and not extracted.is_symlink():
+                    extracted.chmod(perm)
+
+
 def _verify_signature(binary: Path, plat: str) -> str:
-    """Best available signature check for the platform. Returns a note."""
+    """Best available signature check for the platform. Returns a note.
+
+    CfT ships adhoc-signed (no Developer ID cert, no sealed resources), so
+    ``codesign -v`` can never pass on it. What we can verify is that the
+    Mach-O's embedded code-directory hash parses — the seal is self-
+    consistent; real integrity is the recorded sha256 + health check."""
     if plat.startswith("mac"):
-        proc = subprocess.run(
-            ["codesign", "-v", str(binary.parent.parent)], capture_output=True, text=True
-        )
-        return (
-            "signature: valid"
-            if proc.returncode == 0
-            else f"signature: codesign failed — {proc.stderr.strip()[:120]}"
-        )
+        proc = subprocess.run(["codesign", "-dvvv", str(binary)], capture_output=True, text=True)
+        fields = {
+            line.split("=", 1)[0]: line.split("=", 1)[1]
+            for line in proc.stderr.splitlines()
+            if "=" in line
+        }
+        cdhash, sig = fields.get("CDHash"), fields.get("Signature")
+        if proc.returncode == 0 and cdhash:
+            return f"signature: {sig or 'unknown'} (cdhash {cdhash[:16]}…)"
+        if proc.returncode == 0 and sig:
+            return f"signature: {sig}"
+        return f"signature: unreadable — {(proc.stderr or proc.stdout).strip()[:120]}"
     return "signature: not checked on this platform"
 
 
-def _health_check(binary: Path) -> str:
-    proc = subprocess.run([str(binary), "--version"], capture_output=True, text=True, timeout=15)
-    if proc.returncode != 0:
-        raise RuntimeError(f"health check failed: {proc.stderr.strip()[:200]}")
-    return proc.stdout.strip()
+async def _health_check(binary: Path) -> str:
+    """Prove the install actually browses — launch + CDP attach + a page,
+    the same path runs use. ``--version`` alone passes on a corrupt
+    bundle (it never loads the framework)."""
+    from .cdp import BrowserSession
+
+    prof = Path(tempfile.mkdtemp(prefix="agentos-cft-health-"))
+    session = BrowserSession(binary, prof)
+    try:
+        await session.open("about:blank")
+    finally:
+        await session.close()
+        shutil.rmtree(prof, ignore_errors=True)
+    ver = subprocess.run([str(binary), "--version"], capture_output=True, text=True, timeout=15)
+    return ver.stdout.strip()
 
 
 async def install_runtime() -> dict:
@@ -199,60 +249,71 @@ async def install_runtime() -> dict:
             "status": "unsupported_platform",
             "detail": f"{sys.platform}/{platform.machine()} has no pinned runtime build",
         }
+    if _install_progress:
+        return {"status": "error", "detail": "an install is already in progress"}
 
     import httpx
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(_CFT_VERSIONS_URL)
-        resp.raise_for_status()
-        versions = resp.json()["versions"]
-    entry = next((v for v in versions if v["version"] == RUNTIME_VERSION), None)
-    if entry is None:
-        return {"status": "error", "detail": f"pinned version {RUNTIME_VERSION} not published"}
-    url = next(
-        (d["url"] for d in entry["downloads"]["chrome"] if d["platform"] == plat),
-        None,
-    )
-    if url is None:
-        return {"status": "error", "detail": f"no {plat} build for {RUNTIME_VERSION}"}
-
-    dest_dir = runtime_root() / RUNTIME_VERSION
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
-        zip_path = Path(tmp.name)
+    _install_progress.update({"phase": "preparing", "downloaded": 0, "total": None})
     try:
-        sha256 = await _download(url, zip_path)
-        with zipfile.ZipFile(zip_path) as zf:
-            zf.extractall(dest_dir)
-        binary = _binary_in_install(dest_dir, plat)
-        if binary is None:
-            return {"status": "error", "detail": "archive extracted but no binary found"}
-        binary.chmod(binary.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-        sig_note = _verify_signature(binary, plat)
-        version_out = await asyncio.to_thread(_health_check, binary)
-        (dest_dir / "INSTALL.json").write_text(
-            __import__("json").dumps(
-                {
-                    "version": RUNTIME_VERSION,
-                    "platform": plat,
-                    "url": url,
-                    "sha256": sha256,
-                    "signature": sig_note,
-                    "health": version_out,
-                },
-                indent=2,
-            )
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(_CFT_VERSIONS_URL)
+            resp.raise_for_status()
+            versions = resp.json()["versions"]
+        entry = next((v for v in versions if v["version"] == RUNTIME_VERSION), None)
+        if entry is None:
+            return {"status": "error", "detail": f"pinned version {RUNTIME_VERSION} not published"}
+        url = next(
+            (d["url"] for d in entry["downloads"]["chrome"] if d["platform"] == plat),
+            None,
         )
-        return {
-            "status": "installed",
-            "version": RUNTIME_VERSION,
-            "binary": str(binary),
-            "sha256": sha256,
-            "signature": sig_note,
-            "health": version_out,
-        }
+        if url is None:
+            return {"status": "error", "detail": f"no {plat} build for {RUNTIME_VERSION}"}
+
+        dest_dir = runtime_root() / RUNTIME_VERSION
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
+            zip_path = Path(tmp.name)
+        try:
+            sha256 = await _download(url, zip_path)
+            _install_progress.update({"phase": "extracting", "total": None})
+            _extract_zip(zip_path, dest_dir)
+            binary = _binary_in_install(dest_dir, plat)
+            if binary is None:
+                return {"status": "error", "detail": "archive extracted but no binary found"}
+            binary.chmod(binary.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+            _install_progress.update({"phase": "verifying"})
+            sig_note = _verify_signature(binary, plat)
+            try:
+                version_out = await _health_check(binary)
+            except Exception as exc:
+                shutil.rmtree(dest_dir, ignore_errors=True)
+                return {"status": "error", "detail": f"health check failed: {exc}"}
+            (dest_dir / "INSTALL.json").write_text(
+                __import__("json").dumps(
+                    {
+                        "version": RUNTIME_VERSION,
+                        "platform": plat,
+                        "url": url,
+                        "sha256": sha256,
+                        "signature": sig_note,
+                        "health": version_out,
+                    },
+                    indent=2,
+                )
+            )
+            return {
+                "status": "installed",
+                "version": RUNTIME_VERSION,
+                "binary": str(binary),
+                "sha256": sha256,
+                "signature": sig_note,
+                "health": version_out,
+            }
+        finally:
+            zip_path.unlink(missing_ok=True)
     finally:
-        zip_path.unlink(missing_ok=True)
+        _install_progress.clear()
 
 
 def remove_runtime() -> dict:
@@ -267,7 +328,7 @@ def _resolution_source(binary: Path) -> str:
     """How the resolved binary was picked: explicit operator override,
     auto-detected system browser, or the managed install."""
     override = os.environ.get("AGENTOS_BROWSER_BINARY") or settings.browser_binary
-    if override and binary == Path(override).expanduser():
+    if override and binary == Path(override).expanduser().resolve():
         return "override"
     if binary.is_relative_to((runtime_root() / RUNTIME_VERSION).resolve()):
         return "managed"
@@ -289,6 +350,7 @@ def runtime_status() -> dict:
             "version": RUNTIME_VERSION,
             "installable": plat is not None,
             "managed_binary": str(managed_bin.resolve()) if managed_bin else None,
+            "install_progress": dict(_install_progress) or None,
         }
     return {
         "status": "ok",
@@ -297,4 +359,5 @@ def runtime_status() -> dict:
         "managed_binary": str(managed_bin.resolve()) if managed_bin else None,
         "source": _resolution_source(binary),
         "version": RUNTIME_VERSION,
+        "install_progress": dict(_install_progress) or None,
     }

@@ -129,9 +129,12 @@ def assemble_system_prompt(
         parts.append(
             "## Saved Browser Logins\n\n"
             "The operator created these persistent logins — pass the name as "
-            "browser_open's profile argument to reuse one. If the site asks to "
-            "log in, reopen with visible=true and let the user sign in "
-            "themselves; never ask for or type their credentials.\n\n" + "\n".join(login_lines)
+            "browser_open's profile argument to reuse one. Profiles are "
+            "optional: omit profile (or pass an empty value) for a fresh "
+            "isolated session — use a profile only when the task needs that "
+            "site's saved login. If the site asks to log in, reopen with "
+            "visible=true and let the user sign in themselves; never ask for "
+            "or type their credentials.\n\n" + "\n".join(login_lines)
         )
 
     # 8. KG facts (D34 — knowledge graph triples for this contact)

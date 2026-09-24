@@ -461,7 +461,8 @@ def register_builtin_capabilities() -> None:
                         "type": "string",
                         "description": (
                             "Named persistent profile (operator-managed) — keeps logins "
-                            "for its allowed domains; navigations outside them are blocked"
+                            "for its allowed domains; navigations outside them are blocked. "
+                            "Omit it entirely for a fresh isolated session."
                         ),
                     },
                     "visible": {

@@ -54,10 +54,13 @@ async def browser_open(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
             )
         ).scalar_one_or_none()
         if row is None:
+            names = (await kwargs["db"].execute(select(BrowserProfile.name))).scalars().all()
+            available = ", ".join(sorted(names)) or "none"
             return {
                 "status": "profile_not_found",
                 "detail": (
-                    f"no browser profile named '{profile_name}' — the operator creates profiles"
+                    f"no browser profile named '{profile_name}' (available: {available}) — "
+                    "omit the profile arg for a fresh isolated session"
                 ),
             }
         allowed = json.loads(row.allowed_domains or "[]") or None
@@ -131,7 +134,7 @@ async def browser_act(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     # profile's domain policy. Retrying with allow_domain=True widens the
     # session scope — the operator's approval of this call is the decision.
     if args["action"] == "navigate" and args.get("allow_domain"):
-        session.allow_domain_for(args.get("value") or "")
+        session.allow_domain_for(args.get("value") or args.get("target") or "")
     delta = await session.act(
         action=args["action"],
         ref=args.get("target", ""),
