@@ -4,6 +4,7 @@ import asyncio
 import uuid
 from types import SimpleNamespace
 
+import litellm
 import pytest
 
 from agentos.config import settings
@@ -42,9 +43,11 @@ async def test_streaming_model_idle_timeout_ends_stalled_stream(monkeypatch):
     adapter = LiteLLMAdapter(db=None)
 
     async def load_provider(_provider_id):
+        # Custom base_url keeps this on the chat-completions path —
+        # api.openai.com providers default to the Responses API now.
         return {
             "api_key": "",
-            "base_url": None,
+            "base_url": "http://localhost:9/compat",
             "org_id": None,
             "extra_params": {},
             "type": "openai",
@@ -714,6 +717,152 @@ async def test_opencode_gpt_uses_responses_reasoning(monkeypatch):
     assert "reasoning_effort" not in captured
 
 
+@pytest.mark.asyncio
+async def test_plain_openai_defaults_to_responses_api(monkeypatch):
+    """api.openai.com providers route through /v1/responses — reasoning models
+    only accept tools there, and every catalog model works on it."""
+    adapter = LiteLLMAdapter(db=None)
+    provider = {
+        "type": "openai",
+        "base_url": None,
+        "api_key": "sk-test",
+        "org_id": None,
+        "extra_params": {},
+    }
+
+    async def load_provider(_provider_id):
+        return provider
+
+    captured = {}
+
+    async def fake_aresponses(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            output=[
+                SimpleNamespace(
+                    type="message",
+                    content=[SimpleNamespace(type="output_text", text="hi")],
+                )
+            ],
+            usage=SimpleNamespace(input_tokens=3, output_tokens=1),
+            cost=0.0,
+        )
+
+    async def acompletion_should_not_run(**_kwargs):
+        raise AssertionError("chat completions must not be used for api.openai.com")
+
+    monkeypatch.setattr(adapter, "_load_provider", load_provider)
+    monkeypatch.setattr("agentos.harness.litellm_adapter.litellm.aresponses", fake_aresponses)
+    monkeypatch.setattr(
+        "agentos.harness.litellm_adapter.litellm.acompletion", acompletion_should_not_run
+    )
+
+    result = await adapter.complete(
+        agent_model=ModelConfig(provider_id="openai", name="gpt-6-luna"),
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {"name": "t", "parameters": {"type": "object", "properties": {}}},
+            }
+        ],
+    )
+
+    assert result.content == "hi"
+    assert captured["model"] == "openai/gpt-6-luna"
+    assert captured["api_base"] is None
+    assert captured["tools"] == [
+        {
+            "type": "function",
+            "name": "t",
+            "description": "",
+            "parameters": {"type": "object", "properties": {}},
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_chat_completions_retries_on_responses_hint(monkeypatch):
+    """Custom-base_url providers stay on chat completions, but a server error
+    pointing at /v1/responses triggers one transparent retry."""
+    adapter = LiteLLMAdapter(db=None)
+    provider = {
+        "type": "openai",
+        "base_url": "https://compat.example/v1",
+        "api_key": "k",
+        "org_id": None,
+        "extra_params": {},
+    }
+
+    async def load_provider(_provider_id):
+        return provider
+
+    async def acompletion(**_kwargs):
+        raise litellm.BadRequestError(
+            message=(
+                "Function tools with reasoning_effort are not supported for "
+                "new-model in /v1/chat/completions. To use function tools, use "
+                "/v1/responses or set reasoning_effort to 'none'."
+            ),
+            model="openai/new-model",
+            llm_provider="openai",
+        )
+
+    async def fake_aresponses(**kwargs):
+        return SimpleNamespace(
+            output=[
+                SimpleNamespace(
+                    type="message",
+                    content=[SimpleNamespace(type="output_text", text="via responses")],
+                )
+            ],
+            usage=SimpleNamespace(input_tokens=2, output_tokens=1),
+            cost=0.0,
+        )
+
+    monkeypatch.setattr(adapter, "_load_provider", load_provider)
+    monkeypatch.setattr("agentos.harness.litellm_adapter.litellm.acompletion", acompletion)
+    monkeypatch.setattr("agentos.harness.litellm_adapter.litellm.aresponses", fake_aresponses)
+
+    result = await adapter.complete(
+        agent_model=ModelConfig(provider_id="compat", name="new-model"),
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert result.content == "via responses"
+
+
+@pytest.mark.asyncio
+async def test_chat_completions_error_without_responses_hint_propagates(monkeypatch):
+    """Unrelated API errors surface honestly — no silent retry."""
+    adapter = LiteLLMAdapter(db=None)
+
+    async def load_provider(_provider_id):
+        return {
+            "type": "openai",
+            "base_url": "https://compat.example/v1",
+            "api_key": "k",
+            "org_id": None,
+            "extra_params": {},
+        }
+
+    async def acompletion(**_kwargs):
+        raise litellm.BadRequestError(
+            message="Unsupported parameter: 'max_tokens'",
+            model="openai/x",
+            llm_provider="openai",
+        )
+
+    monkeypatch.setattr(adapter, "_load_provider", load_provider)
+    monkeypatch.setattr("agentos.harness.litellm_adapter.litellm.acompletion", acompletion)
+
+    with pytest.raises(litellm.BadRequestError, match="max_tokens"):
+        await adapter.complete(
+            agent_model=ModelConfig(provider_id="compat", name="x"),
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+
 def test_opencode_zen_reasoning_fields_match_endpoint():
     provider = {"type": "openai", "base_url": "https://opencode.ai/zen/v1"}
 
@@ -895,7 +1044,9 @@ async def test_context_overflow_forces_compaction_and_retries(db, workspace, mon
 
     from agentos.harness import compaction as compaction_mod
 
-    async def fake_summary(middle, previous_summary, model_str, api_key=None, base_url=None):
+    async def fake_summary(
+        middle, previous_summary, model_str, api_key=None, base_url=None, use_responses=False
+    ):
         return "condensed earlier conversation"
 
     monkeypatch.setattr(compaction_mod, "generate_summary", fake_summary)

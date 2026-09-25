@@ -10,24 +10,25 @@
  * olive accent, JetBrains Mono for labels and code.
  */
 :root {
-  --surface:    #F5F5F3;
-  --sidebar:    #EFEFED;
-  --border:     #E0DFDC;
-  --ink:        #111110;
-  --ink-2:      #6B6B68;
-  --ink-3:      #9B9B97;
-  --accent:     #6A8216;
-  --accent-bg:  #F0F2E2;
-  --tool-bg:    #F0EDE8;
-  --thinking-bg:#FFFBF0;
-  --thinking-border: #FDE68A;
-  --success:    #16A34A;
-  --danger:     #DC2626;
-  --warning:    #D97706;
-  --white:      #FFFFFF;
-  --brand:      #6A8216;   /* olive — light mode */
-  --brand-2:    #A8C04A;   /* lifted olive — for dark mode */
-  --caberos-sidebar-border: #E0DFDC;
+  --surface: #f5f5f3;
+  --sidebar: #efefed;
+  --border: #e0dfdc;
+  --ink: #111110;
+  --ink-2: #6b6b68;
+  --ink-3: #9b9b97;
+  --accent: #6a8216;
+  --accent-bg: #f0f2e2;
+  --hover: #ebebe8;
+  --tool-bg: #f0ede8;
+  --thinking-bg: #fffbf0;
+  --thinking-border: #fde68a;
+  --success: #16a34a;
+  --danger: #dc2626;
+  --warning: #d97706;
+  --white: #ffffff;
+  --brand: #6a8216; /* olive — light mode */
+  --brand-2: #a8c04a; /* lifted olive — for dark mode */
+  --caberos-sidebar-border: #e0dfdc;
   --sidebar-divider: transparent;
 
   /* shadcn mapping */
@@ -68,31 +69,32 @@
 }
 
 :root[data-theme="dark"] {
-  --surface:    #151811;
-  --sidebar:    #1D2119;
-  --border:     #3D4935;
-  --ink:        #F5F5F3;
-  --ink-2:      #C0C8B8;
-  --ink-3:      #929C89;
-  --accent:     #A8C04A;
-  --accent-bg:  #2F3B20;
-  --tool-bg:    #2A3225;
-  --thinking-bg:#2F2D1D;
-  --thinking-border: #776B26;
-  --success:    #86C883;
-  --danger:     #F87171;
-  --warning:    #E4A34F;
-  --white:      #F5F5F3;
-  --brand:      #A8C04A;
-  --brand-2:    #D8E99B;
-  --caberos-sidebar-border: #3D4935;
+  --surface: #151811;
+  --sidebar: #1d2119;
+  --border: #3d4935;
+  --ink: #f5f5f3;
+  --ink-2: #c0c8b8;
+  --ink-3: #929c89;
+  --accent: #a8c04a;
+  --accent-bg: #2f3b20;
+  --hover: #262b1f;
+  --tool-bg: #2a3225;
+  --thinking-bg: #2f2d1d;
+  --thinking-border: #776b26;
+  --success: #86c883;
+  --danger: #f87171;
+  --warning: #e4a34f;
+  --white: #f5f5f3;
+  --brand: #a8c04a;
+  --brand-2: #d8e99b;
+  --caberos-sidebar-border: #3d4935;
   --sidebar-divider: transparent;
 
   --background: var(--surface);
   --foreground: var(--ink);
-  --card: #20271B;
+  --card: #20271b;
   --card-foreground: var(--ink);
-  --popover: #20271B;
+  --popover: #20271b;
   --popover-foreground: var(--ink);
   --primary: var(--accent);
   --primary-foreground: #151811;
@@ -121,7 +123,8 @@
   --chart-5: var(--ink-3);
 }
 
-:root[data-theme="dark"] [style*="background: var(--ink)"][style*="color: var(--white)"] {
+:root[data-theme="dark"]
+  [style*="background: var(--ink)"][style*="color: var(--white)"] {
   background: var(--accent) !important;
   border-color: var(--accent) !important;
 }
@@ -216,36 +219,68 @@
 }
 
 /* Thin scrollbars */
-::-webkit-scrollbar { width: 4px; height: 4px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-::-webkit-scrollbar-thumb:hover { background: var(--ink-3); }
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ink-3);
+}
 
 /* Pulse animation (for thinking dots, running tools) */
 @keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
 }
-.pulse { animation: pulse 1.5s ease-in-out infinite; }
+.pulse {
+  animation: pulse 1.5s ease-in-out infinite;
+}
 
 /* Bounce dots (typing indicator) */
 @keyframes bounce {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-4px); }
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
 }
 .bounce-dot {
-  width: 6px; height: 6px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--ink-3);
   animation: bounce 1s ease-in-out infinite;
 }
-.bounce-dot:nth-child(2) { animation-delay: 0.15s; }
-.bounce-dot:nth-child(3) { animation-delay: 0.30s; }
+.bounce-dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.bounce-dot:nth-child(3) {
+  animation-delay: 0.3s;
+}
 
 /* Streaming cursor */
 @keyframes blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
 }
 .streaming-cursor {
   display: inline-block;
@@ -258,19 +293,43 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .pulse, .bounce-dot, .streaming-cursor { animation: none; }
+  .pulse,
+  .bounce-dot,
+  .streaming-cursor {
+    animation: none;
+  }
 }
 
 /* Markdown rendering for assistant messages */
-.markdown-body > *:first-child { margin-top: 0; }
-.markdown-body > *:last-child { margin-bottom: 0; }
-.markdown-body p { margin: 0.5em 0; }
-.markdown-body ul, .markdown-body ol { margin: 0.5em 0; padding-left: 1.5em; }
-.markdown-body li { margin: 0.25em 0; }
-.markdown-body ul li { list-style: disc; }
-.markdown-body ol li { list-style: decimal; }
-.markdown-body strong { font-weight: 600; }
-.markdown-body em { font-style: italic; }
+.markdown-body > *:first-child {
+  margin-top: 0;
+}
+.markdown-body > *:last-child {
+  margin-bottom: 0;
+}
+.markdown-body p {
+  margin: 0.5em 0;
+}
+.markdown-body ul,
+.markdown-body ol {
+  margin: 0.5em 0;
+  padding-left: 1.5em;
+}
+.markdown-body li {
+  margin: 0.25em 0;
+}
+.markdown-body ul li {
+  list-style: disc;
+}
+.markdown-body ol li {
+  list-style: decimal;
+}
+.markdown-body strong {
+  font-weight: 600;
+}
+.markdown-body em {
+  font-style: italic;
+}
 .markdown-body code {
   font-family: "JetBrains Mono", monospace;
   font-size: 0.875em;
@@ -300,20 +359,32 @@
   color: var(--accent);
   text-decoration: underline;
 }
-.markdown-body h1, .markdown-body h2, .markdown-body h3 {
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3 {
   font-weight: 600;
   margin: 1em 0 0.5em;
 }
-.markdown-body h1 { font-size: 1.25em; }
-.markdown-body h2 { font-size: 1.15em; }
-.markdown-body h3 { font-size: 1.05em; }
+.markdown-body h1 {
+  font-size: 1.25em;
+}
+.markdown-body h2 {
+  font-size: 1.15em;
+}
+.markdown-body h3 {
+  font-size: 1.05em;
+}
 .markdown-body table {
   border-collapse: collapse;
   margin: 0.75em 0;
 }
-.markdown-body th, .markdown-body td {
+.markdown-body th,
+.markdown-body td {
   border: 1px solid var(--border);
   padding: 0.4em 0.7em;
   text-align: left;
 }
-.markdown-body th { font-weight: 600; background: var(--sidebar); }
+.markdown-body th {
+  font-weight: 600;
+  background: var(--sidebar);
+}

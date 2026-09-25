@@ -74,6 +74,7 @@ class SyscallHandler:
         parent_config: AgentConfig | None = None,
         capability_catalog: Any = None,
         approval_batch: Any = None,
+        trigger: str = "user_message",
     ) -> SyscallResult:
         start = time.monotonic()
         self._event_emitter = event_emitter
@@ -280,6 +281,16 @@ class SyscallHandler:
         if call.name in ("skills_list", "skills_load", "skills_read_resource"):
             extra_kwargs["agent_id"] = agent_config.id
 
+        # Browser tools: ownership scope (agent/session/run) so a browser
+        # session can only be driven by the run that opened it; db is
+        # injected for named-profile lookup on browser_open.
+        if call.name.startswith("browser_"):
+            extra_kwargs["agent_id"] = agent_config.id
+            extra_kwargs["run_id"] = run_id
+            extra_kwargs["session_id"] = getattr(session, "id", None)
+            extra_kwargs["db"] = self.db
+            extra_kwargs["trigger"] = trigger
+
         # Terminal tools: registry + ownership scope (agent/session/run) so a
         # terminal can only be read or closed by the run that started it.
         if call.name in ("terminal", "read_terminal", "close_terminal"):
@@ -302,7 +313,7 @@ class SyscallHandler:
         if call.name in ("capabilities_search", "capabilities_load"):
             extra_kwargs["capability_catalog"] = capability_catalog
 
-        if call.name in ("read_file", "doc_search", "doc_inspect"):
+        if call.name in ("read_file", "doc_search", "doc_inspect", "browser_observe"):
             extra_kwargs["supports_vision"] = self.supports_vision
 
         try:

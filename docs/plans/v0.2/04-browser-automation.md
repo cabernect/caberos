@@ -160,6 +160,75 @@ A reopened persistent session must re-observe before acting. Browser crashes bec
 - Docker runtime parity
 - Repeatable spike benchmark for latency, memory, turns, tokens, and completion reliability
 
+## Deferred (v0.2.+)
+
+- **Recorded browser flows** — capture an act sequence once, replay it
+  deterministically without model turns (durable role+name targeting, not
+  short-lived refs). Composes with Scheduler for repeated research runs.
+
+## Implementation status (branch `feat/v0.2-browser`)
+
+Built on raw CDP — no Playwright/Selenium dependency (decision: build from
+scratch). Spike results in `scripts/spike_browser/RESULTS.md`.
+
+**Implemented:**
+- `browser/` module: `cdp.py` (session core — launch/attach/observe/act/
+  extract/screenshot, dedicated reader task, event-driven waits, Fetch
+  interception), `runtime.py` (managed install of pinned Chrome for
+  Testing 145.0.7632.6 → `data/browser-runtime/`, sha256 + codesign +
+  `--version` health check; binary resolution is exactly two auditable
+  sources: `AGENTOS_BROWSER_BINARY`/`browser_binary` operator override or
+  the managed install — no third-party cache scanning), `registry.py`
+  (run-scoped ownership, 120s idle reaper, run-cancel + gateway-shutdown
+  cleanup).
+- Five capabilities: `browser_open` (egress+approval; `mode=research`,
+  `profile`, `visible`), `browser_observe` (`scope` ref-or-CSS drill-in,
+  `visual` screenshots → `artifacts/browser/`, vision-gated
+  `_model_content`), `browser_act` (click/type/navigate/scroll →
+  post-action delta), `browser_extract` (>20k staged to workspace),
+  `browser_close`.
+- Persistent profiles: `browser_profiles` DB table + operator CRUD at
+  `/api/browser/profiles`; profile dirs under `data/browser-profiles/`;
+  one live session per profile (honest lock refusal); `allowed_domains`
+  enforced via Fetch interception armed before first navigation —
+  out-of-scope Document requests are failed and recorded.
+- Downloads → `Browser.setDownloadBehavior` into workspace `downloads/`,
+  surfaced in deltas/observe, never executed.
+- Research mode: `Network.setBlockedURLs` media/font/tracker blocklist
+  with honest normal-load fallback.
+- Token economics (spike-validated): interactive+landmark AX projection,
+  80-element cap + omission marker, delta observations (~13 tokens),
+  scoped observe, extract staging.
+- Full action set: click/type/select/keypress/hover/navigate/scroll —
+  real `Input.dispatch*` events, Enter submits forms (rawKeyDown→char→keyUp).
+- Takeover: `browser_open(visible=true)` + `agent_ask_user` composes the
+  pause-for-user flow; visible sessions exempt from the idle reaper;
+  `visible` refused on non-interactive triggers (no surprise windows
+  from scheduled work).
+- iframe/shadow-DOM: shadow DOM is flattened into the default observation
+  by a11y; `observe(scope=<iframe-ref|selector>)` swaps to the frame's own
+  AX tree — works for same-origin AND cross-origin frames (browser-side
+  a11y + backendNodeId routing); only JS extract stays top-frame-scoped.
+- Domain redirect pause: out-of-scope navigation is blocked + recorded;
+  `browser_act(navigate, url, allow_domain=true)` widens the session
+  scope — the approval prompt is the operator's decision point.
+- Crash: process loss → all pending/waiting calls fail with an honest
+  BrowserError and the run can reopen; container flags
+  (`AGENTOS_BROWSER_NO_SANDBOX` → --no-sandbox/--disable-dev-shm-usage)
+  + Chromium shared libs in `backend/Dockerfile` for Docker parity.
+- Untrusted-content stance is stated in `browser_open`/`browser_observe`
+  descriptions (page text is never operator instruction).
+
+- Operator browser settings: `Settings → Browser` tab —
+  runtime status + install/remove, custom binary override persisted to
+  `data/app-settings.json` (env/`.env` pins win; UI shows the pin and
+  disables editing), and profile CRUD (name + allowed domains).
+
+**Still open:** visible-mode UI ("Watch Browser" streamed viewer — not
+required for v0.2.0 per Client behavior). Remaining validation:
+real-world E2E runs against live sites per
+`test_plan/04-browser-automation-test-plan.md`.
+
 ## Done when
 
 An agent can research a JavaScript site headlessly within validated latency, resource, and context budgets; request visible takeover for a persistent login on desktop without sending the live visual stream or credentials to the model; resume safely; and produce auditable browser evidence without accessing personal browser data.

@@ -26,6 +26,7 @@ from .api import (  # noqa: E402
     agent_files,
     agents,
     approvals,
+    browser,
     channels,
     chat,
     data,
@@ -112,9 +113,13 @@ async def lifespan(app: FastAPI):
     async with async_session_factory() as db:
 
         async def _reconcile_runs() -> None:
-            # Find orphaned running runs
+            # Find orphaned runs — pending/awaiting_approval rows are just as
+            # dead as running ones: their in-memory execution context is gone,
+            # so they would sit as zombie "running" rows forever.
             orphaned = await db.execute(
-                select(Run.id, Run.agent_id, Run.session_id).where(Run.status == "running")
+                select(Run.id, Run.agent_id, Run.session_id).where(
+                    Run.status.in_(["pending", "running", "awaiting_approval"])
+                )
             )
             orphaned_rows = orphaned.all()
             if not orphaned_rows:
@@ -229,11 +234,15 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Shutdown: kill every background terminal process group first — agents
-    # must not orphan processes on gateway exit.
+    # Shutdown: kill every background terminal process group and browser
+    # session first — agents must not orphan processes on gateway exit.
     from .terminal.registry import terminal_registry
 
     await terminal_registry.shutdown_all()
+
+    from .browser.registry import browser_registry
+
+    await browser_registry.shutdown_all()
 
     # Shutdown: disconnect all MCP servers
     await mcp_registry.disconnect_all()
@@ -319,6 +328,7 @@ app.include_router(channels.router)
 app.include_router(observability.router)
 app.include_router(settings.router)
 app.include_router(data.router)
+app.include_router(browser.router)
 
 
 @app.get("/health")

@@ -33,6 +33,26 @@ discovery as part of the transport handshake — minimal config suffices there.
 - `PATCH /servers/{id}` gains the ability to change `auth_type`/`oauth_config`
   so a misconfigured server is fixable without delete/re-add.
 
+### B2 — Orphaned `pending`/`awaiting_approval` runs never reconciled
+
+**Symptom:** an agent card shows a permanent "running" indicator —
+`GET /api/runs?status=pending,running,awaiting_approval` keeps returning a
+run that will never execute (observed: a `pending` row on `test-agent`
+stuck for two days after a wedged backend).
+
+**Root cause:** startup reconciliation in `main.py` (`_reconcile_runs`)
+only swept `status == "running"` → `interrupted`. A run persisted as
+`pending` (created but never picked up) or `awaiting_approval` (its
+in-memory `RunContext` is gone after a restart, so a later approval can't
+resume anything) survives every restart as a zombie.
+
+**Fix (applied, uncommitted):**
+- `_reconcile_runs` now sweeps `pending`, `running`, and
+  `awaiting_approval` → `interrupted`, keeping the existing
+  `run_interrupted` notification.
+- Verified live: reload marked the orphan and zero non-terminal rows
+  remain; the stale row itself was reconciled manually first.
+
 ## Tests first
 
 - Fake HTTP MCP that 401s with `WWW-Authenticate` → server gains

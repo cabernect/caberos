@@ -215,6 +215,29 @@ class Harness:
         )
         await capability_catalog.prepare()
         visible_capability_names = capability_catalog.model_capability_names()
+
+        # Saved browser logins (W4): operator-managed persistent profiles the
+        # agent can't enumerate itself — inject name + domain scope so
+        # browser_open(profile=…) is usable without the user spelling it out.
+        browser_profiles: list[dict] = []
+        if "browser_open" in visible_capability_names and getattr(syscall_handler, "db", None):
+            from sqlalchemy import select as _select
+
+            from ..models.browser_profile import BrowserProfile
+
+            try:
+                rows = (await syscall_handler.db.execute(_select(BrowserProfile))).scalars().all()
+                browser_profiles = [
+                    {
+                        "name": p.name,
+                        "allowed_domains": json.loads(p.allowed_domains or "[]"),
+                        "description": p.description,
+                    }
+                    for p in rows
+                ]
+            except Exception:
+                browser_profiles = []
+
         system_prompt = assemble_system_prompt(
             agent_config,
             message,
@@ -224,6 +247,7 @@ class Harness:
             past_sessions=past_sessions,
             supports_vision=supports_vision,
             enabled_caps=visible_capability_names,
+            browser_profiles=browser_profiles,
         )
         tool_schemas = assemble_tool_schemas(
             agent_config,
@@ -251,12 +275,14 @@ class Harness:
         model_str = "gpt-4o"  # fallback
         api_key = None
         base_url = None
+        use_responses = False
         if hasattr(self.model, "get_model_info"):
             try:
                 info = await self.model.get_model_info(agent_config.model)
                 model_str = info["model_str"]
                 api_key = info["api_key"]
                 base_url = info["base_url"]
+                use_responses = bool(info.get("use_responses"))
             except Exception:
                 pass
 
@@ -272,6 +298,7 @@ class Harness:
                 previous_summary=compaction_summary,
                 api_key=api_key,
                 base_url=base_url,
+                use_responses=use_responses,
             )
 
             history = system_msgs + compaction_result.messages
@@ -405,6 +432,7 @@ class Harness:
                         api_key=api_key,
                         base_url=base_url,
                         force=True,
+                        use_responses=use_responses,
                     )
                     if compaction_result.compacted:
                         history = system_msgs + compaction_result.messages
@@ -586,6 +614,7 @@ class Harness:
                         event_emitter=event_emitter,
                         capability_catalog=capability_catalog,
                         approval_batch=approval_batch,
+                        trigger=trigger,
                     )
 
                 syscall_results = await asyncio.gather(*[_mediate_one(c) for c in calls])

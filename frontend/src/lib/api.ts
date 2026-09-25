@@ -80,18 +80,21 @@ async function fetchBlob(path: string): Promise<string> {
 
 const isDesktopShell =
   typeof window !== "undefined" &&
-  (window.location.protocol === "tauri:" || window.location.hostname === "tauri.localhost");
+  (window.location.protocol === "tauri:" ||
+    window.location.hostname === "tauri.localhost");
 const configuredBase = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "");
-let resolvedBase = configuredBase || (isDesktopShell ? "http://127.0.0.1:51718" : "");
+let resolvedBase =
+  configuredBase || (isDesktopShell ? "http://127.0.0.1:51718" : "");
 
-const baseReady = configuredBase || !isDesktopShell
-  ? Promise.resolve(resolvedBase)
-  : invoke<string>("gateway_url")
-      .then((url) => {
-        resolvedBase = url.replace(/\/$/, "");
-        return resolvedBase;
-      })
-      .catch(() => resolvedBase);
+const baseReady =
+  configuredBase || !isDesktopShell
+    ? Promise.resolve(resolvedBase)
+    : invoke<string>("gateway_url")
+        .then((url) => {
+          resolvedBase = url.replace(/\/$/, "");
+          return resolvedBase;
+        })
+        .catch(() => resolvedBase);
 
 const SESSION_TOKEN_KEY = "agentos_session_token";
 
@@ -117,14 +120,15 @@ function authHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-async function request<T>(
-  path: string,
-  options: RequestInit = {},
-): Promise<T> {
+async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const base = await baseReady;
   const resp = await fetch(`${base}${path}`, {
     credentials: "include",
-    headers: { "Content-Type": "application/json", ...authHeaders(), ...options.headers },
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders(),
+      ...options.headers,
+    },
     ...options,
   });
   if (!resp.ok) {
@@ -133,6 +137,22 @@ async function request<T>(
   }
   if (resp.status === 204) return undefined as T;
   return resp.json() as Promise<T>;
+}
+
+export interface BrowserRuntimeInfo {
+  status: string;
+  binary?: string;
+  managed?: boolean;
+  managed_binary?: string | null;
+  source?: "override" | "system" | "managed";
+  version?: string;
+  installable?: boolean;
+  detail?: string;
+  install_progress?: {
+    phase: string;
+    downloaded: number;
+    total: number | null;
+  } | null;
 }
 
 export const api = {
@@ -146,69 +166,101 @@ export const api = {
 
   // Auth
   login: (username: string, password: string) =>
-    request<{ operator: Operator; must_change_password: boolean; session_token: string }>(
-      "/api/auth/login",
-      { method: "POST", body: JSON.stringify({ username, password }) },
-    ).then((resp) => {
+    request<{
+      operator: Operator;
+      must_change_password: boolean;
+      session_token: string;
+    }>("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    }).then((resp) => {
       if (resp.session_token) setSessionToken(resp.session_token);
       return resp;
     }),
   logout: () =>
-    request<{ status: string }>("/api/auth/logout", { method: "POST" }).then((resp) => {
-      setSessionToken(null);
-      return resp;
-    }),
+    request<{ status: string }>("/api/auth/logout", { method: "POST" }).then(
+      (resp) => {
+        setSessionToken(null);
+        return resp;
+      },
+    ),
   me: () => request<Operator>("/api/auth/me"),
 
   // Agents
   listAgents: () => request<Agent[]>("/api/agents"),
   getAgent: (id: string) => request<Agent>(`/api/agents/${id}`),
   listCapabilities: () => request<CapabilityInfo[]>("/api/agents/capabilities"),
-  createAgent: (data: { name: string; provider_id?: string; model_name?: string; soul?: string; persona?: string; task?: string }) =>
+  createAgent: (data: {
+    name: string;
+    provider_id?: string;
+    model_name?: string;
+    soul?: string;
+    persona?: string;
+    task?: string;
+  }) =>
     request<{ id: string; name: string; enabled: boolean }>("/api/agents", {
       method: "POST",
       body: JSON.stringify(data),
     }),
-  updateAgent: (id: string, data: {
-    name?: string;
-    provider_id?: string;
-    model_name?: string;
-    thinking_enabled?: boolean | null;
-    thinking_effort?: string | null;
-    soul?: string;
-    persona?: string;
-    task?: string;
-    sandbox_mode?: "strict" | "open";
-    capabilities?: CapabilityGrant[] | null;
-    limits?: Limits;
-    heartbeat?: HeartbeatConfig;
-  }) =>
-    request<{ id: string; version: number; version_id: string }>(`/api/agents/${id}`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    }),
+  updateAgent: (
+    id: string,
+    data: {
+      name?: string;
+      provider_id?: string;
+      model_name?: string;
+      thinking_enabled?: boolean | null;
+      thinking_effort?: string | null;
+      soul?: string;
+      persona?: string;
+      task?: string;
+      sandbox_mode?: "strict" | "open";
+      capabilities?: CapabilityGrant[] | null;
+      limits?: Limits;
+      heartbeat?: HeartbeatConfig;
+    },
+  ) =>
+    request<{ id: string; version: number; version_id: string }>(
+      `/api/agents/${id}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(data),
+      },
+    ),
   disableAgent: (id: string) =>
-    request<{ id: string; enabled: boolean }>(`/api/agents/${id}/disable`, { method: "POST" }),
-  enableAgent: (id: string) =>
-    request<{ id: string; enabled: boolean }>(`/api/agents/${id}/enable`, { method: "POST" }),
-  duplicateAgent: (id: string, newId: string, newName: string) =>
-    request<{ id: string; name: string; enabled: boolean }>(`/api/agents/${id}/duplicate`, {
+    request<{ id: string; enabled: boolean }>(`/api/agents/${id}/disable`, {
       method: "POST",
-      body: JSON.stringify({ new_id: newId, new_name: newName }),
     }),
+  enableAgent: (id: string) =>
+    request<{ id: string; enabled: boolean }>(`/api/agents/${id}/enable`, {
+      method: "POST",
+    }),
+  duplicateAgent: (id: string, newId: string, newName: string) =>
+    request<{ id: string; name: string; enabled: boolean }>(
+      `/api/agents/${id}/duplicate`,
+      {
+        method: "POST",
+        body: JSON.stringify({ new_id: newId, new_name: newName }),
+      },
+    ),
   exportAgent: (id: string) =>
     request<{ yaml: string }>(`/api/agents/${id}/export`),
   importAgent: (yaml: string) =>
-    request<{ id: string; name: string; enabled: boolean }>("/api/agents/import", {
-      method: "POST",
-      body: JSON.stringify({ yaml }),
-    }),
+    request<{ id: string; name: string; enabled: boolean }>(
+      "/api/agents/import",
+      {
+        method: "POST",
+        body: JSON.stringify({ yaml }),
+      },
+    ),
   listVersions: (id: string) =>
     request<AgentVersion[]>(`/api/agents/${id}/versions`),
   getVersion: (id: string, versionId: string) =>
-    request<{ id: string; version_number: number; is_active: boolean; config: Record<string, unknown> }>(
-      `/api/agents/${id}/versions/${versionId}`,
-    ),
+    request<{
+      id: string;
+      version_number: number;
+      is_active: boolean;
+      config: Record<string, unknown>;
+    }>(`/api/agents/${id}/versions/${versionId}`),
   rollbackAgent: (id: string, versionId: string) =>
     request<{ id: string; version_number: number; is_active: boolean }>(
       `/api/agents/${id}/rollback/${versionId}`,
@@ -223,8 +275,7 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ content }),
     }),
-  listAgentSkills: (id: string) =>
-    request<Skill[]>(`/api/agents/${id}/skills`),
+  listAgentSkills: (id: string) => request<Skill[]>(`/api/agents/${id}/skills`),
   listAvailableSkills: (id: string) =>
     request<SkillInfo[]>(`/api/agents/${id}/available-skills`),
   createAgentSkill: (id: string, name: string, content?: string) =>
@@ -233,9 +284,17 @@ export const api = {
       body: JSON.stringify({ name, content: content || "" }),
     }),
   deleteAgentSkill: (id: string, skillName: string) =>
-    request<{ ok: boolean }>(`/api/agents/${id}/skills/${skillName}`, { method: "DELETE" }),
+    request<{ ok: boolean }>(`/api/agents/${id}/skills/${skillName}`, {
+      method: "DELETE",
+    }),
   listWorkspace: (id: string, path?: string) =>
-    request<{ type: "dir" | "file"; path: string; entries?: WorkspaceEntry[]; content?: string; size?: number }>(
+    request<{
+      type: "dir" | "file";
+      path: string;
+      entries?: WorkspaceEntry[];
+      content?: string;
+      size?: number;
+    }>(
       `/api/agents/${id}/workspace${path ? `?path=${encodeURIComponent(path)}` : ""}`,
     ),
   deleteWorkspaceEntry: (id: string, path: string) =>
@@ -247,7 +306,9 @@ export const api = {
   // File previews (W3) — one param object shared by the whole family:
   // {path} for live files, {artifactId, revisionId} for managed bytes.
   previewFile: (id: string, opts: PreviewSource = {}) =>
-    request<PreviewPayload>(`/api/agents/${id}/workspace/preview?${sourceQuery(opts)}`),
+    request<PreviewPayload>(
+      `/api/agents/${id}/workspace/preview?${sourceQuery(opts)}`,
+    ),
 
   // Binary content can't ride <img src>/<video src> — Bearer auth has no
   // cookie fallback in the desktop shell. Fetch the blob, hand the caller
@@ -255,19 +316,34 @@ export const api = {
   fetchFileBlob: (id: string, opts: PreviewSource = {}): Promise<string> =>
     fetchBlob(`/api/agents/${id}/workspace/raw?${sourceQuery(opts)}`),
 
-  fetchPdfPage: (id: string, page: number, opts: PreviewSource = {}): Promise<string> =>
-    fetchBlob(`/api/agents/${id}/workspace/pdf-page?page=${page}&${sourceQuery(opts)}`),
+  fetchPdfPage: (
+    id: string,
+    page: number,
+    opts: PreviewSource = {},
+  ): Promise<string> =>
+    fetchBlob(
+      `/api/agents/${id}/workspace/pdf-page?page=${page}&${sourceQuery(opts)}`,
+    ),
 
   listArtifactRevisions: (id: string, artifactId: string) =>
     request<{ revisions: ArtifactRevisionInfo[] }>(
       `/api/agents/${id}/artifacts/${artifactId}/revisions`,
     ),
-  restoreArtifactRevision: (id: string, artifactId: string, revisionId: string) =>
+  restoreArtifactRevision: (
+    id: string,
+    artifactId: string,
+    revisionId: string,
+  ) =>
     request<{ revision_id: string; revision_number: number }>(
       `/api/agents/${id}/artifacts/${artifactId}/restore`,
       { method: "POST", body: JSON.stringify({ revision_id: revisionId }) },
     ),
-  compareArtifactRevisions: (id: string, artifactId: string, fromRevision: string, toRevision?: string) => {
+  compareArtifactRevisions: (
+    id: string,
+    artifactId: string,
+    fromRevision: string,
+    toRevision?: string,
+  ) => {
     const qs = new URLSearchParams({ from_revision: fromRevision });
     if (toRevision) qs.set("to_revision", toRevision);
     return request<{
@@ -287,7 +363,10 @@ export const api = {
       { method: "POST", body: JSON.stringify({ path }) },
     ),
   // Composer attachment previews (W3c) — ephemeral, nothing persisted.
-  previewAttachment: async (id: string, file: File): Promise<PreviewPayload> => {
+  previewAttachment: async (
+    id: string,
+    file: File,
+  ): Promise<PreviewPayload> => {
     const formData = new FormData();
     formData.append("file", file);
     const base = await baseReady;
@@ -320,7 +399,8 @@ export const api = {
       headers: authHeaders(),
       body: form,
     });
-    if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`);
+    if (!response.ok)
+      throw new Error(`${response.status}: ${await response.text()}`);
     return response.json() as Promise<KnowledgeDocument>;
   },
   searchKnowledge: (query: string, limit = 5) =>
@@ -329,42 +409,68 @@ export const api = {
       body: JSON.stringify({ query, limit }),
     }),
   deleteKnowledgeDocument: (documentId: string) =>
-    request<void>(`/api/knowledge/documents/${documentId}`, { method: "DELETE" }),
+    request<void>(`/api/knowledge/documents/${documentId}`, {
+      method: "DELETE",
+    }),
   listKnowledgeScope: (scope: string) =>
-    request<{ documents: KnowledgeDocument[] }>(`/api/knowledge/scopes/${scope}/documents`),
+    request<{ documents: KnowledgeDocument[] }>(
+      `/api/knowledge/scopes/${scope}/documents`,
+    ),
   uploadKnowledgeScope: async (scope: string, file: File) => {
     const form = new FormData();
     form.append("file", file);
     const base = await baseReady;
-    const response = await fetch(`${base}/api/knowledge/scopes/${scope}/documents/upload`, {
-      method: "POST",
-      credentials: "include",
-      headers: authHeaders(),
-      body: form,
-    });
-    if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`);
+    const response = await fetch(
+      `${base}/api/knowledge/scopes/${scope}/documents/upload`,
+      {
+        method: "POST",
+        credentials: "include",
+        headers: authHeaders(),
+        body: form,
+      },
+    );
+    if (!response.ok)
+      throw new Error(`${response.status}: ${await response.text()}`);
     return response.json() as Promise<KnowledgeDocument>;
   },
   searchKnowledgeScope: (scope: string, query: string, limit = 5) =>
-    request<{ results: KnowledgeResult[] }>(`/api/knowledge/scopes/${scope}/search`, {
-      method: "POST",
-      body: JSON.stringify({ query, limit }),
-    }),
+    request<{ results: KnowledgeResult[] }>(
+      `/api/knowledge/scopes/${scope}/search`,
+      {
+        method: "POST",
+        body: JSON.stringify({ query, limit }),
+      },
+    ),
   reindexKnowledgeDocument: (scope: string, documentId: string) =>
-    request<KnowledgeDocument>(`/api/knowledge/scopes/${scope}/documents/${documentId}/reindex`, {
-      method: "POST",
-    }),
+    request<KnowledgeDocument>(
+      `/api/knowledge/scopes/${scope}/documents/${documentId}/reindex`,
+      {
+        method: "POST",
+      },
+    ),
   deleteKnowledgeScope: (scope: string, documentId: string) =>
-    request<void>(`/api/knowledge/scopes/${scope}/documents/${documentId}`, { method: "DELETE" }),
+    request<void>(`/api/knowledge/scopes/${scope}/documents/${documentId}`, {
+      method: "DELETE",
+    }),
 
   // Chat — POST /message starts a run, returns {run_id, session_id}
   sendMessage: (
     agentId: string,
     text: string,
     isTest = false,
-    modelOverride?: { provider_id: string; name: string; thinking_enabled?: boolean | null; thinking_effort?: string | null },
+    modelOverride?: {
+      provider_id: string;
+      name: string;
+      thinking_enabled?: boolean | null;
+      thinking_effort?: string | null;
+    },
     sessionId?: string,
-    attachments?: { type: string; mime_type: string; data: string; filename: string }[],
+    attachments?: {
+      type: string;
+      mime_type: string;
+      data: string;
+      filename: string;
+    }[],
     newSession = false,
     skill?: string,
   ) =>
@@ -428,7 +534,8 @@ export const api = {
         let data = "";
         let eventId = 0;
         for (const line of raw.split("\n")) {
-          if (line.startsWith("id: ")) eventId = parseInt(line.slice(4), 10) || 0;
+          if (line.startsWith("id: "))
+            eventId = parseInt(line.slice(4), 10) || 0;
           else if (line.startsWith("event: ")) event = line.slice(7);
           else if (line.startsWith("data: ")) data += line.slice(6);
         }
@@ -445,11 +552,17 @@ export const api = {
 
   // Run management
   getRunStatus: (agentId: string, runId: string) =>
-    request<{ run_id: string; session_id: string; agent_id: string; status: string; event_count: number }>(
-      `/api/chat/${agentId}/runs/${runId}`,
-    ),
+    request<{
+      run_id: string;
+      session_id: string;
+      agent_id: string;
+      status: string;
+      event_count: number;
+    }>(`/api/chat/${agentId}/runs/${runId}`),
   stopRun: (agentId: string, runId: string) =>
-    request<{ status: string }>(`/api/chat/${agentId}/runs/${runId}/stop`, { method: "POST" }),
+    request<{ status: string }>(`/api/chat/${agentId}/runs/${runId}/stop`, {
+      method: "POST",
+    }),
   getHistory: (agentId: string, limit = 50) =>
     request<Message[]>(`/api/chat/${agentId}/history?limit=${limit}`),
 
@@ -487,11 +600,17 @@ export const api = {
 
   // Notifications
   listNotifications: (unreadOnly = false) =>
-    request<Notification[]>(`/api/notifications${unreadOnly ? "?unread_only=true" : ""}`),
+    request<Notification[]>(
+      `/api/notifications${unreadOnly ? "?unread_only=true" : ""}`,
+    ),
   markNotificationRead: (id: string) =>
-    request<{ updated: boolean }>(`/api/notifications/${id}/read`, { method: "POST" }),
+    request<{ updated: boolean }>(`/api/notifications/${id}/read`, {
+      method: "POST",
+    }),
   markAllNotificationsRead: () =>
-    request<{ updated: boolean }>("/api/notifications/read-all", { method: "POST" }),
+    request<{ updated: boolean }>("/api/notifications/read-all", {
+      method: "POST",
+    }),
 
   // Data migration
   importBackup: async (file: File) => {
@@ -505,34 +624,52 @@ export const api = {
       headers: authHeaders(),
       body: form,
     });
-    if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`);
+    if (!response.ok)
+      throw new Error(`${response.status}: ${await response.text()}`);
     return response.json() as Promise<{ status: string }>;
   },
   deleteAllData: () =>
-    request<{ status: string; requires_relogin: boolean }>("/api/data/delete-all", {
-      method: "POST",
-      body: JSON.stringify({ confirmation: "DELETE ALL DATA" }),
-    }),
+    request<{ status: string; requires_relogin: boolean }>(
+      "/api/data/delete-all",
+      {
+        method: "POST",
+        body: JSON.stringify({ confirmation: "DELETE ALL DATA" }),
+      },
+    ),
 
   // Providers
   listProviders: () => request<Provider[]>("/api/providers"),
   createProvider: (data: Partial<Provider> & { api_key?: string }) =>
-    request<Provider>("/api/providers", { method: "POST", body: JSON.stringify(data) }),
-  updateProvider: (id: string, data: Partial<Provider> & { api_key?: string }) =>
-    request<Provider>(`/api/providers/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+    request<Provider>("/api/providers", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  updateProvider: (
+    id: string,
+    data: Partial<Provider> & { api_key?: string },
+  ) =>
+    request<Provider>(`/api/providers/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
   deleteProvider: (id: string) =>
     request<{ status: string }>(`/api/providers/${id}`, { method: "DELETE" }),
   listModels: (id: string) =>
-    request<{ discovery: string; models: ModelInfo[] }>(`/api/providers/${id}/models`),
+    request<{ discovery: string; models: ModelInfo[] }>(
+      `/api/providers/${id}/models`,
+    ),
   addCustomModel: (id: string, modelName: string) =>
     request<{ custom_models: string[] }>(`/api/providers/${id}/models`, {
       method: "POST",
       body: JSON.stringify({ model_name: modelName }),
     }),
   removeCustomModel: (id: string, modelName: string) =>
-    request<{ custom_models: string[] }>(`/api/providers/${id}/models/${encodeURIComponent(modelName)}`, {
-      method: "DELETE",
-    }),
+    request<{ custom_models: string[] }>(
+      `/api/providers/${id}/models/${encodeURIComponent(modelName)}`,
+      {
+        method: "DELETE",
+      },
+    ),
 
   // Approvals
   listApprovals: (status = "pending") =>
@@ -545,10 +682,16 @@ export const api = {
   ) =>
     request<{ status: string }>(`/api/approvals/${id}/approve`, {
       method: "POST",
-      body: JSON.stringify({ remember, remember_scope: rememberScope, remember_pattern: rememberPattern }),
+      body: JSON.stringify({
+        remember,
+        remember_scope: rememberScope,
+        remember_pattern: rememberPattern,
+      }),
     }),
   rejectCall: (id: string) =>
-    request<{ status: string }>(`/api/approvals/${id}/reject`, { method: "POST" }),
+    request<{ status: string }>(`/api/approvals/${id}/reject`, {
+      method: "POST",
+    }),
 
   // Elicitation
   respondToElicitation: (id: string, response: string) =>
@@ -582,38 +725,47 @@ export const api = {
       method: "DELETE",
     }),
   promoteSkill: (name: string, agentId: string) =>
-    request<{ promoted: boolean; name: string }>(`/api/skills/${name}/promote?agent_id=${agentId}`, {
-      method: "POST",
-    }),
+    request<{ promoted: boolean; name: string }>(
+      `/api/skills/${name}/promote?agent_id=${agentId}`,
+      {
+        method: "POST",
+      },
+    ),
 
   // Skill resource previews (W3) — same payload shape as workspace previews,
   // rooted at the skill dir instead of an agent workspace.
   listSkillResources: (name: string) =>
-    request<{ skill: string; resources: { path: string; size: number; mime: string }[] }>(
-      `/api/skills/${name}/resources`,
-    ),
+    request<{
+      skill: string;
+      resources: { path: string; size: number; mime: string }[];
+    }>(`/api/skills/${name}/resources`),
   previewSkillResource: (name: string, opts: PreviewSource = {}) =>
     request<PreviewPayload>(`/api/skills/${name}/preview?${sourceQuery(opts)}`),
   fetchSkillBlob: (name: string, opts: PreviewSource = {}): Promise<string> =>
     fetchBlob(`/api/skills/${name}/raw?${sourceQuery(opts)}`),
-  fetchSkillPdfPage: (name: string, page: number, opts: PreviewSource = {}): Promise<string> =>
+  fetchSkillPdfPage: (
+    name: string,
+    page: number,
+    opts: PreviewSource = {},
+  ): Promise<string> =>
     fetchBlob(`/api/skills/${name}/pdf-page?page=${page}&${sourceQuery(opts)}`),
 
   // Scheduler — heartbeat
-  listHeartbeats: () =>
-    request<HeartbeatStatus[]>("/api/scheduler/heartbeat"),
+  listHeartbeats: () => request<HeartbeatStatus[]>("/api/scheduler/heartbeat"),
   updateHeartbeat: (agentId: string, data: Partial<HeartbeatConfig>) =>
     request<{ agent_id: string; version: number; heartbeat: HeartbeatConfig }>(
       `/api/scheduler/heartbeat/${agentId}`,
       { method: "PUT", body: JSON.stringify(data) },
     ),
   fireHeartbeat: (agentId: string) =>
-    request<{ run_id: string; session_id: string; status: string; cost: number; error: string | null }>(
-      `/api/scheduler/heartbeat/${agentId}/fire`,
-      { method: "POST" },
-    ),
-  listSchedulerAlerts: () =>
-    request<SchedulerAlert[]>("/api/scheduler/alerts"),
+    request<{
+      run_id: string;
+      session_id: string;
+      status: string;
+      cost: number;
+      error: string | null;
+    }>(`/api/scheduler/heartbeat/${agentId}/fire`, { method: "POST" }),
+  listSchedulerAlerts: () => request<SchedulerAlert[]>("/api/scheduler/alerts"),
   clearSchedulerAlert: (agentId: string) =>
     request<{ agent_id: string; cleared: boolean }>(
       `/api/scheduler/alerts/${agentId}/clear`,
@@ -621,8 +773,7 @@ export const api = {
     ),
 
   // MCP servers
-  listMcpServers: () =>
-    request<McpServerInfo[]>("/api/mcp/servers"),
+  listMcpServers: () => request<McpServerInfo[]>("/api/mcp/servers"),
   createMcpServer: (data: {
     name: string;
     transport: string;
@@ -633,10 +784,13 @@ export const api = {
     tool_filter?: string[];
     enabled?: boolean;
   }) =>
-    request<{ id: string; name: string; connected: boolean }>("/api/mcp/servers", {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
+    request<{ id: string; name: string; connected: boolean }>(
+      "/api/mcp/servers",
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      },
+    ),
   deleteMcpServer: (id: string) =>
     request<{ id: string; deleted: boolean }>(`/api/mcp/servers/${id}`, {
       method: "DELETE",
@@ -648,12 +802,19 @@ export const api = {
       `/api/mcp/servers/${id}/agents`,
     ),
   connectMcpServer: (id: string) =>
-    request<{ id: string; connected: boolean }>(`/api/mcp/servers/${id}/connect`, {
-      method: "POST",
-    }),
+    request<{ id: string; connected: boolean }>(
+      `/api/mcp/servers/${id}/connect`,
+      {
+        method: "POST",
+      },
+    ),
   updateMcpServer: (
     id: string,
-    data: { require_approval?: boolean; enabled?: boolean; tool_filter?: string[] | null },
+    data: {
+      require_approval?: boolean;
+      enabled?: boolean;
+      tool_filter?: string[] | null;
+    },
   ) =>
     request<{
       id: string;
@@ -661,20 +822,36 @@ export const api = {
       enabled: boolean;
       tool_filter: string[] | null;
       connected: boolean;
-    }>(`/api/mcp/servers/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
-  storeMcpCredential: (serverId: string, data: {
-    credential_type: string;
-    value: string | Record<string, unknown>;
-    label?: string;
-  }) =>
-    request<{ id: string; credential_type: string; label: string | null; connected: boolean }>(
-      `/api/mcp/servers/${serverId}/credentials`,
-      { method: "POST", body: JSON.stringify(data) },
-    ),
+    }>(`/api/mcp/servers/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+  storeMcpCredential: (
+    serverId: string,
+    data: {
+      credential_type: string;
+      value: string | Record<string, unknown>;
+      label?: string;
+    },
+  ) =>
+    request<{
+      id: string;
+      credential_type: string;
+      label: string | null;
+      connected: boolean;
+    }>(`/api/mcp/servers/${serverId}/credentials`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
   listMcpCredentials: (serverId: string) =>
-    request<{ id: string; credential_type: string; label: string | null; created_at: string }[]>(
-      `/api/mcp/servers/${serverId}/credentials`,
-    ),
+    request<
+      {
+        id: string;
+        credential_type: string;
+        label: string | null;
+        created_at: string;
+      }[]
+    >(`/api/mcp/servers/${serverId}/credentials`),
   deleteMcpCredential: (serverId: string, credentialId: string) =>
     request<{ deleted: boolean }>(
       `/api/mcp/servers/${serverId}/credentials/${credentialId}`,
@@ -696,52 +873,94 @@ export const api = {
     if (category) params.set("category", category);
     if (q) params.set("q", q);
     const qs = params.toString();
-    return request<McpCatalogEntry[]>(
-      `/api/mcp/catalog${qs ? "?" + qs : ""}`,
-    );
+    return request<McpCatalogEntry[]>(`/api/mcp/catalog${qs ? "?" + qs : ""}`);
   },
   listMcpCatalogCategories: () =>
     request<{ name: string; count: number }[]>("/api/mcp/catalog/categories"),
   installFromCatalog: (name: string) =>
-    request<{ id: string; name: string; connected: boolean; auth_type: string; message: string | null }>(
-      "/api/mcp/catalog/install",
-      { method: "POST", body: JSON.stringify({ name, enabled: true }) },
-    ),
+    request<{
+      id: string;
+      name: string;
+      connected: boolean;
+      auth_type: string;
+      message: string | null;
+    }>("/api/mcp/catalog/install", {
+      method: "POST",
+      body: JSON.stringify({ name, enabled: true }),
+    }),
 
   // Channels (external messaging — Telegram, Discord, Zalo, ...)
-  listChannels: () =>
-    request<ChannelInfo[]>("/api/channels"),
-  createChannel: (data: { platform: string; agent_id: string; bot_token: string; webhook_secret?: string; mode?: string }) =>
-    request<ChannelInfo>("/api/channels", { method: "POST", body: JSON.stringify(data) }),
-  updateChannel: (id: string, data: { bot_token?: string; webhook_secret?: string; enabled?: boolean; mode?: string }) =>
-    request<ChannelInfo>(`/api/channels/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  listChannels: () => request<ChannelInfo[]>("/api/channels"),
+  createChannel: (data: {
+    platform: string;
+    agent_id: string;
+    bot_token: string;
+    webhook_secret?: string;
+    mode?: string;
+  }) =>
+    request<ChannelInfo>("/api/channels", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  updateChannel: (
+    id: string,
+    data: {
+      bot_token?: string;
+      webhook_secret?: string;
+      enabled?: boolean;
+      mode?: string;
+    },
+  ) =>
+    request<ChannelInfo>(`/api/channels/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
   deleteChannel: (id: string) =>
     request<{ status: string }>(`/api/channels/${id}`, { method: "DELETE" }),
   testChannel: (id: string, chat_id: string) =>
-    request<{ success: boolean; error: string | null }>(`/api/channels/${id}/test`, {
-      method: "POST",
-      body: JSON.stringify({ chat_id }),
-    }),
+    request<{ success: boolean; error: string | null }>(
+      `/api/channels/${id}/test`,
+      {
+        method: "POST",
+        body: JSON.stringify({ chat_id }),
+      },
+    ),
 
   // Observability (Ticket 09)
-  listRuns: (params?: { agent_id?: string; status?: string; trigger?: string; is_test?: boolean; limit?: number; offset?: number }) => {
+  listRuns: (params?: {
+    agent_id?: string;
+    status?: string;
+    trigger?: string;
+    is_test?: boolean;
+    limit?: number;
+    offset?: number;
+  }) => {
     const qs = new URLSearchParams();
     if (params?.agent_id) qs.set("agent_id", params.agent_id);
     if (params?.status) qs.set("status", params.status);
     if (params?.trigger) qs.set("trigger", params.trigger);
-    if (params?.is_test !== undefined) qs.set("is_test", String(params.is_test));
+    if (params?.is_test !== undefined)
+      qs.set("is_test", String(params.is_test));
     if (params?.limit) qs.set("limit", String(params.limit));
     if (params?.offset) qs.set("offset", String(params.offset));
     const q = qs.toString();
     return request<RunSummary[]>(`/api/runs${q ? `?${q}` : ""}`);
   },
-  getRunDetail: (runId: string) =>
-    request<RunDetail>(`/api/runs/${runId}`),
-  listAudit: (params?: { agent_id?: string; capability_name?: string; allowed?: boolean; run_id?: string; limit?: number; offset?: number }) => {
+  getRunDetail: (runId: string) => request<RunDetail>(`/api/runs/${runId}`),
+  listAudit: (params?: {
+    agent_id?: string;
+    capability_name?: string;
+    allowed?: boolean;
+    run_id?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
     const qs = new URLSearchParams();
     if (params?.agent_id) qs.set("agent_id", params.agent_id);
-    if (params?.capability_name) qs.set("capability_name", params.capability_name);
-    if (params?.allowed !== undefined) qs.set("allowed", String(params.allowed));
+    if (params?.capability_name)
+      qs.set("capability_name", params.capability_name);
+    if (params?.allowed !== undefined)
+      qs.set("allowed", String(params.allowed));
     if (params?.run_id) qs.set("run_id", params.run_id);
     if (params?.limit) qs.set("limit", String(params.limit));
     if (params?.offset) qs.set("offset", String(params.offset));
@@ -754,15 +973,72 @@ export const api = {
     return request<SpendSummary>(`/api/spend?${qs.toString()}`);
   },
   listOperatorAudit: (limit = 50, offset = 0) =>
-    request<OperatorAuditOut[]>(`/api/operator-audit?limit=${limit}&offset=${offset}`),
-  getHealth: () =>
-    request<HealthStatus>("/api/health"),
+    request<OperatorAuditOut[]>(
+      `/api/operator-audit?limit=${limit}&offset=${offset}`,
+    ),
+  getHealth: () => request<HealthStatus>("/api/health"),
   getDashboardStats: (days = 7) =>
     request<DashboardStats>(`/api/stats?days=${days}`),
 
   // Global settings
-  getYoloMode: () =>
-    request<{ yolo_mode: boolean }>("/api/settings/yolo"),
+  getYoloMode: () => request<{ yolo_mode: boolean }>("/api/settings/yolo"),
+
+  // --- Browser (W4) ---
+  getBrowserSettings: () =>
+    request<{
+      binary_override: string;
+      override_source: "env" | "persisted" | "none";
+      resolved_binary: string | null;
+      detected: { name: string; path: string }[];
+      runtime: BrowserRuntimeInfo;
+    }>("/api/settings/browser"),
+  updateBrowserSettings: (binaryOverride: string) =>
+    request<{
+      binary_override: string;
+      override_source: "env" | "persisted" | "none";
+      resolved_binary: string | null;
+      detected: { name: string; path: string }[];
+      runtime: BrowserRuntimeInfo;
+    }>("/api/settings/browser", {
+      method: "PUT",
+      body: JSON.stringify({ binary_override: binaryOverride }),
+    }),
+  installBrowserRuntime: () =>
+    request<{
+      status: string;
+      version?: string;
+      binary?: string;
+      detail?: string;
+    }>("/api/browser/runtime/install", { method: "POST" }),
+  removeBrowserRuntime: () =>
+    request<{ status: string }>("/api/browser/runtime", { method: "DELETE" }),
+  listBrowserProfiles: () =>
+    request<
+      {
+        id: string;
+        name: string;
+        allowed_domains: string[];
+        description: string | null;
+      }[]
+    >("/api/browser/profiles"),
+  createBrowserProfile: (
+    name: string,
+    allowedDomains: string[],
+    description?: string,
+  ) =>
+    request<{ id: string }>("/api/browser/profiles", {
+      method: "POST",
+      body: JSON.stringify({
+        name,
+        allowed_domains: allowedDomains,
+        description: description || null,
+      }),
+    }),
+  deleteBrowserProfile: (id: string) =>
+    request<{ deleted: string }>(`/api/browser/profiles/${id}`, {
+      method: "DELETE",
+    }),
+
   setYoloMode: (enabled: boolean) =>
     request<{ yolo_mode: boolean }>("/api/settings/yolo", {
       method: "PUT",

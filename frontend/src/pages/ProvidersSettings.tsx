@@ -1,6 +1,22 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Plus, Trash2, Save, X, RefreshCw, Check, ChevronDown, Info, Settings, Server, Cpu, Download, Upload, HardDrive } from "lucide-react";
+import {
+  Plus,
+  Trash2,
+  Save,
+  X,
+  RefreshCw,
+  Check,
+  ChevronDown,
+  Info,
+  Settings,
+  Server,
+  Cpu,
+  Download,
+  Upload,
+  HardDrive,
+  Globe,
+} from "lucide-react";
 import { api } from "@/lib/api";
 import { useConfirm } from "@/lib/confirmHook";
 import { openUrl } from "@/lib/openUrl";
@@ -40,39 +56,221 @@ interface ProviderPreset {
 }
 
 const PRESET_PROVIDERS: ProviderPreset[] = [
-  { type: "openai", name: "OpenAI", description: "GPT-4o, o1, o3, and more", defaultBaseUrl: "", needsKey: true },
-  { type: "anthropic", name: "Anthropic", description: "Claude 3.5 Sonnet, Opus, Haiku", defaultBaseUrl: "", needsKey: true },
-  { type: "gemini", name: "Google Gemini", description: "Gemini 2.0 Flash, Pro, and more", defaultBaseUrl: "", needsKey: true },
-  { type: "deepseek", name: "DeepSeek", description: "DeepSeek V3, R1, Coder", defaultBaseUrl: "", needsKey: true },
-  { type: "openrouter", name: "OpenRouter", description: "Multi-provider routing — 300+ models", defaultBaseUrl: "", needsKey: true },
-  { type: "fireworks_ai", name: "Fireworks AI", description: "OpenAI-compatible model API", defaultBaseUrl: "", needsKey: true },
-  { type: "xai", name: "xAI (Grok)", description: "Grok models via direct API", defaultBaseUrl: "", needsKey: true },
-  { type: "mistral", name: "Mistral AI", description: "Mistral Large, Codestral, and more", defaultBaseUrl: "", needsKey: true },
-  { type: "ollama", name: "Ollama (Local)", description: "Run models locally — Llama, Qwen, etc.", defaultBaseUrl: "http://localhost:11434", needsKey: false },
-  { type: "azure", name: "Azure OpenAI", description: "Enterprise OpenAI via Azure", defaultBaseUrl: "", needsKey: true },
-  { type: "bedrock", name: "AWS Bedrock", description: "Claude, Nova, Llama via Converse API", defaultBaseUrl: "", needsKey: true },
-  { type: "huggingface", name: "Hugging Face", description: "20+ open models via unified router", defaultBaseUrl: "", needsKey: true },
-  { type: "nvidia_nim", name: "NVIDIA NIM", description: "Nemotron models via build.nvidia.com", defaultBaseUrl: "", needsKey: true },
-  { type: "cohere", name: "Cohere", description: "Command R+, Aya, and more", defaultBaseUrl: "", needsKey: true },
-  { type: "ai21", name: "AI21 Labs", description: "Jamba models", defaultBaseUrl: "", needsKey: true },
-  { type: "together_ai", name: "Together AI", description: "Open models on fast inference", defaultBaseUrl: "", needsKey: true },
-  { type: "groq", name: "Groq", description: "Ultra-fast inference for open models", defaultBaseUrl: "", needsKey: true },
-  { type: "perplexity", name: "Perplexity", description: "Perplexity Online/Sonar models", defaultBaseUrl: "", needsKey: true },
-  { type: "dashscope", name: "Alibaba (Qwen)", description: "Qwen models via DashScope", defaultBaseUrl: "", needsKey: true },
-  { type: "moonshot", name: "Moonshot (Kimi)", description: "Kimi coding and chat models", defaultBaseUrl: "", needsKey: true },
-  { type: "zhipu", name: "Z.AI (GLM)", description: "GLM / Zhipu-hosted models", defaultBaseUrl: "", needsKey: true },
-  { type: "minimax", name: "MiniMax", description: "MiniMax frontier model", defaultBaseUrl: "", needsKey: true },
+  {
+    type: "openai",
+    name: "OpenAI",
+    description: "GPT-4o, o1, o3, and more",
+    defaultBaseUrl: "",
+    needsKey: true,
+  },
+  {
+    type: "anthropic",
+    name: "Anthropic",
+    description: "Claude 3.5 Sonnet, Opus, Haiku",
+    defaultBaseUrl: "",
+    needsKey: true,
+  },
+  {
+    type: "gemini",
+    name: "Google Gemini",
+    description: "Gemini 2.0 Flash, Pro, and more",
+    defaultBaseUrl: "",
+    needsKey: true,
+  },
+  {
+    type: "deepseek",
+    name: "DeepSeek",
+    description: "DeepSeek V3, R1, Coder",
+    defaultBaseUrl: "",
+    needsKey: true,
+  },
+  {
+    type: "openrouter",
+    name: "OpenRouter",
+    description: "Multi-provider routing — 300+ models",
+    defaultBaseUrl: "",
+    needsKey: true,
+  },
+  {
+    type: "fireworks_ai",
+    name: "Fireworks AI",
+    description: "OpenAI-compatible model API",
+    defaultBaseUrl: "",
+    needsKey: true,
+  },
+  {
+    type: "xai",
+    name: "xAI (Grok)",
+    description: "Grok models via direct API",
+    defaultBaseUrl: "",
+    needsKey: true,
+  },
+  {
+    type: "mistral",
+    name: "Mistral AI",
+    description: "Mistral Large, Codestral, and more",
+    defaultBaseUrl: "",
+    needsKey: true,
+  },
+  {
+    type: "ollama",
+    name: "Ollama (Local)",
+    description: "Run models locally — Llama, Qwen, etc.",
+    defaultBaseUrl: "http://localhost:11434",
+    needsKey: false,
+  },
+  {
+    type: "azure",
+    name: "Azure OpenAI",
+    description: "Enterprise OpenAI via Azure",
+    defaultBaseUrl: "",
+    needsKey: true,
+  },
+  {
+    type: "bedrock",
+    name: "AWS Bedrock",
+    description: "Claude, Nova, Llama via Converse API",
+    defaultBaseUrl: "",
+    needsKey: true,
+  },
+  {
+    type: "huggingface",
+    name: "Hugging Face",
+    description: "20+ open models via unified router",
+    defaultBaseUrl: "",
+    needsKey: true,
+  },
+  {
+    type: "nvidia_nim",
+    name: "NVIDIA NIM",
+    description: "Nemotron models via build.nvidia.com",
+    defaultBaseUrl: "",
+    needsKey: true,
+  },
+  {
+    type: "cohere",
+    name: "Cohere",
+    description: "Command R+, Aya, and more",
+    defaultBaseUrl: "",
+    needsKey: true,
+  },
+  {
+    type: "ai21",
+    name: "AI21 Labs",
+    description: "Jamba models",
+    defaultBaseUrl: "",
+    needsKey: true,
+  },
+  {
+    type: "together_ai",
+    name: "Together AI",
+    description: "Open models on fast inference",
+    defaultBaseUrl: "",
+    needsKey: true,
+  },
+  {
+    type: "groq",
+    name: "Groq",
+    description: "Ultra-fast inference for open models",
+    defaultBaseUrl: "",
+    needsKey: true,
+  },
+  {
+    type: "perplexity",
+    name: "Perplexity",
+    description: "Perplexity Online/Sonar models",
+    defaultBaseUrl: "",
+    needsKey: true,
+  },
+  {
+    type: "dashscope",
+    name: "Alibaba (Qwen)",
+    description: "Qwen models via DashScope",
+    defaultBaseUrl: "",
+    needsKey: true,
+  },
+  {
+    type: "moonshot",
+    name: "Moonshot (Kimi)",
+    description: "Kimi coding and chat models",
+    defaultBaseUrl: "",
+    needsKey: true,
+  },
+  {
+    type: "zhipu",
+    name: "Z.AI (GLM)",
+    description: "GLM / Zhipu-hosted models",
+    defaultBaseUrl: "",
+    needsKey: true,
+  },
+  {
+    type: "minimax",
+    name: "MiniMax",
+    description: "MiniMax frontier model",
+    defaultBaseUrl: "",
+    needsKey: true,
+  },
   // OpenAI-compatible endpoints (use type "openai" with custom base_url)
-  { type: "openai", name: "NovitaAI", description: "Multi-model API gateway", defaultBaseUrl: "https://api.novita.ai/v1", needsKey: true, compatOnly: true },
-  { type: "openai", name: "LM Studio (Local)", description: "Local desktop app, OpenAI-compatible", defaultBaseUrl: "http://localhost:1234/v1", needsKey: false, compatOnly: true },
-  { type: "openai", name: "Vercel AI Gateway", description: "Vercel AI Gateway routing", defaultBaseUrl: "https://ai-gateway.vercel.sh/v1", needsKey: true, compatOnly: true },
-  { type: "openai", name: "vLLM / SGLang", description: "Self-hosted OpenAI-compatible server", defaultBaseUrl: "http://localhost:8000/v1", needsKey: false, compatOnly: true },
-  { type: "openai", name: "OpenCode Zen", description: "Pay-per-use — GPT-5.x, Claude, Gemini, open models", defaultBaseUrl: "https://opencode.ai/zen/v1", needsKey: true, compatOnly: true },
-  { type: "openai", name: "OpenCode Go", description: "$10/mo subscription — GLM, Kimi, DeepSeek, MiMo", defaultBaseUrl: "https://opencode.ai/zen/go/v1", needsKey: true, compatOnly: true },
-  { type: "openai", name: "Ollama Cloud", description: "Hosted Ollama — gpt-oss, kimi-k2, llama4, and more", defaultBaseUrl: "https://ollama.com/v1", needsKey: true, compatOnly: true },
+  {
+    type: "openai",
+    name: "NovitaAI",
+    description: "Multi-model API gateway",
+    defaultBaseUrl: "https://api.novita.ai/v1",
+    needsKey: true,
+    compatOnly: true,
+  },
+  {
+    type: "openai",
+    name: "LM Studio (Local)",
+    description: "Local desktop app, OpenAI-compatible",
+    defaultBaseUrl: "http://localhost:1234/v1",
+    needsKey: false,
+    compatOnly: true,
+  },
+  {
+    type: "openai",
+    name: "Vercel AI Gateway",
+    description: "Vercel AI Gateway routing",
+    defaultBaseUrl: "https://ai-gateway.vercel.sh/v1",
+    needsKey: true,
+    compatOnly: true,
+  },
+  {
+    type: "openai",
+    name: "vLLM / SGLang",
+    description: "Self-hosted OpenAI-compatible server",
+    defaultBaseUrl: "http://localhost:8000/v1",
+    needsKey: false,
+    compatOnly: true,
+  },
+  {
+    type: "openai",
+    name: "OpenCode Zen",
+    description: "Pay-per-use — GPT-5.x, Claude, Gemini, open models",
+    defaultBaseUrl: "https://opencode.ai/zen/v1",
+    needsKey: true,
+    compatOnly: true,
+  },
+  {
+    type: "openai",
+    name: "OpenCode Go",
+    description: "$10/mo subscription — GLM, Kimi, DeepSeek, MiMo",
+    defaultBaseUrl: "https://opencode.ai/zen/go/v1",
+    needsKey: true,
+    compatOnly: true,
+  },
+  {
+    type: "openai",
+    name: "Ollama Cloud",
+    description: "Hosted Ollama — gpt-oss, kimi-k2, llama4, and more",
+    defaultBaseUrl: "https://ollama.com/v1",
+    needsKey: true,
+    compatOnly: true,
+  },
 ];
 
-type SettingsTab = "general" | "providers" | "models" | "migration" | "about";
+type SettingsTab =
+  "general" | "providers" | "models" | "browser" | "migration" | "about";
 
 export function ProvidersSettings() {
   const [providers, setProviders] = useState<Provider[]>([]);
@@ -81,8 +279,8 @@ export function ProvidersSettings() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<SettingsTab>("general");
-  const [addingPreset, setAddingPreset] = useState<number | null>(null);  // preset index being configured
-  const [showCustom, setShowCustom] = useState(false);  // custom provider form
+  const [addingPreset, setAddingPreset] = useState<number | null>(null); // preset index being configured
+  const [showCustom, setShowCustom] = useState(false); // custom provider form
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { confirm, toast } = useConfirm();
@@ -99,14 +297,18 @@ export function ProvidersSettings() {
     }
   }, [navigate]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+  }, [load]);
 
   useEffect(() => {
     if (searchParams.get("guide") === "provider") setActiveTab("providers");
   }, [searchParams]);
 
   const handleLogout = async () => {
-    try { await api.logout(); } catch {}
+    try {
+      await api.logout();
+    } catch {}
     window.location.assign("/login");
   };
 
@@ -142,12 +344,16 @@ export function ProvidersSettings() {
     { key: "general", label: "General", icon: Settings },
     { key: "providers", label: "Providers", icon: Server },
     { key: "models", label: "Models", icon: Cpu },
+    { key: "browser", label: "Browser", icon: Globe },
     { key: "migration", label: "Migration", icon: HardDrive },
     { key: "about", label: "About", icon: Info },
   ];
 
   return (
-    <div className="flex h-screen overflow-hidden" style={{ background: "var(--surface)" }}>
+    <div
+      className="flex h-screen overflow-hidden"
+      style={{ background: "var(--surface)" }}
+    >
       <DashboardSidebar
         active="settings"
         onNavigate={handleNavigate}
@@ -181,7 +387,9 @@ export function ProvidersSettings() {
                   background: "none",
                   cursor: "pointer",
                   color: isActive ? "var(--ink)" : "var(--ink-3)",
-                  borderBottom: isActive ? "2px solid var(--ink)" : "2px solid transparent",
+                  borderBottom: isActive
+                    ? "2px solid var(--ink)"
+                    : "2px solid transparent",
                   marginBottom: "-1px",
                 }}
               >
@@ -209,8 +417,14 @@ export function ProvidersSettings() {
               onShowCustom={setShowCustom}
               onEdit={setEditing}
               onCancelEdit={() => setEditing(null)}
-              onSavedPreset={() => { setAddingPreset(null); load(); }}
-              onSavedCustom={() => { setShowCustom(false); load(); }}
+              onSavedPreset={() => {
+                setAddingPreset(null);
+                load();
+              }}
+              onSavedCustom={() => {
+                setShowCustom(false);
+                load();
+              }}
               onCancelPreset={() => setAddingPreset(null)}
               onCancelCustom={() => setShowCustom(false)}
               onDelete={handleDelete}
@@ -218,8 +432,14 @@ export function ProvidersSettings() {
           )}
 
           {activeTab === "models" && (
-            <ModelsTab providers={providers} loading={loading} onChanged={load} />
+            <ModelsTab
+              providers={providers}
+              loading={loading}
+              onChanged={load}
+            />
           )}
+
+          {activeTab === "browser" && <BrowserTab />}
 
           {activeTab === "migration" && <MigrationTab />}
 
@@ -230,14 +450,22 @@ export function ProvidersSettings() {
   );
 }
 
-function GeneralTab({ operator, loading }: { operator: Operator | null; loading: boolean }) {
+function GeneralTab({
+  operator,
+  loading,
+}: {
+  operator: Operator | null;
+  loading: boolean;
+}) {
   const { mode, setMode, resolvedTheme } = useTheme();
 
   return (
     <div className="max-w-2xl space-y-6">
       {/* Operator profile */}
       <div>
-        <h2 className="mb-3 text-[14px] font-semibold text-[var(--ink)]">Operator</h2>
+        <h2 className="mb-3 text-[14px] font-semibold text-[var(--ink)]">
+          Operator
+        </h2>
         <div
           className="rounded-lg border p-5"
           style={{ borderColor: "var(--border)", background: "var(--white)" }}
@@ -249,13 +477,20 @@ function GeneralTab({ operator, loading }: { operator: Operator | null; loading:
               <div className="flex items-center gap-3">
                 <div
                   className="flex h-10 w-10 items-center justify-center rounded-full text-[14px] font-semibold"
-                  style={{ background: "var(--accent-bg)", color: "var(--accent)" }}
+                  style={{
+                    background: "var(--accent-bg)",
+                    color: "var(--accent)",
+                  }}
                 >
                   {operator.username.charAt(0).toUpperCase()}
                 </div>
                 <div>
-                  <p className="text-[14px] font-medium text-[var(--ink)]">{operator.username}</p>
-                  <p className="text-[12px] text-[var(--ink-3)]">Administrator</p>
+                  <p className="text-[14px] font-medium text-[var(--ink)]">
+                    {operator.username}
+                  </p>
+                  <p className="text-[12px] text-[var(--ink-3)]">
+                    Administrator
+                  </p>
                 </div>
               </div>
             </div>
@@ -266,7 +501,9 @@ function GeneralTab({ operator, loading }: { operator: Operator | null; loading:
       </div>
 
       <div>
-        <h2 className="mb-3 text-[14px] font-semibold text-[var(--ink)]">Appearance</h2>
+        <h2 className="mb-3 text-[14px] font-semibold text-[var(--ink)]">
+          Appearance
+        </h2>
         <div
           className="rounded-lg border p-5"
           style={{ borderColor: "var(--border)", background: "var(--card)" }}
@@ -275,7 +512,8 @@ function GeneralTab({ operator, loading }: { operator: Operator | null; loading:
             <div>
               <p className="text-[13px] font-medium text-[var(--ink)]">Theme</p>
               <p className="mt-0.5 text-[12px] text-[var(--ink-3)]">
-                Choose light, dark, or follow your operating-system preference. Currently using {resolvedTheme} mode.
+                Choose light, dark, or follow your operating-system preference.
+                Currently using {resolvedTheme} mode.
               </p>
             </div>
             <ThemePicker mode={mode} onChange={setMode} />
@@ -285,15 +523,21 @@ function GeneralTab({ operator, loading }: { operator: Operator | null; loading:
 
       {/* Search provider */}
       <div>
-        <h2 className="mb-3 text-[14px] font-semibold text-[var(--ink)]">Search Provider</h2>
+        <h2 className="mb-3 text-[14px] font-semibold text-[var(--ink)]">
+          Search Provider
+        </h2>
         <div
           className="rounded-lg border p-5"
           style={{ borderColor: "var(--border)", background: "var(--white)" }}
         >
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-[13px] font-medium text-[var(--ink)]">Web Search Engine</p>
-              <p className="mt-0.5 text-[12px] text-[var(--ink-3)]">Used by the web_search capability</p>
+              <p className="text-[13px] font-medium text-[var(--ink)]">
+                Web Search Engine
+              </p>
+              <p className="mt-0.5 text-[12px] text-[var(--ink-3)]">
+                Used by the web_search capability
+              </p>
             </div>
             <span
               className="rounded-full px-3 py-1 text-[11px] font-medium"
@@ -308,7 +552,592 @@ function GeneralTab({ operator, loading }: { operator: Operator | null; loading:
   );
 }
 
-function ThemePicker({ mode, onChange }: { mode: ThemeMode; onChange: (mode: ThemeMode) => void }) {
+// --- Browser automation (W4) -----------------------------------------------
+
+interface BrowserRuntime {
+  status: string;
+  binary?: string;
+  managed?: boolean;
+  managed_binary?: string | null;
+  source?: "override" | "system" | "managed";
+  version?: string;
+  installable?: boolean;
+  detail?: string;
+  install_progress?: {
+    phase: string;
+    downloaded: number;
+    total: number | null;
+  } | null;
+}
+
+interface BrowserProfileRow {
+  id: string;
+  name: string;
+  allowed_domains: string[];
+  description: string | null;
+}
+
+function BrowserTab() {
+  const { confirm } = useConfirm();
+  const [runtime, setRuntime] = useState<BrowserRuntime | null>(null);
+  const [binaryOverride, setBinaryOverride] = useState("");
+  const [overrideSource, setOverrideSource] = useState<
+    "env" | "persisted" | "none"
+  >("none");
+  const [resolvedBinary, setResolvedBinary] = useState<string | null>(null);
+  const [detected, setDetected] = useState<{ name: string; path: string }[]>(
+    [],
+  );
+  const [profiles, setProfiles] = useState<BrowserProfileRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [installing, setInstalling] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const [newName, setNewName] = useState("");
+  const [newDomains, setNewDomains] = useState("");
+  const [newDesc, setNewDesc] = useState("");
+  const [customPath, setCustomPath] = useState("");
+  const [pickingCustom, setPickingCustom] = useState(false);
+  const [pickingBuiltin, setPickingBuiltin] = useState(false);
+
+  const loadAll = useCallback(async () => {
+    try {
+      const [settings, profileList] = await Promise.all([
+        api.getBrowserSettings(),
+        api.listBrowserProfiles(),
+      ]);
+      setBinaryOverride(settings.binary_override);
+      setOverrideSource(settings.override_source);
+      setResolvedBinary(settings.resolved_binary);
+      setDetected(settings.detected);
+      if (
+        settings.binary_override &&
+        !settings.detected.some((d) => d.path === settings.binary_override)
+      ) {
+        setCustomPath(settings.binary_override);
+      }
+      setRuntime(settings.runtime);
+      setProfiles(profileList);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadAll();
+  }, [loadAll]);
+
+  const applyOverride = async (path: string) => {
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await api.updateBrowserSettings(path.trim());
+      setBinaryOverride(result.binary_override);
+      setOverrideSource(result.override_source);
+      setResolvedBinary(result.resolved_binary);
+      setDetected(result.detected);
+      setRuntime(result.runtime);
+      setNotice(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const managedBinary = runtime?.managed_binary ?? null;
+  const engineValue = pickingCustom
+    ? "custom"
+    : pickingBuiltin
+      ? "builtin"
+      : !binaryOverride
+        ? "auto"
+        : managedBinary && binaryOverride === managedBinary
+          ? "builtin"
+          : detected.some((d) => d.path === binaryOverride)
+            ? binaryOverride
+            : "custom";
+
+  const install = async () => {
+    setInstalling(true);
+    setError(null);
+    const poller = setInterval(() => {
+      void api
+        .getBrowserSettings()
+        .then((s) => setRuntime(s.runtime))
+        .catch(() => {});
+    }, 800);
+    try {
+      const result = await api.installBrowserRuntime();
+      if (
+        (result.status === "installed" || result.status === "ok") &&
+        result.binary
+      ) {
+        setPickingBuiltin(false);
+        await applyOverride(result.binary);
+        setNotice("Browser installed — agents can now browse the web.");
+      } else {
+        setNotice(result.detail ?? `Status: ${result.status}`);
+        await loadAll();
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      clearInterval(poller);
+      setInstalling(false);
+    }
+  };
+
+  const removeRuntime = async () => {
+    const ok = await confirm({
+      title: "Remove built-in browser?",
+      message:
+        "Agents won't be able to browse until you install it again or pick your own browser.",
+      confirmLabel: "Remove",
+      danger: true,
+    });
+    if (!ok) {
+      return;
+    }
+    try {
+      await api.removeBrowserRuntime();
+      if (managedBinary && binaryOverride === managedBinary) {
+        await applyOverride("");
+      }
+      setNotice("Built-in browser removed.");
+      await loadAll();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const createProfile = async () => {
+    setError(null);
+    try {
+      const domains = newDomains
+        .split(",")
+        .map((d) => d.trim())
+        .filter(Boolean);
+      await api.createBrowserProfile(
+        newName.trim(),
+        domains,
+        newDesc.trim() || undefined,
+      );
+      setNewName("");
+      setNewDomains("");
+      setNewDesc("");
+      await loadAll();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const removeProfile = async (id: string) => {
+    const ok = await confirm({
+      title: "Forget this saved login?",
+      message: "The agent will be logged out of these sites.",
+      confirmLabel: "Forget",
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await api.deleteBrowserProfile(id);
+      await loadAll();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  if (loading) {
+    return <p className="text-[13px] text-[var(--ink-2)]">Loading…</p>;
+  }
+
+  const status = runtime?.status ?? "runtime_unavailable";
+  const available = status === "ok" || status === "installed";
+
+  return (
+    <div className="max-w-2xl space-y-6">
+      {error && (
+        <div
+          className="rounded-lg border px-4 py-3 text-[12px]"
+          style={{
+            borderColor: "#dc2626",
+            background: "#fef2f2",
+            color: "#b91c1c",
+          }}
+        >
+          {error}
+        </div>
+      )}
+      {notice && (
+        <div
+          className="rounded-lg border px-4 py-3 text-[12px]"
+          style={{
+            borderColor: "var(--border)",
+            background: "var(--accent-bg)",
+            color: "var(--ink)",
+          }}
+        >
+          {notice}
+        </div>
+      )}
+
+      {/* Runtime */}
+      <div>
+        <h2 className="mb-3 text-[14px] font-semibold text-[var(--ink)]">
+          Agent browser
+        </h2>
+        <div
+          className="rounded-lg border p-5 space-y-3"
+          style={{ borderColor: "var(--border)", background: "var(--white)" }}
+        >
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-[13px] font-medium text-[var(--ink)]">
+                {available
+                  ? runtime?.managed
+                    ? "Built-in browser"
+                    : runtime?.source === "system"
+                      ? "Your browser (auto-detected)"
+                      : "Your own browser"
+                  : "No browser set up"}
+              </p>
+              <p className="mt-0.5 text-[12px] text-[var(--ink-3)] break-all">
+                {available
+                  ? runtime?.managed
+                    ? `CaberOS's own copy of Chrome ${runtime.version ?? ""} — kept separate from your personal browser.`.trim()
+                    : runtime?.source === "system"
+                      ? `${resolvedBinary} — found on this machine, nothing to install`
+                      : resolvedBinary
+                  : "Install a browser and your agents can open websites, fill forms, and read pages for you."}
+              </p>
+            </div>
+            <span
+              className="rounded-full px-3 py-1 text-[11px] font-medium shrink-0"
+              style={
+                available
+                  ? { background: "#dcfce7", color: "#166534" }
+                  : { background: "#fef3c7", color: "#92400e" }
+              }
+            >
+              {available ? "Ready" : "Not installed"}
+            </span>
+          </div>
+          {/* Engine picker */}
+          <div
+            className="border-t pt-3"
+            style={{ borderColor: "var(--border)" }}
+          >
+            <p className="text-[12px] font-medium text-[var(--ink)] mb-1.5">
+              Browser engine
+            </p>
+            <select
+              value={engineValue}
+              disabled={overrideSource === "env"}
+              onChange={(e) => {
+                const v = e.target.value;
+                setPickingCustom(false);
+                setPickingBuiltin(false);
+                if (v === "custom") {
+                  setPickingCustom(true);
+                  setCustomPath(
+                    binaryOverride &&
+                      binaryOverride !== managedBinary &&
+                      !detected.some((d) => d.path === binaryOverride)
+                      ? binaryOverride
+                      : "",
+                  );
+                } else if (v === "builtin" && !managedBinary) {
+                  setPickingBuiltin(true);
+                } else {
+                  void applyOverride(
+                    v === "auto"
+                      ? ""
+                      : v === "builtin"
+                        ? (managedBinary ?? "")
+                        : v,
+                  );
+                }
+              }}
+              className="w-full cursor-pointer rounded-md border px-3 py-2 text-[12px] transition-colors hover:border-[var(--ink-3)] disabled:cursor-not-allowed disabled:opacity-60"
+              style={{
+                borderColor: "var(--border)",
+                background: "var(--surface)",
+                color: "var(--ink)",
+              }}
+            >
+              <option value="auto">Automatic — pick the best available</option>
+              {detected.map((d) => (
+                <option key={d.path} value={d.path}>
+                  {d.name}
+                </option>
+              ))}
+              <option value="builtin">
+                CaberOS browser
+                {managedBinary
+                  ? " (built-in)"
+                  : " (not installed — downloads on select)"}
+              </option>
+              <option value="custom">Custom path…</option>
+            </select>
+
+            {engineValue === "builtin" && !managedBinary && (
+              <div className="mt-2 space-y-2">
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={install}
+                    disabled={installing}
+                    className="cursor-pointer rounded-md px-3 py-1.5 text-[12px] font-medium transition-opacity hover:opacity-90 disabled:cursor-wait disabled:opacity-60"
+                    style={{
+                      background: "var(--accent)",
+                      color: "var(--white)",
+                    }}
+                  >
+                    {installing
+                      ? "Installing…"
+                      : "Download & install (~160 MB)"}
+                  </button>
+                  {!installing && (
+                    <p className="text-[11px] text-[var(--ink-3)]">
+                      CaberOS's own private copy of Chrome — one-time download.
+                    </p>
+                  )}
+                </div>
+                {installing &&
+                  (() => {
+                    const p = runtime?.install_progress;
+                    const mb = (n: number) => (n / 1048576).toFixed(0);
+                    const phaseLabel =
+                      p?.phase === "downloading"
+                        ? p.total
+                          ? `Downloading… ${mb(p.downloaded)} / ${mb(p.total)} MB`
+                          : `Downloading… ${mb(p.downloaded)} MB`
+                        : p?.phase === "extracting"
+                          ? "Extracting…"
+                          : p?.phase === "verifying"
+                            ? "Verifying install…"
+                            : "Preparing download…";
+                    const pct =
+                      p?.phase === "downloading" && p.total
+                        ? Math.min(100, (p.downloaded / p.total) * 100)
+                        : null;
+                    return (
+                      <div className="space-y-1.5">
+                        <div
+                          className="h-1.5 w-full overflow-hidden rounded-full"
+                          style={{ background: "var(--accent-bg)" }}
+                        >
+                          {pct !== null ? (
+                            <div
+                              className="h-full rounded-full transition-[width] duration-300"
+                              style={{
+                                width: `${pct}%`,
+                                background: "var(--accent)",
+                              }}
+                            />
+                          ) : (
+                            <div
+                              className="pulse h-full w-1/3 rounded-full"
+                              style={{ background: "var(--accent)" }}
+                            />
+                          )}
+                        </div>
+                        <p className="text-[11px] text-[var(--ink-3)]">
+                          {phaseLabel} — keep this tab open.
+                        </p>
+                      </div>
+                    );
+                  })()}
+              </div>
+            )}
+            {engineValue === "builtin" && managedBinary && (
+              <div className="mt-2 flex items-center justify-between">
+                <p className="text-[11px] text-[var(--ink-3)] break-all">
+                  {managedBinary}
+                </p>
+                <button
+                  onClick={removeRuntime}
+                  className="ml-2 shrink-0 cursor-pointer text-[11px] text-[var(--ink-3)] transition-colors hover:text-red-600 underline"
+                >
+                  Remove
+                </button>
+              </div>
+            )}
+            {engineValue === "custom" && (
+              <div className="flex items-center gap-2 mt-2">
+                <input
+                  type="text"
+                  value={customPath}
+                  onChange={(e) => setCustomPath(e.target.value)}
+                  disabled={overrideSource === "env"}
+                  placeholder="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+                  className="flex-1 rounded-md border px-3 py-2 font-mono text-[12px] transition-colors hover:border-[var(--ink-3)] disabled:opacity-60"
+                  style={{
+                    borderColor: "var(--border)",
+                    background: "var(--surface)",
+                    color: "var(--ink)",
+                  }}
+                />
+                <button
+                  onClick={() => {
+                    setPickingCustom(false);
+                    void applyOverride(customPath);
+                  }}
+                  disabled={overrideSource === "env" || !customPath.trim()}
+                  className="flex cursor-pointer items-center gap-1 rounded-md px-3 py-2 text-[12px] font-medium transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                  style={{ background: "var(--accent)", color: "var(--white)" }}
+                >
+                  <Save className="h-3.5 w-3.5" /> Save
+                </button>
+              </div>
+            )}
+            {overrideSource === "env" && (
+              <p
+                className="mt-2 rounded-md border px-3 py-2 text-[12px]"
+                style={{
+                  borderColor: "#f59e0b",
+                  background: "#fffbeb",
+                  color: "#92400e",
+                }}
+              >
+                Set by <code>AGENTOS_BROWSER_BINARY</code> in your environment
+                or <code>.env</code> file — remove it there to change it here.
+              </p>
+            )}
+            <p className="mt-2 text-[11px] text-[var(--ink-3)]">
+              Automatic prefers a browser already on this machine, then the
+              built-in one. Pick a specific engine to pin it, or Custom path for
+              a browser we didn't detect.
+            </p>
+          </div>
+
+          <p className="text-[11px] text-[var(--ink-3)]">
+            Agents browse in their own private copy of Chrome — your personal
+            browser, passwords, and logins are never touched. Works even if you
+            only have Safari.
+          </p>
+        </div>
+      </div>
+
+      {/* Profiles */}
+      <div>
+        <h2 className="mb-3 text-[14px] font-semibold text-[var(--ink)]">
+          Saved logins
+        </h2>
+        <div
+          className="rounded-lg border p-5 space-y-4"
+          style={{ borderColor: "var(--border)", background: "var(--white)" }}
+        >
+          <p className="text-[12px] text-[var(--ink-3)]">
+            Let an agent stay logged into websites between runs — you log in
+            once yourself, the agent reuses it. Each login only works on the
+            sites you list, so it can't wander off.
+          </p>
+
+          {profiles.length === 0 ? (
+            <p className="text-[12px] text-[var(--ink-3)]">
+              No saved logins — agents start logged out every run.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {profiles.map((p) => (
+                <div
+                  key={p.id}
+                  className="flex items-center justify-between rounded-md border px-3 py-2"
+                  style={{ borderColor: "var(--border)" }}
+                >
+                  <div className="min-w-0">
+                    <p className="text-[13px] font-medium text-[var(--ink)]">
+                      {p.name}
+                    </p>
+                    <p className="text-[11px] text-[var(--ink-3)] truncate">
+                      {p.allowed_domains.length > 0
+                        ? `only: ${p.allowed_domains.join(", ")}`
+                        : "any website"}
+                      {p.description ? ` — ${p.description}` : ""}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => removeProfile(p.id)}
+                    className="cursor-pointer rounded-md p-1.5 text-[var(--ink-3)] transition-colors hover:text-red-600"
+                    title="Forget this login"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div
+            className="space-y-2 border-t pt-3"
+            style={{ borderColor: "var(--border)" }}
+          >
+            <p className="text-[12px] font-medium text-[var(--ink)]">
+              Add a saved login
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              <input
+                type="text"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                placeholder="name (e.g. shopping)"
+                className="rounded-md border px-3 py-2 text-[12px] transition-colors hover:border-[var(--ink-3)]"
+                style={{
+                  borderColor: "var(--border)",
+                  background: "var(--surface)",
+                  color: "var(--ink)",
+                }}
+              />
+              <input
+                type="text"
+                value={newDesc}
+                onChange={(e) => setNewDesc(e.target.value)}
+                placeholder="note (optional)"
+                className="rounded-md border px-3 py-2 text-[12px] transition-colors hover:border-[var(--ink-3)]"
+                style={{
+                  borderColor: "var(--border)",
+                  background: "var(--surface)",
+                  color: "var(--ink)",
+                }}
+              />
+            </div>
+            <input
+              type="text"
+              value={newDomains}
+              onChange={(e) => setNewDomains(e.target.value)}
+              placeholder="websites it's allowed on, comma-separated (e.g. saucedemo.com, github.com) — empty = anywhere"
+              className="w-full rounded-md border px-3 py-2 text-[12px] transition-colors hover:border-[var(--ink-3)]"
+              style={{
+                borderColor: "var(--border)",
+                background: "var(--surface)",
+                color: "var(--ink)",
+              }}
+            />
+            <button
+              onClick={createProfile}
+              disabled={!newName.trim()}
+              className="flex cursor-pointer items-center gap-1 rounded-md px-3 py-1.5 text-[12px] font-medium transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+              style={{ background: "var(--accent)", color: "var(--white)" }}
+            >
+              <Plus className="h-3.5 w-3.5" /> Add login
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ThemePicker({
+  mode,
+  onChange,
+}: {
+  mode: ThemeMode;
+  onChange: (mode: ThemeMode) => void;
+}) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const options: { value: ThemeMode; label: string }[] = [
@@ -316,7 +1145,8 @@ function ThemePicker({ mode, onChange }: { mode: ThemeMode; onChange: (mode: The
     { value: "light", label: "Light" },
     { value: "dark", label: "Dark" },
   ];
-  const selected = options.find((option) => option.value === mode) ?? options[0];
+  const selected =
+    options.find((option) => option.value === mode) ?? options[0];
 
   useEffect(() => {
     if (!open) return;
@@ -378,7 +1208,9 @@ function ThemePicker({ mode, onChange }: { mode: ThemeMode; onChange: (mode: The
                 }}
                 className="flex w-full items-center justify-between rounded-[4px] px-2.5 py-2 text-left text-[12px] transition"
                 style={{
-                  background: selectedOption ? "var(--accent-bg)" : "transparent",
+                  background: selectedOption
+                    ? "var(--accent-bg)"
+                    : "transparent",
                   color: selectedOption ? "var(--accent)" : "var(--ink-2)",
                   cursor: "pointer",
                 }}
@@ -522,9 +1354,13 @@ function MigrationTab() {
           const err = await resp.json();
           toast(`Import failed: ${err.detail || "unknown error"}`);
         } else {
-          const res = await resp.json() as ImportResult;
+          const res = (await resp.json()) as ImportResult;
           setResult(res);
-          toast(importMode === "replace" ? "Data replaced — restart the server" : "Data merged — restart the server");
+          toast(
+            importMode === "replace"
+              ? "Data replaced — restart the server"
+              : "Data merged — restart the server",
+          );
         }
       } catch (err) {
         toast(`Import failed: ${err}`);
@@ -544,7 +1380,8 @@ function MigrationTab() {
   const handleDeleteAll = async () => {
     const confirmed = await confirm({
       title: "Delete all CaberOS data?",
-      message: "This permanently deletes agents, providers, MCP credentials, channels, sessions, memory, workspaces, attachments, and restore points. This cannot be undone.",
+      message:
+        "This permanently deletes agents, providers, MCP credentials, channels, sessions, memory, workspaces, attachments, and restore points. This cannot be undone.",
       confirmLabel: "Delete everything",
       cancelLabel: "Cancel",
       danger: true,
@@ -566,15 +1403,18 @@ function MigrationTab() {
     <div className="max-w-2xl space-y-6">
       {/* Export */}
       <div>
-        <h2 className="mb-3 text-[14px] font-semibold text-[var(--ink)]">Data Migration</h2>
+        <h2 className="mb-3 text-[14px] font-semibold text-[var(--ink)]">
+          Data Migration
+        </h2>
         <div
           className="rounded-lg border p-5"
           style={{ borderColor: "var(--border)", background: "var(--white)" }}
         >
           <p className="text-[13px] text-[var(--ink-2)]">
-            Export all CaberOS data to a ZIP archive — including agents, providers, MCP servers,
-            channels, sessions, messages, memory, encrypted credentials, and workspace files.
-            Import the archive on another instance (e.g. web → desktop) to sync everything.
+            Export all CaberOS data to a ZIP archive — including agents,
+            providers, MCP servers, channels, sessions, messages, memory,
+            encrypted credentials, and workspace files. Import the archive on
+            another instance (e.g. web → desktop) to sync everything.
           </p>
 
           <div className="mt-4 flex gap-2">
@@ -598,16 +1438,37 @@ function MigrationTab() {
       </div>
 
       <div>
-        <h2 className="mb-3 text-[14px] font-semibold text-[var(--danger)]">Danger zone</h2>
-        <div className="rounded-lg border p-5" style={{ borderColor: "var(--danger)", background: "var(--white)" }}>
-          <p className="text-[13px] text-[var(--ink-2)]">Delete all local CaberOS data and return to the initial setup state.</p>
-          <button type="button" onClick={() => void handleDeleteAll()} disabled={busy} className="mt-4 rounded-[5px] border px-3 py-1.5 text-[12px] font-medium" style={{ borderColor: "var(--danger)", color: "var(--danger)", cursor: busy ? "not-allowed" : "pointer" }}>Delete all data</button>
+        <h2 className="mb-3 text-[14px] font-semibold text-[var(--danger)]">
+          Danger zone
+        </h2>
+        <div
+          className="rounded-lg border p-5"
+          style={{ borderColor: "var(--danger)", background: "var(--white)" }}
+        >
+          <p className="text-[13px] text-[var(--ink-2)]">
+            Delete all local CaberOS data and return to the initial setup state.
+          </p>
+          <button
+            type="button"
+            onClick={() => void handleDeleteAll()}
+            disabled={busy}
+            className="mt-4 rounded-[5px] border px-3 py-1.5 text-[12px] font-medium"
+            style={{
+              borderColor: "var(--danger)",
+              color: "var(--danger)",
+              cursor: busy ? "not-allowed" : "pointer",
+            }}
+          >
+            Delete all data
+          </button>
         </div>
       </div>
 
       {/* Import — single flow: pick file -> preview -> choose action */}
       <div>
-        <h2 className="mb-3 text-[14px] font-semibold text-[var(--ink)]">Import Archive</h2>
+        <h2 className="mb-3 text-[14px] font-semibold text-[var(--ink)]">
+          Import Archive
+        </h2>
         <div
           className="rounded-lg border p-5"
           style={{ borderColor: "var(--border)", background: "var(--white)" }}
@@ -627,10 +1488,13 @@ function MigrationTab() {
                 }}
               >
                 <Upload className="h-5 w-5" />
-                {busy ? "Analyzing archive..." : "Choose a .zip archive to import"}
+                {busy
+                  ? "Analyzing archive..."
+                  : "Choose a .zip archive to import"}
               </button>
               <p className="mt-3 text-[12px] text-[var(--ink-3)]">
-                Pick an archive to see what's inside, then choose Merge or Replace.
+                Pick an archive to see what's inside, then choose Merge or
+                Replace.
               </p>
             </div>
           )}
@@ -642,8 +1506,12 @@ function MigrationTab() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <HardDrive className="h-4 w-4 text-[var(--accent)]" />
-                  <span className="text-[13px] font-semibold text-[var(--ink)]">{selectedFile.name}</span>
-                  <span className="text-[11px] text-[var(--ink-3)]">({(selectedFile.size / 1024 / 1024).toFixed(1)} MB)</span>
+                  <span className="text-[13px] font-semibold text-[var(--ink)]">
+                    {selectedFile.name}
+                  </span>
+                  <span className="text-[11px] text-[var(--ink-3)]">
+                    ({(selectedFile.size / 1024 / 1024).toFixed(1)} MB)
+                  </span>
                 </div>
                 <button
                   onClick={handleReset}
@@ -668,22 +1536,32 @@ function MigrationTab() {
               {preview && (
                 <div
                   className="mt-3 rounded-[6px] border p-4"
-                  style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+                  style={{
+                    borderColor: "var(--border)",
+                    background: "var(--surface)",
+                  }}
                 >
                   {/* Secret key indicator */}
                   <div className="flex items-center gap-1.5">
                     {preview.secret_keys_match === true ? (
                       <>
                         <Check className="h-3.5 w-3.5 text-[var(--accent)]" />
-                        <span className="text-[12px] text-[var(--ink-3)]">Secret keys match — credentials will decrypt</span>
+                        <span className="text-[12px] text-[var(--ink-3)]">
+                          Secret keys match — credentials will decrypt
+                        </span>
                       </>
                     ) : preview.secret_keys_match === false ? (
                       <>
                         <Info className="h-3.5 w-3.5 text-[var(--danger)]" />
-                        <span className="text-[12px] text-[var(--danger)]">Secret keys differ — credentials won't decrypt after merge</span>
+                        <span className="text-[12px] text-[var(--danger)]">
+                          Secret keys differ — credentials won't decrypt after
+                          merge
+                        </span>
                       </>
                     ) : (
-                      <span className="text-[12px] text-[var(--ink-3)]">No secret key in archive</span>
+                      <span className="text-[12px] text-[var(--ink-3)]">
+                        No secret key in archive
+                      </span>
                     )}
                   </div>
 
@@ -692,21 +1570,47 @@ function MigrationTab() {
                     <table className="w-full text-[12px]">
                       <thead>
                         <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                          <th className="py-1.5 pr-4 text-left font-medium text-[var(--ink-3)]">Table</th>
-                          <th className="py-1.5 px-4 text-right font-medium text-[var(--ink-3)]">In Archive</th>
-                          <th className="py-1.5 px-4 text-right font-medium text-[var(--ink-3)]">Current</th>
-                          <th className="py-1.5 pl-4 text-right font-medium text-[var(--ink-3)]">New (merge)</th>
+                          <th className="py-1.5 pr-4 text-left font-medium text-[var(--ink-3)]">
+                            Table
+                          </th>
+                          <th className="py-1.5 px-4 text-right font-medium text-[var(--ink-3)]">
+                            In Archive
+                          </th>
+                          <th className="py-1.5 px-4 text-right font-medium text-[var(--ink-3)]">
+                            Current
+                          </th>
+                          <th className="py-1.5 pl-4 text-right font-medium text-[var(--ink-3)]">
+                            New (merge)
+                          </th>
                         </tr>
                       </thead>
                       <tbody>
                         {preview.tables.map((t) => (
-                          <tr key={t.table} style={{ borderBottom: "1px solid var(--border)" }}>
-                            <td className="py-1.5 pr-4 font-mono text-[var(--ink)]">{t.table}</td>
-                            <td className="py-1.5 px-4 text-right text-[var(--ink-2)]">{t.imported_count}</td>
-                            <td className="py-1.5 px-4 text-right text-[var(--ink-2)]">{t.target_count}</td>
+                          <tr
+                            key={t.table}
+                            style={{ borderBottom: "1px solid var(--border)" }}
+                          >
+                            <td className="py-1.5 pr-4 font-mono text-[var(--ink)]">
+                              {t.table}
+                            </td>
+                            <td className="py-1.5 px-4 text-right text-[var(--ink-2)]">
+                              {t.imported_count}
+                            </td>
+                            <td className="py-1.5 px-4 text-right text-[var(--ink-2)]">
+                              {t.target_count}
+                            </td>
                             <td className="py-1.5 pl-4 text-right">
-                              <span style={{ color: t.new_in_merge > 0 ? "var(--accent)" : "var(--ink-3)" }}>
-                                {t.new_in_merge > 0 ? `+${t.new_in_merge}` : "0"}
+                              <span
+                                style={{
+                                  color:
+                                    t.new_in_merge > 0
+                                      ? "var(--accent)"
+                                      : "var(--ink-3)",
+                                }}
+                              >
+                                {t.new_in_merge > 0
+                                  ? `+${t.new_in_merge}`
+                                  : "0"}
                               </span>
                             </td>
                           </tr>
@@ -730,14 +1634,22 @@ function MigrationTab() {
                   {/* Merge */}
                   <div
                     className="rounded-[6px] border p-3"
-                    style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+                    style={{
+                      borderColor: "var(--border)",
+                      background: "var(--surface)",
+                    }}
                   >
                     <div className="flex items-center gap-2">
                       <Upload className="h-4 w-4 text-[var(--accent)]" />
-                      <span className="text-[13px] font-semibold text-[var(--ink)]">Merge</span>
+                      <span className="text-[13px] font-semibold text-[var(--ink)]">
+                        Merge
+                      </span>
                       <span
                         className="rounded-full px-2 py-0.5 text-[9px] font-mono uppercase"
-                        style={{ background: "var(--accent-bg)", color: "var(--accent)" }}
+                        style={{
+                          background: "var(--accent-bg)",
+                          color: "var(--accent)",
+                        }}
                       >
                         Recommended
                       </span>
@@ -765,11 +1677,16 @@ function MigrationTab() {
                   {/* Replace */}
                   <div
                     className="rounded-[6px] border p-3"
-                    style={{ borderColor: "var(--danger)", background: "rgba(239,68,68,0.03)" }}
+                    style={{
+                      borderColor: "var(--danger)",
+                      background: "rgba(239,68,68,0.03)",
+                    }}
                   >
                     <div className="flex items-center gap-2">
                       <Upload className="h-4 w-4 text-[var(--danger)]" />
-                      <span className="text-[13px] font-semibold text-[var(--ink)]">Replace</span>
+                      <span className="text-[13px] font-semibold text-[var(--ink)]">
+                        Replace
+                      </span>
                       <span
                         className="rounded-full px-2 py-0.5 text-[9px] font-mono uppercase"
                         style={{ background: "var(--danger)", color: "#fff" }}
@@ -807,15 +1724,20 @@ function MigrationTab() {
               <div
                 className="rounded-[6px] border p-4"
                 style={{
-                  borderColor: result.warnings?.length ? "var(--danger)" : "var(--border)",
-                  background: result.warnings?.length ? "rgba(239,68,68,0.03)" : "var(--surface)",
+                  borderColor: result.warnings?.length
+                    ? "var(--danger)"
+                    : "var(--border)",
+                  background: result.warnings?.length
+                    ? "rgba(239,68,68,0.03)"
+                    : "var(--surface)",
                 }}
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <Check className="h-4 w-4 text-[var(--accent)]" />
                     <span className="text-[13px] font-semibold text-[var(--ink)]">
-                      Import {result.mode === "replace" ? "Replace" : "Merge"} Complete
+                      Import {result.mode === "replace" ? "Replace" : "Merge"}{" "}
+                      Complete
                     </span>
                   </div>
                   <button
@@ -838,27 +1760,48 @@ function MigrationTab() {
                 {result.mode === "merge" && (
                   <div className="mt-2 space-y-1.5 text-[12px] text-[var(--ink-2)]">
                     <div className="flex gap-4">
-                      <span><strong className="text-[var(--ink)]">{result.rows_added ?? 0}</strong> rows added</span>
-                      <span><strong className="text-[var(--ink)]">{result.rows_skipped ?? 0}</strong> rows skipped (already exist)</span>
-                      <span><strong className="text-[var(--ink)]">{result.files_added ?? 0}</strong> files added</span>
+                      <span>
+                        <strong className="text-[var(--ink)]">
+                          {result.rows_added ?? 0}
+                        </strong>{" "}
+                        rows added
+                      </span>
+                      <span>
+                        <strong className="text-[var(--ink)]">
+                          {result.rows_skipped ?? 0}
+                        </strong>{" "}
+                        rows skipped (already exist)
+                      </span>
+                      <span>
+                        <strong className="text-[var(--ink)]">
+                          {result.files_added ?? 0}
+                        </strong>{" "}
+                        files added
+                      </span>
                     </div>
 
-                    {result.tables_merged && result.tables_merged.length > 0 && (
-                      <div className="mt-2">
-                        <span className="text-[var(--ink-3)]">Tables updated:</span>
-                        <div className="mt-1 flex flex-wrap gap-1.5">
-                          {result.tables_merged.map((t) => (
-                            <span
-                              key={t}
-                              className="rounded-full px-2 py-0.5 text-[10px] font-mono"
-                              style={{ background: "var(--accent-bg)", color: "var(--accent)" }}
-                            >
-                              {t}
-                            </span>
-                          ))}
+                    {result.tables_merged &&
+                      result.tables_merged.length > 0 && (
+                        <div className="mt-2">
+                          <span className="text-[var(--ink-3)]">
+                            Tables updated:
+                          </span>
+                          <div className="mt-1 flex flex-wrap gap-1.5">
+                            {result.tables_merged.map((t) => (
+                              <span
+                                key={t}
+                                className="rounded-full px-2 py-0.5 text-[10px] font-mono"
+                                style={{
+                                  background: "var(--accent-bg)",
+                                  color: "var(--accent)",
+                                }}
+                              >
+                                {t}
+                              </span>
+                            ))}
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      )}
 
                     {/* Secret key match indicator */}
                     {result.secret_keys_match != null && (
@@ -866,12 +1809,18 @@ function MigrationTab() {
                         {result.secret_keys_match ? (
                           <>
                             <Check className="h-3.5 w-3.5 text-[var(--accent)]" />
-                            <span className="text-[var(--ink-3)]">Secret keys match — credentials will decrypt correctly</span>
+                            <span className="text-[var(--ink-3)]">
+                              Secret keys match — credentials will decrypt
+                              correctly
+                            </span>
                           </>
                         ) : (
                           <>
                             <Info className="h-3.5 w-3.5 text-[var(--danger)]" />
-                            <span className="text-[var(--danger)]">Secret keys differ — re-enter credentials in the target instance</span>
+                            <span className="text-[var(--danger)]">
+                              Secret keys differ — re-enter credentials in the
+                              target instance
+                            </span>
                           </>
                         )}
                       </div>
@@ -883,7 +1832,9 @@ function MigrationTab() {
                 {result.warnings && result.warnings.length > 0 && (
                   <div className="mt-2 space-y-1">
                     {result.warnings.map((w, i) => (
-                      <p key={i} className="text-[12px] text-[var(--danger)]">⚠ {w}</p>
+                      <p key={i} className="text-[12px] text-[var(--danger)]">
+                        ⚠ {w}
+                      </p>
                     ))}
                   </div>
                 )}
@@ -899,7 +1850,9 @@ function MigrationTab() {
 
       {/* What's included */}
       <div>
-        <h2 className="mb-3 text-[14px] font-semibold text-[var(--ink)]">What's Included</h2>
+        <h2 className="mb-3 text-[14px] font-semibold text-[var(--ink)]">
+          What's Included
+        </h2>
         <div
           className="rounded-lg border p-5"
           style={{ borderColor: "var(--border)", background: "var(--white)" }}
@@ -977,9 +1930,11 @@ function ProvidersTab({
 }) {
   // Find which presets are already configured.
   // Match by type AND base_url to distinguish OpenAI-native from OpenAI-compatible presets.
-  const isPresetConfigured = (preset: typeof PRESET_PROVIDERS[number]) => {
+  const isPresetConfigured = (preset: (typeof PRESET_PROVIDERS)[number]) => {
     return providers.some(
-      (p) => p.type === preset.type && (p.base_url || "") === (preset.defaultBaseUrl || ""),
+      (p) =>
+        p.type === preset.type &&
+        (p.base_url || "") === (preset.defaultBaseUrl || ""),
     );
   };
 
@@ -988,7 +1943,9 @@ function ProvidersTab({
       {/* Configured providers */}
       {providers.length > 0 && (
         <div className="mb-8">
-          <h2 className="mb-3 text-[13px] font-medium text-[var(--ink-3)] uppercase tracking-wide">Configured</h2>
+          <h2 className="mb-3 text-[13px] font-medium text-[var(--ink-3)] uppercase tracking-wide">
+            Configured
+          </h2>
           <div className="space-y-3">
             {providers.map((p) => (
               <ProviderCard
@@ -997,7 +1954,10 @@ function ProvidersTab({
                 editing={editing === p.id}
                 onEdit={() => onEdit(p.id)}
                 onCancelEdit={onCancelEdit}
-                onSaved={() => { onCancelEdit(); onSavedPreset(); }}
+                onSaved={() => {
+                  onCancelEdit();
+                  onSavedPreset();
+                }}
                 onDelete={() => onDelete(p.id)}
               />
             ))}
@@ -1008,7 +1968,9 @@ function ProvidersTab({
       {/* Preset provider grid */}
       {addingPreset === null && !showCustom && (
         <div>
-          <h2 className="mb-3 text-[13px] font-medium text-[var(--ink-3)] uppercase tracking-wide">Add a provider</h2>
+          <h2 className="mb-3 text-[13px] font-medium text-[var(--ink-3)] uppercase tracking-wide">
+            Add a provider
+          </h2>
           {loading ? (
             <p className="text-[13px] text-[var(--ink-2)]">Loading…</p>
           ) : (
@@ -1022,19 +1984,30 @@ function ProvidersTab({
                     disabled={isConfigured}
                     className="flex flex-col items-start gap-1 rounded-lg border p-4 text-left transition"
                     style={{
-                      borderColor: isConfigured ? "var(--border)" : "var(--border)",
-                      background: isConfigured ? "var(--surface)" : "var(--white)",
+                      borderColor: isConfigured
+                        ? "var(--border)"
+                        : "var(--border)",
+                      background: isConfigured
+                        ? "var(--surface)"
+                        : "var(--white)",
                       cursor: isConfigured ? "default" : "pointer",
                       opacity: isConfigured ? 0.5 : 1,
                     }}
                   >
                     <div className="flex items-center gap-2">
-                      <p className="text-[13px] font-semibold text-[var(--ink)]">{preset.name}</p>
+                      <p className="text-[13px] font-semibold text-[var(--ink)]">
+                        {preset.name}
+                      </p>
                       {isConfigured && (
-                        <Check className="h-3.5 w-3.5" style={{ color: "var(--success)" }} />
+                        <Check
+                          className="h-3.5 w-3.5"
+                          style={{ color: "var(--success)" }}
+                        />
                       )}
                     </div>
-                    <p className="text-[11px] text-[var(--ink-3)]">{preset.description}</p>
+                    <p className="text-[11px] text-[var(--ink-3)]">
+                      {preset.description}
+                    </p>
                   </button>
                 );
               })}
@@ -1043,11 +2016,19 @@ function ProvidersTab({
               <button
                 onClick={() => onShowCustom(true)}
                 className="flex flex-col items-start gap-2 rounded-lg border border-dashed p-4 text-left transition"
-                style={{ borderColor: "var(--border)", background: "var(--surface)", cursor: "pointer" }}
+                style={{
+                  borderColor: "var(--border)",
+                  background: "var(--surface)",
+                  cursor: "pointer",
+                }}
               >
                 <div>
-                  <p className="text-[13px] font-semibold text-[var(--ink)]">Custom Provider</p>
-                  <p className="mt-0.5 text-[11px] text-[var(--ink-3)]">OpenAI-compatible or other endpoint</p>
+                  <p className="text-[13px] font-semibold text-[var(--ink)]">
+                    Custom Provider
+                  </p>
+                  <p className="mt-0.5 text-[11px] text-[var(--ink-3)]">
+                    OpenAI-compatible or other endpoint
+                  </p>
                 </div>
               </button>
             </div>
@@ -1066,10 +2047,7 @@ function ProvidersTab({
 
       {/* Custom provider form */}
       {showCustom && (
-        <ProviderForm
-          onCancel={onCancelCustom}
-          onSaved={onSavedCustom}
-        />
+        <ProviderForm onCancel={onCancelCustom} onSaved={onSavedCustom} />
       )}
     </div>
   );
@@ -1114,7 +2092,9 @@ function PresetProviderForm({
   return (
     <div className="max-w-2xl">
       <div className="mb-4">
-        <h2 className="text-[15px] font-semibold text-[var(--ink)]">{preset.name}</h2>
+        <h2 className="text-[15px] font-semibold text-[var(--ink)]">
+          {preset.name}
+        </h2>
         <p className="text-[12px] text-[var(--ink-3)]">{preset.description}</p>
       </div>
       <div
@@ -1123,35 +2103,72 @@ function PresetProviderForm({
       >
         <div className="space-y-3">
           <Field label="Display name">
-            <input value={name} onChange={(e) => setName(e.target.value)}
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
               className="w-full rounded-[5px] border px-3 py-2 text-[13px] text-[var(--ink)] outline-none"
-              style={{ borderColor: "var(--border)", background: "var(--surface)" }} autoFocus />
+              style={{
+                borderColor: "var(--border)",
+                background: "var(--surface)",
+              }}
+              autoFocus
+            />
           </Field>
           {preset.needsKey && (
             <Field label="API Key">
-              <input value={apiKey} onChange={(e) => setApiKey(e.target.value)} type="password"
+              <input
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                type="password"
                 placeholder="Paste your API key…"
                 className="w-full rounded-[5px] border px-3 py-2 text-[13px] text-[var(--ink)] outline-none"
-                style={{ borderColor: "var(--border)", background: "var(--surface)" }} />
+                style={{
+                  borderColor: "var(--border)",
+                  background: "var(--surface)",
+                }}
+              />
             </Field>
           )}
           {(preset.compatOnly || !preset.needsKey) && (
             <Field label="Base URL">
-              <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)}
-                placeholder={preset.defaultBaseUrl || "https://api.example.com/v1"}
+              <input
+                value={baseUrl}
+                onChange={(e) => setBaseUrl(e.target.value)}
+                placeholder={
+                  preset.defaultBaseUrl || "https://api.example.com/v1"
+                }
                 className="w-full rounded-[5px] border px-3 py-2 text-[13px] text-[var(--ink)] outline-none"
-                style={{ borderColor: "var(--border)", background: "var(--surface)" }} />
+                style={{
+                  borderColor: "var(--border)",
+                  background: "var(--surface)",
+                }}
+              />
             </Field>
           )}
           <div className="flex items-center gap-2 pt-1">
-            <button onClick={handleCreate} disabled={saving || !name.trim()}
+            <button
+              onClick={handleCreate}
+              disabled={saving || !name.trim()}
               className="flex items-center gap-1.5 rounded-[6px] px-4 py-2 text-[13px] font-medium"
-              style={{ background: "var(--ink)", color: "var(--white)", border: "1px solid var(--ink)", cursor: "pointer", opacity: saving || !name.trim() ? 0.5 : 1 }}>
+              style={{
+                background: "var(--ink)",
+                color: "var(--white)",
+                border: "1px solid var(--ink)",
+                cursor: "pointer",
+                opacity: saving || !name.trim() ? 0.5 : 1,
+              }}
+            >
               <Plus className="h-3.5 w-3.5" /> Add
             </button>
-            <button onClick={onCancel}
+            <button
+              onClick={onCancel}
               className="rounded-[6px] px-4 py-2 text-[13px] text-[var(--ink-2)]"
-              style={{ border: "1px solid var(--border)", background: "none", cursor: "pointer" }}>
+              style={{
+                border: "1px solid var(--border)",
+                background: "none",
+                cursor: "pointer",
+              }}
+            >
               Cancel
             </button>
           </div>
@@ -1208,13 +2225,18 @@ function ModelsTab({
     }
   };
 
-  if (loading) return <p className="text-[13px] text-[var(--ink-2)]">Loading…</p>;
+  if (loading)
+    return <p className="text-[13px] text-[var(--ink-2)]">Loading…</p>;
   if (providers.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-20">
         <Cpu className="h-8 w-8 text-[var(--ink-3)]" />
-        <p className="mt-3 text-[14px] text-[var(--ink-2)]">No providers configured</p>
-        <p className="mt-1 text-[12px] text-[var(--ink-3)]">Add a provider first to manage models.</p>
+        <p className="mt-3 text-[14px] text-[var(--ink-2)]">
+          No providers configured
+        </p>
+        <p className="mt-1 text-[12px] text-[var(--ink-3)]">
+          Add a provider first to manage models.
+        </p>
       </div>
     );
   }
@@ -1233,7 +2255,9 @@ function ModelsTab({
           >
             <div className="mb-4 flex items-center justify-between">
               <div>
-                <h3 className="text-[14px] font-semibold text-[var(--ink)]">{provider.name}</h3>
+                <h3 className="text-[14px] font-semibold text-[var(--ink)]">
+                  {provider.name}
+                </h3>
                 <p className="mt-0.5 text-[12px] text-[var(--ink-3)]">
                   {disc.length} discovered · {custom.length} custom
                 </p>
@@ -1242,9 +2266,15 @@ function ModelsTab({
                 onClick={() => handleDiscover(provider)}
                 disabled={isDiscovering}
                 className="flex items-center gap-1.5 rounded-[6px] px-3 py-2 text-[12px] text-[var(--ink-2)]"
-                style={{ border: "1px solid var(--border)", background: "none", cursor: "pointer" }}
+                style={{
+                  border: "1px solid var(--border)",
+                  background: "none",
+                  cursor: "pointer",
+                }}
               >
-                <RefreshCw className={`h-3.5 w-3.5 ${isDiscovering ? "animate-spin" : ""}`} />
+                <RefreshCw
+                  className={`h-3.5 w-3.5 ${isDiscovering ? "animate-spin" : ""}`}
+                />
                 Discover
               </button>
             </div>
@@ -1252,13 +2282,18 @@ function ModelsTab({
             {/* Discovered models */}
             {disc.length > 0 && (
               <div className="mb-4">
-                <p className="mb-2 text-[11px] font-medium text-[var(--ink-3)] uppercase tracking-wide">Discovered</p>
+                <p className="mb-2 text-[11px] font-medium text-[var(--ink-3)] uppercase tracking-wide">
+                  Discovered
+                </p>
                 <div className="flex flex-wrap gap-1.5">
                   {disc.map((m) => (
                     <span
                       key={m.id}
                       className="rounded-full px-2.5 py-1 font-mono text-[11px]"
-                      style={{ background: "var(--border)", color: "var(--ink-2)" }}
+                      style={{
+                        background: "var(--border)",
+                        color: "var(--ink-2)",
+                      }}
                     >
                       {m.name}
                     </span>
@@ -1269,20 +2304,35 @@ function ModelsTab({
 
             {/* Custom models */}
             <div>
-              <p className="mb-2 text-[11px] font-medium text-[var(--ink-3)] uppercase tracking-wide">Custom</p>
+              <p className="mb-2 text-[11px] font-medium text-[var(--ink-3)] uppercase tracking-wide">
+                Custom
+              </p>
               {custom.length > 0 && (
                 <div className="mb-3 flex flex-wrap gap-1.5">
                   {custom.map((m) => (
                     <span
                       key={m}
                       className="flex items-center gap-1 rounded-full px-2.5 py-1 font-mono text-[11px]"
-                      style={{ background: "var(--accent-bg)", color: "var(--accent)" }}
+                      style={{
+                        background: "var(--accent-bg)",
+                        color: "var(--accent)",
+                      }}
                       title={`${provider.type}/${m}`}
                     >
                       {m}
                       <button
-                        onClick={(e) => { e.stopPropagation(); handleRemoveCustom(provider, m); }}
-                        style={{ border: "none", background: "none", cursor: "pointer", padding: 0, display: "flex", alignItems: "center" }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRemoveCustom(provider, m);
+                        }}
+                        style={{
+                          border: "none",
+                          background: "none",
+                          cursor: "pointer",
+                          padding: 0,
+                          display: "flex",
+                          alignItems: "center",
+                        }}
                       >
                         <X className="h-3 w-3" />
                       </button>
@@ -1293,17 +2343,31 @@ function ModelsTab({
               <div className="flex items-center gap-2">
                 <span
                   className="flex items-center rounded-[5px] border px-2.5 py-2 font-mono text-[12px] text-[var(--ink-3)]"
-                  style={{ borderColor: "var(--border)", background: "var(--surface)", whiteSpace: "nowrap" }}
+                  style={{
+                    borderColor: "var(--border)",
+                    background: "var(--surface)",
+                    whiteSpace: "nowrap",
+                  }}
                 >
                   {provider.type}/
                 </span>
                 <input
                   value={newModel[provider.id] || ""}
-                  onChange={(e) => setNewModel((prev) => ({ ...prev, [provider.id]: e.target.value }))}
-                  onKeyDown={(e) => e.key === "Enter" && handleAddCustom(provider)}
+                  onChange={(e) =>
+                    setNewModel((prev) => ({
+                      ...prev,
+                      [provider.id]: e.target.value,
+                    }))
+                  }
+                  onKeyDown={(e) =>
+                    e.key === "Enter" && handleAddCustom(provider)
+                  }
                   placeholder="model-name"
                   className="flex-1 rounded-[5px] border px-3 py-2 font-mono text-[12px] text-[var(--ink)] outline-none"
-                  style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+                  style={{
+                    borderColor: "var(--border)",
+                    background: "var(--surface)",
+                  }}
                 />
                 <button
                   onClick={() => handleAddCustom(provider)}
@@ -1334,7 +2398,8 @@ function AboutTab() {
 
   useEffect(() => {
     // In desktop mode, read from Tauri. In web mode, fetch from the backend.
-    const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+    const isTauri =
+      typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
     if (isTauri) {
       // Tauri v2 — read the app version from the package info
       import("@tauri-apps/api/app")
@@ -1376,9 +2441,15 @@ function AboutTab() {
       >
         <LogoMark className="h-12 w-12" color="var(--ink)" />
         <div className="flex-1">
-          <h2 className="text-[18px] font-semibold text-[var(--ink)]">CaberOS</h2>
-          <p className="text-[13px] text-[var(--ink-2)]">Local-first AI Agent Operating System</p>
-          <p className="mt-1 font-mono text-[11px] text-[var(--ink-3)]">v{version}</p>
+          <h2 className="text-[18px] font-semibold text-[var(--ink)]">
+            CaberOS
+          </h2>
+          <p className="text-[13px] text-[var(--ink-2)]">
+            Local-first AI Agent Operating System
+          </p>
+          <p className="mt-1 font-mono text-[11px] text-[var(--ink-3)]">
+            v{version}
+          </p>
         </div>
         {/* Update check */}
         <div className="flex flex-col items-end gap-2">
@@ -1395,7 +2466,9 @@ function AboutTab() {
             <p className="text-[12px] text-[var(--ink-3)]">Checking...</p>
           )}
           {updater.status === "up-to-date" && (
-            <p className="text-[12px] text-[var(--accent)]">You're up to date</p>
+            <p className="text-[12px] text-[var(--accent)]">
+              You're up to date
+            </p>
           )}
           {updater.status === "available" && (
             <div className="flex flex-col items-end gap-2">
@@ -1403,7 +2476,9 @@ function AboutTab() {
                 v{updater.info?.latestVersion} is available
               </p>
               {updater.info?.notes && (
-                <p className="max-w-xs text-[11px] text-[var(--ink-3)]">{updater.info?.notes}</p>
+                <p className="max-w-xs text-[11px] text-[var(--ink-3)]">
+                  {updater.info?.notes}
+                </p>
               )}
               <div className="flex gap-2">
                 <button
@@ -1425,14 +2500,17 @@ function AboutTab() {
           {updater.status === "downloading" && (
             <div className="flex flex-col items-end gap-1">
               <p className="text-[12px] text-[var(--ink-2)]">
-                Downloading... {updater.progress.downloaded && updater.progress.total
+                Downloading...{" "}
+                {updater.progress.downloaded && updater.progress.total
                   ? `${Math.round((updater.progress.downloaded / updater.progress.total) * 100)}%`
                   : ""}
               </p>
             </div>
           )}
           {updater.status === "installing" && (
-            <p className="text-[12px] text-[var(--ink-2)]">Installing update...</p>
+            <p className="text-[12px] text-[var(--ink-2)]">
+              Installing update...
+            </p>
           )}
           {updater.status === "ready" && (
             <button
@@ -1443,34 +2521,54 @@ function AboutTab() {
             </button>
           )}
           {updater.status === "error" && (
-            <p className="text-[12px] text-red-500">{updater.error || "Update check failed"}</p>
+            <p className="text-[12px] text-red-500">
+              {updater.error || "Update check failed"}
+            </p>
           )}
         </div>
       </div>
 
       {/* Tech stack */}
       <div>
-        <h2 className="mb-3 text-[14px] font-semibold text-[var(--ink)]">Tech Stack</h2>
+        <h2 className="mb-3 text-[14px] font-semibold text-[var(--ink)]">
+          Tech Stack
+        </h2>
         <div
           className="rounded-lg border p-5"
           style={{ borderColor: "var(--border)", background: "var(--white)" }}
         >
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <p className="text-[12px] font-medium text-[var(--ink-3)]">Backend</p>
-              <p className="mt-1 text-[13px] text-[var(--ink)]">Python 3.12 · FastAPI · SQLAlchemy · LiteLLM</p>
+              <p className="text-[12px] font-medium text-[var(--ink-3)]">
+                Backend
+              </p>
+              <p className="mt-1 text-[13px] text-[var(--ink)]">
+                Python 3.12 · FastAPI · SQLAlchemy · LiteLLM
+              </p>
             </div>
             <div>
-              <p className="text-[12px] font-medium text-[var(--ink-3)]">Frontend</p>
-              <p className="mt-1 text-[13px] text-[var(--ink)]">React 19 · Vite · Tailwind CSS</p>
+              <p className="text-[12px] font-medium text-[var(--ink-3)]">
+                Frontend
+              </p>
+              <p className="mt-1 text-[13px] text-[var(--ink)]">
+                React 19 · Vite · Tailwind CSS
+              </p>
             </div>
             <div>
-              <p className="text-[12px] font-medium text-[var(--ink-3)]">Database</p>
-              <p className="mt-1 text-[13px] text-[var(--ink)]">SQLite (WAL mode)</p>
+              <p className="text-[12px] font-medium text-[var(--ink-3)]">
+                Database
+              </p>
+              <p className="mt-1 text-[13px] text-[var(--ink)]">
+                SQLite (WAL mode)
+              </p>
             </div>
             <div>
-              <p className="text-[12px] font-medium text-[var(--ink-3)]">Sandbox</p>
-              <p className="mt-1 text-[13px] text-[var(--ink)]">sandbox-exec (macOS) · bubblewrap (Linux)</p>
+              <p className="text-[12px] font-medium text-[var(--ink-3)]">
+                Sandbox
+              </p>
+              <p className="mt-1 text-[13px] text-[var(--ink)]">
+                sandbox-exec (macOS) · bubblewrap (Linux)
+              </p>
             </div>
           </div>
         </div>
@@ -1478,7 +2576,9 @@ function AboutTab() {
 
       {/* Links */}
       <div>
-        <h2 className="mb-3 text-[14px] font-semibold text-[var(--ink)]">Links</h2>
+        <h2 className="mb-3 text-[14px] font-semibold text-[var(--ink)]">
+          Links
+        </h2>
         <div
           className="rounded-lg border p-5"
           style={{ borderColor: "var(--border)", background: "var(--white)" }}
@@ -1517,7 +2617,9 @@ function AboutTab() {
 
       {/* License */}
       <div>
-        <h2 className="mb-3 text-[14px] font-semibold text-[var(--ink)]">License</h2>
+        <h2 className="mb-3 text-[14px] font-semibold text-[var(--ink)]">
+          License
+        </h2>
         <div
           className="rounded-lg border p-5"
           style={{ borderColor: "var(--border)", background: "var(--white)" }}
@@ -1603,57 +2705,125 @@ function ProviderCard({
         style={{ borderColor: "var(--border)", background: "var(--white)" }}
       >
         <div className="mb-4 flex items-center justify-between">
-          <h3 className="text-[14px] font-semibold text-[var(--ink)]">Edit {provider.type}</h3>
-          <button onClick={onCancelEdit} style={{ border: "none", background: "none", cursor: "pointer", color: "var(--ink-3)" }}>
+          <h3 className="text-[14px] font-semibold text-[var(--ink)]">
+            Edit {provider.type}
+          </h3>
+          <button
+            onClick={onCancelEdit}
+            style={{
+              border: "none",
+              background: "none",
+              cursor: "pointer",
+              color: "var(--ink-3)",
+            }}
+          >
             <X className="h-4 w-4" />
           </button>
         </div>
         <div className="space-y-3">
           <Field label="Name">
-            <input value={name} onChange={(e) => setName(e.target.value)}
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
               className="w-full rounded-[5px] border px-3 py-2 text-[13px] text-[var(--ink)] outline-none"
-              style={{ borderColor: "var(--border)", background: "var(--surface)" }} />
+              style={{
+                borderColor: "var(--border)",
+                background: "var(--surface)",
+              }}
+            />
           </Field>
-          <Field label={`API Key${provider.has_key ? " (leave blank to keep current)" : ""}`}>
-            <input value={apiKey} onChange={(e) => setApiKey(e.target.value)} type="password"
+          <Field
+            label={`API Key${provider.has_key ? " (leave blank to keep current)" : ""}`}
+          >
+            <input
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              type="password"
               placeholder={provider.has_key ? "••••••••" : "sk-..."}
               className="w-full rounded-[5px] border px-3 py-2 text-[13px] text-[var(--ink)] outline-none"
-              style={{ borderColor: "var(--border)", background: "var(--surface)" }} />
+              style={{
+                borderColor: "var(--border)",
+                background: "var(--surface)",
+              }}
+            />
           </Field>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Base URL (optional)">
-              <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)}
+              <input
+                value={baseUrl}
+                onChange={(e) => setBaseUrl(e.target.value)}
                 placeholder="https://api.openai.com/v1"
                 className="w-full rounded-[5px] border px-3 py-2 text-[13px] text-[var(--ink)] outline-none"
-                style={{ borderColor: "var(--border)", background: "var(--surface)" }} />
+                style={{
+                  borderColor: "var(--border)",
+                  background: "var(--surface)",
+                }}
+              />
             </Field>
             <Field label="Org ID (optional)">
-              <input value={orgId} onChange={(e) => setOrgId(e.target.value)}
+              <input
+                value={orgId}
+                onChange={(e) => setOrgId(e.target.value)}
                 className="w-full rounded-[5px] border px-3 py-2 text-[13px] text-[var(--ink)] outline-none"
-                style={{ borderColor: "var(--border)", background: "var(--surface)" }} />
+                style={{
+                  borderColor: "var(--border)",
+                  background: "var(--surface)",
+                }}
+              />
             </Field>
           </div>
           <div className="flex items-center gap-2 pt-1">
-            <button onClick={handleSave} disabled={saving}
+            <button
+              onClick={handleSave}
+              disabled={saving}
               className="flex items-center gap-1.5 rounded-[6px] px-4 py-2 text-[13px] font-medium"
-              style={{ background: "var(--ink)", color: "var(--white)", border: "1px solid var(--ink)", cursor: "pointer", opacity: saving ? 0.5 : 1 }}>
+              style={{
+                background: "var(--ink)",
+                color: "var(--white)",
+                border: "1px solid var(--ink)",
+                cursor: "pointer",
+                opacity: saving ? 0.5 : 1,
+              }}
+            >
               <Save className="h-3.5 w-3.5" /> Save
             </button>
-            <button onClick={handleDiscover} disabled={loadingModels}
+            <button
+              onClick={handleDiscover}
+              disabled={loadingModels}
               className="flex items-center gap-1.5 rounded-[6px] px-3 py-2 text-[13px] text-[var(--ink-2)]"
-              style={{ border: "1px solid var(--border)", background: "none", cursor: "pointer" }}>
-              <RefreshCw className={`h-3.5 w-3.5 ${loadingModels ? "animate-spin" : ""}`} /> Discover Models
+              style={{
+                border: "1px solid var(--border)",
+                background: "none",
+                cursor: "pointer",
+              }}
+            >
+              <RefreshCw
+                className={`h-3.5 w-3.5 ${loadingModels ? "animate-spin" : ""}`}
+              />{" "}
+              Discover Models
             </button>
           </div>
           {models && (
-            <div className="rounded-[5px] border p-3" style={{ borderColor: "var(--border)", background: "var(--surface)" }}>
+            <div
+              className="rounded-[5px] border p-3"
+              style={{
+                borderColor: "var(--border)",
+                background: "var(--surface)",
+              }}
+            >
               <p className="mb-2 text-[12px] font-medium text-[var(--ink-2)]">
                 Available models ({models.length})
               </p>
               <div className="flex flex-wrap gap-1.5">
                 {models.map((m) => (
-                  <span key={m.id} className="rounded-full px-2.5 py-1 font-mono text-[11px]"
-                    style={{ background: "var(--border)", color: "var(--ink-2)" }}>
+                  <span
+                    key={m.id}
+                    className="rounded-full px-2.5 py-1 font-mono text-[11px]"
+                    style={{
+                      background: "var(--border)",
+                      color: "var(--ink-2)",
+                    }}
+                  >
                     {m.name}
                   </span>
                 ))}
@@ -1672,28 +2842,43 @@ function ProviderCard({
     >
       <div className="flex items-center gap-3">
         <div>
-          <h3 className="text-[14px] font-semibold text-[var(--ink)]">{provider.name}</h3>
+          <h3 className="text-[14px] font-semibold text-[var(--ink)]">
+            {provider.name}
+          </h3>
           <div className="mt-0.5 flex items-center gap-2">
             {provider.has_key && (
-              <span className="flex items-center gap-0.5 text-[11px]" style={{ color: "var(--success)" }}>
+              <span
+                className="flex items-center gap-0.5 text-[11px]"
+                style={{ color: "var(--success)" }}
+              >
                 <Check className="h-3 w-3" /> key set
               </span>
             )}
             {provider.base_url && (
-              <span className="font-mono text-[11px] text-[var(--ink-3)]">{provider.base_url}</span>
+              <span className="font-mono text-[11px] text-[var(--ink-3)]">
+                {provider.base_url}
+              </span>
             )}
           </div>
         </div>
       </div>
       <div className="flex items-center gap-2">
-        <button onClick={onEdit}
+        <button
+          onClick={onEdit}
           className="rounded-[5px] px-3 py-1.5 text-[12px] text-[var(--ink-2)] transition"
-          style={{ border: "1px solid var(--border)", background: "none", cursor: "pointer" }}>
+          style={{
+            border: "1px solid var(--border)",
+            background: "none",
+            cursor: "pointer",
+          }}
+        >
           Edit
         </button>
-        <button onClick={onDelete}
+        <button
+          onClick={onDelete}
           className="flex h-7 w-7 items-center justify-center rounded text-[var(--ink-3)] transition hover:text-[var(--danger)]"
-          style={{ border: "none", background: "none", cursor: "pointer" }}>
+          style={{ border: "none", background: "none", cursor: "pointer" }}
+        >
           <Trash2 className="h-4 w-4" />
         </button>
       </div>
@@ -1701,7 +2886,13 @@ function ProviderCard({
   );
 }
 
-function ProviderForm({ onCancel, onSaved }: { onCancel: () => void; onSaved: () => void }) {
+function ProviderForm({
+  onCancel,
+  onSaved,
+}: {
+  onCancel: () => void;
+  onSaved: () => void;
+}) {
   const [name, setName] = useState("");
   const [type, setType] = useState("openai");
   const [apiKey, setApiKey] = useState("");
@@ -1733,45 +2924,127 @@ function ProviderForm({ onCancel, onSaved }: { onCancel: () => void; onSaved: ()
       style={{ borderColor: "var(--accent)", background: "var(--white)" }}
     >
       <div className="mb-4 flex items-center justify-between">
-        <h3 className="text-[14px] font-semibold text-[var(--ink)]">Add Provider</h3>
-        <button onClick={onCancel} style={{ border: "none", background: "none", cursor: "pointer", color: "var(--ink-3)" }}>
+        <h3 className="text-[14px] font-semibold text-[var(--ink)]">
+          Add Provider
+        </h3>
+        <button
+          onClick={onCancel}
+          style={{
+            border: "none",
+            background: "none",
+            cursor: "pointer",
+            color: "var(--ink-3)",
+          }}
+        >
           <X className="h-4 w-4" />
         </button>
       </div>
       <div className="space-y-3">
         <div className="grid grid-cols-2 gap-3">
           <Field label="Name">
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="My OpenAI"
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="My OpenAI"
               className="w-full rounded-[5px] border px-3 py-2 text-[13px] text-[var(--ink)] outline-none"
-              style={{ borderColor: "var(--border)", background: "var(--surface)" }} autoFocus />
+              style={{
+                borderColor: "var(--border)",
+                background: "var(--surface)",
+              }}
+              autoFocus
+            />
           </Field>
           <Field label="Type">
-            <select value={type} onChange={(e) => setType(e.target.value)}
+            <select
+              value={type}
+              onChange={(e) => setType(e.target.value)}
               className="w-full rounded-[5px] border px-3 py-2 text-[13px] text-[var(--ink)] outline-none"
-              style={{ borderColor: "var(--border)", background: "var(--surface)" }}>
-              {["openai", "anthropic", "gemini", "google", "ollama", "azure", "mistral", "cohere", "bedrock", "huggingface", "nvidia_nim", "ai21", "together_ai", "groq", "perplexity", "fireworks_ai", "dashscope", "moonshot", "zhipu", "minimax", "deepseek", "openrouter", "xai"].map((t) => <option key={t} value={t}>{t}</option>)}
+              style={{
+                borderColor: "var(--border)",
+                background: "var(--surface)",
+              }}
+            >
+              {[
+                "openai",
+                "anthropic",
+                "gemini",
+                "google",
+                "ollama",
+                "azure",
+                "mistral",
+                "cohere",
+                "bedrock",
+                "huggingface",
+                "nvidia_nim",
+                "ai21",
+                "together_ai",
+                "groq",
+                "perplexity",
+                "fireworks_ai",
+                "dashscope",
+                "moonshot",
+                "zhipu",
+                "minimax",
+                "deepseek",
+                "openrouter",
+                "xai",
+              ].map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
             </select>
           </Field>
         </div>
         <Field label="API Key">
-          <input value={apiKey} onChange={(e) => setApiKey(e.target.value)} type="password" placeholder="sk-..."
+          <input
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            type="password"
+            placeholder="sk-..."
             className="w-full rounded-[5px] border px-3 py-2 text-[13px] text-[var(--ink)] outline-none"
-            style={{ borderColor: "var(--border)", background: "var(--surface)" }} />
+            style={{
+              borderColor: "var(--border)",
+              background: "var(--surface)",
+            }}
+          />
         </Field>
         <Field label="Base URL (optional, for Ollama or custom endpoints)">
-          <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="http://localhost:11434"
+          <input
+            value={baseUrl}
+            onChange={(e) => setBaseUrl(e.target.value)}
+            placeholder="http://localhost:11434"
             className="w-full rounded-[5px] border px-3 py-2 text-[13px] text-[var(--ink)] outline-none"
-            style={{ borderColor: "var(--border)", background: "var(--surface)" }} />
+            style={{
+              borderColor: "var(--border)",
+              background: "var(--surface)",
+            }}
+          />
         </Field>
         <div className="flex items-center gap-2 pt-1">
-          <button onClick={handleCreate} disabled={saving || !name.trim()}
+          <button
+            onClick={handleCreate}
+            disabled={saving || !name.trim()}
             className="flex items-center gap-1.5 rounded-[6px] px-4 py-2 text-[13px] font-medium"
-            style={{ background: "var(--ink)", color: "var(--white)", border: "1px solid var(--ink)", cursor: "pointer", opacity: saving || !name.trim() ? 0.5 : 1 }}>
+            style={{
+              background: "var(--ink)",
+              color: "var(--white)",
+              border: "1px solid var(--ink)",
+              cursor: "pointer",
+              opacity: saving || !name.trim() ? 0.5 : 1,
+            }}
+          >
             <Plus className="h-3.5 w-3.5" /> Add
           </button>
-          <button onClick={onCancel}
+          <button
+            onClick={onCancel}
             className="rounded-[6px] px-4 py-2 text-[13px] text-[var(--ink-2)]"
-            style={{ border: "1px solid var(--border)", background: "none", cursor: "pointer" }}>
+            style={{
+              border: "1px solid var(--border)",
+              background: "none",
+              cursor: "pointer",
+            }}
+          >
             Cancel
           </button>
         </div>
@@ -1780,10 +3053,18 @@ function ProviderForm({ onCancel, onSaved }: { onCancel: () => void; onSaved: ()
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
   return (
     <div>
-      <label className="mb-1 block text-[12px] font-medium text-[var(--ink-2)]">{label}</label>
+      <label className="mb-1 block text-[12px] font-medium text-[var(--ink-2)]">
+        {label}
+      </label>
       {children}
     </div>
   );

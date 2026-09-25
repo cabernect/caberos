@@ -236,11 +236,18 @@ async def start_run(
         except asyncio.CancelledError:
             rid = run_id_future.result() if run_id_future.done() else None
             if rid:
-                # A cancelled run must not orphan its background terminals.
+                # A cancelled run must not orphan its background terminals
+                # or browser sessions.
                 try:
                     from .terminal.registry import terminal_registry
 
                     await terminal_registry.close_for_run(rid)
+                except Exception:
+                    pass
+                try:
+                    from .browser.registry import browser_registry
+
+                    await browser_registry.close_for_run(rid)
                 except Exception:
                     pass
             if rid and rid in _active_runs:

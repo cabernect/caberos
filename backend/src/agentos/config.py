@@ -72,6 +72,14 @@ class Settings(BaseSettings):
     # Can be toggled at runtime via PUT /api/settings/yolo.
     yolo_mode: bool = False
 
+    # Browser runtime override — path to a Chromium-family binary (Chrome,
+    # Chromium, Edge, Brave). When set, the managed Chrome-for-Testing
+    # install is skipped. The browser still launches with its own
+    # --user-data-dir, so the operator's personal profile is never touched.
+    # Set via AGENTOS_BROWSER_BINARY in .env or the env, or persisted via
+    # PUT /api/settings/browser (env wins over the persisted value).
+    browser_binary: str = ""
+
     @property
     def db_url(self) -> str:
         """Active database URL — custom backend if set, SQLite default otherwise."""
@@ -94,3 +102,67 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def env_pinned(key: str) -> bool:
+    """True when AGENTOS_<KEY> is set in the process env or the .env file.
+
+    Real env vars land in os.environ; .env-file values are loaded by
+    pydantic without touching os.environ, so both must be checked to know
+    whether the operator explicitly pinned a setting outside the UI."""
+    import re
+
+    env_key = f"AGENTOS_{key.upper()}"
+    if os.environ.get(env_key):
+        return True
+    env_file = Path(".env")
+    if env_file.is_file():
+        try:
+            pattern = rf"^\s*(?:export\s+)?{re.escape(env_key)}\s*="
+            if re.search(pattern, env_file.read_text(), re.MULTILINE):
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def _apply_persisted_overrides() -> None:
+    """Overlay operator-editable settings saved under the data dir
+    (Settings → Browser writes browser_binary here). Survives restarts
+    and rides the Docker /data volume; env vars still win for ops."""
+    import json
+
+    path = settings.db_path.parent / "app-settings.json"
+    if not path.is_file():
+        return
+    try:
+        saved = json.loads(path.read_text())
+    except Exception:
+        return
+    for key in ("browser_binary",):
+        if key in saved and not env_pinned(key):
+            setattr(settings, key, saved[key])
+
+
+_apply_persisted_overrides()
+
+
+def persist_setting(key: str, value: object) -> None:
+    """Write an operator-editable setting to the data-dir overlay and apply
+    it to the live singleton."""
+    import json
+
+    path = settings.db_path.parent / "app-settings.json"
+    saved: dict = {}
+    if path.is_file():
+        try:
+            saved = json.loads(path.read_text())
+        except Exception:
+            saved = {}
+    if value in (None, ""):
+        saved.pop(key, None)
+    else:
+        saved[key] = value
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(saved, indent=2))
+    setattr(settings, key, value if value is not None else "")
