@@ -113,9 +113,13 @@ async def lifespan(app: FastAPI):
     async with async_session_factory() as db:
 
         async def _reconcile_runs() -> None:
-            # Find orphaned running runs
+            # Find orphaned runs — pending/awaiting_approval rows are just as
+            # dead as running ones: their in-memory execution context is gone,
+            # so they would sit as zombie "running" rows forever.
             orphaned = await db.execute(
-                select(Run.id, Run.agent_id, Run.session_id).where(Run.status == "running")
+                select(Run.id, Run.agent_id, Run.session_id).where(
+                    Run.status.in_(["pending", "running", "awaiting_approval"])
+                )
             )
             orphaned_rows = orphaned.all()
             if not orphaned_rows:
