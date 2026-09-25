@@ -109,9 +109,11 @@ def _get_skill_dirs(agent_id: str) -> list[tuple[Path, str]]:
     wm = WorkspaceManager()
     workspace = Path(wm.create_workspace(agent_id))
 
+    # Agent-local is scanned first because _scan_all_skills is first-wins —
+    # local skills shadow system skills with the same name.
     return [
-        (settings.skills_dir, "system"),
         (workspace / "skills", "agent"),
+        (settings.skills_dir, "system"),
     ]
 
 
