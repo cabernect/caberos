@@ -18,7 +18,7 @@ import { PreviewPanel } from "@/components/previews/PreviewPanel";
 import { formatBytes } from "@/components/previews/renderers";
 import { Markdown } from "@/components/Markdown";
 
-type ViewKey = "all" | "built-in" | "global" | "agent-local" | "drafts";
+type ViewKey = "all" | "built-in" | "global" | "agent-local" | "drafts" | "archived";
 type DetailTab = "overview" | "instructions" | "resources" | "history" | "usage";
 
 const VIEWS: { key: ViewKey; label: string }[] = [
@@ -27,6 +27,7 @@ const VIEWS: { key: ViewKey; label: string }[] = [
   { key: "global", label: "Global" },
   { key: "agent-local", label: "Agent Skills" },
   { key: "drafts", label: "Drafts" },
+  { key: "archived", label: "Archived" },
 ];
 
 const SCOPE_STYLE: Record<SkillScope, { label: string; color: string }> = {
@@ -365,7 +366,7 @@ export function Skills() {
               </button>
             ))}
           </div>
-          <div className="relative min-w-[160px] max-w-md flex-1">
+          <div className="relative min-w-[160px] flex-1">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2" style={{ color: "var(--ink-3)" }} />
             <input
               type="text" value={search} onChange={(e) => setSearch(e.target.value)}
@@ -487,12 +488,12 @@ export function Skills() {
           </div>
 
           {/* Tab bar */}
-          <div className="flex gap-1 border-b border-[var(--border)] px-3 py-2">
+          <div className="flex gap-1 overflow-x-auto border-b border-[var(--border)] px-3 py-2">
             {(["overview", "instructions", "resources", "history", "usage"] as DetailTab[]).map((t) => (
               <button
                 key={t}
                 onClick={() => setDetailTab(t)}
-                className="rounded-[6px] px-2.5 py-1 text-[12px] font-medium capitalize"
+                className="shrink-0 whitespace-nowrap rounded-[6px] px-2.5 py-1 text-[12px] font-medium capitalize"
                 style={{
                   background: detailTab === t ? "var(--sidebar)" : "transparent",
                   color: detailTab === t ? "var(--ink)" : "var(--ink-3)",

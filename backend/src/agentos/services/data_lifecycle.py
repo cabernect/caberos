@@ -1,8 +1,8 @@
 """Explicit local data lifecycle operations."""
 
 import shutil
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 from sqlalchemy import bindparam, delete, text
 from sqlalchemy.ext.asyncio import AsyncSession

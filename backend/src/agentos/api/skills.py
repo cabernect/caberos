@@ -207,6 +207,7 @@ async def _validate_now(db: AsyncSession, skill: Skill) -> dict:
         content_dir,
         known_capabilities=_known_capabilities(),
         granted_capabilities=await _granted_capabilities(db, skill),
+        expected_name=skill.name,
     )
 
 
@@ -223,7 +224,11 @@ async def list_skills(
     operator: Operator = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Scoped skill listing. view = all | built-in | global | agent-local | drafts."""
+    """Scoped skill listing.
+
+    view = all | built-in | global | agent-local | drafts | archived.
+    Drafts and archived rows are only visible in their own views.
+    """
     stmt = select(Skill).order_by(Skill.name)
     if view == "built-in":
         stmt = stmt.where(Skill.scope == "built-in")
@@ -233,11 +238,13 @@ async def list_skills(
         stmt = stmt.where(Skill.scope == "agent-local", Skill.status != "draft")
     elif view == "drafts":
         stmt = stmt.where(Skill.status == "draft")
+    elif view == "archived":
+        stmt = stmt.where(Skill.status == "archived")
     elif view != "all":
         raise HTTPException(status_code=400, detail=f"unknown view '{view}'")
 
-    if view != "drafts":
-        stmt = stmt.where(Skill.status != "draft")
+    if view not in ("drafts", "archived"):
+        stmt = stmt.where(Skill.status.not_in(["draft", "archived"]))
     if agent_id and view == "agent-local":
         stmt = stmt.where(Skill.owner_agent_id == agent_id)
     if q:

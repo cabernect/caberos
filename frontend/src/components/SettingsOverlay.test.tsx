@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SettingsOverlay } from "./SettingsOverlay";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import type { Agent, CapabilityInfo } from "@/lib/types";
 
 const webSearch: CapabilityInfo = {
@@ -74,7 +74,7 @@ describe("SettingsOverlay capabilities", () => {
   });
 
   it("shows a retryable error when a capability save is rejected by the API", async () => {
-    vi.spyOn(api, "updateAgent").mockRejectedValue(new Error("503: database busy"));
+    vi.spyOn(api, "updateAgent").mockRejectedValue(new ApiError(503, "database busy"));
     renderCapabilities({ ...baseAgent, capabilities: null });
 
     const approval = await screen.findByLabelText("approval");

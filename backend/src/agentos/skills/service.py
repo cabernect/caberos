@@ -299,6 +299,14 @@ async def publish(
                 status_code=409,
             )
 
+    # Promoting a live agent-local copy to global retires the workspace dir —
+    # its bytes are snapshotted into the new revision, and leaving the dir
+    # would let the live copy keep shadowing the global row for its owner.
+    retired_live_dir = (
+        live_local_dir(skill)
+        if scope == "global" and skill.scope == "agent-local" and skill.status != "draft"
+        else None
+    )
     was_draft_dir = source if skill.status == "draft" else None
     revision = await _next_revision(db, skill, source, change_summary, validation, source_run_id)
     skill.scope = scope
@@ -322,6 +330,8 @@ async def publish(
     # A published draft leaves no stale copy in skill-drafts/.
     if was_draft_dir is not None and was_draft_dir.is_dir():
         shutil.rmtree(was_draft_dir)
+    if retired_live_dir is not None and retired_live_dir.is_dir():
+        shutil.rmtree(retired_live_dir)
     await db.flush()
     return revision
 
@@ -338,9 +348,13 @@ async def promote(
 
 
 async def duplicate(
-    db: AsyncSession, skill: Skill, *, owner_agent_id: str, new_name: str | None = None
+    db: AsyncSession, skill: Skill, *, owner_agent_id: str | None, new_name: str | None = None
 ) -> Skill:
-    """Copy a skill's current content into a new draft under a host agent."""
+    """Copy a skill's current content into a new draft.
+
+    With an owner the draft lands in the agent's workspace skill-drafts dir;
+    ownerless duplicates land in `data/skills-drafts/` like manual drafts.
+    """
     source: Path | None = None
     if skill.status == "draft":
         source = draft_dir(skill)
@@ -357,24 +371,39 @@ async def duplicate(
     name = base
     suffix = 2
     while True:
-        clash = await db.scalar(
-            select(Skill).where(
-                Skill.name == name,
-                Skill.scope == "agent-local",
-                Skill.owner_agent_id == owner_agent_id,
-            )
-        )
-        if (
-            clash is None
-            and not (
-                Path(settings.workspace_root) / owner_agent_id / "skill-drafts" / name
-            ).exists()
-        ):
+        if owner_agent_id:
+            taken = (
+                await db.scalar(
+                    select(Skill).where(
+                        Skill.name == name,
+                        Skill.scope == "agent-local",
+                        Skill.owner_agent_id == owner_agent_id,
+                    )
+                )
+                is not None
+            ) or (Path(settings.workspace_root) / owner_agent_id / "skill-drafts" / name).exists()
+        else:
+            taken = (
+                await db.scalar(
+                    select(Skill).where(
+                        Skill.name == name,
+                        Skill.status == "draft",
+                        Skill.owner_agent_id.is_(None),
+                    )
+                )
+                is not None
+            ) or (Path(settings.skills_drafts_root) / name).exists()
+        if not taken:
             break
         name = f"{base}-{suffix}"
         suffix += 1
 
-    draft = Skill(name=name, scope="agent-local", owner_agent_id=owner_agent_id, status="draft")
+    draft = Skill(
+        name=name,
+        scope="agent-local" if owner_agent_id else "global",
+        owner_agent_id=owner_agent_id,
+        status="draft",
+    )
     db.add(draft)
     target = draft_dir(draft)
     target.parent.mkdir(parents=True, exist_ok=True)

@@ -40,12 +40,15 @@ def validate_skill_dir(
     *,
     known_capabilities: set[str] | None = None,
     granted_capabilities: set[str] | None = None,
+    expected_name: str | None = None,
 ) -> dict[str, Any]:
     """Validate a skill directory. Returns {errors, warnings, stats}.
 
     `known_capabilities`: names that exist at all (unknown → error).
     `granted_capabilities`: names granted to the relevant agent(s); existing
     but ungranted names → warning.
+    `expected_name`: frontmatter name must match this when given — used for
+    governed revisions whose storage dir is `rev-N`, not the skill name.
     """
     errors: list[str] = []
     warnings: list[str] = []
@@ -82,7 +85,9 @@ def validate_skill_dir(
         errors.append("frontmatter 'name' missing")
     elif not _NAME_RE.match(name) or len(name) > _MAX_NAME:
         errors.append(f"name '{name}' must be lowercase letters, numbers, hyphens (≤64 chars)")
-    elif name != skill_dir.name:
+    elif expected_name is not None and name != expected_name:
+        errors.append(f"name '{name}' must match skill name '{expected_name}'")
+    elif expected_name is None and name != skill_dir.name:
         errors.append(f"name '{name}' must match directory '{skill_dir.name}'")
 
     description = fm.get("description", "")
@@ -100,10 +105,14 @@ def validate_skill_dir(
     if stats["body_tokens"] > _WARN_BODY_TOKENS:
         warnings.append(f"large body (~{stats['body_tokens']} tokens)")
 
-    # Resource references must resolve inside the skill dir.
+    # Resource references must resolve inside the skill dir. `#anchor`
+    # fragments target a heading inside the file — strip before checking.
     declared_dirs = {p.name for p in skill_dir.iterdir() if p.is_dir()}
     for ref in sorted(set(_RESOURCE_REF_RE.findall(body)) | set(_MD_LINK_RE.findall(body))):
-        target = (skill_dir / ref).resolve()
+        ref_path, _, _anchor = ref.partition("#")
+        if not ref_path:
+            continue
+        target = (skill_dir / ref_path).resolve()
         try:
             target.relative_to(skill_dir.resolve())
         except ValueError:

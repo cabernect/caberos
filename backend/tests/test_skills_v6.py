@@ -335,9 +335,7 @@ class TestLifecycle:
         from agentos.models.contact import Contact
         from agentos.models.run import Run
 
-        g = await service.import_draft(
-            db, name="used", source_dir=_write_skill(env / "t", "used")
-        )
+        g = await service.import_draft(db, name="used", source_dir=_write_skill(env / "t", "used"))
         rev = await service.publish(db, g, scope="global")
         db.add(
             Contact(
@@ -464,9 +462,7 @@ class TestImporter:
         assert importer.archive_url_for("https://x.example.com/a.zip") == (
             "https://x.example.com/a.zip"
         )
-        assert importer.archive_url_for("o/r") == (
-            "https://codeload.github.com/o/r/zip/HEAD"
-        )
+        assert importer.archive_url_for("o/r") == ("https://codeload.github.com/o/r/zip/HEAD")
         with pytest.raises(ImportRejected):
             importer.archive_url_for("http://github.com/o/r")  # https only
 
@@ -515,4 +511,94 @@ class TestValidation:
             granted_capabilities={"read_file"},
         )
         assert any("not granted" in w for w in result["warnings"])
+        assert result["errors"] == []
+
+
+# ---------------------------------------------------------------------------
+# W11 regression — findings from the live test run (B7–B13)
+# ---------------------------------------------------------------------------
+
+
+class TestW11Regressions:
+    async def test_duplicate_without_owner_lands_ownerless_draft(self, db, env):
+        """B7: duplicate with owner_agent_id=None crashed joining None into
+        the workspace path — ownerless duplicates go to data/skills-drafts/."""
+        g = await service.import_draft(db, name="orig", source_dir=_write_skill(env / "o", "orig"))
+        await service.publish(db, g, scope="global")
+
+        dup = await service.duplicate(db, g, owner_agent_id=None)
+
+        assert dup.status == "draft" and dup.owner_agent_id is None
+        assert service.draft_dir(dup) == env / "skills-drafts" / "orig-copy"
+        assert "name: orig-copy" in (service.draft_dir(dup) / "SKILL.md").read_text()
+
+    async def test_archived_hidden_from_live_views(self, db, env, agent):
+        """B8: archived rows leave every live view but stay reachable via
+        view=archived (unarchive/purge need somewhere to live)."""
+        from types import SimpleNamespace
+
+        from agentos.api.skills import list_skills
+
+        op = SimpleNamespace(id="op")
+        g = await service.import_draft(db, name="arch", source_dir=_write_skill(env / "a", "arch"))
+        await service.publish(db, g, scope="global")
+        await service.set_status(db, g, "archived")
+
+        names = {s["name"] for s in (await list_skills(view="all", operator=op, db=db))["skills"]}
+        assert "arch" not in names
+        archived = (await list_skills(view="archived", operator=op, db=db))["skills"]
+        assert {s["name"] for s in archived} == {"arch"}
+
+    async def test_promote_retires_live_dir(self, db, env, agent):
+        """B9: promote snapshots the live dir into the rev then removes it —
+        a leftover live dir kept shadowing the global row for its owner."""
+        _write_skill(env / "workspaces" / agent.id / "skills", "pro")
+        s = Skill(name="pro", scope="agent-local", owner_agent_id=agent.id, status="published")
+        db.add(s)
+        await db.flush()
+        live = service.live_local_dir(s)
+        await service.publish(db, s, scope="agent-local")
+        await service.promote(db, s)
+        await db.commit()
+
+        assert s.scope == "global" and s.owner_agent_id is None
+        assert not live.exists()
+        resolved = {x.name: x for x in await resolve_effective_skills(db, agent.id)}
+        assert resolved["pro"].pin.startswith("rev:")
+
+    async def test_second_global_publish_revalidates_cleanly(self, db, env):
+        """B10: republishing a governed skill used to fail — validation
+        compared the frontmatter name to the `rev-N` storage dir."""
+        from types import SimpleNamespace
+
+        from agentos.api.skills import PublishBody, publish_skill
+
+        g = await service.import_draft(
+            db, name="re-pub", source_dir=_write_skill(env / "p", "re-pub")
+        )
+        op = SimpleNamespace(id="op")
+        body = PublishBody(scope="global", availability="all")
+        await publish_skill(g.id, body, op, db)
+        again = await publish_skill(g.id, body, op, db)
+        assert again["revision"] == 2
+
+    def test_validate_revision_dir_uses_expected_name(self, tmp_path):
+        """B10 at the validator: `rev-N` dirs pass when expected_name given,
+        still fail without it."""
+        d = tmp_path / "rev-3"
+        d.mkdir()
+        (d / "SKILL.md").write_text(
+            "---\nname: foo\ndescription: d\n---\n\nbody\n", encoding="utf-8"
+        )
+        assert any("must match" in e for e in validate.validate_skill_dir(d)["errors"])
+        ok = validate.validate_skill_dir(d, expected_name="foo")
+        assert not any("must match" in e for e in ok["errors"])
+
+    def test_anchor_fragment_refs_resolve(self, tmp_path):
+        """B13: `references/x.md#heading` must check x.md, not the literal
+        path including the fragment."""
+        d = _write_skill(tmp_path / "s", "anch", "d", body="see `references/x.md#sec`")
+        (d / "references").mkdir()
+        (d / "references" / "x.md").write_text("# x\n", encoding="utf-8")
+        result = validate.validate_skill_dir(d)
         assert result["errors"] == []
