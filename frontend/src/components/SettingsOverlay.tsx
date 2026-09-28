@@ -3,7 +3,7 @@ import {
   X, Save, Copy, Download, Upload, Power, Trash2, ArrowLeft,
   FileText, Folder, ChevronRight, ChevronDown, FolderOpen,
 } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { useConfirm } from "@/lib/confirmHook";
 import type {
   Agent,
@@ -646,9 +646,8 @@ function CapabilitiesTab({
       await api.updateAgent(agent.id, { capabilities: caps });
       onSaved();
     } catch (error) {
-      const message = error instanceof Error ? error.message : "";
       setSaveError(
-        message.startsWith("503:")
+        error instanceof ApiError && error.status === 503
           ? "The database is busy. Nothing was saved; please retry."
           : "Could not save capability settings; please retry.",
       );
@@ -1084,7 +1083,7 @@ function SkillsTab({ agentId, showSaved }: { agentId: string; showSaved: (msg: s
         api.listSkills(),
         api.listAgentSkills(agentId),
       ]);
-      setSystemSkills(globalData.skills);
+      setSystemSkills(globalData.skills.filter((s) => s.scope !== "agent-local"));
       setAgentSkills(agentData);
     } catch {} finally {
       setLoading(false);
@@ -1106,11 +1105,11 @@ function SkillsTab({ agentId, showSaved }: { agentId: string; showSaved: (msg: s
     showSaved("Skill deleted");
   };
 
-  const handlePromote = async (name: string) => {
+  const handlePromote = async (skill: Skill) => {
     try {
-      await api.promoteSkill(name, agentId);
+      await api.promoteSkill(skill.id!, { change_summary: "promoted from agent settings" });
       load();
-      showSaved(`Promoted "${name}" to global`);
+      showSaved(`Promoted "${skill.name}" to global`);
     } catch (e) {
       showSaved(`Promote failed: ${e instanceof Error ? e.message : "error"}`);
     }
@@ -1183,14 +1182,16 @@ function SkillsTab({ agentId, showSaved }: { agentId: string; showSaved: (msg: s
                   )}
                 </div>
                 <div className="flex items-center gap-2 ml-2">
-                  <button
-                    onClick={() => handlePromote(skill.name)}
-                    className="text-[12px] text-[var(--accent)] transition hover:underline"
-                    style={{ border: "none", background: "none", cursor: "pointer" }}
-                    title="Promote to global"
-                  >
-                    Promote
-                  </button>
+                  {skill.id && (
+                    <button
+                      onClick={() => handlePromote(skill)}
+                      className="text-[12px] text-[var(--accent)] transition hover:underline"
+                      style={{ border: "none", background: "none", cursor: "pointer" }}
+                      title="Promote to global"
+                    >
+                      Promote
+                    </button>
+                  )}
                   <button
                     onClick={() => handleDeleteAgentSkill(skill.name)}
                     className="text-[var(--ink-3)] transition hover:text-[var(--danger)]"

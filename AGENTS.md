@@ -148,7 +148,9 @@ root and other dirs are scratch space (scripts, drafts, `write_file` output).
 | Provider keys | DB — encrypted (Fernet) | n/a |
 | Connector tokens | DB — encrypted (Fernet) | n/a |
 | Workspace (working files) | Filesystem — shared directory | n/a |
-| Skills | Filesystem — `skills/` (system) + `workspace/skills/{agent_id}/` (per-agent) | n/a |
+| Skills (governed) | Bytes on disk — `skills/` built-ins + `data/skills-store/{id}/rev-{n}/`; index in DB (`Skill`/`SkillRevision`/`SkillAssignment`) | yes (SkillRevision) |
+| Agent-local skills | Filesystem — `workspace/skills/{agent_id}/` (live, agent-editable) | optional published snapshots |
+| Skill drafts | `workspace/{agent}/skill-drafts/` (builder) + `data/skills-drafts/` (imports) — never scanned | no |
 
 ## Current status
 
@@ -179,6 +181,22 @@ Tickets **01–09 implemented**: smoke slice, real-model chat + SSE streaming, f
 - **Composer tray:** clipboard/drag/picker/URL attachments with stable ids, content-hash dedupe (incl. intra-batch), reorder/remove, ephemeral preview chips (kind + size + PDF first-page thumb), object-URL cleanup, retry retention — `onSend` returning `false` keeps the draft.
 - **Attachment persistence:** message attachments carry workspace-relative `attachments/attachment_{i}_{name}` paths (shared helper in `pipeline.py`) so chat chips open the stored file.
 - **Verification:** `backend/tests/test_previews.py` (36 tests) + `attachmentUtils.test.ts` (5 tests); all surfaces exercised live via Playwright MCP.
+
+**v0.2 W4 status:** Browser automation merged via #53 — managed Chrome-for-Testing, CDP sessions, domain-scoped persistent profiles, domain leash, visible takeover, approval-gated actions, download staging. `web_fetch` stays the non-interactive path.
+
+**v0.2 W5 status:** Plan Mode spec settled then **DEFERRED** (see `docs/plans/v0.2/05-plan-mode.md` banner) — cost outweighs value while per-tool approvals already prevent bad outcomes.
+
+**v0.2 W6 status (branch `feat/v0.2-skills`, unmerged):**
+- **W6 Skills Studio (implemented):** DB is the resolution authority for governed scopes. `Skill`/`SkillRevision`/`SkillAssignment` models; `skills/reconcile.py` seeds built-ins from `skills/builtins.BUILTIN_SKILLS`, migrates legacy `skills/` dirs into the store, indexes agent-local workspace dirs.
+- **Resolution:** `skills/resolution.py` — `resolve_effective_skills()` per agent: published governed rows + live workspace scan, precedence `agent-local > global > built-in`, global respects `availability`/`skill_assignments`. Disabled/archived agent-local rows suppress the live dir. `GET /api/agents/{id}/skills` indexes dirs on read so promote works without a restart.
+- **Pinning:** pipeline resolves once per run; manifest `skill_revision_ids` stores `{name: "rev:<id>" | "live:<sha256>"}` — mid-run publishes can't wobble a live run; `skills_load`/`skills_read_resource` serve the pinned rev (agent-local serves live bytes, pin is provenance only).
+- **Builder:** "Create Skill" opens a normal session flagged builder-mode on a host agent — `skill-creator` force-loaded, ordinary workspace tools write `skill-drafts/`; no publish capability exists by construction.
+- **Imports:** ZIP + repo-URL (GitHub/GitLab/Bitbucket normalized → archive zipball over HTTP) share `skills/importer.py` hardening — traversal, symlinks, zip-bomb caps, `https:`-only; multi-`SKILL.md` repos → pick-list; everything lands `draft`.
+- **Validation** (`skills/validate.py`): errors block publish; warnings (ungranted-but-real capabilities, missing license, token estimate) don't.
+- **Lifecycle:** publish/promote (scope change, history preserved)/duplicate/restore-as-new/disable/archive/purge; purge guarded by active-run manifest pins, built-ins never purge, agent-local purge also removes the live dir.
+- **API/UI:** `/api/skills` scoped views, `/effective`, detail, files/preview/raw/pdf-page (revision-aware), validate, export, drafts, import. React Skills Studio: scope views, detail tabs, publish dialog (scope + assignments), builder launch, import ZIP/URL.
+- **Verification:** `test_skills_v6.py` (24) + `test_skills_api.py` (10) + rewritten syscall/preview fixtures; 694 backend tests pass, `tsc -b` clean.
+- **Deferred:** hub/registry, per-agent built-in disable, live-test subsystem.
 
 **Ticket 10 (Tauri Desktop App):** SHIPPED for macOS ARM64 (Apple Silicon). macOS Intel and Windows builds require cross-compilation/CI and are not yet set up.
 - Tauri 2 shell wraps the React frontend + packaged PyInstaller gateway.

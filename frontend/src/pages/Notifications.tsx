@@ -108,7 +108,7 @@ export function Notifications() {
                 <p className="mt-1 text-[13px] text-[var(--ink-2)]">Important run, integration, and system updates will appear here.</p>
               </div>
             ) : (
-              <div className="divide-y" style={{ borderBottom: "1px solid var(--border)" }}>
+              <div className="divide-y divide-[var(--border)]" style={{ borderBottom: "1px solid var(--border)" }}>
                 {visibleItems.map((item) => {
                   const Icon = severityIcon[item.severity];
                   return (

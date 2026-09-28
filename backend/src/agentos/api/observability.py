@@ -113,7 +113,7 @@ class ManifestOut(BaseModel):
     model_name: str | None = None
     plan_revision_id: str | None = None
     schedule_revision_id: str | None = None
-    skill_revision_ids: list[str] = []
+    skill_revision_ids: dict[str, str] | list[str] = []
     retrieval_profile_revision_id: str | None = None
     knowledge_snapshot_ids: list[str] = []
     browser_profile_id: str | None = None

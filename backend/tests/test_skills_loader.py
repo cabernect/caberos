@@ -31,9 +31,7 @@ def test_agent_skill_shadows_system_with_same_name(skill_dirs):
     _write_skill(settings.workspace_root / "caber" / "skills", "docx", "agent version")
 
     matches = [s for s in loader.list_skills("caber") if s["name"] == "docx"]
-    assert matches == [
-        {"name": "docx", "description": "agent version", "source": "agent"}
-    ]
+    assert matches == [{"name": "docx", "description": "agent version", "source": "agent"}]
 
     loaded = loader.load_skill("caber", "docx")
     assert loaded is not None

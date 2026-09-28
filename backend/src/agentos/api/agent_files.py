@@ -14,7 +14,6 @@ from ..db import get_db
 from ..memory import recall, triples
 from ..models.operator import Operator
 from ..skills.loader import _load_skill_from_dir
-from ..skills.loader import list_skills as load_available_skills
 
 router = APIRouter(prefix="/api/agents", tags=["agent-files"])
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
@@ -113,8 +112,28 @@ async def list_skills(
     operator: Operator = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    """List all skills for an agent."""
+    """List all skills for an agent.
+
+    Directory skills are indexed as agent-local rows on read so the
+    response can carry a governed `id` (needed for promote/history) even
+    when the dir appeared after the last startup reconcile.
+    """
+    from sqlalchemy import select
+
+    from ..models.skill import Skill
+    from ..skills.reconcile import _index_agent_local
+
     skills_dir = _skills_dir(agent_id)
+    rows = {
+        s.name: s
+        for s in (
+            await db.execute(
+                select(Skill).where(Skill.scope == "agent-local", Skill.owner_agent_id == agent_id)
+            )
+        )
+        .scalars()
+        .all()
+    }
     skills = []
     if skills_dir.exists():
         for entry in sorted(skills_dir.iterdir()):
@@ -122,21 +141,29 @@ async def list_skills(
                 skill = _load_skill_from_dir(entry, "agent")
                 if skill is None:
                     continue
+                row = rows.get(entry.name)
+                if row is None:
+                    row = await _index_agent_local(db, agent_id, entry)
                 skills.append(
                     {
+                        "id": row.id if row else None,
                         "name": skill.name,
                         "type": "directory",
                         "description": skill.description,
+                        "status": row.status if row else "live",
                     }
                 )
             elif entry.is_file() and entry.suffix in (".md", ".yaml", ".yml"):
                 skills.append(
                     {
+                        "id": None,
                         "name": entry.name,
                         "type": "file",
                         "description": "",
+                        "status": "live",
                     }
                 )
+    await db.commit()
     return skills
 
 
@@ -146,8 +173,23 @@ async def list_available_skills(
     operator: Operator = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    """List system and agent skills available to the active agent."""
-    return load_available_skills(agent_id)
+    """List the effective skill menu for this agent (W6 — DB-resolved).
+
+    Published + assigned governed scopes plus the live agent-local scan,
+    precedence agent-local > global > built-in.
+    """
+    from ..skills.resolution import resolve_effective_skills
+
+    resolved = await resolve_effective_skills(db, agent_id)
+    return [
+        {
+            "name": s.name,
+            "description": s.description,
+            "source": s.scope,
+            "shadows": s.shadows,
+        }
+        for s in resolved
+    ]
 
 
 class CreateSkillRequest(BaseModel):
@@ -172,6 +214,32 @@ async def create_skill(
     skill_md = skill_path / "SKILL.md"
     content = req.content or f"# {skill_name}\n\nDescribe this skill here.\n"
     skill_md.write_text(content, encoding="utf-8")
+    # Index immediately — don't wait for the next startup reconcile. A row
+    # may already exist (archived then recreated on disk) — revive it
+    # rather than collide on the (name, scope, owner) uniqueness.
+    from sqlalchemy import select
+
+    from ..models.skill import Skill
+
+    row = await db.scalar(
+        select(Skill).where(
+            Skill.name == skill_name,
+            Skill.scope == "agent-local",
+            Skill.owner_agent_id == agent_id,
+        )
+    )
+    if row is None:
+        db.add(
+            Skill(
+                name=skill_name,
+                scope="agent-local",
+                owner_agent_id=agent_id,
+                status="published",
+            )
+        )
+    elif row.status != "published":
+        row.status = "published"
+    await db.commit()
     return {"name": skill_name, "path": str(skill_path)}
 
 
@@ -182,18 +250,50 @@ async def delete_skill(
     operator: Operator = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Delete a skill."""
+    """Delete a skill — dir + governed row (with store revisions).
+
+    For governed rows this routes through the pin-guarded purge so an
+    active run's pinned revision is never deleted underneath it.
+    """
+    from sqlalchemy import select
+
+    from ..models.skill import Skill
+    from ..skills import service
+
     skills_dir = _skills_dir(agent_id)
     skill_name = _safe_component(skill_name, "skill name")
     skill_path = _child_path(skills_dir, skill_name)
-    if not skill_path.exists():
+    row = await db.scalar(
+        select(Skill).where(
+            Skill.name == skill_name,
+            Skill.scope == "agent-local",
+            Skill.owner_agent_id == agent_id,
+        )
+    )
+    if not skill_path.exists() and row is None:
         raise HTTPException(status_code=404, detail="Skill not found")
-    if skill_path.is_dir():
-        import shutil
+    try:
+        if row is not None and skill_path.is_dir():
+            # Purge removes the live dir itself — keep purge's status
+            # precondition satisfied by archiving first when needed.
+            if row.status not in ("archived", "disabled"):
+                await service.set_status(db, row, "archived")
+            await service.purge(db, row)
+        elif skill_path.is_dir():
+            import shutil
 
-        shutil.rmtree(skill_path)
-    else:
-        skill_path.unlink()
+            shutil.rmtree(skill_path)
+        elif skill_path.exists():
+            skill_path.unlink()
+        else:
+            # Dir already gone but a governed row remains — purge the row
+            # (and its store revisions) so it can't keep resolving.
+            if row.status not in ("archived", "disabled"):
+                await service.set_status(db, row, "archived")
+            await service.purge(db, row)
+    except service.SkillError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    await db.commit()
     return {"ok": True}
 
 

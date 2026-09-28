@@ -15,6 +15,7 @@ import { ChatInputBar, type Attachment, type ChatInputBarHandle, type ContextIte
 import { SettingsOverlay } from "@/components/SettingsOverlay";
 import { useDesktopFileDrop } from "@/lib/desktopFileDrop";
 import { refreshNotifications } from "@/lib/notificationStore";
+import { useResizableWidth } from "@/lib/useResizableWidth";
 
 interface ChatMessage {
   id: string;
@@ -122,7 +123,11 @@ export function Conversation() {
   const [contextBreakdown, setContextBreakdown] = useState<{ system_prompt: number; conversation: number; tools: number } | undefined>(undefined);
   const [hasModelSelected, setHasModelSelected] = useState(false);
   const [previewSource, setPreviewSource] = useState<PreviewSource | null>(null);
-  const [previewWidth, setPreviewWidth] = useState(420);
+  const {
+    width: previewWidth,
+    dragging: previewDragging,
+    startResize: startPreviewResize,
+  } = useResizableWidth({ initial: 420, min: 300, max: 960, storageKey: "caberos.preview.width" });
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -1070,26 +1075,6 @@ export function Conversation() {
 
   const closePreview = useCallback(() => setPreviewSource(null), []);
 
-  const startPreviewResize = useCallback(
-    (e: React.MouseEvent) => {
-      e.preventDefault();
-      const startX = e.clientX;
-      const startWidth = previewWidth;
-      const onMove = (ev: MouseEvent) => {
-        // Panel hugs the right edge — dragging left grows it.
-        const next = startWidth + (startX - ev.clientX);
-        setPreviewWidth(Math.min(720, Math.max(300, next)));
-      };
-      const onUp = () => {
-        window.removeEventListener("mousemove", onMove);
-        window.removeEventListener("mouseup", onUp);
-      };
-      window.addEventListener("mousemove", onMove);
-      window.addEventListener("mouseup", onUp);
-    },
-    [previewWidth],
-  );
-
   // Returns success so the composer can keep the draft + tray on failure.
   const handleSend = async (
     text: string,
@@ -1668,7 +1653,7 @@ export function Conversation() {
         >
           <div
             onMouseDown={startPreviewResize}
-            className="absolute left-0 top-0 z-10 h-full w-1 cursor-col-resize transition-colors hover:bg-[var(--accent)]/40 max-md:hidden"
+            className={`absolute -left-1 top-0 z-10 h-full w-2 cursor-col-resize transition-colors hover:bg-[var(--accent)]/40 max-md:hidden ${previewDragging ? "bg-[var(--accent)]/40" : ""}`}
             role="separator"
             aria-orientation="vertical"
             aria-label="Resize preview"
@@ -1929,7 +1914,7 @@ function MessageRow({
           )}
         </div>
         <div
-          className="border-l-[3px] pl-4 text-[14px] leading-[1.65]"
+          className="markdown-body border-l-[3px] pl-4 text-[14px] leading-[1.65]"
           style={{ borderColor: "#7C3AED" }}
         >
           <Markdown>{message.content}</Markdown>

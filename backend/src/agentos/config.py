@@ -48,6 +48,11 @@ class Settings(BaseSettings):
 
     # System-level skills directory (shared across all agents)
     skills_dir: Path = Path("../skills")  # relative to backend cwd → repo root/skills
+    # Operator-managed global/published skill storage (W6). Built-ins stay in
+    # skills_dir; user-managed revisions are immutable dirs under this root.
+    skills_store_root: Path = Path("data/skills-store")
+    # Operator-owned import drafts (no host agent) — per-draft subdirs.
+    skills_drafts_root: Path = Path("data/skills-drafts")
 
     # Server
     control_plane_host: str = "127.0.0.1"

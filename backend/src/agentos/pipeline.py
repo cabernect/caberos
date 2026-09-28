@@ -25,6 +25,7 @@ from .models.contact import Contact
 from .models.run import Message, Run
 from .models.session import Session
 from .sandbox.workspace import WorkspaceManager
+from .skills.resolution import resolve_effective_skills, skill_pins
 from .syscall.lock import session_locks
 from .syscall.mediator import SyscallHandler
 
@@ -378,6 +379,14 @@ class Pipeline:
                         "Add a provider in Settings → Providers, then assign a model."
                     )
 
+                # Resolve the effective skill set once — the manifest pins
+                # and the prompt menu must describe the same set (W6).
+                resolved_skills: list = []
+                try:
+                    resolved_skills = await resolve_effective_skills(self.db, message.bot_id)
+                except Exception:
+                    logger.exception("Skill resolution failed for run %s", run.id)
+
                 # Capture the Execution Manifest — the immutable provenance
                 # record of which revisions this run uses (v0.2 foundations).
                 from .manifest import capture_execution_manifest
@@ -388,7 +397,7 @@ class Pipeline:
                         run_id=run.id,
                         agent_id=message.bot_id,
                         agent_config=agent_config,
-                        skill_revision_ids=[message.skill] if message.skill else None,
+                        skill_revision_ids=skill_pins(resolved_skills),
                     )
                 except Exception:
                     logger.exception("Execution manifest capture failed for run %s", run.id)
@@ -581,6 +590,7 @@ class Pipeline:
                     event_emitter=_persisting_emitter,
                     attachments=attachment_context,
                     skill=message.skill,
+                    resolved_skills=resolved_skills,
                 )
 
                 # Store the assistant's response

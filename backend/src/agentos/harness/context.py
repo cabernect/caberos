@@ -69,6 +69,9 @@ def assemble_system_prompt(
     supports_vision: bool | None = None,
     enabled_caps: list[str] | None = None,
     browser_profiles: list[dict[str, Any]] | None = None,
+    resolved_skills: list[Any] | None = None,
+    forced_skill_rendered: dict[str, Any] | None = None,
+    builder_draft: dict[str, Any] | None = None,
 ) -> str:
     """Build the system prompt from base prompt + agent identity (D35 order).
 
@@ -111,7 +114,14 @@ def assemble_system_prompt(
     # 6. Skills (D11b — menu only, not auto-injected)
     # The agent sees available skill names + descriptions, then calls
     # skills_load(name) to get the full content when it decides to use one.
-    skill_menu = _load_skill_menu(agent_config)
+    # W6: the pipeline passes DB-resolved skills (published + assigned);
+    # the legacy fs scan is the fallback for callers without a db.
+    if resolved_skills is not None:
+        from ..skills.resolution import format_menu
+
+        skill_menu = format_menu(resolved_skills)
+    else:
+        skill_menu = _load_skill_menu(agent_config)
     if skill_menu:
         parts.append(f"## Available Skills\n\n{skill_menu}")
 
@@ -166,15 +176,33 @@ def assemble_system_prompt(
         snippet_lines = [f"- [{s['key']}] {s['value']}" for s in recall_snippets]
         parts.append("## Relevant Past Context\n\n" + "\n".join(snippet_lines))
 
-    # 11. Forced skill (slash command — /skillname message)
+    # 11. Forced skill (slash command — /skillname message, or builder mode)
     # When the user types /skillname, the skill's full body is injected into
     # context so the agent has the instructions without calling skills_load.
-    if forced_skill:
+    # W6: the caller may pass a pre-rendered skill (resolved + pin-aware) —
+    # otherwise fall back to the legacy sync loader.
+    rendered = forced_skill_rendered
+    if forced_skill and rendered is None:
         from ..skills.loader import load_skill
 
-        skill = load_skill(agent_config.id, forced_skill)
-        if skill:
-            parts.append(f"## Active Skill: {skill['name']}\n\n{skill['body']}")
+        rendered = load_skill(agent_config.id, forced_skill)
+    if rendered:
+        parts.append(f"## Active Skill: {rendered['name']}\n\n{rendered['body']}")
+
+    # Builder-mode sessions: the draft row links the session; tell the agent
+    # where the draft lives and what the boundaries are.
+    if builder_draft:
+        parts.append(
+            "## Skill Builder\n\n"
+            f"This session is drafting the skill `{builder_draft['name']}`. "
+            f"Write and edit its files under `skill-drafts/{builder_draft['name']}/` "
+            "in your workspace — that directory is the only place draft content "
+            "lives, and it is never loaded as a skill until the operator publishes "
+            "it. Interview the operator per the loaded skill-creator guidance, "
+            "keep the draft updated as decisions are made, and tell them to "
+            "review and publish it from the Skills page when it's ready. You "
+            "cannot publish — no such capability exists."
+        )
 
     # 12. Model capabilities — tell the agent what its model can/can't do
     if supports_vision is not None:

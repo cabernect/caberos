@@ -170,6 +170,14 @@ async def lifespan(app: FastAPI):
             )
         await db.commit()
 
+    # Sync skills on disk into Skill/SkillRevision rows (W6): seeds built-ins,
+    # migrates legacy imports out of skills/, indexes agent-local workspace dirs.
+    from .skills.reconcile import reconcile_skills
+
+    async with async_session_factory() as db:
+        await retry_locked_transaction(lambda: reconcile_skills(db), db, "startup_reconcile_skills")
+        await db.commit()
+
     # Clean up expired auth sessions from previous runs
     from .auth import cleanup_expired_sessions
 

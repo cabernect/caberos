@@ -311,10 +311,10 @@ function HeartbeatCard({
 
   return (
     <div
-      className="rounded-[8px] border p-4"
+      className="rounded-xl p-4"
       style={{
-        borderColor: hb.enabled ? "var(--accent)" : "var(--border)",
-        background: "var(--white)",
+        border: hb.enabled ? "1px solid var(--accent)" : "1px solid var(--border-soft)",
+        background: "var(--sidebar)",
       }}
     >
       {/* Header row */}
@@ -323,7 +323,7 @@ function HeartbeatCard({
           onClick={onToggle}
           className="relative h-5 w-9 rounded-full transition"
           style={{
-            background: hb.enabled ? "#6A8216" : "#E0DFDC",
+            background: hb.enabled ? "var(--accent)" : "var(--ink-3)",
             cursor: "pointer",
             border: "none",
           }}

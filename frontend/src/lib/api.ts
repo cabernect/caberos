@@ -30,7 +30,10 @@ import type {
   SchedulerAlert,
   SessionInfo,
   Skill,
+  SkillDetail,
+  SkillImportResult,
   SkillInfo,
+  EffectiveSkill,
   SpendSummary,
   KnowledgeDocument,
   KnowledgeResult,
@@ -45,6 +48,8 @@ export interface PreviewSource {
   path?: string;
   artifactId?: string;
   revisionId?: string;
+  /** Skill revision number (skill preview endpoints only). */
+  revision?: number;
 }
 
 function sourceQuery(opts: PreviewSource): string {
@@ -52,6 +57,7 @@ function sourceQuery(opts: PreviewSource): string {
   if (opts.path) params.set("path", opts.path);
   if (opts.artifactId) params.set("artifact_id", opts.artifactId);
   if (opts.revisionId) params.set("revision_id", opts.revisionId);
+  if (opts.revision != null) params.set("revision", String(opts.revision));
   return params.toString();
 }
 
@@ -68,13 +74,54 @@ export interface PreviewBackend {
   pdfPage(page: number, source: PreviewSource): Promise<string>;
 }
 
+export class ApiError extends Error {
+  readonly status: number;
+  readonly code?: string;
+  constructor(status: number, message: string, code?: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
+/**
+ * Read a failed response and produce a clean error message — extracts
+ * FastAPI `detail` (string, {message, errors}, {code, message}, or the
+ * 422 validation array) instead of surfacing raw JSON to the UI.
+ */
+async function apiError(resp: Response): Promise<ApiError> {
+  const text = await resp.text().catch(() => "");
+  let code: string | undefined;
+  let message = `${resp.status}: ${text || resp.statusText}`;
+  try {
+    const detail = JSON.parse(text)?.detail;
+    if (typeof detail === "string") {
+      message = detail;
+    } else if (Array.isArray(detail)) {
+      message = detail
+        .map((d) => (typeof d?.msg === "string" ? d.msg : JSON.stringify(d)))
+        .join("; ");
+    } else if (detail && typeof detail === "object") {
+      if (typeof detail.code === "string") code = detail.code;
+      const parts: string[] = [];
+      if (typeof detail.message === "string") parts.push(detail.message);
+      if (Array.isArray(detail.errors)) parts.push(...detail.errors.map(String));
+      if (parts.length) message = parts.join(": ");
+    }
+  } catch {
+    /* non-JSON error body — keep raw */
+  }
+  return new ApiError(resp.status, message, code);
+}
+
 async function fetchBlob(path: string): Promise<string> {
   const base = await baseReady;
   const resp = await fetch(`${base}${path}`, {
     credentials: "include",
     headers: authHeaders(),
   });
-  if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text()}`);
+  if (!resp.ok) throw await apiError(resp);
   return URL.createObjectURL(await resp.blob());
 }
 
@@ -131,10 +178,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     },
     ...options,
   });
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => "");
-    throw new Error(`${resp.status}: ${text || resp.statusText}`);
-  }
+  if (!resp.ok) throw await apiError(resp);
   if (resp.status === 204) return undefined as T;
   return resp.json() as Promise<T>;
 }
@@ -376,7 +420,7 @@ export const api = {
       headers: { ...authHeaders() },
       body: formData,
     });
-    if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text()}`);
+    if (!resp.ok) throw await apiError(resp);
     return resp.json();
   },
   previewUrl: (id: string, url: string) =>
@@ -399,8 +443,7 @@ export const api = {
       headers: authHeaders(),
       body: form,
     });
-    if (!response.ok)
-      throw new Error(`${response.status}: ${await response.text()}`);
+    if (!response.ok) throw await apiError(response);
     return response.json() as Promise<KnowledgeDocument>;
   },
   searchKnowledge: (query: string, limit = 5) =>
@@ -429,8 +472,7 @@ export const api = {
         body: form,
       },
     );
-    if (!response.ok)
-      throw new Error(`${response.status}: ${await response.text()}`);
+    if (!response.ok) throw await apiError(response);
     return response.json() as Promise<KnowledgeDocument>;
   },
   searchKnowledgeScope: (scope: string, query: string, limit = 5) =>
@@ -509,10 +551,7 @@ export const api = {
         signal,
       },
     );
-    if (!resp.ok) {
-      const errorText = await resp.text().catch(() => "");
-      throw new Error(`${resp.status}: ${errorText || resp.statusText}`);
-    }
+    if (!resp.ok) throw await apiError(resp);
     if (!resp.body) return;
 
     const reader = resp.body.getReader();
@@ -624,8 +663,7 @@ export const api = {
       headers: authHeaders(),
       body: form,
     });
-    if (!response.ok)
-      throw new Error(`${response.status}: ${await response.text()}`);
+    if (!response.ok) throw await apiError(response);
     return response.json() as Promise<{ status: string }>;
   },
   deleteAllData: () =>
@@ -700,12 +738,94 @@ export const api = {
       body: JSON.stringify({ response }),
     }),
 
-  // Skills management (system-level)
-  listSkills: () =>
-    request<{ skills: SkillInfo[]; count: number }>("/api/skills"),
-  importSkillZip: async (file: File) => {
+  // Skills Studio (W6) — scoped, revisioned, DB-backed library.
+  listSkills: (view = "all", agentId?: string, q?: string) => {
+    const params = new URLSearchParams({ view });
+    if (agentId) params.set("agent_id", agentId);
+    if (q) params.set("q", q);
+    return request<{ skills: SkillInfo[]; count: number }>(
+      `/api/skills?${params.toString()}`,
+    );
+  },
+  effectiveSkills: (agentId: string) =>
+    request<{ agent_id: string; skills: EffectiveSkill[] }>(
+      `/api/skills/effective?agent_id=${agentId}`,
+    ),
+  skillDetail: (id: string) => request<SkillDetail>(`/api/skills/${id}`),
+  skillFiles: (id: string, revision?: number) =>
+    request<{ files: { path: string; size: number; mime: string }[] }>(
+      `/api/skills/${id}/files${revision != null ? `?revision=${revision}` : ""}`,
+    ),
+  validateSkill: (id: string) =>
+    request<{ errors: string[]; warnings: string[]; stats: Record<string, number> }>(
+      `/api/skills/${id}/validate`,
+    ),
+  createSkillDraft: (body: {
+    name: string;
+    agent_id?: string;
+    launch_session?: boolean;
+  }) =>
+    request<{ id: string; name: string; status: string; session_id: string | null }>(
+      "/api/skills/drafts",
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  deleteSkill: (id: string) =>
+    request<{ deleted: boolean; id: string }>(`/api/skills/${id}`, {
+      method: "DELETE",
+    }),
+  publishSkill: (
+    id: string,
+    body: {
+      scope: "global" | "agent-local";
+      owner_agent_id?: string;
+      availability?: "all" | "selected";
+      agent_ids?: string[];
+      change_summary?: string;
+    },
+  ) =>
+    request<{ published: boolean; revision: number; id: string }>(
+      `/api/skills/${id}/publish`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  promoteSkill: (
+    id: string,
+    body: {
+      availability?: "all" | "selected";
+      agent_ids?: string[];
+      change_summary?: string;
+    } = {},
+  ) =>
+    request<{ promoted: boolean; revision: number }>(
+      `/api/skills/${id}/promote`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  duplicateSkill: (id: string, body: { owner_agent_id?: string; new_name?: string }) =>
+    request<{ id: string; name: string; status: string }>(
+      `/api/skills/${id}/duplicate`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  restoreSkill: (id: string, revision_number: number) =>
+    request<{ restored: boolean; revision: number }>(
+      `/api/skills/${id}/restore`,
+      { method: "POST", body: JSON.stringify({ revision_number }) },
+    ),
+  setSkillStatus: (id: string, status: "published" | "disabled" | "archived") =>
+    request<{ id: string; status: string }>(`/api/skills/${id}/status`, {
+      method: "POST",
+      body: JSON.stringify({ status }),
+    }),
+  exportSkill: (id: string, revision?: number): Promise<string> =>
+    fetchBlob(
+      `/api/skills/${id}/export${revision != null ? `?revision=${revision}` : ""}`,
+    ),
+  importSkillZip: async (
+    file: File,
+    opts: { owner_agent_id?: string; paths?: string[] } = {},
+  ): Promise<SkillImportResult> => {
     const formData = new FormData();
     formData.append("file", file);
+    if (opts.owner_agent_id) formData.append("owner_agent_id", opts.owner_agent_id);
+    if (opts.paths) formData.append("paths", JSON.stringify(opts.paths));
     const base = await baseReady;
     return fetch(`${base}/api/skills/import`, {
       method: "POST",
@@ -713,42 +833,33 @@ export const api = {
       headers: { ...authHeaders() },
       body: formData,
     }).then(async (r) => {
-      if (!r.ok) {
-        const text = await r.text().catch(() => "");
-        throw new Error(`${r.status}: ${text || r.statusText}`);
-      }
+      if (!r.ok) throw await apiError(r);
       return r.json();
     });
   },
-  deleteSkill: (name: string) =>
-    request<{ deleted: boolean; name: string }>(`/api/skills/${name}`, {
-      method: "DELETE",
+  importSkillUrl: (body: {
+    url: string;
+    owner_agent_id?: string;
+    paths?: string[];
+  }) =>
+    request<SkillImportResult>("/api/skills/import-url", {
+      method: "POST",
+      body: JSON.stringify(body),
     }),
-  promoteSkill: (name: string, agentId: string) =>
-    request<{ promoted: boolean; name: string }>(
-      `/api/skills/${name}/promote?agent_id=${agentId}`,
-      {
-        method: "POST",
-      },
-    ),
 
-  // Skill resource previews (W3) — same payload shape as workspace previews,
-  // rooted at the skill dir instead of an agent workspace.
-  listSkillResources: (name: string) =>
-    request<{
-      skill: string;
-      resources: { path: string; size: number; mime: string }[];
-    }>(`/api/skills/${name}/resources`),
-  previewSkillResource: (name: string, opts: PreviewSource = {}) =>
-    request<PreviewPayload>(`/api/skills/${name}/preview?${sourceQuery(opts)}`),
-  fetchSkillBlob: (name: string, opts: PreviewSource = {}): Promise<string> =>
-    fetchBlob(`/api/skills/${name}/raw?${sourceQuery(opts)}`),
+  // Skill resource previews — same payload shape as workspace previews,
+  // rooted at the skill's revision/draft/live dir. `revision` selects a
+  // specific SkillRevision's bytes.
+  previewSkillResource: (id: string, opts: PreviewSource = {}) =>
+    request<PreviewPayload>(`/api/skills/${id}/preview?${sourceQuery(opts)}`),
+  fetchSkillBlob: (id: string, opts: PreviewSource = {}): Promise<string> =>
+    fetchBlob(`/api/skills/${id}/raw?${sourceQuery(opts)}`),
   fetchSkillPdfPage: (
-    name: string,
+    id: string,
     page: number,
     opts: PreviewSource = {},
   ): Promise<string> =>
-    fetchBlob(`/api/skills/${name}/pdf-page?page=${page}&${sourceQuery(opts)}`),
+    fetchBlob(`/api/skills/${id}/pdf-page?page=${page}&${sourceQuery(opts)}`),
 
   // Scheduler — heartbeat
   listHeartbeats: () => request<HeartbeatStatus[]>("/api/scheduler/heartbeat"),
@@ -1055,10 +1166,12 @@ export function workspaceBackend(agentId: string): PreviewBackend {
   };
 }
 
-export function skillBackend(skillName: string): PreviewBackend {
+export function skillBackend(skillId: string, revision?: number): PreviewBackend {
   return {
-    preview: (source) => api.previewSkillResource(skillName, source),
-    blob: (source) => api.fetchSkillBlob(skillName, source),
-    pdfPage: (page, source) => api.fetchSkillPdfPage(skillName, page, source),
+    preview: (source) =>
+      api.previewSkillResource(skillId, { ...source, revision }),
+    blob: (source) => api.fetchSkillBlob(skillId, { ...source, revision }),
+    pdfPage: (page, source) =>
+      api.fetchSkillPdfPage(skillId, page, { ...source, revision }),
   };
 }

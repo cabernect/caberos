@@ -13,6 +13,8 @@
   --surface: #f5f5f3;
   --sidebar: #efefed;
   --border: #e0dfdc;
+  /* softer variant of --border for card surfaces — follows theme via var() */
+  --border-soft: color-mix(in srgb, var(--border) 55%, transparent);
   --ink: #111110;
   --ink-2: #6b6b68;
   --ink-3: #9b9b97;
@@ -121,23 +123,49 @@
   --chart-3: var(--success);
   --chart-4: var(--danger);
   --chart-5: var(--ink-3);
+
+  /* ring-offset-* defaults to #fff — would halo white in dark mode */
+  --tw-ring-offset-color: var(--surface);
 }
 
 :root[data-theme="dark"]
   [style*="background: var(--ink)"][style*="color: var(--white)"] {
   background: var(--accent) !important;
   border-color: var(--accent) !important;
+  color: var(--accent-foreground) !important;
 }
 
 :root[data-theme="dark"] [style*="background: var(--white)"] {
   background: var(--card) !important;
 }
 
+/* .text-white only ever sits on --accent/--danger surfaces (both
+   light-tinted in dark) — remap to the dark accent foreground */
+:root[data-theme="dark"] .text-white {
+  color: var(--accent-foreground) !important;
+}
+
 :root[data-theme="dark"] .bg-white {
   background-color: var(--card) !important;
 }
 
-:root[data-theme="dark"] [style*="color: var(--white)"] {
+/* Tailwind arbitrary-value classes can't be seen by the [style*=] rules */
+:root[data-theme="dark"] .bg-\[var\(--white\)\] {
+  background-color: var(--card) !important;
+}
+:root[data-theme="dark"] .hover\:bg-\[var\(--white\)\]:hover {
+  background-color: var(--hover) !important;
+}
+:root[data-theme="dark"] .bg-\[var\(--accent\)\] {
+  color: var(--accent-foreground);
+}
+
+/* inline white text — covers every serialization React/browser emits
+   ("white", "#fff", "rgb(255, 255, 255)") — only used on tinted bgs */
+:root[data-theme="dark"] [style*="color: var(--white)"],
+:root[data-theme="dark"] [style*="color: #fff"],
+:root[data-theme="dark"] [style*="color: white"],
+:root[data-theme="dark"] [style*="color: rgb(255, 255, 255)"] {
   color: var(--surface) !important;
 }
 
@@ -342,6 +370,14 @@
   padding: 0.75em 1em;
   border-radius: 6px;
   overflow-x: auto;
+  margin: 0.75em 0;
+}
+/* CodeBlock wraps pre in .group — carry the spacing on the wrapper so
+   the group box hugs the block (keeps the sticky copy button anchored) */
+.markdown-body .group > pre {
+  margin: 0;
+}
+.markdown-body .group:has(> pre) {
   margin: 0.75em 0;
 }
 .markdown-body pre code {

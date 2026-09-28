@@ -8,19 +8,33 @@ needed because system-level skills live outside the workspace, so read_file
 (workspace-sandboxed) can't access them. The path is scoped to the skill
 directory — it cannot escape.
 
+Resolution is DB-backed (W6): governed scopes come from published/assigned
+Skill rows, agent-local from the live workspace scan. Governed skills are
+served from the run's pinned revision — a mid-run publish cannot wobble a
+live run.
+
 These are called by the syscall mediator with extra_kwargs:
 - agent_id: str
+- db: AsyncSession
+- run_id: str | None
 """
 
 from typing import Any
 
-from ...skills.loader import list_skills, load_skill
+from ...skills.loader import render_skill_dir
+from ...skills.resolution import pinned_dir, resolve_effective_skills
+
+
+async def _resolve(db: Any, agent_id: str, name: str):
+    """Find `name` in the agent's effective set."""
+    resolved = await resolve_effective_skills(db, agent_id)
+    return next((s for s in resolved if s.name == name), None)
 
 
 async def skills_list(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     """List available skills (name + description only)."""
-    agent_id = kwargs["agent_id"]
-    skills = list_skills(agent_id)
+    resolved = await resolve_effective_skills(kwargs["db"], kwargs["agent_id"])
+    skills = [{"name": s.name, "description": s.description, "source": s.scope} for s in resolved]
     return {"skills": skills, "count": len(skills)}
 
 
@@ -30,12 +44,15 @@ async def skills_load(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     After loading, call skills_read_resource to read any resource files
     the skill body references (templates, checklists, data files).
     """
-    agent_id = kwargs["agent_id"]
-    name = args["name"]
+    db = kwargs["db"]
+    resolved = await _resolve(db, kwargs["agent_id"], args["name"])
+    if resolved is None:
+        return {"error": f"Skill '{args['name']}' not found"}
 
-    skill = load_skill(agent_id, name)
+    path = await pinned_dir(db, resolved, kwargs.get("run_id"))
+    skill = render_skill_dir(path, resolved.scope)
     if skill is None:
-        return {"error": f"Skill '{name}' not found"}
+        return {"error": f"Skill '{args['name']}' not found"}
     return skill
 
 
@@ -50,32 +67,25 @@ async def skills_read_resource(args: dict[str, Any], **kwargs: Any) -> dict[str,
         skill: The skill name (from skills_list)
         resource: The resource filename (from skills_load resources listing)
     """
-    agent_id = kwargs["agent_id"]
-    skill_name = args["skill"]
-    resource_name = args["resource"]
+    db = kwargs["db"]
+    resolved = await _resolve(db, kwargs["agent_id"], args["skill"])
+    if resolved is None:
+        return {"error": f"Skill '{args['skill']}' not found"}
 
-    from ...skills.loader import _scan_all_skills
-
-    skills = _scan_all_skills(agent_id)
-    skill_obj = next((s for s in skills if s.name == skill_name), None)
-    if skill_obj is None:
-        return {"error": f"Skill '{skill_name}' not found"}
-
-    # Validate the resource path — must stay within the skill directory
-    resource_path = (skill_obj.path / resource_name).resolve()
-    skill_dir = skill_obj.path.resolve()
+    skill_dir = (await pinned_dir(db, resolved, kwargs.get("run_id"))).resolve()
+    resource_path = (skill_dir / args["resource"]).resolve()
     try:
         resource_path.relative_to(skill_dir)
     except ValueError:
         return {"error": "Resource path escapes skill directory"}
 
     if not resource_path.is_file():
-        return {"error": f"Resource not found: {resource_name}"}
+        return {"error": f"Resource not found: {args['resource']}"}
 
     content = resource_path.read_text(encoding="utf-8", errors="replace")
     return {
-        "skill": skill_name,
-        "resource": resource_name,
+        "skill": args["skill"],
+        "resource": args["resource"],
         "content": content,
         "size": resource_path.stat().st_size,
     }

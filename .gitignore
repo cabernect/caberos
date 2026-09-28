@@ -52,3 +52,10 @@ backend/build/work/
 
 # Devin CLI skills (local agent tooling, not part of the project)
 .devin/
+
+# Local agent tooling installs (skills-lock.json pairs with .agents/)
+.agents/
+skills-lock.json
+
+# HyperFrames project output (intro videos etc.) — local media work, not repo content
+videos/

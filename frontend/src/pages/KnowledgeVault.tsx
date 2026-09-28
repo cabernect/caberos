@@ -66,15 +66,15 @@ function KnowledgeOverview() {
         <div className="mx-auto max-w-6xl">
           {error && <p className="mb-4 text-sm text-[var(--danger)]">{error}</p>}
           {loading ? (
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(230px,1fr))] gap-4">
               {[0, 1, 2].map((item) => (
-                <div key={item} className="h-[174px] animate-pulse rounded-lg border" style={{ borderColor: "var(--border)", background: "var(--white)" }} />
+                <div key={item} className="h-[174px] animate-pulse rounded-xl" style={{ borderColor: "var(--border)", background: "var(--white)" }} />
               ))}
             </div>
           ) : scopes.length === 0 ? (
             <EmptyVaultState />
           ) : (
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(230px,1fr))] gap-4">
               {scopes.map((scope) => (
                 <KnowledgeScopeCard
                   key={scope.id}
@@ -100,8 +100,8 @@ export function KnowledgeScopeCard({ scope, onClick }: { scope: KnowledgeScope; 
       tabIndex={0}
       onClick={onClick}
       onKeyDown={(event) => event.key === "Enter" && onClick()}
-      className="group cursor-pointer rounded-[8px] border p-4 transition hover:border-[var(--accent)]"
-      style={{ borderColor: "var(--border)", background: "var(--white)" }}
+      className="group cursor-pointer rounded-xl p-4 transition-shadow hover:shadow-md"
+      style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
     >
       <div className="flex items-center justify-between gap-3">
         <h2 className="truncate text-[15px] font-semibold text-[var(--ink)]">{scope.name}</h2>
@@ -206,7 +206,7 @@ function KnowledgeScopeDetail({ scope }: { scope: string }) {
       />
       <main className="mx-auto w-full max-w-5xl space-y-5 px-8 py-7">
         {error && <p className="text-sm text-[var(--danger)]">{error}</p>}
-        <section className="rounded-lg border p-5" style={{ borderColor: "var(--border)", background: "var(--sidebar)" }}>
+        <section className="rounded-xl p-5" style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}>
           <div className="flex items-center justify-between gap-3">
             <h2 className="text-sm font-semibold text-[var(--ink)]">Upload documents</h2>
             {uploading && <p role="status" className="text-xs text-[var(--accent)]">Uploading and indexing…</p>}
@@ -253,7 +253,7 @@ function KnowledgeScopeDetail({ scope }: { scope: string }) {
             }}
           />
         </section>
-        <section className="overflow-hidden rounded-lg border" style={{ borderColor: "var(--border)", background: "var(--sidebar)" }}>
+        <section className="overflow-hidden rounded-xl" style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}>
           <div className="border-b px-5 py-4" style={{ borderColor: "var(--border)" }}>
             <h2 className="text-sm font-semibold text-[var(--ink)]">Indexed documents</h2>
           </div>
@@ -262,7 +262,7 @@ function KnowledgeScopeDetail({ scope }: { scope: string }) {
               <thead className="border-b text-[11px] uppercase tracking-wide text-[var(--ink-3)]" style={{ borderColor: "var(--border)" }}>
                 <tr><th className="px-5 py-3 font-medium">Document</th><th className="px-5 py-3 font-medium">Status</th><th className="px-5 py-3 text-right font-medium">Actions</th></tr>
               </thead>
-              <tbody className="divide-y" style={{ borderColor: "var(--border)" }}>
+              <tbody className="divide-y divide-[var(--border)]">
                 {documents.map((document) => {
                   const structure = {
                     sections: document.structure?.sections ?? EMPTY_STRUCTURE.sections,
@@ -283,7 +283,7 @@ function KnowledgeScopeDetail({ scope }: { scope: string }) {
             </table>
           )}
         </section>
-        <section className="rounded-lg border" style={{ borderColor: "var(--border)", background: "var(--sidebar)" }}><div className="border-b px-5 py-4" style={{ borderColor: "var(--border)" }}><h2 className="text-sm font-semibold text-[var(--ink)]">Retrieval preview</h2><div className="mt-3 flex gap-3"><input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => event.key === "Enter" && void search()} placeholder="Search this scope…" className="min-w-0 flex-1 rounded-md border bg-transparent px-3 py-2 text-sm outline-none" style={{ borderColor: "var(--border)", color: "var(--ink)" }} /><button type="button" onClick={() => void search()} disabled={working || !query.trim()} className="flex cursor-pointer items-center gap-2 rounded-md border px-4 py-2 text-sm disabled:opacity-50" style={{ borderColor: "var(--border)", color: "var(--ink-2)" }}><Search className="h-4 w-4" /> Search</button></div></div><div className="space-y-3 p-5">{results.length === 0 ? <p className="text-sm text-[var(--ink-3)]">Search results will appear here.</p> : results.map((result) => <article key={result.chunk_id} className="rounded-md border p-3" style={{ borderColor: "var(--border)" }}><p className="text-sm leading-6 text-[var(--ink)]">{result.text}</p><p className="mt-2 text-xs text-[var(--ink-3)]">{result.source_path}{result.page_number ? ` · page ${result.page_number}` : ""}{result.sheet_name ? ` · ${result.sheet_name}` : ""}</p></article>)}</div></section>
+        <section className="rounded-xl" style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}><div className="border-b px-5 py-4" style={{ borderColor: "var(--border)" }}><h2 className="text-sm font-semibold text-[var(--ink)]">Retrieval preview</h2><div className="mt-3 flex gap-3"><input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => event.key === "Enter" && void search()} placeholder="Search this scope…" className="min-w-0 flex-1 rounded-md border bg-transparent px-3 py-2 text-sm outline-none" style={{ borderColor: "var(--border)", color: "var(--ink)" }} /><button type="button" onClick={() => void search()} disabled={working || !query.trim()} className="flex cursor-pointer items-center gap-2 rounded-md border px-4 py-2 text-sm disabled:opacity-50" style={{ borderColor: "var(--border)", color: "var(--ink-2)" }}><Search className="h-4 w-4" /> Search</button></div></div><div className="space-y-3 p-5">{results.length === 0 ? <p className="text-sm text-[var(--ink-3)]">Search results will appear here.</p> : results.map((result) => <article key={result.chunk_id} className="rounded-md border p-3" style={{ borderColor: "var(--border)" }}><p className="text-sm leading-6 text-[var(--ink)]">{result.text}</p><p className="mt-2 text-xs text-[var(--ink-3)]">{result.source_path}{result.page_number ? ` · page ${result.page_number}` : ""}{result.sheet_name ? ` · ${result.sheet_name}` : ""}</p></article>)}</div></section>
       </main>
     </Shell>
   );

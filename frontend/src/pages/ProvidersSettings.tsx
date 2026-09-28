@@ -467,8 +467,8 @@ function GeneralTab({
           Operator
         </h2>
         <div
-          className="rounded-lg border p-5"
-          style={{ borderColor: "var(--border)", background: "var(--white)" }}
+          className="rounded-xl p-5"
+          style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
         >
           {loading ? (
             <p className="text-[13px] text-[var(--ink-2)]">Loading…</p>
@@ -505,8 +505,8 @@ function GeneralTab({
           Appearance
         </h2>
         <div
-          className="rounded-lg border p-5"
-          style={{ borderColor: "var(--border)", background: "var(--card)" }}
+          className="rounded-xl p-5"
+          style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
         >
           <div className="flex items-center justify-between gap-4">
             <div>
@@ -527,8 +527,8 @@ function GeneralTab({
           Search Provider
         </h2>
         <div
-          className="rounded-lg border p-5"
-          style={{ borderColor: "var(--border)", background: "var(--white)" }}
+          className="rounded-xl p-5"
+          style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
         >
           <div className="flex items-center justify-between">
             <div>
@@ -763,9 +763,9 @@ function BrowserTab() {
         <div
           className="rounded-lg border px-4 py-3 text-[12px]"
           style={{
-            borderColor: "#dc2626",
-            background: "#fef2f2",
-            color: "#b91c1c",
+            borderColor: "var(--danger)",
+            background: "color-mix(in srgb, var(--danger) 10%, transparent)",
+            color: "var(--danger)",
           }}
         >
           {error}
@@ -790,8 +790,8 @@ function BrowserTab() {
           Agent browser
         </h2>
         <div
-          className="rounded-lg border p-5 space-y-3"
-          style={{ borderColor: "var(--border)", background: "var(--white)" }}
+          className="rounded-xl p-5 space-y-3"
+          style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
         >
           <div className="flex items-center justify-between">
             <div>
@@ -818,8 +818,8 @@ function BrowserTab() {
               className="rounded-full px-3 py-1 text-[11px] font-medium shrink-0"
               style={
                 available
-                  ? { background: "#dcfce7", color: "#166534" }
-                  : { background: "#fef3c7", color: "#92400e" }
+                  ? { background: "color-mix(in srgb, var(--success) 15%, transparent)", color: "var(--success)" }
+                  : { background: "color-mix(in srgb, var(--warning) 15%, transparent)", color: "var(--warning)" }
               }
             >
               {available ? "Ready" : "Not installed"}
@@ -997,9 +997,9 @@ function BrowserTab() {
               <p
                 className="mt-2 rounded-md border px-3 py-2 text-[12px]"
                 style={{
-                  borderColor: "#f59e0b",
-                  background: "#fffbeb",
-                  color: "#92400e",
+                  borderColor: "var(--warning)",
+                  background: "color-mix(in srgb, var(--warning) 10%, transparent)",
+                  color: "var(--warning)",
                 }}
               >
                 Set by <code>AGENTOS_BROWSER_BINARY</code> in your environment
@@ -1027,8 +1027,8 @@ function BrowserTab() {
           Saved logins
         </h2>
         <div
-          className="rounded-lg border p-5 space-y-4"
-          style={{ borderColor: "var(--border)", background: "var(--white)" }}
+          className="rounded-xl p-5 space-y-4"
+          style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
         >
           <p className="text-[12px] text-[var(--ink-3)]">
             Let an agent stay logged into websites between runs — you log in
@@ -1407,8 +1407,8 @@ function MigrationTab() {
           Data Migration
         </h2>
         <div
-          className="rounded-lg border p-5"
-          style={{ borderColor: "var(--border)", background: "var(--white)" }}
+          className="rounded-xl p-5"
+          style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
         >
           <p className="text-[13px] text-[var(--ink-2)]">
             Export all CaberOS data to a ZIP archive — including agents,
@@ -1442,8 +1442,8 @@ function MigrationTab() {
           Danger zone
         </h2>
         <div
-          className="rounded-lg border p-5"
-          style={{ borderColor: "var(--danger)", background: "var(--white)" }}
+          className="rounded-xl p-5"
+          style={{ border: "1px solid var(--danger)", background: "var(--sidebar)" }}
         >
           <p className="text-[13px] text-[var(--ink-2)]">
             Delete all local CaberOS data and return to the initial setup state.
@@ -1470,8 +1470,8 @@ function MigrationTab() {
           Import Archive
         </h2>
         <div
-          className="rounded-lg border p-5"
-          style={{ borderColor: "var(--border)", background: "var(--white)" }}
+          className="rounded-xl p-5"
+          style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
         >
           {/* Step 1: Pick file (or show selected file) */}
           {!selectedFile && !result && (
@@ -1854,8 +1854,8 @@ function MigrationTab() {
           What's Included
         </h2>
         <div
-          className="rounded-lg border p-5"
-          style={{ borderColor: "var(--border)", background: "var(--white)" }}
+          className="rounded-xl p-5"
+          style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
         >
           <ul className="space-y-2 text-[13px] text-[var(--ink-2)]">
             <li className="flex items-center gap-2">
@@ -2098,8 +2098,8 @@ function PresetProviderForm({
         <p className="text-[12px] text-[var(--ink-3)]">{preset.description}</p>
       </div>
       <div
-        className="rounded-lg border p-5"
-        style={{ borderColor: "var(--border)", background: "var(--white)" }}
+        className="rounded-xl p-5"
+        style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
       >
         <div className="space-y-3">
           <Field label="Display name">
@@ -2250,8 +2250,8 @@ function ModelsTab({
         return (
           <div
             key={provider.id}
-            className="rounded-lg border p-5"
-            style={{ borderColor: "var(--border)", background: "var(--white)" }}
+            className="rounded-xl p-5"
+            style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
           >
             <div className="mb-4 flex items-center justify-between">
               <div>
@@ -2436,8 +2436,8 @@ function AboutTab() {
     <div className="max-w-2xl space-y-6">
       {/* Logo + version */}
       <div
-        className="flex items-center gap-4 rounded-lg border p-6"
-        style={{ borderColor: "var(--border)", background: "var(--white)" }}
+        className="flex items-center gap-4 rounded-xl p-6"
+        style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
       >
         <LogoMark className="h-12 w-12" color="var(--ink)" />
         <div className="flex-1">
@@ -2534,8 +2534,8 @@ function AboutTab() {
           Tech Stack
         </h2>
         <div
-          className="rounded-lg border p-5"
-          style={{ borderColor: "var(--border)", background: "var(--white)" }}
+          className="rounded-xl p-5"
+          style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
         >
           <div className="grid grid-cols-2 gap-4">
             <div>
@@ -2580,8 +2580,8 @@ function AboutTab() {
           Links
         </h2>
         <div
-          className="rounded-lg border p-5"
-          style={{ borderColor: "var(--border)", background: "var(--white)" }}
+          className="rounded-xl p-5"
+          style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
         >
           <div className="space-y-2">
             <a
@@ -2621,8 +2621,8 @@ function AboutTab() {
           License
         </h2>
         <div
-          className="rounded-lg border p-5"
-          style={{ borderColor: "var(--border)", background: "var(--white)" }}
+          className="rounded-xl p-5"
+          style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
         >
           <div className="space-y-2">
             <p className="text-[13px] text-[var(--ink-2)]">
@@ -2701,8 +2701,8 @@ function ProviderCard({
   if (editing) {
     return (
       <div
-        className="rounded-lg border p-5"
-        style={{ borderColor: "var(--border)", background: "var(--white)" }}
+        className="rounded-xl p-5"
+        style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
       >
         <div className="mb-4 flex items-center justify-between">
           <h3 className="text-[14px] font-semibold text-[var(--ink)]">
@@ -2837,8 +2837,8 @@ function ProviderCard({
 
   return (
     <div
-      className="flex items-center justify-between rounded-lg border p-5"
-      style={{ borderColor: "var(--border)", background: "var(--white)" }}
+      className="flex items-center justify-between rounded-xl p-5"
+      style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
     >
       <div className="flex items-center gap-3">
         <div>
@@ -2920,8 +2920,8 @@ function ProviderForm({
 
   return (
     <div
-      className="rounded-lg border p-5"
-      style={{ borderColor: "var(--accent)", background: "var(--white)" }}
+      className="rounded-xl p-5"
+      style={{ border: "1px solid var(--accent)", background: "var(--sidebar)" }}
     >
       <div className="mb-4 flex items-center justify-between">
         <h3 className="text-[14px] font-semibold text-[var(--ink)]">

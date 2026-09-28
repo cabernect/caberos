@@ -22,6 +22,7 @@ from .provider import Provider
 from .revision import RevisionedEntityMixin, RevisionMixin
 from .run import Message, Run
 from .session import Session
+from .skill import Skill, SkillAssignment, SkillRevision
 from .source import RunSource
 from .sub_agent import SubAgent
 from .terminal import TerminalSession
@@ -53,6 +54,9 @@ __all__ = [
     "RevisionedEntityMixin",
     "RevisionMixin",
     "Session",
+    "Skill",
+    "SkillAssignment",
+    "SkillRevision",
     "Run",
     "Message",
     "RunSource",

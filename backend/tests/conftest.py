@@ -26,6 +26,7 @@ async def db_engine():
         provider,
         run,
         session,
+        skill,
         source,
         sub_agent,
     )
