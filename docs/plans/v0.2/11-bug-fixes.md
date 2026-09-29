@@ -229,6 +229,14 @@ Verified live: `algorithmic-art` detail → 200 with 11 usage rows.
 
 **Fix applied:** main pane + drawer now sit in a measured content region (`ResizeObserver` on a `relative flex min-w-0 flex-1` wrapper, measured independent of the docked drawer — no feedback loop). When `contentWidth - drawerWidth < 420` (`MAIN_MIN_WIDTH`) the drawer switches to overlay mode: `absolute inset-y-0 right-0 z-30 shadow-xl`, width `min(drawerWidth, contentWidth)`, main pane keeps the full content width underneath; otherwise it docks exactly as before. Resize handle, the 380/1100/560 width limits, and the `caberos.skillDrawer.width` storage key are unchanged. Re-verified live: at 680×900 + 380px drawer the drawer is `position:absolute` and the main pane keeps ~436px; at 1280×900 the drawer stays docked (`position:relative`) and the grid is unchanged.
 
+### B16 — ZIP import switches to Drafts but lists all skills (FIXED)
+
+**Symptom:** after importing a ZIP on the Skills page, the view pill switches to "Drafts" but the grid still renders every skill — the imported draft is only visible after a manual reload.
+
+**Root cause:** `handleImportResult` called `setView("drafts")` and then awaited the current render's `loadSkills` closure — which still fetched `view=all`. `setView` recreated `loadSkills` (deps `[view, agentFilter, search]`) and the effect fired a second `view=drafts` fetch. The two requests raced; the stale `view=all` response usually resolved last and overwrote the drafts list. `loadSkills` also had no out-of-order guard, so fast search typing could race the same way.
+
+**Fix applied:** `loadSkills` now stamps each call with `++loadSeq.current` and only applies `setSkills`/`setError`/`setLoading(false)` when the sequence is still current — superseded responses are dropped. `handleImportResult` calls `setView("drafts")` only when switching views (the effect then issues the single `view=drafts` fetch) and calls `loadSkills()` directly when already on drafts. Re-verified live: importing a ZIP from the All view issues exactly one post-import `GET /api/skills?view=drafts` and every rendered card is a draft; importing while already on Drafts reloads drafts correctly; a fast `pdf` keystroke burst ends on the final query's result set.
+
 ## Tests first
 
 - Fake HTTP MCP that 401s with `WWW-Authenticate` → server gains

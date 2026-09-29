@@ -107,7 +107,10 @@ export function Skills() {
     [detail, filesRevision],
   );
 
+  const loadSeq = useRef(0);
+
   const loadSkills = useCallback(async () => {
+    const seq = ++loadSeq.current;
     try {
       setLoading(true);
       const data = await api.listSkills(
@@ -115,12 +118,14 @@ export function Skills() {
         view === "agent-local" && agentFilter ? agentFilter : undefined,
         search || undefined,
       );
+      if (seq !== loadSeq.current) return;
       setSkills(data.skills);
       setError(null);
     } catch (e) {
+      if (seq !== loadSeq.current) return;
       setError(e instanceof Error ? e.message : "Failed to load skills");
     } finally {
-      setLoading(false);
+      if (seq === loadSeq.current) setLoading(false);
     }
   }, [view, agentFilter, search]);
 
@@ -213,8 +218,11 @@ export function Skills() {
           : "") +
         errs,
     );
-    setView("drafts");
-    await loadSkills();
+    if (view === "drafts") {
+      await loadSkills();
+    } else {
+      setView("drafts");
+    }
   };
 
   const handleZipImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
