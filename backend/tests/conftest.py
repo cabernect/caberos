@@ -89,7 +89,14 @@ async def db_engine():
             )
         )
     yield engine
-    await engine.dispose()
+    try:
+        await engine.dispose()
+    except Exception:
+        # aiosqlite's worker thread can exit before StaticPool finalizes the
+        # shared connection on slow/CI hosts, leaving dispose() to fail on a
+        # missing 'connection' key — teardown is best-effort for a disposable
+        # in-memory engine.
+        pass
 
 
 @pytest_asyncio.fixture

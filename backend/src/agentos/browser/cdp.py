@@ -222,13 +222,20 @@ class BrowserSession:
             stderr=subprocess.DEVNULL,
         )
         deadline = time.monotonic() + LOAD_TIMEOUT_S
-        while not port_file.exists():
+        port = ws_path = ""
+        while True:
             if self._proc.poll() is not None:
                 raise BrowserError("browser process exited during startup")
             if time.monotonic() > deadline:
                 raise BrowserError("browser did not expose a debug port")
+            # Chrome creates the file before writing it — existence alone
+            # races the read on slow hosts; wait for both lines to land.
+            if port_file.exists():
+                lines = port_file.read_text().splitlines()
+                if len(lines) >= 2:
+                    port, ws_path = lines[0], lines[1]
+                    break
             await asyncio.sleep(0.05)
-        port, ws_path = port_file.read_text().splitlines()[:2]
         self._ws = await websockets.connect(
             f"ws://127.0.0.1:{port}{ws_path}", max_size=64 * 1024 * 1024
         )
