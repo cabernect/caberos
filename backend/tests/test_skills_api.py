@@ -67,6 +67,34 @@ class TestListViews:
         detail = (await client.get(f"/api/skills/{draft_id}")).json()
         assert detail["status"] == "draft"
 
+    async def test_drafts_view_indexes_workspace_draft_dirs(
+        self, client, skills_env, db, skills_agent
+    ):
+        """Live indexing: a skill-drafts/ dir written mid-run (e.g. an agent
+        using skill-creator in chat) surfaces in the Drafts view on the
+        next listing — no restart or startup reconcile needed."""
+        draft_dir = skills_env / "workspaces" / skills_agent.id / "skill-drafts" / "chat-made"
+        draft_dir.mkdir(parents=True)
+        (draft_dir / "SKILL.md").write_text(
+            "---\nname: chat-made\ndescription: built in chat\n---\n\nBody.\n"
+        )
+
+        resp = await client.get("/api/skills?view=drafts")
+        assert resp.status_code == 200
+        match = [s for s in resp.json()["skills"] if s["name"] == "chat-made"]
+        assert len(match) == 1
+        assert match[0]["status"] == "draft"
+        assert match[0]["scope"] == "agent-local"
+        assert match[0]["owner_agent_id"] == skills_agent.id
+        assert match[0]["description"] == "built in chat"
+
+        # The row is persisted (not transient): a second listing returns
+        # the same id, and drafts still don't leak into the live views.
+        again = (await client.get("/api/skills?view=drafts")).json()["skills"]
+        assert [s["id"] for s in again if s["name"] == "chat-made"] == [match[0]["id"]]
+        all_names = [s["name"] for s in (await client.get("/api/skills")).json()["skills"]]
+        assert "chat-made" not in all_names
+
 
 class TestLifecycleApi:
     async def test_draft_publish_flow(self, client, skills_env, db, skills_agent):

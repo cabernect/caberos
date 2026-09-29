@@ -41,6 +41,7 @@ from ..models.skill import Skill, SkillAssignment, SkillRevision
 from ..skills import importer, service, validate
 from ..skills.importer import ImportRejected
 from ..skills.loader import _load_skill_from_dir
+from ..skills.reconcile import index_workspace_draft_dirs
 from ..skills.resolution import resolve_effective_skills
 from ..skills.service import SkillError
 
@@ -229,6 +230,13 @@ async def list_skills(
     view = all | built-in | global | agent-local | drafts | archived.
     Drafts and archived rows are only visible in their own views.
     """
+    # Index workspace skill-drafts/ dirs on every listing — a draft an
+    # agent wrote mid-run (skill-creator touches only files) must surface
+    # without a restart. Rows created this pass are committed so later
+    # calls see the same ids; drafts never leak into non-draft views.
+    if await index_workspace_draft_dirs(db):
+        await db.commit()
+
     stmt = select(Skill).order_by(Skill.name)
     if view == "built-in":
         stmt = stmt.where(Skill.scope == "built-in")

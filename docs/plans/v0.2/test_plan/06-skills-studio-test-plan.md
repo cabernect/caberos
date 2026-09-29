@@ -60,7 +60,7 @@ BUILTIN=$(curl -s "$API?view=built-in" -H "$H" | python3 -c \
 
 | #   | case                                    | command                                                                                          | expect |
 | --- | --------------------------------------- | ------------------------------------------------------------------------------------------------ | ------ |
-| A1  | list all                                | `curl -s "$API" -H "$H"`                                                                          | `count` ≥ 17; every row has `id,name,description,scope,status,current_revision,resource_count`; no `status:"draft"` rows |
+| A1  | list all                                | `curl -s "$API" -H "$H"`                                                                          | `count` ≥ 3; every row has `id,name,description,scope,status,current_revision,resource_count`; no `status:"draft"` rows |
 | A2  | view filters                            | `?view=built-in`, `?view=global`, `?view=agent-local`, `?view=drafts`                              | each returns only its scope/status; `?view=nope` → 400 |
 | A3  | search                                  | `?view=all&q=art`                                                                                 | only names containing `art` (case-insensitive) |
 | A4  | agent filter                            | `?view=agent-local&agent_id=$AGENT`                                                                | only `owner_agent_id == $AGENT` |
@@ -117,7 +117,7 @@ BUILTIN=$(curl -s "$API?view=built-in" -H "$H" | python3 -c \
 | U6  | Instructions tab                        | —                                                                                      | SKILL.md renders as styled markdown — headings, bold, inline-code chips, code blocks on `--tool-bg` surface, copy button inside block's top-right on hover |
 | U7  | Resources tab                           | open a skill with assets (e.g. `fpt-slide-generator-en` draft after A13)               | collapsible file tree; clicking a file opens the preview panel; PNGs render as images |
 | U8  | History tab                             | on a multi-revision skill                                                              | revision list newest-first, `current` marker, restore action on old revs |
-| U9  | Usage tab                               | on a built-in pinned by runs (e.g. `algorithmic-art`)                                  | run list w/ status + timestamp; **must not 500** (B6 regression) |
+| U9  | Usage tab                               | on a built-in pinned by runs (e.g. `skill-creator`)                                  | run list w/ status + timestamp; **must not 500** (B6 regression) |
 | U10 | action gating                           | check buttons per scope                                                                | built-in: Export/Disable/Archive only (no Purge/Duplicate-into... verify actual); agent-local: + Promote/Purge; draft: Publish/Delete |
 | U11 | publish dialog                          | draft → Publish                                                                        | dialog offers scope (global / agent-local), owner picker when agent-local, availability + assignment, change summary; validation errors block with messages |
 | U12 | Import .zip                             | header → Import .zip → pick `data/fpt-slide-generator-en.zip`                          | lands in Drafts; toast/notice; no auto-publish |

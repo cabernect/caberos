@@ -12,25 +12,18 @@ from pathlib import Path
 
 # Names of the built-in skills shipped in skills/. Tests pin this list to the
 # actual directory contents — add here when shipping a new built-in.
+#
+# Removed built-ins: rows for names dropped from this manifest are deleted at
+# startup (see reconcile._retire_builtins) — the shipped bytes are gone, so the
+# rows are dead ends. A row pinned by an active run is archived instead and
+# deleted once the pin clears.
 BUILTIN_SKILLS: frozenset[str] = frozenset(
     {
-        "algorithmic-art",
-        "brand-guidelines",
-        "canvas-design",
-        "claude-api",
+        "browser-workflows",
         "doc-coauthoring",
-        "docx",
         "frontend-design",
-        "internal-comms",
-        "mcp-builder",
-        "pdf",
-        "pptx",
+        "office-documents",
         "skill-creator",
-        "slack-gif-creator",
-        "theme-factory",
-        "web-artifacts-builder",
-        "webapp-testing",
-        "xlsx",
     }
 )
 

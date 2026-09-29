@@ -68,6 +68,104 @@ class TestReconcile:
         store_dir = skills_env / "skills-store" / rev.storage_path
         assert (store_dir / "SKILL.md").is_file()
 
+    async def test_retires_builtin_dropped_from_manifest(self, db, skills_env, monkeypatch):
+        """A built-in removed from the manifest is deleted — its shipped
+        bytes are gone, so the rows are dead ends."""
+        write_skill(skills_env / "skills", "pdf", "PDF handling")
+        write_skill(skills_env / "skills", "kept", "still shipped")
+        monkeypatch.setattr(reconcile, "BUILTIN_SKILLS", {"pdf", "kept"})
+        await reconcile.reconcile_skills(db)
+        await db.commit()
+        pdf_id = (await db.scalar(select(Skill).where(Skill.name == "pdf"))).id
+
+        # App update: pdf dropped from the manifest and its dir deleted.
+        import shutil
+
+        shutil.rmtree(skills_env / "skills" / "pdf")
+        monkeypatch.setattr(reconcile, "BUILTIN_SKILLS", {"kept"})
+        await reconcile.reconcile_skills(db)
+        await db.commit()
+
+        assert await db.scalar(select(Skill).where(Skill.name == "pdf")) is None
+        # Revisions went with the row.
+        assert (
+            await db.execute(select(SkillRevision).where(SkillRevision.skill_id == pdf_id))
+        ).scalars().all() == []
+        kept = await db.scalar(select(Skill).where(Skill.name == "kept"))
+        assert kept.status == "published"
+        # Reconcile is idempotent — a second run stays deleted.
+        await reconcile.reconcile_skills(db)
+        assert await db.scalar(select(Skill).where(Skill.name == "pdf")) is None
+
+        # Re-shipping the name seeds a fresh row as published rev 1.
+        write_skill(skills_env / "skills", "pdf", "PDF handling v2")
+        monkeypatch.setattr(reconcile, "BUILTIN_SKILLS", {"pdf", "kept"})
+        await reconcile.reconcile_skills(db)
+        await db.commit()
+        pdf = await db.scalar(select(Skill).where(Skill.name == "pdf"))
+        assert pdf.status == "published"
+        rev = await db.scalar(
+            select(SkillRevision).where(SkillRevision.id == pdf.current_revision_id)
+        )
+        assert rev.revision_number == 1
+
+    async def test_retired_builtin_pinned_by_active_run_is_archived(
+        self, db, skills_env, skills_agent, monkeypatch
+    ):
+        """Retired built-ins delete outright — except while an active run
+        pins a revision, which archives it until the pin clears."""
+        write_skill(skills_env / "skills", "pdf", "PDF handling")
+        write_skill(skills_env / "skills", "kept", "still shipped")
+        monkeypatch.setattr(reconcile, "BUILTIN_SKILLS", {"pdf", "kept"})
+        await reconcile.reconcile_skills(db)
+        await db.commit()
+        pdf = await db.scalar(select(Skill).where(Skill.name == "pdf"))
+
+        from agentos.models.contact import Contact
+        from agentos.models.run import Run
+
+        db.add(
+            Contact(
+                id="c-1",
+                channel="dashboard_chat",
+                bot_id=skills_agent.id,
+                external_user_id="op",
+            )
+        )
+        db.add(
+            Run(
+                id="run-1",
+                agent_id=skills_agent.id,
+                session_id="s",
+                contact_id="c-1",
+                status="running",
+            )
+        )
+        db.add(
+            ExecutionManifest(
+                id="m-1",
+                run_id="run-1",
+                skill_revision_ids=json.dumps({"pdf": f"rev:{pdf.current_revision_id}"}),
+            )
+        )
+        await db.flush()
+
+        # pdf dropped from the manifest — pinned, so archived not deleted.
+        import shutil
+
+        shutil.rmtree(skills_env / "skills" / "pdf")
+        monkeypatch.setattr(reconcile, "BUILTIN_SKILLS", {"kept"})
+        await reconcile.reconcile_skills(db)
+        pdf = await db.scalar(select(Skill).where(Skill.name == "pdf"))
+        assert pdf.status == "archived"
+
+        # Pin cleared → a later reconcile deletes the row.
+        run = await db.scalar(select(Run).where(Run.id == "run-1"))
+        run.status = "completed"
+        await db.flush()
+        await reconcile.reconcile_skills(db)
+        assert await db.scalar(select(Skill).where(Skill.name == "pdf")) is None
+
     async def test_indexes_agent_local_workspace_dirs(self, db, skills_env, skills_agent):
         write_skill(skills_env / "workspaces" / skills_agent.id / "skills", "release-notes")
 
@@ -80,6 +178,92 @@ class TestReconcile:
         assert row is not None
         assert row.owner_agent_id == skills_agent.id
         assert row.status == "published"
+
+    async def test_indexes_agent_draft_dirs(self, db, skills_env, skills_agent):
+        """A skill-drafts/ dir written outside the API (e.g. an agent told
+        to use skill-creator in a normal chat) is indexed as a draft row."""
+        write_skill(
+            skills_env / "workspaces" / skills_agent.id / "skill-drafts",
+            "wip-skill",
+            "draft",
+        )
+
+        await reconcile.reconcile_skills(db)
+        await db.commit()
+
+        row = await db.scalar(
+            select(Skill).where(Skill.name == "wip-skill", Skill.scope == "agent-local")
+        )
+        assert row is not None
+        assert row.owner_agent_id == skills_agent.id
+        assert row.status == "draft"
+        assert row.current_revision_id is None  # drafts carry no revisions
+
+        # Idempotent — a second reconcile creates no duplicate.
+        await reconcile.reconcile_skills(db)
+        rows = (
+            (
+                await db.execute(
+                    select(Skill).where(Skill.name == "wip-skill", Skill.scope == "agent-local")
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(rows) == 1
+
+    async def test_draft_indexing_does_not_touch_existing_draft(self, db, skills_env, skills_agent):
+        """A draft row created via the API owns its skill-drafts/ dir —
+        indexing the same-named dir must not duplicate or mutate it."""
+        draft = await service.create_draft(db, name="wip-skill", owner_agent_id=skills_agent.id)
+        await db.commit()
+        # create_draft already made the dir; fill in real content.
+        ddir = service.draft_dir(draft)
+        assert ddir.is_dir()
+        (ddir / "SKILL.md").write_text("---\nname: wip-skill\ndescription: authored\n---\n\nbody\n")
+
+        await reconcile.reconcile_skills(db)
+        await db.commit()
+
+        rows = (
+            (
+                await db.execute(
+                    select(Skill).where(Skill.name == "wip-skill", Skill.scope == "agent-local")
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert [r.id for r in rows] == [draft.id]
+        assert rows[0].status == "draft"
+
+    async def test_draft_dirs_skip_invalid(self, db, skills_env, skills_agent):
+        """Dirs without a valid SKILL.md, and dirs under a workspace with
+        no Agent row, are skipped — no rows created."""
+        # Dir without SKILL.md → not indexed.
+        bad_dir = skills_env / "workspaces" / skills_agent.id / "skill-drafts" / "no-manifest"
+        bad_dir.mkdir(parents=True)
+        (bad_dir / "README.md").write_text("no frontmatter here")
+
+        # Well-formed dir under a ghost agent → skipped (owner_agent_id is FK'd).
+        write_skill(
+            skills_env / "workspaces" / "ghost-agent" / "skill-drafts",
+            "orphan-draft",
+        )
+
+        await reconcile.reconcile_skills(db)
+        await db.commit()
+
+        assert (
+            await db.scalar(
+                select(Skill).where(Skill.name == "no-manifest", Skill.scope == "agent-local")
+            )
+        ) is None
+        assert (
+            await db.scalar(
+                select(Skill).where(Skill.name == "orphan-draft", Skill.scope == "agent-local")
+            )
+        ) is None
 
     async def test_builtin_manifest_matches_shipped_dirs(self):
         """skills/ contents must equal the manifest — drift means update both."""
@@ -581,3 +765,39 @@ class TestW11Regressions:
         (d / "references" / "x.md").write_text("# x\n", encoding="utf-8")
         result = validate.validate_skill_dir(d)
         assert result["errors"] == []
+
+
+# ---------------------------------------------------------------------------
+# Built-in guardrails — CI gate on the shipped skills/ dirs
+# ---------------------------------------------------------------------------
+
+_REPO_SKILLS = Path(__file__).resolve().parents[2] / "skills"
+
+
+class TestBuiltinGuardrails:
+    @pytest.mark.parametrize("name", sorted(d.name for d in _REPO_SKILLS.iterdir() if d.is_dir()))
+    def test_builtin_skill_is_well_formed(self, name):
+        """Every shipped built-in must declare compatibility + allowed-tools,
+        reference only registered capabilities, validate clean, stay under
+        3000 body tokens, and not reference bundled scripts/ paths."""
+        import re
+
+        from agentos.capabilities.builtin import register_builtin_capabilities
+        from agentos.capabilities.registry import registry
+        from agentos.skills import loader
+
+        skill_dir = _REPO_SKILLS / name
+        fm, body = loader._parse_frontmatter((skill_dir / "SKILL.md").read_text())
+        assert fm.get("compatibility"), "missing compatibility field"
+        assert fm.get("allowed-tools"), "missing allowed-tools field"
+
+        register_builtin_capabilities()
+        known = set(registry.list_names())
+        requested = [t.strip() for t in re.split(r"[,\s]+", str(fm["allowed-tools"])) if t.strip()]
+        unknown = [t for t in requested if t not in known]
+        assert not unknown, f"allowed-tools not registered: {unknown}"
+
+        result = validate.validate_skill_dir(skill_dir, known_capabilities=known)
+        assert result["errors"] == []
+        assert result["stats"]["body_tokens"] <= 3000
+        assert not re.search(r"scripts/", body), "bundled scripts can't execute yet"

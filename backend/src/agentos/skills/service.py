@@ -466,6 +466,44 @@ async def set_status(db: AsyncSession, skill: Skill, status: str) -> None:
     await db.flush()
 
 
+async def active_run_pins_skill(db: AsyncSession, skill: Skill) -> bool:
+    """True when an active run's execution manifest pins one of the skill's
+    revisions (pins carry a `rev:` prefix over the revision id)."""
+    from ..models.execution_manifest import ExecutionManifest
+    from ..models.run import Run
+
+    rev_ids = (
+        (await db.execute(select(SkillRevision.id).where(SkillRevision.skill_id == skill.id)))
+        .scalars()
+        .all()
+    )
+    if not rev_ids:
+        return False
+    active_runs = select(Run.id).where(Run.status.in_(ACTIVE_RUN_STATUSES))
+    manifests = (
+        (
+            await db.execute(
+                select(ExecutionManifest.skill_revision_ids).where(
+                    ExecutionManifest.run_id.in_(active_runs)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    pinned = {str(r) for r in rev_ids}
+    for raw in manifests:
+        try:
+            pins = json.loads(raw or "{}")
+        except (TypeError, json.JSONDecodeError):
+            continue
+        values = pins.values() if isinstance(pins, dict) else pins
+        for pin in values:
+            if str(pin).replace("rev:", "") in pinned:
+                return True
+    return False
+
+
 async def purge(db: AsyncSession, skill: Skill) -> None:
     """Hard-delete a skill's store bytes + rows.
 
@@ -478,40 +516,11 @@ async def purge(db: AsyncSession, skill: Skill) -> None:
     if skill.status not in ("archived", "disabled"):
         raise SkillError("archive or disable the skill before purging", status_code=409)
 
-    from ..models.execution_manifest import ExecutionManifest
-    from ..models.run import Run
-
-    rev_ids = (
-        (await db.execute(select(SkillRevision.id).where(SkillRevision.skill_id == skill.id)))
-        .scalars()
-        .all()
-    )
-    if rev_ids:
-        active_runs = select(Run.id).where(Run.status.in_(ACTIVE_RUN_STATUSES))
-        manifests = (
-            (
-                await db.execute(
-                    select(ExecutionManifest.skill_revision_ids).where(
-                        ExecutionManifest.run_id.in_(active_runs)
-                    )
-                )
-            )
-            .scalars()
-            .all()
+    if await active_run_pins_skill(db, skill):
+        raise SkillError(
+            "an active run pins a revision of this skill — purge is blocked",
+            status_code=409,
         )
-        pinned = {str(r) for r in rev_ids}
-        for raw in manifests:
-            try:
-                pins = json.loads(raw or "{}")
-            except (TypeError, json.JSONDecodeError):
-                continue
-            values = pins.values() if isinstance(pins, dict) else pins
-            for pin in values:
-                if str(pin).replace("rev:", "") in pinned:
-                    raise SkillError(
-                        "an active run pins a revision of this skill — purge is blocked",
-                        status_code=409,
-                    )
 
     # Delete stored revisions (store root only — never skills_dir) and, for
     # agent-local skills, the live workspace dir — otherwise the workspace
