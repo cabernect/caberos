@@ -1211,16 +1211,30 @@ function SkillsTab({ agentId, showSaved }: { agentId: string; showSaved: (msg: s
 
 // --- Workspace Tab ---
 //
-// Split file-browser/preview (W3): the directory stays navigable on the
-// left while the shared PreviewPanel renders the selected file on the
-// right. Narrow layouts fall back to a full-width preview with Back.
+// Lazy file tree + split preview (W3): each directory fetches its children
+// on first expand — the API lists one level at a time — and caches them by
+// path, indenting nested levels like the Skills resource tree. The tree
+// stays navigable on the left while the shared PreviewPanel renders the
+// selected file on the right; narrow layouts fall back to a full-width
+// preview with Back.
+
+interface WorkspaceTreeProps {
+  /** dir path ("" = root) → loaded children */
+  tree: Map<string, WorkspaceEntry[]>;
+  expanded: Set<string>;
+  loadingDirs: Set<string>;
+  previewPath: string | null;
+  onToggle: (dirPath: string) => void;
+  onOpen: (filePath: string) => void;
+  onDelete: (entry: WorkspaceEntry, rel: string) => void;
+}
 
 function WorkspaceTab({ agentId, showSaved }: { agentId: string; showSaved: (msg: string) => void }) {
   const { confirm } = useConfirm();
-  const [path, setPath] = useState("");
-  const [entries, setEntries] = useState<WorkspaceEntry[]>([]);
+  const [tree, setTree] = useState<Map<string, WorkspaceEntry[]>>(new Map());
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [loadingDirs, setLoadingDirs] = useState<Set<string>>(new Set());
   const [previewPath, setPreviewPath] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
   const listRef = useRef<HTMLDivElement>(null);
   // Saved when the preview opens: where the browser was scrolled and which
   // row was selected, so closing the preview lands the operator back
@@ -1230,35 +1244,43 @@ function WorkspaceTab({ agentId, showSaved }: { agentId: string; showSaved: (msg
     selected: null,
   });
 
-  const load = useCallback(async (p: string) => {
+  const fetchDir = useCallback(async (dirPath: string) => {
     if (!agentId) return;
-    setLoading(true);
+    setLoadingDirs((prev) => new Set(prev).add(dirPath));
     try {
-      const result = await api.listWorkspace(agentId, p);
-      if (result.type === "dir") {
-        setEntries(result.entries || []);
-      }
+      const result = await api.listWorkspace(agentId, dirPath);
+      const list = result.type === "dir" ? result.entries ?? [] : [];
+      setTree((prev) => new Map(prev).set(dirPath, list));
     } catch {
-      setEntries([]);
+      // Same contract as before: a failed listing renders as empty.
+      setTree((prev) => new Map(prev).set(dirPath, []));
     } finally {
-      setLoading(false);
+      setLoadingDirs((prev) => {
+        const next = new Set(prev);
+        next.delete(dirPath);
+        return next;
+      });
     }
   }, [agentId]);
 
-  useEffect(() => { load(""); }, [load]);
+  useEffect(() => { void fetchDir(""); }, [fetchDir]);
 
-  const navigate = (entry: WorkspaceEntry) => {
-    const newPath = path ? `${path}/${entry.name}` : entry.name;
-    if (entry.type === "dir") {
-      setPath(newPath);
-      load(newPath);
-    } else {
-      browseStateRef.current = {
-        scrollTop: listRef.current?.scrollTop ?? 0,
-        selected: newPath,
-      };
-      setPreviewPath(newPath);
-    }
+  const toggleDir = (dirPath: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(dirPath)) next.delete(dirPath);
+      else next.add(dirPath);
+      return next;
+    });
+    if (!tree.has(dirPath) && !loadingDirs.has(dirPath)) void fetchDir(dirPath);
+  };
+
+  const openFile = (filePath: string) => {
+    browseStateRef.current = {
+      scrollTop: listRef.current?.scrollTop ?? 0,
+      selected: filePath,
+    };
+    setPreviewPath(filePath);
   };
 
   const closePreview = () => {
@@ -1275,14 +1297,6 @@ function WorkspaceTab({ agentId, showSaved }: { agentId: string; showSaved: (msg
     });
   };
 
-  const goUp = () => {
-    const parts = path.split("/").filter(Boolean);
-    parts.pop();
-    const up = parts.join("/");
-    setPath(up);
-    load(up);
-  };
-
   const errDetail = (e: unknown) => {
     const m = e instanceof Error ? e.message : String(e);
     try {
@@ -1292,8 +1306,37 @@ function WorkspaceTab({ agentId, showSaved }: { agentId: string; showSaved: (msg
     }
   };
 
-  const handleDelete = async (entry: WorkspaceEntry) => {
-    const rel = path ? `${path}/${entry.name}` : entry.name;
+  // Splice a deleted path out of its parent's cached children; deleting a
+  // dir also drops its cached subtree (expanded/loading state included) —
+  // the server already removed everything, so no refetch is needed.
+  const pruneDeleted = (rel: string, wasDir: boolean) => {
+    const parent = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
+    const name = rel.split("/").pop()!;
+    setTree((prev) => {
+      const next = new Map(prev);
+      const list = next.get(parent);
+      if (list) next.set(parent, list.filter((e) => e.name !== name));
+      if (wasDir) {
+        for (const key of [...next.keys()]) {
+          if (key === rel || key.startsWith(`${rel}/`)) next.delete(key);
+        }
+      }
+      return next;
+    });
+    if (wasDir) {
+      const pruneSet = (prev: Set<string>) => {
+        const next = new Set(prev);
+        for (const key of [...next]) {
+          if (key === rel || key.startsWith(`${rel}/`)) next.delete(key);
+        }
+        return next;
+      };
+      setExpanded(pruneSet);
+      setLoadingDirs(pruneSet);
+    }
+  };
+
+  const handleDelete = async (entry: WorkspaceEntry, rel: string) => {
     const ok = await confirm({
       title: `Delete ${entry.type === "dir" ? "folder" : "file"}?`,
       message: `Delete "${rel}"${entry.type === "dir" ? " and everything inside it" : ""}? This cannot be undone.`,
@@ -1304,67 +1347,29 @@ function WorkspaceTab({ agentId, showSaved }: { agentId: string; showSaved: (msg
     try {
       await api.deleteWorkspaceEntry(agentId, rel);
       if (previewPath === rel || previewPath?.startsWith(`${rel}/`)) closePreview();
+      pruneDeleted(rel, entry.type === "dir");
       showSaved(`Deleted ${entry.name}`);
-      load(path);
     } catch (e) {
       showSaved(`Delete failed: ${errDetail(e)}`);
     }
   };
 
-  const breadcrumbs = path ? path.split("/").filter(Boolean) : [];
+  const rootEntries = tree.get("");
 
-  const fileList = (
-    <div ref={listRef} className="h-full space-y-1 overflow-auto">
-      {path && (
-        <button
-          onClick={goUp}
-          className="flex w-full items-center gap-2 rounded-[5px] px-3 py-2 text-[13px] text-[var(--ink-2)] transition hover:bg-[var(--surface)]"
-          style={{ border: "none", background: "none", cursor: "pointer" }}
-        >
-          <FolderOpen className="h-4 w-4" /> ..
-        </button>
-      )}
-      {entries.map((entry) => (
-        <div
-          key={entry.name}
-          className="group flex w-full items-center rounded-[5px] transition hover:bg-[var(--surface)]"
-          style={{
-            background:
-              previewPath === (path ? `${path}/${entry.name}` : entry.name)
-                ? "var(--surface)"
-                : "none",
-          }}
-        >
-          <button
-            data-path={path ? `${path}/${entry.name}` : entry.name}
-            onClick={() => navigate(entry)}
-            className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-[13px]"
-            style={{ border: "none", background: "none", cursor: "pointer", color: "var(--ink)" }}
-          >
-            {entry.type === "dir" ? (
-              <Folder className="h-4 w-4" style={{ color: "var(--accent)" }} />
-            ) : (
-              <FileText className="h-4 w-4" style={{ color: "var(--ink-3)" }} />
-            )}
-            <span className="truncate">{entry.name}</span>
-            {entry.type === "file" && (
-              <span className="ml-auto shrink-0 font-mono text-[11px] text-[var(--ink-3)]">
-                {entry.size > 1024 ? `${(entry.size / 1024).toFixed(1)}KB` : `${entry.size}B`}
-              </span>
-            )}
-          </button>
-          <button
-            onClick={() => void handleDelete(entry)}
-            aria-label={`Delete ${entry.name}`}
-            title={`Delete ${entry.name}`}
-            className="mr-1 shrink-0 rounded-[3px] p-1 text-[var(--ink-3)] opacity-0 transition hover:bg-[var(--white)] hover:text-[var(--danger)] group-hover:opacity-100"
-            style={{ border: "none", cursor: "pointer" }}
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      ))}
-      {entries.length === 0 && !loading && (
+  const treeList = (
+    <div ref={listRef} className="h-full overflow-auto py-1">
+      <WorkspaceTreeLevel
+        dirPath=""
+        depth={0}
+        tree={tree}
+        expanded={expanded}
+        loadingDirs={loadingDirs}
+        previewPath={previewPath}
+        onToggle={toggleDir}
+        onOpen={openFile}
+        onDelete={(entry, rel) => void handleDelete(entry, rel)}
+      />
+      {rootEntries && rootEntries.length === 0 && (
         <p className="py-8 text-center text-[13px] text-[var(--ink-3)]">Empty directory.</p>
       )}
     </div>
@@ -1372,28 +1377,12 @@ function WorkspaceTab({ agentId, showSaved }: { agentId: string; showSaved: (msg
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-1 text-[12px] text-[var(--ink-2)]">
-        <button onClick={() => { setPath(""); load(""); }} style={{ border: "none", background: "none", cursor: "pointer", color: "var(--accent)" }}>
-          workspace
-        </button>
-        {breadcrumbs.map((part, i) => (
-          <span key={i} className="flex items-center gap-1">
-            <ChevronRight className="h-3 w-3" />
-            <button
-              onClick={() => {
-                const p = breadcrumbs.slice(0, i + 1).join("/");
-                setPath(p);
-                load(p);
-              }}
-              style={{ border: "none", background: "none", cursor: "pointer", color: i === breadcrumbs.length - 1 ? "var(--ink)" : "var(--accent)" }}
-            >
-              {part}
-            </button>
-          </span>
-        ))}
+      <div className="flex items-center gap-1.5 text-[12px] text-[var(--ink-2)]">
+        <FolderOpen className="h-3.5 w-3.5" style={{ color: "var(--accent)" }} />
+        <span>workspace</span>
       </div>
 
-      {loading ? (
+      {!rootEntries ? (
         <p className="text-[13px] text-[var(--ink-2)]">Loading…</p>
       ) : previewPath ? (
         <div>
@@ -1408,7 +1397,7 @@ function WorkspaceTab({ agentId, showSaved }: { agentId: string; showSaved: (msg
           </button>
           <div className="flex gap-0 overflow-hidden rounded-[5px] border border-[var(--border)]" style={{ height: "60vh" }}>
             <div className="hidden w-56 shrink-0 overflow-auto border-r border-[var(--border)] p-2 md:block">
-              {fileList}
+              {treeList}
             </div>
             <div className="min-w-0 flex-1">
               <PreviewPanel
@@ -1418,16 +1407,130 @@ function WorkspaceTab({ agentId, showSaved }: { agentId: string; showSaved: (msg
                 onDeleted={(p) => {
                   closePreview();
                   showSaved(`Deleted ${p.split("/").pop()}`);
-                  load(path);
+                  // A delete happened inside the file's parent dir — refetch
+                  // it if its children were already loaded so the tree stays
+                  // in sync with the server.
+                  const parent = p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
+                  if (tree.has(parent)) void fetchDir(parent);
                 }}
               />
             </div>
           </div>
         </div>
       ) : (
-        <div style={{ maxHeight: "60vh" }}>{fileList}</div>
+        <div style={{ maxHeight: "60vh" }}>{treeList}</div>
       )}
     </div>
+  );
+}
+
+function WorkspaceTreeLevel({
+  dirPath,
+  depth,
+  tree,
+  expanded,
+  loadingDirs,
+  previewPath,
+  onToggle,
+  onOpen,
+  onDelete,
+}: WorkspaceTreeProps & { dirPath: string; depth: number }) {
+  const entries = tree.get(dirPath) ?? [];
+  return (
+    <>
+      {entries.map((entry) => {
+        const rel = dirPath ? `${dirPath}/${entry.name}` : entry.name;
+        if (entry.type === "dir") {
+          const isOpen = expanded.has(rel);
+          const Chevron = isOpen ? ChevronDown : ChevronRight;
+          const FolderIcon = isOpen ? FolderOpen : Folder;
+          const kids = tree.get(rel);
+          return (
+            <div key={rel}>
+              <div
+                className="group flex w-full items-center rounded-[5px] transition hover:bg-[var(--surface)]"
+                style={{ background: previewPath === rel ? "var(--surface)" : "none" }}
+              >
+                <button
+                  data-path={rel}
+                  onClick={() => onToggle(rel)}
+                  className="flex min-w-0 flex-1 items-center gap-1.5 py-1.5 pr-3 text-[13px]"
+                  style={{ paddingLeft: `${depth * 16 + 8}px`, border: "none", background: "none", cursor: "pointer", color: "var(--ink)" }}
+                >
+                  <Chevron className="h-3 w-3 shrink-0 text-[var(--ink-3)]" />
+                  <FolderIcon className="h-4 w-4 shrink-0" style={{ color: "var(--accent)" }} />
+                  <span className="truncate">{entry.name}</span>
+                </button>
+                <WorkspaceDeleteButton name={entry.name} onClick={() => onDelete(entry, rel)} />
+              </div>
+              {isOpen &&
+                (loadingDirs.has(rel) && !kids ? (
+                  <p
+                    className="py-1.5 text-[12px] text-[var(--ink-3)]"
+                    style={{ paddingLeft: `${(depth + 1) * 16 + 26}px` }}
+                  >
+                    Loading…
+                  </p>
+                ) : kids && kids.length === 0 ? (
+                  <p
+                    className="py-1.5 text-[12px] text-[var(--ink-3)]"
+                    style={{ paddingLeft: `${(depth + 1) * 16 + 26}px` }}
+                  >
+                    Empty
+                  </p>
+                ) : (
+                  <WorkspaceTreeLevel
+                    dirPath={rel}
+                    depth={depth + 1}
+                    tree={tree}
+                    expanded={expanded}
+                    loadingDirs={loadingDirs}
+                    previewPath={previewPath}
+                    onToggle={onToggle}
+                    onOpen={onOpen}
+                    onDelete={onDelete}
+                  />
+                ))}
+            </div>
+          );
+        }
+        return (
+          <div
+            key={rel}
+            className="group flex w-full items-center rounded-[5px] transition hover:bg-[var(--surface)]"
+            style={{ background: previewPath === rel ? "var(--surface)" : "none" }}
+          >
+            <button
+              data-path={rel}
+              onClick={() => onOpen(rel)}
+              className="flex min-w-0 flex-1 items-center gap-2 py-1.5 pr-3 text-[13px]"
+              style={{ paddingLeft: `${depth * 16 + 26}px`, border: "none", background: "none", cursor: "pointer", color: "var(--ink)" }}
+            >
+              <FileText className="h-4 w-4 shrink-0" style={{ color: "var(--ink-3)" }} />
+              <span className="truncate">{entry.name}</span>
+              <span className="ml-auto shrink-0 font-mono text-[11px] text-[var(--ink-3)]">
+                {entry.size > 1024 ? `${(entry.size / 1024).toFixed(1)}KB` : `${entry.size}B`}
+              </span>
+            </button>
+            <WorkspaceDeleteButton name={entry.name} onClick={() => onDelete(entry, rel)} />
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+function WorkspaceDeleteButton({ name, onClick }: { name: string; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      aria-label={`Delete ${name}`}
+      title={`Delete ${name}`}
+      className="mr-1 shrink-0 rounded-[3px] p-1 text-[var(--ink-3)] opacity-0 transition hover:bg-[var(--white)] hover:text-[var(--danger)] group-hover:opacity-100"
+      style={{ border: "none", cursor: "pointer" }}
+    >
+      <Trash2 className="h-3.5 w-3.5" />
+    </button>
   );
 }
 
