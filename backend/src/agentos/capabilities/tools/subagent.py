@@ -13,7 +13,10 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
+from sqlalchemy import select
+
 from ...config_schema import AgentConfig, CapabilityGrant, Limits, ModelConfig
+from ...models.provider import Provider
 from ..registry import CapabilityDef, registry
 
 
@@ -71,6 +74,46 @@ async def run_subagent(
 
     # Sync mode — block until done
     return await _execute_subagent(subagent_id, args, workspace_path, kwargs)
+
+
+async def _resolve_provider_ref(db: Any, ref: Any) -> str | dict[str, Any]:
+    """Resolve a model-override provider reference to a configured provider id.
+
+    A bare provider id wins. Otherwise a case-insensitive match on provider
+    name or type resolves only when exactly one configured provider matches —
+    anything else returns a corrective error dict telling the caller to omit
+    `model` (inherit the parent's model) or use a real provider id.
+    """
+    if not isinstance(ref, str) or not ref.strip():
+        return {
+            "error": "model.provider_id must be a non-empty string — omit 'model' to inherit the parent's model"
+        }
+    ref = ref.strip()
+
+    result = await db.execute(select(Provider))
+    providers = list(result.scalars().all())
+
+    for p in providers:
+        if p.id == ref:
+            return p.id
+
+    lowered = ref.lower()
+    matches = [p for p in providers if p.name.lower() == lowered or p.type.lower() == lowered]
+    if len(matches) == 1:
+        return matches[0].id
+
+    reason = (
+        f"is ambiguous — matches {len(matches)} configured providers"
+        if matches
+        else "is not a configured provider"
+    )
+    valid = ", ".join(f"{p.id} ({p.name}, {p.type})" for p in providers) or "none configured"
+    return {
+        "error": (
+            f"model.provider_id {ref!r} {reason}. Provider ids are UUIDs, not vendor "
+            f"names — omit 'model' to inherit the parent's model, or use one of: {valid}"
+        )
+    }
 
 
 async def read_subagent(
@@ -139,10 +182,17 @@ async def _execute_subagent(
 
     # Determine model — default to parent's
     model_arg = args.get("model")
+    model_resolved_from: str | None = None
     if isinstance(model_arg, dict) and model_arg.get("provider_id"):
+        ref = model_arg["provider_id"]
+        resolved = await _resolve_provider_ref(parent_syscall_handler.db, ref)
+        if isinstance(resolved, dict):
+            return resolved
+        if resolved != ref:
+            model_resolved_from = ref
         sub_model = ModelConfig(
-            provider_id=model_arg["provider_id"],
-            name=model_arg.get("name", ""),
+            provider_id=resolved,
+            name=model_arg.get("name") or parent_config.model.name,
         )
     else:
         sub_model = parent_config.model
@@ -199,7 +249,7 @@ async def _execute_subagent(
             parent_config=parent_config,
         )
 
-        return {
+        out = {
             "result": result.final_answer or "(sub-agent produced no output)",
             "turns": result.total_turns,
             "tokens_in": result.tokens_in,
@@ -207,6 +257,9 @@ async def _execute_subagent(
             "cost": result.total_cost,
             "status": result.status,
         }
+        if model_resolved_from:
+            out["model_resolved"] = f"{model_resolved_from} -> {sub_model.provider_id}"
+        return out
     except Exception as e:
         return {"error": f"sub-agent failed: {e}", "result": ""}
 
@@ -273,6 +326,8 @@ class _SubAgentSyscallHandler:
         event_emitter: Any = None,
         parent_config: Any = None,
         capability_catalog: Any = None,
+        approval_batch: Any = None,
+        trigger: str = "user_message",
     ) -> Any:
         # Use the parent config passed at construction time, or the one
         # passed to this call (for nested sub-agents)
@@ -287,6 +342,8 @@ class _SubAgentSyscallHandler:
             event_emitter=event_emitter,
             parent_config=effective_parent,
             capability_catalog=capability_catalog,
+            approval_batch=approval_batch,
+            trigger=trigger,
         )
 
 
@@ -340,10 +397,16 @@ def register_subagent_tools() -> None:
                     "model": {
                         "type": "object",
                         "properties": {
-                            "provider_id": {"type": "string"},
+                            "provider_id": {
+                                "type": "string",
+                                "description": "Id of a configured provider (a UUID). "
+                                "A provider name or vendor type resolves only when it "
+                                "matches exactly one configured provider.",
+                            },
                             "name": {"type": "string"},
                         },
-                        "description": "Optional model override. Defaults to the parent's model.",
+                        "description": "Optional model override. Omit to inherit the "
+                        "parent's model — the common case.",
                     },
                 },
                 "required": ["task"],

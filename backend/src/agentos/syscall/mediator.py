@@ -277,9 +277,12 @@ class SyscallHandler:
             if cap.subject_scoped:
                 extra_kwargs["contact_id"] = subject_contact_id
 
-        # For skill capabilities, inject agent_id (needed to find skill dirs)
+        # For skill capabilities, inject agent_id + db + run_id — resolution
+        # is DB-backed and governed scopes load via the run's pinned revs.
         if call.name in ("skills_list", "skills_load", "skills_read_resource"):
             extra_kwargs["agent_id"] = agent_config.id
+            extra_kwargs["db"] = self.db
+            extra_kwargs["run_id"] = run_id
 
         # Browser tools: ownership scope (agent/session/run) so a browser
         # session can only be driven by the run that opened it; db is

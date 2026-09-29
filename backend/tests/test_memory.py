@@ -544,19 +544,41 @@ class TestMemoryCapabilities:
 
 
 class TestSkillCapabilities:
-    """Skill capabilities through the syscall layer (D11b, D11c)."""
+    """Skill capabilities through the syscall layer (D11b, D11c).
+
+    W6: skills resolve through DB rows (published + assigned), not raw dir
+    scans — tests seed via the real import_draft → publish path.
+    """
+
+    async def _seed_global_skill(
+        self,
+        db,
+        tmp_path,
+        monkeypatch,
+        name="research",
+        description="Research skill",
+        body="Do research thoroughly.",
+        resources: dict | None = None,
+    ):
+        monkeypatch.setattr("agentos.config.settings.workspace_root", tmp_path / "ws")
+        monkeypatch.setattr("agentos.config.settings.skills_store_root", tmp_path / "store")
+        monkeypatch.setattr("agentos.config.settings.skills_drafts_root", tmp_path / "drafts")
+        from agentos.skills import service
+
+        src = tmp_path / "src" / name
+        src.mkdir(parents=True)
+        (src / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: {description}\n---\n\n{body}"
+        )
+        for fname, content in (resources or {}).items():
+            (src / fname).write_text(content)
+        draft = await service.import_draft(db, name=name, source_dir=src)
+        await service.publish(db, draft, scope="global")
+        await db.commit()
 
     async def test_skills_list_via_syscall(self, db, workspace, tmp_path, monkeypatch):
         """skills_list returns the menu (name + description, no body)."""
-        # Create a system-level skill
-        skill_dir = tmp_path / "skills" / "research"
-        skill_dir.mkdir(parents=True)
-        (skill_dir / "SKILL.md").write_text(
-            "---\nname: research\ndescription: Research skill\n---\n\nSecret instructions."
-        )
-
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("agentos.config.settings.skills_dir", tmp_path / "skills")
+        await self._seed_global_skill(db, tmp_path, monkeypatch, body="Secret instructions.")
 
         handler = SyscallHandler(db=db, workspace_path=workspace)
         agent_config = _make_agent_config()
@@ -578,15 +600,12 @@ class TestSkillCapabilities:
 
     async def test_skills_load_via_syscall(self, db, workspace, tmp_path, monkeypatch):
         """skills_load returns the full body + resources."""
-        skill_dir = tmp_path / "skills" / "research"
-        skill_dir.mkdir(parents=True)
-        (skill_dir / "SKILL.md").write_text(
-            "---\nname: research\ndescription: Research skill\n---\n\nDo research thoroughly."
+        await self._seed_global_skill(
+            db,
+            tmp_path,
+            monkeypatch,
+            resources={"checklist.md": "# Checklist\n\n- Step 1"},
         )
-        (skill_dir / "checklist.md").write_text("# Checklist\n\n- Step 1")
-
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("agentos.config.settings.skills_dir", tmp_path / "skills")
 
         handler = SyscallHandler(db=db, workspace_path=workspace)
         agent_config = _make_agent_config()
@@ -608,8 +627,7 @@ class TestSkillCapabilities:
 
     async def test_skills_load_nonexistent(self, db, workspace, tmp_path, monkeypatch):
         """skills_load on a nonexistent skill returns an error."""
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("agentos.config.settings.skills_dir", tmp_path / "skills")
+        await self._seed_global_skill(db, tmp_path, monkeypatch, name="other")
 
         handler = SyscallHandler(db=db, workspace_path=workspace)
         agent_config = _make_agent_config()
@@ -627,17 +645,13 @@ class TestSkillCapabilities:
 
     async def test_skills_read_resource_via_syscall(self, db, workspace, tmp_path, monkeypatch):
         """skills_read_resource reads a resource file from a skill directory."""
-        skill_dir = tmp_path / "skills" / "research"
-        skill_dir.mkdir(parents=True)
-        (skill_dir / "SKILL.md").write_text(
-            "---\nname: research\ndescription: Research skill\n---\n\nFollow the checklist."
+        await self._seed_global_skill(
+            db,
+            tmp_path,
+            monkeypatch,
+            body="Follow the checklist.",
+            resources={"checklist.md": "# Research Checklist\n\n- [ ] Define scope\n- [ ] Search"},
         )
-        (skill_dir / "checklist.md").write_text(
-            "# Research Checklist\n\n- [ ] Define scope\n- [ ] Search"
-        )
-
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("agentos.config.settings.skills_dir", tmp_path / "skills")
 
         handler = SyscallHandler(db=db, workspace_path=workspace)
         agent_config = _make_agent_config()
@@ -663,14 +677,9 @@ class TestSkillCapabilities:
         self, db, workspace, tmp_path, monkeypatch
     ):
         """skills_read_resource blocks path traversal outside the skill dir."""
-        skill_dir = tmp_path / "skills" / "research"
-        skill_dir.mkdir(parents=True)
-        (skill_dir / "SKILL.md").write_text("---\nname: research\n---\n\nBody.")
+        await self._seed_global_skill(db, tmp_path, monkeypatch)
 
         (tmp_path / "secret.txt").write_text("passwords")
-
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("agentos.config.settings.skills_dir", tmp_path / "skills")
 
         handler = SyscallHandler(db=db, workspace_path=workspace)
         agent_config = _make_agent_config()

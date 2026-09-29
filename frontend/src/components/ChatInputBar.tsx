@@ -1101,7 +1101,7 @@ function ContextCircle({
   const ratio = contextTokens / maxContextTokens;
   const isWarning = ratio > 0.7;
   const color = isWarning ? "var(--warning)" : "var(--brand-2)";
-  const trackColor = "#E0DFDC";
+  const trackColor = "var(--border)";
   const radius = 7;
   const circumference = 2 * Math.PI * radius;
   const dashOffset = circumference - (pct / 100) * circumference;
@@ -1169,7 +1169,7 @@ function ContextCircle({
 
           {/* Stacked bar showing section proportions */}
           {sections.length > 0 && (
-            <div className="mb-2.5 flex h-2 w-full overflow-hidden rounded-full" style={{ background: "#E0DFDC" }}>
+            <div className="mb-2.5 flex h-2 w-full overflow-hidden rounded-full" style={{ background: "var(--border)" }}>
               {sections.map((s) => (
                 <div
                   key={s.label}

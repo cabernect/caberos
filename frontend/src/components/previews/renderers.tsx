@@ -111,7 +111,7 @@ function MarkdownView({ content, truncated }: { content: string; truncated?: boo
           {content}
         </pre>
       ) : (
-        <div className="prose-sm max-w-none text-[13px] text-[var(--ink)]">
+        <div className="markdown-body max-w-none text-[13px] text-[var(--ink)]">
           <Markdown>{content}</Markdown>
         </div>
       )}

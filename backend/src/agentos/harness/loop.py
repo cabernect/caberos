@@ -140,6 +140,7 @@ class Harness:
         attachments: list[Any] | None = None,
         skill: str | None = None,
         parent_config: AgentConfig | None = None,
+        resolved_skills: list[Any] | None = None,
     ) -> RunResult:
         """Execute the agent loop (D19 steps 7-11).
 
@@ -238,6 +239,54 @@ class Harness:
             except Exception:
                 browser_profiles = []
 
+        # W6: resolve the effective skill set from the DB (published +
+        # assigned) + live agent-local workspace scan. The pipeline normally
+        # resolves once and passes it in (so the manifest pins match the
+        # menu); direct harness callers (subagents) resolve here.
+        builder_draft: dict | None = None
+        forced_skill_rendered: dict | None = None
+        _db = getattr(syscall_handler, "db", None)
+        if _db is not None:
+            from sqlalchemy import select as _select
+
+            from ..models.skill import Skill
+            from ..skills.loader import render_skill_dir
+            from ..skills.resolution import pinned_dir, resolve_effective_skills
+
+            if resolved_skills is None:
+                try:
+                    resolved_skills = await resolve_effective_skills(_db, agent_config.id)
+                except Exception:
+                    resolved_skills = []
+
+            # A draft Skill row linked to this session makes it a builder
+            # session — force-load skill-creator and inject the overlay.
+            if getattr(session, "id", None):
+                try:
+                    draft = await _db.scalar(
+                        _select(Skill).where(
+                            Skill.builder_session_id == session.id,
+                            Skill.status == "draft",
+                        )
+                    )
+                    if draft is not None:
+                        builder_draft = {"id": draft.id, "name": draft.name}
+                        if not skill:
+                            skill = "skill-creator"
+                except Exception:
+                    builder_draft = None
+
+            # Render a forced skill from the pinned revision dir so a mid-run
+            # publish can't serve content the menu didn't advertise.
+            if skill and resolved_skills:
+                hit = next((s for s in resolved_skills if s.name == skill), None)
+                if hit is not None:
+                    try:
+                        path = await pinned_dir(_db, hit, run_id)
+                        forced_skill_rendered = render_skill_dir(path, hit.scope)
+                    except Exception:
+                        forced_skill_rendered = None
+
         system_prompt = assemble_system_prompt(
             agent_config,
             message,
@@ -248,6 +297,9 @@ class Harness:
             supports_vision=supports_vision,
             enabled_caps=visible_capability_names,
             browser_profiles=browser_profiles,
+            resolved_skills=resolved_skills,
+            forced_skill_rendered=forced_skill_rendered,
+            builder_draft=builder_draft,
         )
         tool_schemas = assemble_tool_schemas(
             agent_config,

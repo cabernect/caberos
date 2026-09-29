@@ -97,19 +97,77 @@ export interface AgentVersion {
 }
 
 export interface Skill {
+  /** Governed Skill row id — null for loose file entries. */
+  id: string | null;
   name: string;
   type: "directory" | "file";
   description: string;
+  status?: string;
 }
 
+// W6 Skills Studio — DB-backed skill library.
+export type SkillScope = "built-in" | "global" | "agent-local";
+export type SkillStatus = "draft" | "published" | "disabled" | "archived";
+
 export interface SkillInfo {
+  id: string;
   name: string;
   description: string;
-  source: string;
-  path: string;
+  scope: SkillScope;
+  status: SkillStatus;
+  owner_agent_id: string | null;
+  owner_name: string | null;
+  availability: "all" | "selected";
+  assigned_agent_ids: string[];
+  assigned_names: string[];
+  current_revision: number | null;
   resource_count: number;
-  license?: string;
-  compatibility?: string;
+  builder_session_id: string | null;
+  updated_at: string | null;
+}
+
+export interface SkillRevisionInfo {
+  id: string;
+  revision_number: number;
+  content_hash: string;
+  change_summary: string | null;
+  source_run_id: string | null;
+  validation_result: { errors?: string[]; warnings?: string[] };
+  is_current: boolean;
+  created_at: string | null;
+}
+
+export interface SkillDetail extends SkillInfo {
+  body: string;
+  license: string;
+  compatibility: string;
+  allowed_tools: string;
+  revisions: SkillRevisionInfo[];
+  validation: { errors: string[]; warnings: string[]; stats: Record<string, number> };
+  usage: { run_id: string; status: string; created_at: string | null }[];
+}
+
+export interface EffectiveSkill {
+  name: string;
+  description: string;
+  scope: SkillScope;
+  skill_id: string | null;
+  revision_id: string | null;
+  pin: string;
+  shadows: string[];
+}
+
+export interface SkillCandidate {
+  path: string;
+  dir_name: string;
+  name: string;
+  description: string;
+}
+
+export interface SkillImportResult {
+  imported: { id: string; name: string }[];
+  errors?: string[];
+  candidates?: SkillCandidate[];
 }
 
 export interface WorkspaceEntry {

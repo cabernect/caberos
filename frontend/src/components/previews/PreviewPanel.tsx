@@ -280,7 +280,7 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, cla
         className={
           expanded
             ? "fixed inset-x-0 top-[2.5vh] bottom-[2.5vh] z-50 mx-auto flex w-[min(1240px,95vw)] flex-col overflow-hidden rounded-[10px] border border-[var(--border)] bg-[var(--white)] shadow-2xl"
-            : `flex h-full flex-col border-l border-[var(--border)] bg-[var(--white)] ${className || ""}`
+            : `flex h-full flex-col border-l border-[var(--border)] bg-[var(--sidebar)] ${className || ""}`
         }
         role="complementary"
         aria-label="File preview"

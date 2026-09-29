@@ -155,7 +155,7 @@ export function Mcps() {
         <div className="flex-1 overflow-y-auto px-8 py-6">
           <div className="mx-auto max-w-3xl">
             {/* Tab toggle */}
-            <div className="mb-4 flex gap-1 border-b" style={{ borderColor: "#E0DFDC" }}>
+            <div className="mb-4 flex gap-1 border-b" style={{ borderColor: "var(--border)" }}>
               <TabButton active={tab === "mine"} onClick={() => setTab("mine")} icon={<Plug className="h-3.5 w-3.5" />}>
                 My Servers
               </TabButton>
@@ -361,8 +361,8 @@ function AddServerForm({ onAdded }: { onAdded: () => void }) {
 
   return (
     <div
-      className="mb-4 rounded-[8px] border p-4"
-      style={{ borderColor: "var(--border)", background: "var(--white)" }}
+      className="mb-4 rounded-xl p-4"
+      style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
     >
       <div className="mb-3 flex items-center justify-between">
         <h3 className="text-[14px] font-semibold text-[var(--ink)]">Add MCP Server</h3>
@@ -408,7 +408,7 @@ function AddServerForm({ onAdded }: { onAdded: () => void }) {
                 placeholder="e.g. Outlook"
                 required
                 className="w-full rounded-[5px] border px-3 py-2 text-[13px]"
-                style={{ borderColor: "#E0DFDC", background: "var(--surface)", color: "var(--ink)" }}
+                style={{ borderColor: "var(--border)", background: "var(--surface)", color: "var(--ink)" }}
               />
             </div>
             <div>
@@ -417,7 +417,7 @@ function AddServerForm({ onAdded }: { onAdded: () => void }) {
                 value={transport}
                 onChange={(e) => setTransport(e.target.value)}
                 className="w-full rounded-[5px] border px-3 py-2 text-[13px]"
-                style={{ borderColor: "#E0DFDC", background: "var(--surface)", color: "var(--ink)" }}
+                style={{ borderColor: "var(--border)", background: "var(--surface)", color: "var(--ink)" }}
               >
                 <option value="stdio">stdio (local process)</option>
                 <option value="http">http (remote server)</option>
@@ -433,7 +433,7 @@ function AddServerForm({ onAdded }: { onAdded: () => void }) {
                     placeholder="e.g. uvx outlook-graph-mcp"
                     required
                     className="w-full rounded-[5px] border px-3 py-2 font-mono text-[13px]"
-                    style={{ borderColor: "#E0DFDC", background: "var(--surface)", color: "var(--ink)" }}
+                    style={{ borderColor: "var(--border)", background: "var(--surface)", color: "var(--ink)" }}
                   />
                 </div>
                 <div>
@@ -443,7 +443,7 @@ function AddServerForm({ onAdded }: { onAdded: () => void }) {
                     onChange={(e) => setArgs(e.target.value)}
                     placeholder="e.g. --port 3000"
                     className="w-full rounded-[5px] border px-3 py-2 font-mono text-[13px]"
-                    style={{ borderColor: "#E0DFDC", background: "var(--surface)", color: "var(--ink)" }}
+                    style={{ borderColor: "var(--border)", background: "var(--surface)", color: "var(--ink)" }}
                   />
                 </div>
               </>
@@ -456,7 +456,7 @@ function AddServerForm({ onAdded }: { onAdded: () => void }) {
                   placeholder="https://mcp-server.example.com"
                   required
                   className="w-full rounded-[5px] border px-3 py-2 font-mono text-[13px]"
-                  style={{ borderColor: "#E0DFDC", background: "var(--surface)", color: "var(--ink)" }}
+                  style={{ borderColor: "var(--border)", background: "var(--surface)", color: "var(--ink)" }}
                 />
               </div>
             )}
@@ -470,7 +470,7 @@ function AddServerForm({ onAdded }: { onAdded: () => void }) {
                 placeholder='{"API_KEY": "{{credential_value}}"}'
                 rows={2}
                 className="w-full rounded-[5px] border px-3 py-2 font-mono text-[12px]"
-                style={{ borderColor: "#E0DFDC", background: "var(--surface)", color: "var(--ink)" }}
+                style={{ borderColor: "var(--border)", background: "var(--surface)", color: "var(--ink)" }}
               />
             </div>
             {error && (
@@ -531,7 +531,7 @@ function AddServerForm({ onAdded }: { onAdded: () => void }) {
                 rows={10}
                 required
                 className="w-full rounded-[5px] border px-3 py-2 font-mono text-[12px]"
-                style={{ borderColor: "#E0DFDC", background: "var(--surface)", color: "var(--ink)" }}
+                style={{ borderColor: "var(--border)", background: "var(--surface)", color: "var(--ink)" }}
               />
             </div>
             {error && (
@@ -578,7 +578,7 @@ function ServerCard({
   onToolEnabledChange: (toolName: string, enabled: boolean) => void;
   onCredentialChanged: () => void;
 }) {
-  const statusColor = server.connected ? "#6A8216" : "#999";
+  const statusColor = server.connected ? "var(--accent)" : "var(--ink-3)";
   const statusText = server.connected ? "connected" : server.enabled ? "disconnected" : "disabled";
   const needsApiKey = server.auth_type === "api_key" && !server.connected && server.enabled;
   const needsOAuth = server.auth_type === "oauth" && !server.connected && server.enabled;
@@ -589,8 +589,8 @@ function ServerCard({
 
   return (
     <div
-      className="rounded-[8px] border"
-      style={{ borderColor: "#E0DFDC", background: "var(--white)" }}
+      className="rounded-xl"
+      style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
     >
       {/* Header row */}
       <div className="flex items-center gap-3 p-4">
@@ -745,7 +745,7 @@ function ServerCard({
             }}
             disabled={connecting}
             className="rounded-[4px] p-1 transition"
-            style={{ background: "none", border: "1px solid #E0DFDC", cursor: connecting ? "not-allowed" : "pointer" }}
+            style={{ background: "none", border: "1px solid var(--border)", cursor: connecting ? "not-allowed" : "pointer" }}
             title="Reconnect"
           >
             <RefreshCw
@@ -757,7 +757,7 @@ function ServerCard({
         <button
           onClick={onDelete}
           className="rounded-[4px] p-1 transition"
-          style={{ background: "none", border: "1px solid #E0DFDC", cursor: "pointer" }}
+          style={{ background: "none", border: "1px solid var(--border)", cursor: "pointer" }}
           title="Remove"
         >
           <Trash2 className="h-3.5 w-3.5" style={{ color: "var(--danger)" }} />
@@ -842,7 +842,7 @@ function ServerCard({
 
       {/* Expanded — tools list */}
       {expanded && (
-        <div className="border-t px-4 py-3" style={{ borderColor: "#E0DFDC" }}>
+        <div className="border-t px-4 py-3" style={{ borderColor: "var(--border)" }}>
           {server.command && (
             <div className="mb-3">
               <span className="font-mono text-[10px] uppercase tracking-wider text-[var(--ink-3)]">Command</span>
@@ -1036,7 +1036,7 @@ function CredentialForm({
   return (
     <div
       className="border-t px-4 py-3"
-      style={{ borderColor: "#E0DFDC", background: "var(--surface)" }}
+      style={{ borderColor: "var(--border)", background: "var(--surface)" }}
     >
       <form onSubmit={handleSave} className="space-y-2">
         <div className="flex items-center gap-2">
@@ -1060,7 +1060,7 @@ function CredentialForm({
             autoFocus
             className="flex-1 rounded-[5px] border px-3 py-2 font-mono text-[12px]"
             style={{
-              borderColor: "#E0DFDC",
+              borderColor: "var(--border)",
               background: "var(--white)",
               color: "var(--ink)",
             }}
@@ -1085,7 +1085,7 @@ function CredentialForm({
             style={{
               background: "none",
               color: "var(--ink-3)",
-              border: "1px solid #E0DFDC",
+              border: "1px solid var(--border)",
               cursor: "pointer",
             }}
           >
@@ -1153,7 +1153,7 @@ function CredentialManager({
   if (!envTemplate && !hasCredentials) return null;
 
   return (
-    <div className="mt-3 border-t pt-3" style={{ borderColor: "#E0DFDC" }}>
+    <div className="mt-3 border-t pt-3" style={{ borderColor: "var(--border)" }}>
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Key className="h-3.5 w-3.5" style={{ color: "var(--ink-3)" }} />
@@ -1323,7 +1323,7 @@ function CatalogBrowser({
             placeholder="Search MCP servers…"
             className="w-full rounded-[6px] border py-2 pl-9 pr-3 text-[13px]"
             style={{
-              borderColor: "#E0DFDC",
+              borderColor: "var(--border)",
               background: "var(--white)",
               color: "var(--ink)",
             }}
@@ -1350,7 +1350,7 @@ function CatalogBrowser({
         <div
           className="mb-4 rounded-[6px] border px-3 py-2 text-[12px]"
           style={{
-            borderColor: "#E0DFDC",
+            borderColor: "var(--border)",
             background: "var(--surface)",
             color: "var(--ink-2)",
           }}
@@ -1369,16 +1369,16 @@ function CatalogBrowser({
           <p className="text-[14px] text-[var(--ink-3)]">No servers found</p>
         </div>
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3">
           {entries.map((entry) => {
             const isInstalled = installedNames.has(entry.name);
             return (
               <div
                 key={entry.name}
-                className="flex flex-col rounded-[8px] border p-4"
+                className="flex flex-col rounded-xl p-4 transition-shadow hover:shadow-md"
                 style={{
-                  borderColor: "#E0DFDC",
-                  background: "var(--white)",
+                  border: "1px solid var(--border)",
+                  background: "var(--sidebar)",
                 }}
               >
                 {/* Header */}
@@ -1434,8 +1434,8 @@ function CatalogBrowser({
                       className="inline-block rounded-[5px] px-3 py-1.5 text-[12px] font-medium"
                       style={{
                         background: "var(--surface)",
-                        color: "#6A8216",
-                        border: "1px solid #D4E0A8",
+                        color: "var(--accent)",
+                        border: "1px solid color-mix(in srgb, var(--accent) 40%, transparent)",
                       }}
                     >
                       Installed
@@ -1491,7 +1491,7 @@ function CategoryChip({
       style={{
         background: active ? "var(--accent)" : "var(--surface)",
         color: active ? "#fff" : "var(--ink-2)",
-        border: "1px solid #E0DFDC",
+        border: "1px solid var(--border)",
         cursor: "pointer",
       }}
     >

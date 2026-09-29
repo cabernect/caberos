@@ -631,32 +631,42 @@ async def test_url_preview_extracts_title(client, workspace_root, monkeypatch):
 
 
 @pytest.fixture
-def skills_dir(tmp_path, monkeypatch):
-    """Point the skills API at a throwaway skill directory."""
-    from agentos.api import skills as skills_api
+async def seeded_skill(tmp_path, monkeypatch, db):
+    """Publish a global skill through the W6 path; return (skill_id, rev_dir)."""
+    import agentos.config as cfg
 
-    root = tmp_path / "skills"
-    (root / "demo-skill" / "refs").mkdir(parents=True)
-    (root / "demo-skill" / "SKILL.md").write_text("---\nname: demo-skill\n---\n# Demo")
-    (root / "demo-skill" / "refs" / "guide.md").write_text("# Guide\n\nsteps")
-    (root / "demo-skill" / "refs" / "data.csv").write_text("a,b\n1,2\n")
-    monkeypatch.setattr(skills_api, "SKILLS_DIR", root)
-    return root
+    monkeypatch.setattr(cfg.settings, "skills_store_root", tmp_path / "store")
+    monkeypatch.setattr(cfg.settings, "skills_drafts_root", tmp_path / "drafts")
+    monkeypatch.setattr(cfg.settings, "workspace_root", tmp_path / "ws")
+    from agentos.skills import service
+
+    src = tmp_path / "src" / "demo-skill"
+    (src / "refs").mkdir(parents=True)
+    (src / "SKILL.md").write_text("---\nname: demo-skill\ndescription: demo\n---\n# Demo")
+    (src / "refs" / "guide.md").write_text("# Guide\n\nsteps")
+    (src / "refs" / "data.csv").write_text("a,b\n1,2\n")
+    draft = await service.import_draft(db, name="demo-skill", source_dir=src)
+    await service.publish(db, draft, scope="global")
+    await db.commit()
+    rev_dir = tmp_path / "store" / draft.id / "rev-1"
+    return draft.id, rev_dir
 
 
-async def test_skill_resources_lists_files(client, skills_dir):
-    resp = await client.get("/api/skills/demo-skill/resources")
+async def test_skill_resources_lists_files(client, seeded_skill):
+    skill_id, _ = seeded_skill
+    resp = await client.get(f"/api/skills/{skill_id}/files")
     assert resp.status_code == 200
-    paths = {r["path"] for r in resp.json()["resources"]}
+    paths = {r["path"] for r in resp.json()["files"]}
     assert "SKILL.md" in paths
     assert "refs/guide.md" in paths
 
-    resp = await client.get("/api/skills/no-such/resources")
+    resp = await client.get("/api/skills/no-such/files")
     assert resp.status_code == 404
 
 
-async def test_skill_preview_renders_markdown(client, skills_dir):
-    resp = await client.get("/api/skills/demo-skill/preview?path=refs/guide.md")
+async def test_skill_preview_renders_markdown(client, seeded_skill):
+    skill_id, _ = seeded_skill
+    resp = await client.get(f"/api/skills/{skill_id}/preview?path=refs/guide.md")
     assert resp.status_code == 200
     data = resp.json()
     assert data["kind"] == "markdown"
@@ -664,25 +674,27 @@ async def test_skill_preview_renders_markdown(client, skills_dir):
     assert data["artifact"] is None
 
 
-async def test_skill_preview_containment_blocks_escape(client, skills_dir):
-    resp = await client.get("/api/skills/demo-skill/preview?path=../outside.txt")
+async def test_skill_preview_containment_blocks_escape(client, seeded_skill):
+    skill_id, _ = seeded_skill
+    resp = await client.get(f"/api/skills/{skill_id}/preview?path=../outside.txt")
     assert resp.status_code in (403, 404)
     resp = await client.get("/api/skills/..%2fpreview?path=x")
     assert resp.status_code in (400, 404, 422)
 
 
-async def test_skill_raw_and_pdf_page(client, skills_dir):
-    (skills_dir / "demo-skill" / "refs" / "doc.pdf").write_bytes(_pdf_bytes())
+async def test_skill_raw_and_pdf_page(client, seeded_skill):
+    skill_id, rev_dir = seeded_skill
+    (rev_dir / "refs" / "doc.pdf").write_bytes(_pdf_bytes())
 
-    resp = await client.get("/api/skills/demo-skill/raw?path=refs/data.csv")
+    resp = await client.get(f"/api/skills/{skill_id}/raw?path=refs/data.csv")
     assert resp.status_code == 200
     assert resp.content == b"a,b\n1,2\n"
 
-    resp = await client.get("/api/skills/demo-skill/pdf-page?path=refs/doc.pdf&page=1")
+    resp = await client.get(f"/api/skills/{skill_id}/pdf-page?path=refs/doc.pdf&page=1")
     assert resp.status_code == 200
     assert resp.content[:8] == b"\x89PNG\r\n\x1a\n"
 
-    resp = await client.get("/api/skills/demo-skill/pdf-page?path=refs/data.csv&page=1")
+    resp = await client.get(f"/api/skills/{skill_id}/pdf-page?path=refs/data.csv&page=1")
     assert resp.status_code == 400
 
 

@@ -160,8 +160,8 @@ export function Traces() {
                       <div
                         key={a.id}
                         onClick={() => navigate(`/traces/${a.id}`)}
-                        className="cursor-pointer rounded-[8px] border p-4 transition hover:border-[var(--accent)]"
-                        style={{ borderColor: "var(--border)", background: "var(--white)" }}
+                        className="cursor-pointer rounded-xl p-4 transition-shadow hover:shadow-md"
+                        style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
                       >
                         <div className="flex items-center justify-between">
                           <h3 className="text-[15px] font-semibold text-[var(--ink)]">{a.name}</h3>
@@ -200,7 +200,7 @@ export function Traces() {
               <div>
                 {/* Agent info header */}
                 {activeAgent && (
-                  <div className="mb-4 rounded-[8px] border p-4" style={{ borderColor: "var(--border)", background: "var(--white)" }}>
+                  <div className="mb-4 rounded-xl p-4" style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}>
                     <h2 className="text-[16px] font-semibold text-[var(--ink)]">{activeAgent.name}</h2>
                     <div className="mt-2 flex gap-6 text-[12px] text-[var(--ink-2)]">
                       <span>ID: <span className="font-mono">{activeAgent.id.slice(0, 8)}</span></span>
@@ -216,9 +216,9 @@ export function Traces() {
                 ) : runs.length === 0 ? (
                   <p className="py-8 text-center text-[13px] text-[var(--ink-3)]">No runs for this agent</p>
                 ) : (
-                  <div className="overflow-x-auto rounded-[8px] border" style={{ borderColor: "var(--border)" }}>
+                  <div className="overflow-x-auto rounded-xl" style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}>
                     <table className="w-full text-[12px]">
-                      <thead style={{ background: "var(--surface)" }}>
+                      <thead style={{ background: "var(--hover)" }}>
                         <tr style={{ borderBottom: "1px solid var(--border)" }}>
                           <th className="px-3 py-2 text-left font-medium text-[var(--ink-2)]">Status</th>
                           <th className="px-3 py-2 text-left font-medium text-[var(--ink-2)]">Trigger</th>
@@ -230,11 +230,11 @@ export function Traces() {
                         </tr>
                       </thead>
                       <tbody>
-                        {runs.map((r) => (
+                        {runs.map((r, i) => (
                           <tr
                             key={r.id}
                             className="cursor-pointer transition hover:bg-[var(--surface)]"
-                            style={{ borderBottom: "1px solid var(--border)" }}
+                            style={{ borderBottom: i === runs.length - 1 ? "none" : "1px solid var(--border)" }}
                             onClick={() => navigate(`/traces/${r.agent_id}/${r.id}`)}
                           >
                             <td className="px-3 py-2">
@@ -317,7 +317,7 @@ function RunTraceView({
       </button>
 
       {/* Run header */}
-      <div className="mb-4 rounded-[8px] border p-4" style={{ borderColor: "var(--border)", background: "var(--white)" }}>
+      <div className="mb-4 rounded-xl p-4" style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}>
         <div className="flex items-start justify-between">
           <div>
             <h3 className="text-[16px] font-semibold text-[var(--ink)]">
