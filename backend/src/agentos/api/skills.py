@@ -745,6 +745,8 @@ async def promote_skill(
 ) -> dict:
     """Promote agent-local → global on the same row (history preserved)."""
     skill = await _skill_row(db, skill_id)
+    if skill.scope != "agent-local":
+        raise HTTPException(status_code=400, detail="only agent-local skills can be promoted")
     result = await _validate_now(db, skill)
     if result["errors"]:
         raise HTTPException(
@@ -752,13 +754,12 @@ async def promote_skill(
             detail={"message": "validation failed", "errors": result["errors"]},
         )
     try:
-        revision = await service.publish(
+        revision = await service.promote(
             db,
             skill,
-            scope="global",
             availability=body.availability,
             agent_ids=body.agent_ids,
-            change_summary=body.change_summary or "promoted to global",
+            change_summary=body.change_summary,
             validation=result,
         )
     except SkillError as e:

@@ -152,7 +152,7 @@ empty and those skills loaded — masking the bug in light testing.
 
 **Fix applied:** `r.created_at` → `r.started_at` (`skills.py:522`).
 Regression test:
-`test_skills_v6.py::test_detail_usage_lists_runs_pinning_revision`.
+`test_skills_studio.py::test_detail_usage_lists_runs_pinning_revision`.
 Verified live: `algorithmic-art` detail → 200 with 11 usage rows.
 
 ### B7 — Skill duplicate without an owner agent returns 500 (FIXED)
@@ -161,7 +161,7 @@ Verified live: `algorithmic-art` detail → 200 with 11 usage rows.
 
 **Root cause:** the route passes `None` to the duplicate service, which joins that value into the agent workspace path while checking for a name collision; the resulting `TypeError` is not converted to a 4xx response. Reproduced against a published test global skill. Sev-1 per W6 test-plan rule for any 500.
 
-**Fix applied:** `service.duplicate` now supports ownerless duplication — the draft lands in `data/skills-drafts/{name}` (same convention as `create_draft`/`import_draft`) with scope `global`/status `draft`, and the collision loop checks ownerless draft rows + the drafts dir instead of the workspace path. Signature corrected to `owner_agent_id: str | None`. Regression: `test_skills_v6.py::TestW11Regressions::test_duplicate_without_owner_lands_ownerless_draft`.
+**Fix applied:** `service.duplicate` now supports ownerless duplication — the draft lands in `data/skills-drafts/{name}` (same convention as `create_draft`/`import_draft`) with scope `global`/status `draft`, and the collision loop checks ownerless draft rows + the drafts dir instead of the workspace path. Signature corrected to `owner_agent_id: str | None`. Regression: `test_skills_studio.py::TestW11Regressions::test_duplicate_without_owner_lands_ownerless_draft`.
 
 ### B8 — Archived skills remain in the `all` view (FIXED)
 
@@ -210,6 +210,24 @@ Verified live: `algorithmic-art` detail → 200 with 11 usage rows.
 **Root cause:** the resource-reference regex retains the `#anchor` fragment and validation calls `Path.exists()` on the path-plus-fragment as if it were a filename. Strip the fragment before checking the file path, and validate the heading separately if anchors are part of the contract.
 
 **Fix applied:** the existence check strips `#fragment` via `str.partition("#")` before resolving inside the skill dir; bare `#`-refs are skipped, and the error message still shows the original reference for readability. Anchor-target verification deferred (fragments resolve to headings, not files). Regression: `test_anchor_fragment_refs_resolve`.
+
+### B14 — Promote route accepts global and built-in skills (FIXED)
+
+**Symptom:** `POST /api/skills/{id}/promote` returned HTTP 200 for an already-global skill and for built-in `algorithmic-art`, although A22 expects both to be rejected. Promoting the built-in changed its DB scope to `global` and current revision to 2, removing it from the Built-in view.
+
+**Root cause:** the promote route calls `service.publish(..., scope="global")` without checking the row is `agent-local`; `service.publish` accepts built-ins and global rows.
+
+**Recovery:** this built-in request was a testing mistake; the plan explicitly warned not to attempt it. I stopped and disclosed it, then restored `algorithmic-art` to built-in revision 1 and removed only the test-created rev-2 row/store copy after the user authorized restoration. The shipped source directory and revision-1 hash were verified unchanged.
+
+**Fix applied:** the route now rejects non-`agent-local` rows with HTTP 400 before validating, and calls `service.promote` (which keeps its own scope guard) instead of `service.publish` directly; `promote` gained `availability`/`agent_ids`/`validation` passthrough params so the route keeps its body semantics. Regressions: `test_promote_rejects_global_skill`, `test_promote_rejects_builtin_skill` (both assert 400, scope/`current_revision_id` unchanged, no new SkillRevision). Re-verified live: `POST /promote` on built-in `algorithmic-art` → 400, detail still `scope=built-in`, `current_revision=1`.
+
+### B15 — Skills main pane collapses when a narrow viewport has the drawer open (FIXED)
+
+**Symptom:** at 680×900 with the sidebar expanded and the drawer at its 380px minimum, the main pane measured 60px, its toolbar 64px, and the search remained 160px wide. At the stored 560px drawer width the main pane collapsed to 0px. The full-width search passes at 680px with the drawer closed and at 1280px with the drawer open, but this narrow/open combination is unusable.
+
+**Root cause:** the right-docked drawer is non-shrinking beside the fixed sidebar; the main flex pane can shrink to almost nothing rather than overlaying or clamping the drawer against the remaining viewport width.
+
+**Fix applied:** main pane + drawer now sit in a measured content region (`ResizeObserver` on a `relative flex min-w-0 flex-1` wrapper, measured independent of the docked drawer — no feedback loop). When `contentWidth - drawerWidth < 420` (`MAIN_MIN_WIDTH`) the drawer switches to overlay mode: `absolute inset-y-0 right-0 z-30 shadow-xl`, width `min(drawerWidth, contentWidth)`, main pane keeps the full content width underneath; otherwise it docks exactly as before. Resize handle, the 380/1100/560 width limits, and the `caberos.skillDrawer.width` storage key are unchanged. Re-verified live: at 680×900 + 380px drawer the drawer is `position:absolute` and the main pane keeps ~436px; at 1280×900 the drawer stays docked (`position:relative`) and the grid is unchanged.
 
 ## Tests first
 

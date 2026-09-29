@@ -43,6 +43,8 @@ const STATUS_STYLE: Record<string, string> = {
   archived: "var(--ink-3)",
 };
 
+const MAIN_MIN_WIDTH = 420;
+
 export function Skills() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [skills, setSkills] = useState<SkillInfo[]>([]);
@@ -66,6 +68,23 @@ export function Skills() {
     dragging: drawerDragging,
     startResize: startDrawerResize,
   } = useResizableWidth({ initial: 560, min: 380, max: 1100, storageKey: "caberos.skillDrawer.width" });
+
+  // Content region (main pane + drawer) — measured independently of the
+  // docked drawer so there's no feedback loop.
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [contentWidth, setContentWidth] = useState(0);
+
+  useEffect(() => {
+    const el = contentRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      setContentWidth(entries[0].contentRect.width);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const drawerOverlay = contentWidth > 0 && contentWidth - drawerWidth < MAIN_MIN_WIDTH;
 
   // Dialogs
   const [showCreate, setShowCreate] = useState(false);
@@ -312,6 +331,7 @@ export function Skills() {
         onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
       />
 
+      <div ref={contentRef} className="relative flex min-w-0 flex-1">
       <div className="flex min-w-0 flex-1 flex-col">
         {/* Header */}
         <PageHeader
@@ -459,11 +479,19 @@ export function Skills() {
         </div>
       </div>
 
-      {/* Detail drawer */}
+      {/* Detail drawer — docked when the main pane keeps room, overlay when not */}
       {detail && (
         <div
-          className="relative flex shrink-0 flex-col border-l border-[var(--border)] bg-[var(--surface)]"
-          style={{ width: `min(100%, ${drawerWidth}px)` }}
+          className={
+            drawerOverlay
+              ? "absolute inset-y-0 right-0 z-30 flex flex-col border-l border-[var(--border)] bg-[var(--surface)] shadow-xl"
+              : "relative flex shrink-0 flex-col border-l border-[var(--border)] bg-[var(--surface)]"
+          }
+          style={{
+            width: drawerOverlay
+              ? Math.min(drawerWidth, contentWidth)
+              : `min(100%, ${drawerWidth}px)`,
+          }}
         >
           <div
             onMouseDown={startDrawerResize}
@@ -584,6 +612,7 @@ export function Skills() {
           </div>
         </div>
       )}
+      </div>
 
       {/* Dialogs */}
       {showCreate && (

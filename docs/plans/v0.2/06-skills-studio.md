@@ -4,7 +4,7 @@
 > library with immutable revisions, effective resolution
 > (`agent-local > global > built-in`), run-pinned loads, hardened ZIP +
 > repo-URL imports landing as drafts, builder-mode sessions, and the React
-> Skills Studio. Suite: `test_skills_v6.py` + `test_skills_api.py` +
+> Skills Studio. Suite: `test_skills_studio.py` + `test_skills_api.py` +
 > updated syscall/preview tests — 694 backend tests pass.
 
 ## Outcome

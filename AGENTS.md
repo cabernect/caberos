@@ -195,7 +195,7 @@ Tickets **01–09 implemented**: smoke slice, real-model chat + SSE streaming, f
 - **Validation** (`skills/validate.py`): errors block publish; warnings (ungranted-but-real capabilities, missing license, token estimate) don't.
 - **Lifecycle:** publish/promote (scope change, history preserved)/duplicate/restore-as-new/disable/archive/purge; purge guarded by active-run manifest pins, built-ins never purge, agent-local purge also removes the live dir.
 - **API/UI:** `/api/skills` scoped views, `/effective`, detail, files/preview/raw/pdf-page (revision-aware), validate, export, drafts, import. React Skills Studio: scope views, detail tabs, publish dialog (scope + assignments), builder launch, import ZIP/URL.
-- **Verification:** `test_skills_v6.py` (24) + `test_skills_api.py` (10) + rewritten syscall/preview fixtures; 694 backend tests pass, `tsc -b` clean.
+- **Verification:** `test_skills_studio.py` (24) + `test_skills_api.py` (10) + rewritten syscall/preview fixtures; 694 backend tests pass, `tsc -b` clean.
 - **Deferred:** hub/registry, per-agent built-in disable, live-test subsystem.
 
 **Ticket 10 (Tauri Desktop App):** SHIPPED for macOS ARM64 (Apple Silicon). macOS Intel and Windows builds require cross-compilation/CI and are not yet set up.

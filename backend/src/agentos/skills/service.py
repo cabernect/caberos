@@ -337,13 +337,25 @@ async def publish(
 
 
 async def promote(
-    db: AsyncSession, skill: Skill, *, change_summary: str | None = None
+    db: AsyncSession,
+    skill: Skill,
+    *,
+    availability: str = "all",
+    agent_ids: list[str] | None = None,
+    change_summary: str | None = None,
+    validation: dict | None = None,
 ) -> SkillRevision:
     """Promote agent-local → global: same row, history preserved (Q7)."""
     if skill.scope != "agent-local":
         raise SkillError("only agent-local skills can be promoted")
     return await publish(
-        db, skill, scope="global", change_summary=change_summary or "promoted to global"
+        db,
+        skill,
+        scope="global",
+        availability=availability,
+        agent_ids=agent_ids,
+        change_summary=change_summary or "promoted to global",
+        validation=validation,
     )
 
 

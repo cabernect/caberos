@@ -99,7 +99,7 @@ BUILTIN=$(curl -s "$API?view=built-in" -H "$H" | python3 -c \
 
 | #   | case                                                             | expect |
 | --- | ---------------------------------------------------------------- | ------ |
-| B1  | `cd backend && uv run pytest tests/test_skills_v6.py tests/test_skills_api.py tests/test_skills_loader.py -v` | all pass (25 + 10 + loader cases at time of writing) |
+| B1  | `cd backend && uv run pytest tests/test_skills_studio.py tests/test_skills_api.py tests/test_skills_loader.py -v` | all pass (25 + 10 + loader cases at time of writing) |
 | B2  | `uv run pytest`                                                  | full suite green — no collateral regressions |
 | B3  | `cd frontend && npx tsc -b`                                      | clean |
 
