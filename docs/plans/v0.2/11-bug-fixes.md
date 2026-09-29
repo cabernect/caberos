@@ -237,6 +237,64 @@ Verified live: `algorithmic-art` detail → 200 with 11 usage rows.
 
 **Fix applied:** `loadSkills` now stamps each call with `++loadSeq.current` and only applies `setSkills`/`setError`/`setLoading(false)` when the sequence is still current — superseded responses are dropped. `handleImportResult` calls `setView("drafts")` only when switching views (the effect then issues the single `view=drafts` fetch) and calls `loadSkills()` directly when already on drafts. Re-verified live: importing a ZIP from the All view issues exactly one post-import `GET /api/skills?view=drafts` and every rendered card is a draft; importing while already on Drafts reloads drafts correctly; a fast `pdf` keystroke burst ends on the final query's result set.
 
+### B17 — `GET /api/elicitation` 500s when a pending elicitation has structured options (FIXED)
+
+**Symptom:** `GET /api/elicitation` returns HTTP 500 whenever any pending elicitation request carries `options` as a list of `{label, description}` objects — which is what `agent_ask_user` actually stores. Reproduced 2026-09-29 with one pending row (run `e07c28f5`, options `[{label, description}]`); the endpoint error disappears only when no structured-options rows are pending. This breaks the frontend's pending-questions surface for the common case.
+
+**Root cause:** `ElicitationOut.options` was declared `list[str] | None` in `backend/src/agentos/api/elicitation.py`, but the mediator normalizes every option — plain strings included — to `{label, description}` objects before persisting (`syscall/mediator.py:848-868`). `json.loads(r.options)` therefore always yields `list[dict]` and the response model fails to serialize (FastAPI ResponseValidationError → 500) for any options-bearing row.
+
+**Fix applied:** added `ElicitationOption` (`label: str`, `description: str = ""`) and widened `ElicitationOut.options` to `list[ElicitationOption | str] | None` (`api/elicitation.py:25-42`), matching the `agent_ask_user` schema union — object rows serialize with their shape preserved and raw-string rows still pass. Swept for adjacent paths: `ElicitationOut` is used only by the list route (`respond` returns a plain dict, no by-id GET exists), so the single serializer covers every read path. Regressions: `test_elicitation.py::test_list_pending_elicitation_preserves_structured_options` (object options round-trip verbatim) and `test_list_pending_elicitation_plain_string_options` (raw-string rows serialize). Verified live: the reproducing row (run `e07c28f5`, four `{label, description}` options) returns 200 with the objects intact.
+
+### B18 — doc-coauthoring: section-by-section flow and reader tests skipped (FIXED)
+
+**Symptom (run `3c7c3d14` + `31f20a56`, real model):** skill loaded via `skills_load` and Stage 1 meta questions were asked with `agent_ask_user` ✅, but the run then ended with a question inline in the final message instead of an elicitation; on reply the whole `auth-module-decision.md` was written in one `write_file` — no proposed structure with `[To be written]` placeholders, no per-section drafting, and **no `run_subagent` reader tests** (Stage 3 absent entirely).
+
+**Suspected cause:** behavioral — the model compressed the three-stage process once it felt it had enough info. The skill text does not forbid single-shot drafting strongly enough to hold under "write it now" pressure.
+
+**Fix applied:** intro now states the three stages run in order and each **Done when** gates the next; Stage 2 gained an explicit "Skeleton first" step — the file is created with all agreed headings + `[To be written]` placeholders before any section prose is written, and "the file never jumps ahead of the conversation"; Stage 3's criterion now requires one `run_subagent` call per predicted question plus the contradiction pass ("reading the document yourself is not a substitute"). Built-ins reseeded at rev 1 with the fix.
+
+**Re-verified (run `9b6683a4`, 2026-09-29):** full process followed — skeleton file with 4 headings + `[To be written]` placeholders written before any prose, sections drafted incrementally across 3 `write_file` passes with elicitation between them, then 10 `run_subagent` calls (two rounds of 4 predicted-question readers + 1 contradiction pass). The subagent *calls* all failed with "Provider openai/anthropic not found" — a separate resolution defect, filed as B21 — and the final message honestly reported the reader check could not complete.
+
+### B19 — frontend-design: plan/critique/screenshot steps skipped (FIXED)
+
+**Symptom (run `01bce87d`, real model):** `skills_load` fired first ✅, but the transcript shows no compact design plan (color/type/layout/signature) written anywhere — not in a message and not as a file — no plan critique pass, and no `browser_open` + `browser_observe(visual)` screenshot of the rendered page (it was never served). Deliverable `roastery-landing.html` was produced in a single `write_file`.
+
+**Suspected cause:** behavioral — same class as B18: the skill's two-pass "plan → critique → build → critique rendered result" process collapses to a single generation step when the model is confident. The HTML itself was on-brief.
+
+**Fix applied:** the process section is now gated steps with a checkable artifact: Step 1 writes the plan (color/type/layout/signature) into `design-plan.md` *before any HTML/CSS exists*; Step 2 is a critique pass that names what was revised; Step 3 builds only from the revised plan; the **Done when** requires the plan artifact + named critique + plan-conformant page. Built-ins reseeded at rev 1 with the fix.
+
+**Re-verified (run `ab2d04ab`, 2026-09-29):** `skills_load` → `write_file design-plan.md` (5 hex colors, 3 type roles, ASCII wireframe, signature) → `terminal ls` → `write_file index.html`. A "Critique and revision" section names the defaults avoided and the changes made. No screenshot pass (page never served — conditional step).
+
+### B20 — browser-workflows: `browser_close` and URL citation skipped (FIXED)
+
+**Symptom (runs `2e20384d`, `c4174c27`, real model):** the observe→act→observe loop with refs worked (click `e7` revealed `SECRET-ORCHARD-42`), but the run ended without `browser_close` — leaving the managed browser session open — and the final answer reported the extracted text without citing the source URL. In run `2e20384d` the plain "summarize" task did not trigger `skills_load` at all (borderline: `web_fetch` was attempted first as required, then escalated legitimately when fetch TLS-failed).
+
+**Suspected cause:** behavioral — teardown/citation steps are the first to drop; also possibly a trigger-description gap for bare "summarize a URL" asks.
+
+**Fix applied:** (a) description rewritten to trigger on the user's ask — "read, summarize, or extract from a URL or web page; operate a site; pull data from a rendered page; test a web app" — since "web_fetch returns empty" was unknowable before trying; (b) a global rule added: every `browser_open` ends in `browser_close`, and extracted content names its URL; per-branch Done-when criteria for read/operate/test now require `browser_close`. Built-ins reseeded at rev 1 with the fix.
+
+**Re-verified (runs `5fe73fb7`, `e91a565a`, 2026-09-29):** bare "summarize this page: <url>" now triggers `skills_load`; `web_fetch` first, `browser_open` only after the TLS failure, and `browser_close` closes the session in both runs; the S5b answer cites `http://localhost:8899/` verbatim.
+
+### B21 — `run_subagent` model override accepts provider *names*, then fails "Provider X not found" (FIXED)
+
+**Symptom (run `9b6683a4`, 2026-09-29):** doc-coauthoring's reader tests issued `run_subagent` with `model: {"provider_id": "openai", "name": "gpt-4.1-mini"}` — all five failed `Provider openai not found`; a retry round with `{"provider_id": "anthropic"}` failed the same way. Provider ids in CaberOS are UUIDs (`providers.id`), not vendor names, so the override never resolves. The subagents work when `model` is omitted (they inherit the parent's model), but nothing tells the model that, and the error gives no hint that omitting `model` would have worked.
+
+**Suspected cause:** the `run_subagent` schema exposes `model.provider_id` without constraining it to configured providers, and the description ("Optional model override. Defaults to the parent's model") doesn't warn against guessing. Two candidate fixes: (a) tool description/schema — tell the model to omit `model` unless it has a real provider id, or validate `provider_id` against configured providers and return a corrective error listing valid ids; (b) resolution — fall back to the parent model when the override's `provider_id` doesn't resolve, and record the fallback in the audit record.
+
+**Fix applied:** combined both, minus silent fallback — `capabilities/tools/subagent.py::_resolve_provider_ref` resolves the override before the sub-agent spawns: a bare provider id wins; a provider *name* or *vendor type* resolves only when exactly one configured provider matches (the guessed-`"openai"` case now works, and the result carries `model_resolved: "openai -> <uuid>"`); zero or ambiguous matches return a corrective error naming the valid `id (name, type)` values and telling the caller to omit `model` to inherit the parent's model. The `model`/`provider_id` schema descriptions now say provider ids are UUIDs and omitting is the common case. Regressions: `test_subagent_isolation.py::TestSubAgentModelOverride` (6 tests — exact id, unique type, name match, ambiguous, unknown, non-string). 721 backend tests pass; live on :8081.
+
+**Re-verified (runs `d566fe28`, `4f1ed406`, 2026-09-29):** the provider-name resolution works end-to-end — a live `run_subagent` with `provider_id: "openai"` resolved to `a4da6653` and returned `model_resolved: "openai -> a4da6653-…"`. The sub-agent still cannot complete a tool-using task: it now dies one layer deeper on `approval_batch` — filed as B22. Note an empty `name` in the override is passed through to litellm verbatim (`The model '' does not exist`) rather than falling back to the parent's model name; whether that needs a fix can ride on B22.
+
+### B22 — `run_subagent` is broken for all tool-using sub-agents: `_SubAgentSyscallHandler.mediate` signature lacks `approval_batch`/`trigger` (FIXED)
+
+**Symptom (runs `4f1ed406` ×6 calls, `d566fe28`, 2026-09-29):** every `run_subagent` whose sub-agent attempts a tool call fails with `sub-agent failed: _SubAgentSyscallHandler.mediate() got an unexpected keyword argument 'approval_batch'`. doc-coauthoring's six reader tests all failed this way; a direct `capabilities: ["read_file"]` probe failed the same way. Repro rate: 100% for tool-using sub-agents.
+
+**Root cause:** `harness/loop.py:660-668` dispatches every tool call via `syscall_handler.mediate(..., approval_batch=…, trigger=…)`. Inside a sub-agent the handler is `_SubAgentSyscallHandler` (`capabilities/tools/subagent.py:318`), whose `mediate` signature still ends at `capability_catalog` — missing `approval_batch` and `trigger`, both added to `SyscallMediator.mediate` (`syscall/mediator.py:65-77`) by the approval-batching work. The wrapper also does not forward either kwarg to `self._parent.mediate`. The B21 unit tests never exercised a sub-agent tool call, so the drift was invisible to them.
+
+**Fix applied:** `_SubAgentSyscallHandler.mediate` now accepts `approval_batch` and `trigger` (same defaults as the mediator) and forwards both — so sub-agent calls keep approval-batching semantics and trigger attribution. Also took the B21 rider: an empty `model.name` in the override now falls back to the parent's model name instead of passing `""` to LiteLLM. Regression: `test_subagent_isolation.py::TestSubAgentWrapperForwarding` — a fake harness drives a real `mediate` call through the wrapper with the loop's kwargs and asserts both reach the parent mediator, with `is_sub_agent`/`sub_agent_id`/parent `run_id` stamped. 13 sub-agent tests pass; ruff clean; backend restarted on :8081.
+
+**Re-verified (runs `0e79f316`, `c47d551d`, 2026-09-29):** end-to-end on `caber`. (a) `run_subagent` with `capabilities: ["read_file"]` — the sub-agent's own `read_file` mediated cleanly, returned `ORCHARD-77`, `status: completed`. (b) override `{"provider_id":"openai","name":""}` resolved the provider (`model_resolved: "openai -> a4da6653-…"`), fell back to the parent's model name, and completed — both previously-broken paths now work. 13 `test_subagent_isolation` tests pass.
+
 ## Tests first
 
 - Fake HTTP MCP that 401s with `WWW-Authenticate` → server gains

@@ -28,15 +28,19 @@ Match complexity to the vision. Maximalist directions need elaborate execution; 
 
 Treat copy as design material — see "Writing in design" below.
 
-## Process: plan, critique, build, critique again
+## Process — two passes, gated
+
+The design process has hard ordering: **the written plan exists before any code does, and the critique happens between them.** Both are checkable — a page produced without them failed the process even if it looks good.
 
 For calibration: AI-generated design currently clusters around three looks: (1) a warm cream background (near #F4F1EA) with a high-contrast serif display and a terracotta accent; (2) a near-black background with a single bright acid-green or vermilion accent; (3) a broadsheet layout with hairline rules, zero border-radius, and dense newspaper-like columns. All three are legitimate for some briefs, but they are defaults rather than choices. Where the brief pins down a visual direction, follow it exactly — the brief's words always win, including when it asks for one of these looks. Where it leaves an axis free, spend that freedom on a choice made for this brief.
 
-Work in two passes. First, write a compact design plan: **Color** — 4–6 named hex values. **Type** — faces for 2+ roles (a characterful display face used with restraint, a complementary body face, a utility face for captions or data if needed). **Layout** — a one-sentence concept plus an ASCII wireframe; compare alternatives. **Signature** — the single element this page will be remembered by.
+**Step 1 — Write the plan.** Before any HTML/CSS exists, write a compact design plan into `design-plan.md` in the workspace (or into your reply if the task is conversational): **Color** — 4–6 named hex values. **Type** — faces for 2+ roles (a characterful display face used with restraint, a complementary body face, a utility face for captions or data if needed). **Layout** — a one-sentence concept plus an ASCII wireframe. **Signature** — the single element this page will be remembered by.
 
-Then review the plan against the brief: wherever it reads like the default you would produce for any similar page, revise it and say what you changed and why. Build only from the revised plan, deriving every color and type decision from it.
+**Step 2 — Critique the plan.** Read it back against the brief and list, in the file or reply, which parts are the default you would produce for *any* similar page — then revise those parts and say what changed and why. The brief's own direction always wins over this check.
 
-Watch CSS specificity as you write: type-based selectors (`.section`) and element-based ones (`.cta`) easily cancel each other's paddings and margins.
+**Step 3 — Build.** Derive every color and type decision from the revised plan. Watch CSS specificity: type-based selectors (`.section`) and element-based ones (`.cta`) easily cancel each other's paddings and margins.
+
+**Done when** `design-plan.md` (or the plan in the conversation) exists with all four parts, the critique pass names what was revised, and the built page follows the plan.
 
 ## Restraint and self-critique
 

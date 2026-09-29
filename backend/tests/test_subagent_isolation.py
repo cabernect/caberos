@@ -261,3 +261,146 @@ class TestSubAgentCapabilityIsolation:
             parent_config=parent_config,
         )
         assert result_term.allowed is False
+
+
+class TestSubAgentModelOverride:
+    """Regression for B21 — model.provider_id passed as a vendor name
+    ('openai') used to reach LiteLLM as a literal id and fail
+    'Provider openai not found'. The resolver now accepts a bare id, resolves
+    a unique name/type match, and otherwise returns a corrective error."""
+
+    async def _resolve(self, db, ref):
+        from agentos.capabilities.tools.subagent import _resolve_provider_ref
+
+        return await _resolve_provider_ref(db, ref)
+
+    async def test_exact_provider_id_wins(self, db):
+        from agentos.models.provider import Provider
+
+        db.add(Provider(id="prov-1", name="My OpenAI", type="openai"))
+        db.add(Provider(id="prov-2", name="Other", type="openai"))
+        await db.commit()
+
+        assert await self._resolve(db, "prov-1") == "prov-1"
+
+    async def test_vendor_type_resolves_when_unique(self, db):
+        from agentos.models.provider import Provider
+
+        db.add(Provider(id="prov-1", name="My OpenAI", type="openai"))
+        db.add(Provider(id="prov-2", name="Claude", type="anthropic"))
+        await db.commit()
+
+        assert await self._resolve(db, "anthropic") == "prov-2"
+
+    async def test_provider_name_resolves_case_insensitive(self, db):
+        from agentos.models.provider import Provider
+
+        db.add(Provider(id="prov-1", name="Opencode Zen", type="openai"))
+        await db.commit()
+
+        assert await self._resolve(db, "opencode zen") == "prov-1"
+
+    async def test_ambiguous_type_returns_corrective_error(self, db):
+        from agentos.models.provider import Provider
+
+        db.add(Provider(id="prov-1", name="OpenAI A", type="openai"))
+        db.add(Provider(id="prov-2", name="OpenAI B", type="openai"))
+        await db.commit()
+
+        result = await self._resolve(db, "openai")
+        assert isinstance(result, dict)
+        assert "ambiguous" in result["error"]
+        assert "prov-1" in result["error"] and "prov-2" in result["error"]
+        assert "omit 'model'" in result["error"]
+
+    async def test_unknown_ref_returns_corrective_error(self, db):
+        from agentos.models.provider import Provider
+
+        db.add(Provider(id="prov-1", name="My OpenAI", type="openai"))
+        await db.commit()
+
+        result = await self._resolve(db, "anthropic")
+        assert isinstance(result, dict)
+        assert "not a configured provider" in result["error"]
+        assert "prov-1" in result["error"]
+        assert "omit 'model'" in result["error"]
+
+    async def test_non_string_ref_returns_corrective_error(self, db):
+        result = await self._resolve(db, 42)
+        assert isinstance(result, dict)
+        assert "non-empty string" in result["error"]
+
+
+class TestSubAgentWrapperForwarding:
+    """Regression for B22 — _SubAgentSyscallHandler.mediate must accept and
+    forward every kwarg harness/loop.py passes to mediate() (approval_batch,
+    trigger, …). Exercises a sub-agent tool call end-to-end with fakes."""
+
+    async def test_wrapper_accepts_and_forwards_loop_kwargs(self, db, workspace):
+        from types import SimpleNamespace
+
+        from agentos.capabilities.tools.subagent import _execute_subagent
+
+        forwarded: dict = {}
+
+        class FakeParentHandler:
+            def __init__(self, db_session, ws):
+                self.db = db_session
+                self.workspace_path = ws
+                self.sandbox_mode = "unrestricted"
+
+            async def mediate(self, **kwargs):
+                forwarded.update(kwargs)
+                return SimpleNamespace(allowed=True, output={})
+
+        class FakeHarness:
+            async def run(self, *, syscall_handler, agent_config, session, **kw):
+                # Mirror loop.py's dispatch kwargs on a sub-agent tool call
+                await syscall_handler.mediate(
+                    call="call-1",
+                    session=session,
+                    agent_config=agent_config,
+                    run_id="ignored",
+                    event_emitter=None,
+                    capability_catalog=None,
+                    approval_batch="BATCH-OBJ",
+                    trigger="scheduled",
+                )
+                return SimpleNamespace(
+                    final_answer="done",
+                    total_turns=1,
+                    tokens_in=1,
+                    tokens_out=1,
+                    total_cost=0.0,
+                    status="completed",
+                )
+
+        parent = AgentConfig(
+            id="parent",
+            name="P",
+            model=ModelConfig(provider_id="prov", name="m"),
+        )
+        result = await _execute_subagent(
+            "sub-x",
+            {"task": "do a thing"},
+            workspace,
+            {
+                "parent_config": parent,
+                "_spawn_context": {
+                    "harness": FakeHarness(),
+                    "syscall_handler": FakeParentHandler(db, workspace),
+                    "session": _make_session(),
+                    "run_id": "run-1",
+                },
+            },
+        )
+
+        assert result["result"] == "done"
+        # Both new kwargs reached the real mediator…
+        assert forwarded["approval_batch"] == "BATCH-OBJ"
+        assert forwarded["trigger"] == "scheduled"
+        # …and the wrapper stamped the call as a sub-agent call under the
+        # parent's run, not the sub-agent's own run_id.
+        assert forwarded["is_sub_agent"] is True
+        assert forwarded["sub_agent_id"] == "sub-x"
+        assert forwarded["run_id"] == "run-1"

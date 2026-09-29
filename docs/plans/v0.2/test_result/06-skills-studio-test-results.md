@@ -186,3 +186,85 @@ B7–B15 are recorded in `docs/plans/v0.2/11-bug-fixes.md`:
 Cleanup removed test-created skills/drafts/runs/sessions, test notifications, W6 Playwright captures, and generated workspace files. API checks show no W6 skills/drafts, no `d26b139d` sessions or approvals, and no test notification rows. The scratch workspace is gone. The `skills-test` agent and all its residual DB data (1 agent, 1 AgentVersion, 1 Contact, 5 memory triples, 6 session-summary FTS rows) were then deleted directly from the DB with explicit user approval, since the application has no agent-delete endpoint. No references remain, and the agent's API lookup returns 404. The built-in `algorithmic-art` row remains built-in rev1 with its original bytes/hash. Pre-existing skills and other agents were preserved. Backend health is `ok`, frontend returns HTTP 200, theme is `light`, and drawer width is 560px.
 
 The W6 test-plan file is tracked and unmodified. This verification changed no product source and created no commit. The W6 report and W11 findings are modified by this run; `docs/plans/v0.2/07-rag-v2.md` is also modified in the worktree and was left untouched.
+
+## 6. Built-in skills smoke (real model, 2026-09-29)
+
+Behavior-level check of the five rewritten built-ins on agent `caber` (provider
+`gpt-6-luna`). Evidence = seq-ordered `tool_call` messages + audit results via
+`GET /api/runs/{run_id}`; `agent_ask_user` pauses were answered through
+`POST /api/elicitation/{id}/respond` (the list endpoint is broken — see B17).
+
+| # | Skill | Result | Evidence |
+|---|-------|--------|----------|
+| S1 | skill-creator | PASS | Draft `w6smoke-release-notes` + `launch_session` builder session `91d2b0a7`. Run `d27f7039`: 2 rounds of `agent_ask_user` *before* writing → `write_file` to `skill-drafts/w6smoke-release-notes/SKILL.md` → re-read + listed dir (self-check, "six checks") → final `agent_ask_user` → told operator to Validate + Publish from Drafts; never claimed to publish. Draft visible in `view=drafts`. |
+| S2 | doc-coauthoring | FAIL (B18) | Run `3c7c3d14`: `skills_load` ✅, meta questions via `agent_ask_user` ✅ — but the run ended asking a question inline in the final message (not via elicitation). On reply, run `31f20a56` wrote `auth-module-decision.md` in a single `write_file` — **no** section-by-section drafting, **no** `run_subagent` reader tests. 2 of 4 criteria missed. |
+| S3 | frontend-design | FAIL (B19) | Run `01bce87d`: `skills_load` ✅ first, then workspace scouting, then a single `write_file` producing `roastery-landing.html`. **No** written design plan (color/type/layout/signature) anywhere in the transcript, **no** critique pass, **no** `browser_open`/`browser_observe(visual)` screenshot (page was never served). |
+| S4 | office-documents | PASS | Session `48509bc0`, 3 sequential runs. ① `df1170e7`: `skills_load` → `skills_read_resource(specs.md)` → `artifact_create` xlsx → `artifact_revise` (real `base_revision_id`) → `artifact_inspect`; file at `artifacts/q3-budget.xlsx`. ② `729b2e8b`: `artifact_inspect` → `agent_ask_user` (ambiguous ask) → `artifact_revise` on real base rev → inspect. ③ `2ac34dc2`: `artifact_export_pdf` → `{"export_status":"exported","renderer":"reportlab"}` — honest status/renderer. No `terminal`/`write_file` raw Office bytes in any run. |
+| S5 | browser-workflows | PARTIAL (B20) | Session `817bc0f9`. ① `2e20384d`: `web_fetch` attempted first ✅ (failed with an SSL `WRONG_VERSION_NUMBER` — same environmental TLS issue as W4), then `browser_open` escalation was justified and honestly reported failure (chrome SSL error page). Skill not loaded for the plain summarize — borderline trigger miss. ② `c4174c27`: `skills_load` ✅ → `browser_open(localhost:8899)` → `browser_act click e7` → `browser_observe` showed `SECRET-ORCHARD-42` ✅; answer correct. **But** `browser_close` was never called and the final answer didn't cite the URL. |
+| NEG | — | PASS | Run `7630e13d` ("what is 2+2"): **zero** tool calls — no `skills_load` over-trigger; answered `4`. |
+
+Environment notes: `web_fetch`/`browser` hit TLS errors on `https://example.com`
+(environmental, matches W4's observation) — localhost http worked fine. Runs
+were otherwise clean; per-run token cost kept small via short prompts.
+
+New findings filed: **B17** (elicitation list 500), **B18** (doc-coauthoring
+process skipped), **B19** (frontend-design plan/critique skipped), **B20**
+(browser-workflows close/citation deviations).
+
+Cleanup after the smoke run: draft `w6smoke-release-notes` deleted; all six
+test sessions (+ their runs/messages/audit/elicitation rows) deleted via
+`DELETE /api/chat/caber/sessions/{id}`; workspace files `roastery-landing.html`,
+`auth-module-decision.md`, `skill-drafts/w6smoke-release-notes/`, and
+`artifacts/q3-budget.{xlsx,pdf}` removed (artifact rows `dfcb692e`/`3528765d`
+deleted from the DB after a `/tmp` backup — no artifact-delete API exists);
+the minted test operator-session row was removed; the :8899 helper page was
+stopped. Zero remaining references; `integrity_check` ok; sessions for `caber`
+back to 38; skills back to the 6 pre-existing rows.
+
+### Retest after B17–B20 fixes (2026-09-29, same prompts, reseeded rev-1 built-ins)
+
+| # | Skill | Result | Evidence |
+|---|-------|--------|----------|
+| S2 | doc-coauthoring | PASS (B18 fixed; B21 blocks Stage 3 checks) | Run `9b6683a4`: `skills_load` → 4 `agent_ask_user` rounds → skeleton `auth-module-decision.md` with 4 headings + `[To be written]` placeholders written **before** prose → sections drafted incrementally (3 more `write_file` passes, elicitation between) → 10 `run_subagent` calls = two rounds of 4 predicted-question readers + 1 contradiction pass. All subagents failed `Provider openai/anthropic not found` — **B21**; the final message honestly reported the reader check could not run. Process followed end-to-end; the check itself is blocked by B21, not the skill. |
+| S3 | frontend-design | PASS (B19 fixed) | Run `ab2d04ab`: `skills_list` → `skills_load` → `write_file design-plan.md` (5 named hex colors, 3 type roles, ASCII wireframe, signature element) **before** `index.html` → `terminal ls` → build. A "Critique and revision" section names the avoided defaults and the changes made. No rendered-page screenshot (page never served — conditional step, same caveat as round 1). |
+| S5 | browser-workflows | PASS (B20 fixed) | `5fe73fb7`: bare "summarize this page: <url>" now triggers `skills_load` ✅; `web_fetch` first ✅, `browser_open` only after the environmental TLS failure ✅, `browser_close` called ✅, honest report naming the URL ✅. `e91a565a`: `skills_load` → `browser_open` → `browser_act click e7` → `browser_observe` (secret visible) → `browser_close`; answer cites `http://localhost:8899/` verbatim. |
+| B17 spot-check | elicitation list | PASS | `GET /api/elicitation` now returns 200 with the pending structured-options row (`e07c28f5`, four `{label,description}` objects) intact — the same row that produced HTTP 500 in round 1. |
+
+New finding filed: **B21** (`run_subagent` model override accepts provider
+names and fails unresolvably; the skill's reader-test calls used guessed
+provider names). B17, B18, B19, B20 verified fixed.
+
+Retest cleanup: sessions `a301a5ac`, `10ec6887`, `95a0186b` (+ runs/messages)
+deleted; workspace files `auth-module-decision.md`, `design-plan.md`,
+`index.html` removed; `w6smoke2` operator session revoked; :8899 stopped.
+
+### B21 fix verification (2026-09-29, fix live on :8081)
+
+- `_resolve_provider_ref` verified live: `run_subagent` with guessed
+  `provider_id: "openai"` resolved to `a4da6653` and the result carried
+  `model_resolved: "openai -> a4da6653-…"` (run `d566fe28`). The 6 new
+  `TestSubAgentModelOverride` regressions pass.
+- End-to-end reader tests still cannot complete: sub-agent tool calls now die
+  one layer deeper — `mediate() got an unexpected keyword argument
+  'approval_batch'` — **B22** (`_SubAgentSyscallHandler.mediate` signature
+  drift; 100% repro for tool-using sub-agents). doc-coauthoring run
+  `8d243530`/`4f1ed406` issued all 6 reader subagents; all failed on B22.
+  Verdict: **B21 fixed as specified; the S2 Stage-3 check remains blocked by
+  B22**, which is a runtime defect, not a skill or provider-resolution one.
+- B22 probe sessions `6982cdcf`, `84f9036f`, `388478a1` (+ runs) and workspace
+  files `auth-module-decision.md`, `b21-probe.txt` deleted; `w6smoke3` operator
+  session revoked.
+
+### B22 fix verification (2026-09-29, fix live on :8081)
+
+- **PASS** — run `0e79f316`: `run_subagent(capabilities:["read_file"])` → the
+  sub-agent's `read_file` mediated cleanly through the wrapper and returned
+  `ORCHARD-77` (`status: completed`, 2 turns). The exact path that crashed on
+  `approval_batch` now works end-to-end.
+- **PASS** — run `c47d551d`: override `{"provider_id":"openai","name":""}`
+  resolved (`model_resolved: "openai -> a4da6653-…"`), the empty name fell
+  back to the parent's model, sub-agent completed. Both B21 rider and B22
+  verified together.
+- 13 `test_subagent_isolation` tests pass. Probe sessions `32786a4b`,
+  `d20a6b19` (+ runs) deleted; `b22-probe.txt` removed; `w6smoke4` operator
+  session revoked.
