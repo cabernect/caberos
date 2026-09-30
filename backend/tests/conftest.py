@@ -19,6 +19,7 @@ async def db_engine():
         channel_config,
         contact,
         document,
+        knowledge_index,
         mcp,
         memory,
         operator,

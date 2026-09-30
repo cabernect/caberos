@@ -92,6 +92,9 @@ class PostgresBackend(DatabaseBackend):
             ("runs", "loaded_capabilities", "TEXT NOT NULL DEFAULT '[]'"),
             ("mcp_tools", "effects", "TEXT"),
             ("audit_records", "outcome", "VARCHAR(20) DEFAULT 'ok'"),
+            ("documents", "semantic_state", "VARCHAR(20) NOT NULL DEFAULT 'na'"),
+            ("document_chunks", "kind", "VARCHAR(10) NOT NULL DEFAULT 'chunk'"),
+            ("document_chunks", "parent_id", "VARCHAR(36)"),
         ]
         for table, column, col_type in patches:
             if not await self.column_exists(conn, table, column):
@@ -181,6 +184,8 @@ class PostgresBackend(DatabaseBackend):
             "BOOLEAN DEFAULT FALSE",
             "TEXT NOT NULL DEFAULT '[]'",
             "TEXT NOT NULL DEFAULT '{}'",
+            "VARCHAR(20) NOT NULL DEFAULT 'na'",
+            "VARCHAR(10) NOT NULL DEFAULT 'chunk'",
         }:
             raise ValueError("Invalid database column type")
         await conn.execute(

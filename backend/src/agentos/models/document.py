@@ -25,6 +25,9 @@ class Document(Base, IdMixin, TimestampMixin):
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    # Semantic coverage in the *current active* generation: embedded | pending | na.
+    # Recomputed on activate/rollback/repair; 'na' when no embeddings apply.
+    semantic_state: Mapped[str] = mapped_column(String(20), nullable=False, default="na")
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     indexed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     structure_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
@@ -45,6 +48,12 @@ class DocumentChunk(Base, IdMixin):
 
     document_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False
+    )
+    # parent = expansion-only container; child = retrievable unit inside a
+    # parent; chunk = legacy flat row (still retrievable, never expands).
+    kind: Mapped[str] = mapped_column(String(10), nullable=False, default="chunk")
+    parent_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("document_chunks.id", ondelete="CASCADE"), nullable=True
     )
     seq: Mapped[int] = mapped_column(Integer, nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
