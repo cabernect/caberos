@@ -24,7 +24,7 @@ Knowledge Vault retrieval becomes reliable, inspectable, and optionally semantic
 - HyDE, GraphRAG, CRAG, and self-RAG
 - Knowledge Source / Collection entities beyond the existing shared (`agent_id NULL`) and agent-private scopes — scoping is exercised via those scopes, no new entity layer yet
 - Background-task rebuilds — rebuild runs synchronous in-request; progress stats are written to the generation row as it builds so a concurrent `GET` still shows `building` + live counts
-- Vault UI for embedding/generation controls — API + response traces first; UI lands with the frontend rework (W13)
+- Vault UI for embedding/generation controls — an interim panel was prototyped then **withdrawn** (see below); all config/lifecycle stays API-only until the W13 rework designs it properly
 
 ## Concepts
 
@@ -104,9 +104,9 @@ New tables (created via `Base.metadata.create_all`; no Alembic yet per D5):
 
 ### Brainstorm decisions (operator-confirmed)
 
-- **Freshness**: embed-at-ingest when the active resource is `ready`; otherwise `semantic_state=pending` (means *pending in the current active generation* — recomputed on activate/rollback/repair). No active gen or lexical profile → `na`.
+- **Freshness**: embed-at-ingest only when `fusion=hybrid` **and** the active resource is `ready` — lexical mode is embeddings-off (no provider call, no egress, no spend). Non-embedded uploads land `semantic_state=pending` (means *pending in the current active generation* — recomputed on activate/rollback/repair); a later hybrid flip + Repair fills the hole. No active gen → `na`. Rebuild/Repair stay explicit and ungated — building vectors while still lexical (pre-warm before flipping) is legitimate.
 - **Egress**: remote embedding providers blocked until the operator explicitly enables egress on the resource — gating at configuration time, audited. Local endpoints (ollama/lmstudio/localhost) pass through.
-- **Tabular parents**: whichever-first split — close at 150 rows *or* `parent_tokens`, row-atomic; row-range citations cover only rows actually present.
+- **Tabular parents**: whichever-first split — close at 150 rows *or* `parent_tokens`, row-atomic; row-range citations cover only rows actually present. *(Reconsidered post-review: chunking tabular sources at all is wrong-shaped — rows belong in a queryable row layer. **xlsx/xls/csv uploads are refused at the ingest boundary** until that lands — `_check_supported` in `api/knowledge.py`. See `v0.2-release-plan.md` deferred: "Structured sources get a row layer".)*
 - **Rebuild races**: concurrent build → `409`; building gen sweeps chunks created/changed after build start before validate+activate.
 - **Rebuild semantics**: re-embed only — chunks are canonical corpus state; re-chunking requires explicit re-ingest. Generations own embeddings + fusion config.
 - **Generation scope**: one global generation; `shared`/`agent` filtering is a query-time predicate.
@@ -137,6 +137,10 @@ Changing model/dimensions creates a new Index Generation. Keep the old generatio
 
 Trace query normalization, lexical/semantic candidate counts, fusion rank, selected chunks, parent expansion, warnings, and context-token cost without leaking unrelated document text.
 
+**Embedding spend ledger.** Every provider call through `embed_texts` writes an `embedding_calls` row — `resource_id`, `generation_id`, `run_id`/`agent_id` when run-scoped (doc_search query embeds), provider/model, `operation` (`validate`/`index`/`ingest`/`repair`/`query`), `chunk_count`, `tokens_in` (from `usage.prompt_tokens`), `cost` (LiteLLM `completion_cost`), `latency_ms`, `status`, `error`. Ledger refs are plain strings — rows survive deletion of generations/resources/runs. Best-effort like `ModelCall`: a bookkeeping failure never breaks embedding work.
+
+**Spend is index-scoped, not agent-scoped.** `/api/spend` and the Observability page remain agent-run surfaces (runs have agents/triggers; embed jobs don't). Embedding spend surfaces where the spend happens: `GET /index` returns `embedding_spend` (cumulative calls/tokens/cost) and each generation response carries `cost`/`tokens_in` summed from index+ingest+repair calls — query embeds are per-search spend, excluded from generation cost. A unified "all model spend" section covering embeddings + provider probes + other non-run calls is deferred to W10.
+
 ## Tests first
 
 - Punctuation/hyphens cannot become FTS column errors.
@@ -149,6 +153,20 @@ Trace query normalization, lexical/semantic candidate counts, fusion rank, selec
 - Stable citation revision identity.
 - Vietnamese/English/mixed-language queries.
 - Frozen gateway loads local vector adapter.
+
+## Vault UI — semantic index controls (withdrawn; W13 designs)
+
+An interim collapsible panel was prototyped on the KnowledgeVault overview, browser-verified end-to-end (egress gate, validate → ready + dims, hybrid toggle, rebuild, generations list, spend line), then **removed after review** — the control cockpit read confusingly without the page redesign around it. The API surface is unchanged and complete; W13 designs the real surface.
+
+What the prototype settled — requirements for the W13 design:
+
+- **Guided sequence, not a cockpit.** Five parallel controls (Save / Validate / toggle / Rebuild / Repair) with hidden ordering confused the operator immediately. The W13 surface must be state-driven: the search-mode toggle is the on/off; provider+model+egress collapse into one "Enable" step (save+probe together); Rebuild appears only when `ready`; repair/generations sink into maintenance details.
+- **Semantic honesty.** `fusion=lexical` is embeddings-off — no provider call, no egress (enforced in `embed_chunks_at_ingest`). Uploads during lexical land `pending`; hybrid flip + Repair fills them. Any W13 design must keep this: "lexical" can never silently keep a remote embed pipe warm.
+- **Egress consent**: conditional control shown only for remote providers, unchecked by default per save, names the provider + what leaves. Backend enforces regardless.
+- **Global index, local controls**: the index is vault-global; status/progress (poll `GET /index` ~2s while `building_generation` exists) should live wherever W13 puts index state.
+- **Spend sits next to the index**: `GET /index.embedding_spend` + per-generation `cost`/`tokens_in` are ready for whatever surface displays them.
+- **Config-save resets**: `PUT /embedding-resource` resets `status`→`unvalidated` + consent each call — W13 should avoid silent re-saves (or the API gains a no-change early-return).
+- **Document inspection (deferred to post-v0.2 backlog** — `v0.2-release-plan.md` "Explicitly deferred"): there is no way to see how a document was indexed — chunk tree, per-sheet breakdown, citations, extracted text. A 7.7 MB xlsx becomes ~88k chunks invisibly; the document row shows only counts + a sheets list. Shape: `GET /documents/{id}/chunks` (paged: kind, source_location, tokens, text preview) + a document drill-down surface. Vault inspection is core to the "inspectable RAG" pitch — not urgent enough to gate v0.2.
 
 ## Done when
 

@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from urllib.parse import urlparse
 
 import litellm
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models.knowledge_index import EmbeddingResource
+from ..models.knowledge_index import EmbeddingCall, EmbeddingResource
 from ..models.provider import Provider
 from ..secret_store import decrypt
 
@@ -65,12 +66,63 @@ def _litellm_kwargs(provider: Provider, resource: EmbeddingResource) -> dict:
     return {k: v for k, v in kwargs.items() if v is not None}
 
 
+def _record_call(
+    db: AsyncSession,
+    resource: EmbeddingResource,
+    provider: Provider,
+    *,
+    operation: str,
+    generation_id: str | None,
+    run_id: str | None,
+    agent_id: str | None,
+    chunk_count: int,
+    tokens_in: int,
+    cost: float,
+    latency_ms: int,
+    status: str,
+    error: str | None,
+) -> None:
+    """Ledger entry per provider call — best-effort accounting like
+    ModelCall: a bookkeeping failure must never break embedding work."""
+    try:
+        db.add(
+            EmbeddingCall(
+                resource_id=resource.id,
+                generation_id=generation_id,
+                run_id=run_id,
+                agent_id=agent_id,
+                provider_id=provider.id,
+                model_name=resource.model_name,
+                operation=operation,
+                chunk_count=chunk_count,
+                tokens_in=tokens_in,
+                cost=cost,
+                latency_ms=latency_ms,
+                status=status,
+                error=(error[:2000] if error else None),
+            )
+        )
+    except Exception:
+        import logging
+
+        logging.getLogger("agentos.knowledge.embeddings").debug(
+            "Could not record embedding call"
+        )
+
+
 async def embed_texts(
     db: AsyncSession,
     resource: EmbeddingResource,
     texts: list[str],
+    *,
+    operation: str = "index",
+    generation_id: str | None = None,
+    run_id: str | None = None,
+    agent_id: str | None = None,
 ) -> list[list[float]]:
-    """Embed a batch of texts; raises EmbeddingUnavailable on any failure."""
+    """Embed a batch of texts; raises EmbeddingUnavailable on any failure.
+    Every provider call is ledgered in ``embedding_calls`` (tokens, cost,
+    latency) — the spend record survives the caller's outcome."""
     if not texts:
         return []
     provider = await _provider_for(db, resource)
@@ -80,20 +132,43 @@ async def embed_texts(
     vectors: list[list[float]] = []
     for start in range(0, len(texts), _BATCH_SIZE):
         batch = texts[start : start + _BATCH_SIZE]
+        started = time.monotonic()
         try:
             response = await asyncio.wait_for(
                 litellm.aembedding(input=batch, **kwargs),
                 timeout=_EMBED_TIMEOUT_SECONDS,
             )
         except Exception as error:  # provider/network/timeout — caller degrades
+            _record_call(
+                db, resource, provider,
+                operation=operation, generation_id=generation_id, run_id=run_id,
+                agent_id=agent_id, chunk_count=len(batch), tokens_in=0, cost=0.0,
+                latency_ms=int((time.monotonic() - started) * 1000),
+                status="error", error=str(error),
+            )
             raise EmbeddingUnavailable(str(error)) from error
+        usage = getattr(response, "usage", None)
+        tokens_in = int(getattr(usage, "prompt_tokens", 0) or 0)
+        try:
+            cost = float(litellm.completion_cost(completion_response=response) or 0.0)
+        except Exception:
+            cost = 0.0
+        _record_call(
+            db, resource, provider,
+            operation=operation, generation_id=generation_id, run_id=run_id,
+            agent_id=agent_id, chunk_count=len(batch), tokens_in=tokens_in,
+            cost=cost, latency_ms=int((time.monotonic() - started) * 1000),
+            status="ok", error=None,
+        )
         vectors.extend([item["embedding"] for item in response.data])
     return vectors
 
 
 async def probe_dimensions(db: AsyncSession, resource: EmbeddingResource) -> int:
     """One bounded embed call to learn/validate the model's dimensions."""
-    vectors = await embed_texts(db, resource, ["knowledge vault dimension probe"])
+    vectors = await embed_texts(
+        db, resource, ["knowledge vault dimension probe"], operation="validate"
+    )
     if not vectors or not vectors[0]:
         raise EmbeddingUnavailable("embedding probe returned no vector")
     if resource.dimensions and len(vectors[0]) != resource.dimensions:

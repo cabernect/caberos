@@ -124,6 +124,7 @@ async def doc_search(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         query,
         limit=limit,
         agent_id=kwargs["agent_id"],
+        run_id=kwargs.get("run_id"),
     )
     results = outcome["results"]
     run_id = kwargs.get("run_id")

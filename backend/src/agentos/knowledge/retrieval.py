@@ -39,7 +39,7 @@ async def _lexical_candidates(
                 "FROM document_chunks c JOIN documents d ON d.id = c.document_id "
                 "WHERE c.search_vector @@ plainto_tsquery('simple', :query) "
                 "AND c.kind != 'parent' "
-                "AND (:agent_id IS NULL OR d.agent_id IS NULL OR d.agent_id = :agent_id) "
+                "AND (d.agent_id IS NULL OR d.agent_id = :agent_id) "
                 "ORDER BY 2 DESC LIMIT :k"
             ),
             {"query": " ".join(query.split()), "agent_id": agent_id, "k": k},
@@ -52,7 +52,7 @@ async def _lexical_candidates(
                 "JOIN document_chunks dc ON dc.id = fts.chunk_id "
                 "WHERE document_chunks_fts MATCH :query "
                 "AND dc.kind != 'parent' "
-                "AND (:agent_id IS NULL OR fts.agent_id IS NULL OR fts.agent_id = :agent_id) "
+                "AND (fts.agent_id IS NULL OR fts.agent_id = :agent_id) "
                 "ORDER BY rank LIMIT :k"
             ),
             {"query": fts_query, "agent_id": agent_id, "k": k},
@@ -82,6 +82,7 @@ async def retrieve(
     limit: int = 5,
     agent_id: str | None = None,
     include_trace: bool = False,
+    run_id: str | None = None,
 ) -> dict[str, Any]:
     """Run the full retrieval pipeline; always returns a trace."""
     profile = await get_active_profile(db)
@@ -119,7 +120,15 @@ async def retrieve(
                 degraded.append("embedding resource not ready; lexical only")
             else:
                 try:
-                    vectors = await embed_texts(db, resource, [query])
+                    vectors = await embed_texts(
+                        db,
+                        resource,
+                        [query],
+                        operation="query",
+                        generation_id=generation.id,
+                        run_id=run_id,
+                        agent_id=agent_id,
+                    )
                     if vectors:
                         semantic = await adapter_for(generation.adapter).search(
                             db, generation.id, pack_f32(vectors[0]), agent_id, _SEMANTIC_K

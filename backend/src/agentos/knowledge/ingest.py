@@ -91,7 +91,11 @@ async def _write_chunk_nodes(
     db.add_all(child_rows)
     await db.flush()
 
-    # Phase 3: one executemany for every FTS row (children only).
+    # Phase 3: one executemany for every FTS row (children only). An empty
+    # retrievable set (e.g. a scanned PDF) must skip the insert entirely —
+    # executemany with no params raises a bind-parameter error.
+    if not retrievable:
+        return []
     await db.execute(
         text(
             "INSERT INTO document_chunks_fts "
@@ -191,10 +195,14 @@ async def ingest_document(
     nodes = chunk_blocks(extracted.blocks, config)
     retrievable = await _write_chunk_nodes(db, nodes, document, agent_id)
 
-    # Embed-at-ingest: cover the new chunks in the active generation when the
-    # embedding resource is healthy; otherwise the doc is FTS-indexed but
-    # semantically pending (repaired later by sweep/repair/next build).
-    from .indexing import embed_chunks_at_ingest
+    # Commit the corpus write before embedding: a large document's embed
+    # phase runs hundreds of batches, and holding this transaction through
+    # it starves every other writer. The document is honest here — indexed
+    # and lexically searchable, 'pending' when a generation expects vectors.
+    from .indexing import embed_chunks_at_ingest, get_active_generation
+
+    document.semantic_state = "pending" if await get_active_generation(db) else "na"
+    await db.commit()
 
     document.semantic_state = await embed_chunks_at_ingest(db, document, retrievable)
     await db.flush()
@@ -250,7 +258,7 @@ async def search_documents(
                 "ts_rank(c.search_vector, plainto_tsquery('simple', :query)) AS rank "
                 "FROM document_chunks c JOIN documents d ON d.id = c.document_id "
                 "WHERE c.search_vector @@ plainto_tsquery('simple', :query) "
-                "AND (:agent_id IS NULL OR d.agent_id IS NULL OR d.agent_id = :agent_id) "
+                "AND (d.agent_id IS NULL OR d.agent_id = :agent_id) "
                 "ORDER BY rank DESC LIMIT :limit"
             ),
             {"query": " ".join(terms), "agent_id": agent_id, "limit": limit},
@@ -264,7 +272,7 @@ async def search_documents(
                 "FROM document_chunks_fts fts "
                 "JOIN document_chunks dc ON dc.id = fts.chunk_id "
                 "WHERE document_chunks_fts MATCH :query "
-                "AND (:agent_id IS NULL OR fts.agent_id IS NULL OR fts.agent_id = :agent_id) "
+                "AND (fts.agent_id IS NULL OR fts.agent_id = :agent_id) "
                 "ORDER BY rank LIMIT :limit"
             ),
             {"query": fts_query, "agent_id": agent_id, "limit": limit},

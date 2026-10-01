@@ -158,6 +158,18 @@ async def lifespan(app: FastAPI):
 
         await retry_locked_transaction(_reconcile_runs, db, "startup_reconcile_runs")
 
+        # Index generations: a gateway kill mid-build leaves a committed
+        # 'building' row that would 409 every future rebuild — reconcile to
+        # 'failed' (same dead-context argument as interrupted runs).
+        from .knowledge.indexing import reconcile_stale_builds
+
+        stale = await reconcile_stale_builds(db)
+        if stale:
+            logging.getLogger("agentos.main").info(
+                "[startup] Marked %d stale index generation(s) failed",
+                stale,
+            )
+
         # Terminal processes never survive a gateway restart — reconcile
         # persisted `running` rows to `interrupted`.
         from .terminal.registry import terminal_registry

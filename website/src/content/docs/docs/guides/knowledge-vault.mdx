@@ -28,9 +28,10 @@ A scope is a retrieval boundary, not an external access-control system. The loca
 | Text (`.txt`) | Extracts plain-text paragraphs. |
 | PDF (`.pdf`) | Extracts text by page and uses PDF outline paths when available. |
 | Word (`.docx`) | Extracts paragraphs, heading hierarchy, tables, and embedded-image references. |
-| Excel (`.xlsx`) | Extracts each worksheet with its sheet name and cell range. |
 
-The upload limit is **25 MB per document**. Image-only OCR is not currently supported. A scanned PDF may index with little or no useful text unless it already contains a text layer.
+Tabular files (`.xlsx`, `.xls`, `.csv`) are **refused** — flattening rows to text loses queryability, so they wait for a row-query ingest layer.
+
+The upload limit is **250 MB per document**. Image-only OCR is not currently supported. A scanned PDF may index with little or no useful text unless it already contains a text layer.
 
 ## Upload and index a document
 

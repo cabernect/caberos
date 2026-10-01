@@ -36,6 +36,9 @@ import type {
   EffectiveSkill,
   SpendSummary,
   KnowledgeDocument,
+  KnowledgeEmbeddingResource,
+  KnowledgeGeneration,
+  KnowledgeIndexOverview,
   KnowledgeResult,
   KnowledgeScope,
   WorkspaceEntry,
@@ -106,7 +109,8 @@ async function apiError(resp: Response): Promise<ApiError> {
       if (typeof detail.code === "string") code = detail.code;
       const parts: string[] = [];
       if (typeof detail.message === "string") parts.push(detail.message);
-      if (Array.isArray(detail.errors)) parts.push(...detail.errors.map(String));
+      if (Array.isArray(detail.errors))
+        parts.push(...detail.errors.map(String));
       if (parts.length) message = parts.join(": ");
     }
   } catch {
@@ -495,6 +499,53 @@ export const api = {
       method: "DELETE",
     }),
 
+  // Knowledge index (RAG v2 — semantic index lifecycle)
+  getKnowledgeIndex: () =>
+    request<KnowledgeIndexOverview>("/api/knowledge/index"),
+  listKnowledgeGenerations: () =>
+    request<{ generations: KnowledgeGeneration[] }>(
+      "/api/knowledge/index/generations",
+    ),
+  rebuildKnowledgeIndex: () =>
+    request<KnowledgeGeneration>("/api/knowledge/index/rebuild", {
+      method: "POST",
+    }),
+  repairKnowledgeIndex: () =>
+    request<{ fixed: number; still_pending: number; reasons: string[] }>(
+      "/api/knowledge/index/repair",
+      { method: "POST" },
+    ),
+  activateKnowledgeGeneration: (generationId: string) =>
+    request<KnowledgeGeneration>(
+      `/api/knowledge/index/generations/${generationId}/activate`,
+      { method: "POST" },
+    ),
+  deleteKnowledgeGeneration: (generationId: string) =>
+    request<void>(`/api/knowledge/index/generations/${generationId}`, {
+      method: "DELETE",
+    }),
+  putEmbeddingResource: (data: {
+    provider_id: string;
+    model_name: string;
+    egress_allowed: boolean;
+  }) =>
+    request<KnowledgeEmbeddingResource>("/api/knowledge/embedding-resource", {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+  validateEmbeddingResource: () =>
+    request<KnowledgeEmbeddingResource>(
+      "/api/knowledge/embedding-resource/validate",
+      {
+        method: "POST",
+      },
+    ),
+  putRetrievalProfile: (config: Record<string, unknown>) =>
+    request<{ id: string; revision: number; config: Record<string, unknown> }>(
+      "/api/knowledge/retrieval-profile",
+      { method: "PUT", body: JSON.stringify(config) },
+    ),
+
   // Chat — POST /message starts a run, returns {run_id, session_id}
   sendMessage: (
     agentId: string,
@@ -757,18 +808,22 @@ export const api = {
       `/api/skills/${id}/files${revision != null ? `?revision=${revision}` : ""}`,
     ),
   validateSkill: (id: string) =>
-    request<{ errors: string[]; warnings: string[]; stats: Record<string, number> }>(
-      `/api/skills/${id}/validate`,
-    ),
+    request<{
+      errors: string[];
+      warnings: string[];
+      stats: Record<string, number>;
+    }>(`/api/skills/${id}/validate`),
   createSkillDraft: (body: {
     name: string;
     agent_id?: string;
     launch_session?: boolean;
   }) =>
-    request<{ id: string; name: string; status: string; session_id: string | null }>(
-      "/api/skills/drafts",
-      { method: "POST", body: JSON.stringify(body) },
-    ),
+    request<{
+      id: string;
+      name: string;
+      status: string;
+      session_id: string | null;
+    }>("/api/skills/drafts", { method: "POST", body: JSON.stringify(body) }),
   deleteSkill: (id: string) =>
     request<{ deleted: boolean; id: string }>(`/api/skills/${id}`, {
       method: "DELETE",
@@ -799,7 +854,10 @@ export const api = {
       `/api/skills/${id}/promote`,
       { method: "POST", body: JSON.stringify(body) },
     ),
-  duplicateSkill: (id: string, body: { owner_agent_id?: string; new_name?: string }) =>
+  duplicateSkill: (
+    id: string,
+    body: { owner_agent_id?: string; new_name?: string },
+  ) =>
     request<{ id: string; name: string; status: string }>(
       `/api/skills/${id}/duplicate`,
       { method: "POST", body: JSON.stringify(body) },
@@ -824,7 +882,8 @@ export const api = {
   ): Promise<SkillImportResult> => {
     const formData = new FormData();
     formData.append("file", file);
-    if (opts.owner_agent_id) formData.append("owner_agent_id", opts.owner_agent_id);
+    if (opts.owner_agent_id)
+      formData.append("owner_agent_id", opts.owner_agent_id);
     if (opts.paths) formData.append("paths", JSON.stringify(opts.paths));
     const base = await baseReady;
     return fetch(`${base}/api/skills/import`, {
@@ -1166,7 +1225,10 @@ export function workspaceBackend(agentId: string): PreviewBackend {
   };
 }
 
-export function skillBackend(skillId: string, revision?: number): PreviewBackend {
+export function skillBackend(
+  skillId: string,
+  revision?: number,
+): PreviewBackend {
   return {
     preview: (source) =>
       api.previewSkillResource(skillId, { ...source, revision }),

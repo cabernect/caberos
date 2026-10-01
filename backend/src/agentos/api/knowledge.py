@@ -32,7 +32,7 @@ from ..knowledge.ingest import delete_document, ingest_document, list_documents
 from ..knowledge.retrieval import retrieve
 from ..models.agent import Agent
 from ..models.document import Document, DocumentChunk
-from ..models.knowledge_index import EmbeddingResource, IndexGeneration
+from ..models.knowledge_index import EmbeddingCall, EmbeddingResource, IndexGeneration
 from ..models.operator import Operator, OperatorAuditLog
 from ..models.provider import Provider
 from ..sandbox.workspace import WorkspaceManager
@@ -41,7 +41,26 @@ router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
 # Large-PDF friendly while still bounding disk usage; uploads stream to disk
 # so the cap doesn't sit in memory.
 _MAX_UPLOAD_BYTES = 250 * 1024 * 1024
-_SUPPORTED_SUFFIXES = {".md", ".markdown", ".txt", ".pdf", ".docx", ".xlsx"}
+_SUPPORTED_SUFFIXES = {".md", ".markdown", ".txt", ".pdf", ".docx"}
+# Tabular files are refused, not chunked: flattening rows to text destroys
+# queryability (no COUNT/filter/column semantics) and doc_search's top-K
+# sample masquerades as coverage. A row-record ingest layer is deferred
+# post-v0.2 (see v0.2-release-plan.md → "Structured sources get a row layer").
+_TABULAR_SUFFIXES = {".xlsx", ".xls", ".csv"}
+
+
+def _check_supported(file_name: str) -> None:
+    suffix = Path(file_name).suffix.lower()
+    if suffix in _TABULAR_SUFFIXES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Tabular files are not indexed yet — rows need a queryable "
+                "layer, not text chunks (deferred)"
+            ),
+        )
+    if suffix not in _SUPPORTED_SUFFIXES:
+        raise HTTPException(status_code=400, detail="Unsupported document format")
 
 
 async def _stream_upload(file: UploadFile, target: Path) -> int:
@@ -110,6 +129,23 @@ async def _resolve_scope(scope: str, db: AsyncSession) -> str | None:
     return agent.id
 
 
+async def _unlink_unless_owned(db: AsyncSession, target: Path, agent_id: str | None) -> None:
+    """Delete a failed upload's file unless a document row already owns it.
+
+    ``ingest_document`` commits the corpus write before the embed phase, so
+    a failure after that commit leaves a persisted document whose
+    ``storage_path`` is this file — deleting it would orphan the row.
+    """
+    persisted = await db.scalar(
+        select(Document.id).where(
+            Document.agent_id == agent_id,
+            Document.storage_path == target.name,
+        )
+    )
+    if not persisted:
+        target.unlink(missing_ok=True)
+
+
 async def _document_chunk_count(db: AsyncSession, document_id: str) -> int:
     count = await db.scalar(
         select(func.count(DocumentChunk.id)).where(DocumentChunk.document_id == document_id)
@@ -176,8 +212,7 @@ async def upload(
     file_path = Path(filename)
     if not filename or file_path.is_absolute() or file_path.name != filename:
         raise HTTPException(status_code=400, detail="File name must be a simple file name")
-    if file_path.suffix.lower() not in _SUPPORTED_SUFFIXES:
-        raise HTTPException(status_code=400, detail="Unsupported document format")
+    _check_supported(filename)
 
     vault_root = (Path(settings.knowledge_root) / "shared").resolve()
     vault_root.mkdir(parents=True, exist_ok=True)
@@ -191,6 +226,10 @@ async def upload(
         await db.rollback()
         target.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail="Document could not be indexed") from error
+    except Exception:
+        await db.rollback()
+        await _unlink_unless_owned(db, target, agent_id=None)
+        raise
     return _document_response(document, await _document_chunk_count(db, document.id))
 
 
@@ -309,8 +348,7 @@ async def upload_scope(
     file_path = Path(filename)
     if not filename or file_path.is_absolute() or file_path.name != filename:
         raise HTTPException(status_code=400, detail="File name must be a simple file name")
-    if file_path.suffix.lower() not in _SUPPORTED_SUFFIXES:
-        raise HTTPException(status_code=400, detail="Unsupported document format")
+    _check_supported(filename)
     knowledge_root = Path(settings.knowledge_root).resolve()
     vault_root = knowledge_root / ("shared" if agent_id is None else Path("agents") / agent_id)
     vault_root = vault_root.resolve()
@@ -334,6 +372,10 @@ async def upload_scope(
         await db.rollback()
         target.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail="Document could not be indexed") from error
+    except Exception:
+        await db.rollback()
+        await _unlink_unless_owned(db, target, agent_id)
+        raise
     return _document_response(document, await _document_chunk_count(db, document.id))
 
 
@@ -368,6 +410,7 @@ async def ingest_workspace_file(
     source = Path(WorkspaceManager().validate_path(str(workspace), request.path))
     if not source.is_file():
         raise HTTPException(status_code=400, detail="Document does not exist")
+    _check_supported(source.name)
     vault_root = Path(settings.knowledge_root).resolve()
     vault_root.mkdir(parents=True, exist_ok=True)
     target = vault_root / f"{uuid.uuid4().hex}{source.suffix.lower()}"
@@ -380,6 +423,10 @@ async def ingest_workspace_file(
         await db.rollback()
         target.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail="Document could not be indexed") from error
+    except Exception:
+        await db.rollback()
+        await _unlink_unless_owned(db, target, agent_id=None)
+        raise
     return _document_response(document, await _document_chunk_count(db, document.id))
 
 
@@ -436,8 +483,36 @@ def _resource_response(resource: EmbeddingResource | None, provider: Provider | 
     }
 
 
-def _generation_response(generation: IndexGeneration) -> dict:
+_GENERATION_OPS = ("index", "ingest", "repair")
+
+
+async def _generation_spend_map(db: AsyncSession) -> dict[str, dict]:
+    """Cost/tokens attributed to each generation's vector set — index,
+    ingest, and repair calls only; query embeds are per-search spend."""
+    rows = (
+        await db.execute(
+            select(
+                EmbeddingCall.generation_id,
+                func.coalesce(func.sum(EmbeddingCall.cost), 0.0),
+                func.coalesce(func.sum(EmbeddingCall.tokens_in), 0),
+            )
+            .where(
+                EmbeddingCall.generation_id.is_not(None),
+                EmbeddingCall.operation.in_(_GENERATION_OPS),
+            )
+            .group_by(EmbeddingCall.generation_id)
+        )
+    ).all()
     return {
+        generation_id: {"cost": float(cost), "tokens_in": int(tokens)}
+        for generation_id, cost, tokens in rows
+    }
+
+
+def _generation_response(
+    generation: IndexGeneration, spend: dict | None = None
+) -> dict:
+    response = {
         "id": generation.id,
         "revision": generation.revision,
         "status": generation.status,
@@ -450,6 +525,10 @@ def _generation_response(generation: IndexGeneration) -> dict:
         "activated_at": (generation.activated_at.isoformat() if generation.activated_at else None),
         "created_at": generation.created_at.isoformat() if generation.created_at else None,
     }
+    if spend is not None:
+        response["cost"] = spend["cost"]
+        response["tokens_in"] = spend["tokens_in"]
+    return response
 
 
 @router.get("/index")
@@ -474,6 +553,16 @@ async def index_overview(
     building = await db.scalar(
         select(IndexGeneration).where(IndexGeneration.status == "building").limit(1)
     )
+    spend_map = await _generation_spend_map(db)
+    spend_totals = (
+        await db.execute(
+            select(
+                func.count(EmbeddingCall.id),
+                func.coalesce(func.sum(EmbeddingCall.tokens_in), 0),
+                func.coalesce(func.sum(EmbeddingCall.cost), 0.0),
+            )
+        )
+    ).one()
     return {
         "profile": {
             "id": profile.id,
@@ -481,10 +570,19 @@ async def index_overview(
             "config": json.loads(profile.config_json or "{}"),
         },
         "embedding_resource": _resource_response(resource, provider),
-        "active_generation": _generation_response(active) if active else None,
-        "building_generation": _generation_response(building) if building else None,
+        "active_generation": (
+            _generation_response(active, spend_map.get(active.id)) if active else None
+        ),
+        "building_generation": (
+            _generation_response(building, spend_map.get(building.id)) if building else None
+        ),
         "documents": {
             "pending": pending or 0,
+        },
+        "embedding_spend": {
+            "calls": spend_totals[0],
+            "tokens_in": int(spend_totals[1]),
+            "cost": float(spend_totals[2]),
         },
     }
 
@@ -575,7 +673,8 @@ async def rebuild(
         raise HTTPException(status_code=409, detail="An index rebuild is already running")
     _audit(db, operator, "knowledge.index_rebuild", generation.id)
     await db.commit()
-    return _generation_response(generation)
+    spend_map = await _generation_spend_map(db)
+    return _generation_response(generation, spend_map.get(generation.id))
 
 
 @router.post("/index/repair")
@@ -602,7 +701,12 @@ async def list_generations(
         .scalars()
         .all()
     )
-    return {"generations": [_generation_response(row) for row in rows]}
+    spend_map = await _generation_spend_map(db)
+    return {
+        "generations": [
+            _generation_response(row, spend_map.get(row.id)) for row in rows
+        ]
+    }
 
 
 @router.post("/index/generations/{generation_id}/activate")
@@ -620,7 +724,8 @@ async def activate(
         raise HTTPException(status_code=404, detail="Generation not found")
     _audit(db, operator, "knowledge.generation_activated", generation.id)
     await db.commit()
-    response = _generation_response(generation)
+    spend_map = await _generation_spend_map(db)
+    response = _generation_response(generation, spend_map.get(generation.id))
     pending = await db.scalar(
         select(func.count(Document.id)).where(Document.semantic_state == "pending")
     )

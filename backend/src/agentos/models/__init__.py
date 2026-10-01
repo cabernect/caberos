@@ -14,6 +14,7 @@ from .elicitation import ElicitationRequest
 from .execution_manifest import ExecutionManifest
 from .knowledge_index import (
     ChunkEmbedding,
+    EmbeddingCall,
     EmbeddingResource,
     IndexGeneration,
     RetrievalProfile,
@@ -55,6 +56,7 @@ __all__ = [
     "Contact",
     "Document",
     "DocumentChunk",
+    "EmbeddingCall",
     "EmbeddingResource",
     "RetrievalProfile",
     "IndexGeneration",

@@ -23,9 +23,10 @@ from agentos.knowledge.indexing import (
 )
 from agentos.knowledge.ingest import ingest_document
 from agentos.knowledge.retrieval import retrieve
-from agentos.models.document import DocumentChunk
+from agentos.models.document import Document, DocumentChunk
 from agentos.models.knowledge_index import (
     ChunkEmbedding,
+    EmbeddingCall,
     EmbeddingResource,
     IndexGeneration,
     RetrievalProfile,
@@ -45,7 +46,7 @@ def _fake_vectors(texts):
 
 
 def _patch_embeddings(monkeypatch):
-    async def fake(db, resource, texts):
+    async def fake(db, resource, texts, **_kwargs):
         return _fake_vectors(texts)
 
     monkeypatch.setattr("agentos.knowledge.indexing.embed_texts", fake)
@@ -260,7 +261,7 @@ async def test_embed_at_ingest_covers_new_doc(db, tmp_path: Path, monkeypatch):
 
 
 async def test_embed_failure_marks_pending_and_keeps_lexical(db, tmp_path: Path, monkeypatch):
-    async def boom(db, resource, texts):
+    async def boom(db, resource, texts, **_kwargs):
         raise EmbeddingUnavailable("provider down")
 
     monkeypatch.setattr("agentos.knowledge.indexing.embed_texts", boom)
@@ -383,7 +384,7 @@ async def test_repair_fills_semantic_holes(db, tmp_path: Path, monkeypatch):
     await rebuild_index(db)
 
     # Ingest with failing embed → pending hole in the active generation.
-    async def boom(db, resource, texts):
+    async def boom(db, resource, texts, **_kwargs):
         raise EmbeddingUnavailable("down")
 
     monkeypatch.setattr("agentos.knowledge.indexing.embed_texts", boom)
@@ -605,3 +606,292 @@ async def test_dimension_mismatch_probe(db, monkeypatch):
             await probe_dimensions(db, resource)
     finally:
         litellm.aembedding = original
+
+
+# --------------------------------------------------------------------------
+# B23–B28 regressions (test-run findings)
+# --------------------------------------------------------------------------
+
+
+async def test_zero_chunk_document_indexes_honestly(db, tmp_path: Path):
+    """B25 — a scanned/image-only PDF yields no chunks: status indexed,
+    chunk_count 0, semantic_state 'na' — not a 500."""
+    from pypdf import PdfWriter
+
+    root = tmp_path / "vault"
+    root.mkdir()
+    pdf = root / "scanned.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=400, height=400)
+    with pdf.open("wb") as file:
+        writer.write(file)
+
+    document = await ingest_document(db, pdf, root)
+    await db.commit()
+
+    assert document.status == "indexed"
+    assert document.semantic_state == "na"
+    chunk_count = await db.scalar(
+        select(func.count(DocumentChunk.id)).where(DocumentChunk.document_id == document.id)
+    )
+    assert chunk_count == 0
+
+
+async def test_ingest_stats_merge_into_generation_totals(db, tmp_path: Path, monkeypatch):
+    """B24 — an ingest-time embed batch accumulates onto the generation's
+    stats instead of overwriting the build's totals."""
+    _patch_embeddings(monkeypatch)
+    provider = await _local_provider(db)
+    await _ready_resource(db, provider)
+    await _hybrid_profile(db)
+
+    root = tmp_path / "vault"
+    root.mkdir()
+    (root / "a.md").write_text("first document content", encoding="utf-8")
+    await ingest_document(db, root / "a.md", root)
+    generation = await rebuild_index(db)
+    built = json.loads(generation.stats_json)
+    assert built["embedded"] == built["total"] > 0
+
+    (root / "b.md").write_text("second document content", encoding="utf-8")
+    added = await ingest_document(db, root / "b.md", root)
+    new_chunks = await db.scalar(
+        select(func.count(DocumentChunk.id)).where(
+            DocumentChunk.document_id == added.id, DocumentChunk.kind != "parent"
+        )
+    )
+    await db.refresh(generation)
+    merged = json.loads(generation.stats_json)
+    assert merged["embedded"] == built["embedded"] + new_chunks
+    assert merged["total"] == built["total"] + new_chunks
+
+
+async def test_shared_scope_never_returns_agent_private_docs(db, tmp_path: Path):
+    """B27 — agent_id=None is the *shared* scope, not unscoped: private
+    documents must not leak into an operator preview."""
+    shared_root = tmp_path / "shared"
+    private_root = tmp_path / "private"
+    shared_root.mkdir()
+    private_root.mkdir()
+    (shared_root / "shared.md").write_text("orchard shared policy", encoding="utf-8")
+    (private_root / "secret.md").write_text("orchard private detail", encoding="utf-8")
+    await ingest_document(db, shared_root / "shared.md", shared_root)
+    await ingest_document(db, private_root / "secret.md", private_root, agent_id="agent-9")
+    await db.commit()
+
+    shared = await retrieve(db, "orchard", limit=10, agent_id=None)
+    assert shared["count"] == 1
+    assert all(row["agent_id"] is None for row in shared["results"])
+
+    agent = await retrieve(db, "orchard", limit=10, agent_id="agent-9")
+    assert agent["count"] == 2
+
+
+async def test_rebuild_lock_rejects_concurrent_same_process(db):
+    """B23 — the in-process lock rejects a second build even before the
+    'building' row could be observed (the window the DB check can't see)."""
+    from agentos.knowledge.indexing import _REBUILD_LOCK
+
+    await _REBUILD_LOCK.acquire()
+    try:
+        with pytest.raises(RebuildInProgress):
+            await rebuild_index(db)
+    finally:
+        _REBUILD_LOCK.release()
+
+
+async def test_failed_rebuild_marks_generation_failed_and_recovers(db, tmp_path: Path, monkeypatch):
+    """B23 — a failed build is a committed 'failed' record (not a silent
+    rollback), and the lock releases so a later rebuild proceeds."""
+    provider = await _local_provider(db)
+    await _ready_resource(db, provider)
+    await _hybrid_profile(db)
+
+    root = tmp_path / "vault"
+    root.mkdir()
+    (root / "a.md").write_text("content worth embedding", encoding="utf-8")
+    await ingest_document(db, root / "a.md", root)
+
+    async def boom(db, resource, texts, **_kwargs):
+        raise RuntimeError("provider exploded")
+
+    monkeypatch.setattr("agentos.knowledge.indexing.embed_texts", boom)
+    with pytest.raises(RuntimeError, match="provider exploded"):
+        await rebuild_index(db)
+
+    failed = await db.scalar(select(IndexGeneration).where(IndexGeneration.status == "failed"))
+    assert failed is not None
+    assert "provider exploded" in (failed.error or "")
+
+    _patch_embeddings(monkeypatch)
+    recovered = await rebuild_index(db)
+    assert recovered.status == "active"
+
+
+async def test_unlink_unless_owned_respects_committed_document(db, tmp_path: Path):
+    """B26 — a failed upload's file is deleted only when no committed
+    document row owns it (mid-ingest commits make the row the owner)."""
+    from agentos.api.knowledge import _unlink_unless_owned
+
+    orphan = tmp_path / "orphan.md"
+    orphan.write_text("dropped", encoding="utf-8")
+    await _unlink_unless_owned(db, orphan, agent_id=None)
+    assert not orphan.exists()
+
+    owned = tmp_path / "owned.md"
+    owned.write_text("kept", encoding="utf-8")
+    db.add(
+        Document(
+            source_path="owned.md",
+            storage_path="owned.md",
+            display_name="owned.md",
+            mime_type="text/markdown",
+            content_hash="b" * 64,
+            size_bytes=4,
+            status="indexed",
+        )
+    )
+    await db.commit()
+    await _unlink_unless_owned(db, owned, agent_id=None)
+    assert owned.exists()
+
+
+async def test_stale_building_generation_reconciled_on_startup(db):
+    """B23 follow-up — a committed 'building' row from a killed process must
+    flip to 'failed' at startup, else every future rebuild 409s forever."""
+    from agentos.knowledge.indexing import reconcile_stale_builds
+
+    db.add(IndexGeneration(revision=1, profile_revision=1, status="building"))
+    db.add(IndexGeneration(revision=2, profile_revision=1, status="active"))
+    await db.commit()
+
+    assert await reconcile_stale_builds(db) == 1
+    await db.commit()
+
+    statuses = {row.status for row in (await db.execute(select(IndexGeneration))).scalars().all()}
+    assert statuses == {"failed", "active"}
+    # The freed state no longer blocks a rebuild.
+    _ = await rebuild_index(db)
+
+
+# --------------------------------------------------------------------------
+# Embedding-call ledger — spend/tokens/latency per provider call
+# --------------------------------------------------------------------------
+
+
+def _patch_litellm_embed(monkeypatch, fail: Exception | None = None):
+    """Patch the LiteLLM seam itself so the real embed_texts (and its
+    ledger writes) still runs."""
+    from types import SimpleNamespace
+
+    import litellm
+
+    class _Response:
+        def __init__(self, texts):
+            self.data = [{"embedding": v} for v in _fake_vectors(texts)]
+            self.usage = SimpleNamespace(
+                prompt_tokens=sum(len(str(t).split()) for t in texts)
+            )
+
+    async def fake_aembedding(**kwargs):
+        if fail is not None:
+            raise fail
+        return _Response(kwargs["input"])
+
+    monkeypatch.setattr(litellm, "aembedding", fake_aembedding)
+
+
+async def test_embed_call_ledger_records_usage(db, monkeypatch):
+    _patch_litellm_embed(monkeypatch)
+    provider = await _local_provider(db)
+    resource = await _ready_resource(db, provider)
+
+    await embed_texts(
+        db,
+        resource,
+        ["alpha beta", "gamma"],
+        operation="index",
+        generation_id="gen-1",
+        run_id="run-1",
+        agent_id="agent-1",
+    )
+    await db.flush()
+
+    rows = (await db.execute(select(EmbeddingCall))).scalars().all()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.status == "ok"
+    assert row.operation == "index"
+    assert row.generation_id == "gen-1"
+    assert row.run_id == "run-1"
+    assert row.agent_id == "agent-1"
+    assert row.resource_id == resource.id
+    assert row.provider_id == provider.id
+    assert row.model_name == "embed-test"
+    assert row.chunk_count == 2
+    assert row.tokens_in > 0
+    assert row.latency_ms >= 0
+    assert row.cost >= 0.0
+
+
+async def test_embed_call_ledger_records_failure(db, monkeypatch):
+    _patch_litellm_embed(monkeypatch, fail=RuntimeError("provider boom"))
+    provider = await _local_provider(db)
+    resource = await _ready_resource(db, provider)
+
+    with pytest.raises(EmbeddingUnavailable, match="provider boom"):
+        await embed_texts(db, resource, ["x"], operation="repair")
+    await db.flush()
+
+    row = (await db.execute(select(EmbeddingCall))).scalar_one()
+    assert row.status == "error"
+    assert "provider boom" in (row.error or "")
+    assert row.tokens_in == 0
+    assert row.operation == "repair"
+
+
+async def test_generation_spend_excludes_query_calls(db, monkeypatch):
+    """Generation cost covers index/ingest/repair — query embeds are
+    per-search spend, not part of the build."""
+    _patch_litellm_embed(monkeypatch)
+    provider = await _local_provider(db)
+    resource = await _ready_resource(db, provider)
+
+    await embed_texts(db, resource, ["a"], operation="index", generation_id="g1")
+    await embed_texts(db, resource, ["b c"], operation="ingest", generation_id="g1")
+    await embed_texts(db, resource, ["q"], operation="query", generation_id="g1", run_id="r9")
+    await db.flush()
+
+    from agentos.api.knowledge import _generation_spend_map
+
+    spend = await _generation_spend_map(db)
+    # tokens: 1 (index) + 2 (ingest) = 3; the query call's token is excluded.
+    assert spend["g1"]["tokens_in"] == 3
+
+
+async def test_query_embed_in_retrieve_is_ledgered(db, monkeypatch):
+    """Hybrid search embeds the query — the call is ledgered with the
+    run/agent context doc_search passes through."""
+    _patch_litellm_embed(monkeypatch)
+    provider = await _local_provider(db)
+    resource = await _ready_resource(db, provider)
+    await _hybrid_profile(db)
+    generation = IndexGeneration(
+        revision=1,
+        profile_revision=1,
+        status="active",
+        embedding_resource_id=resource.id,
+        embedding_model=resource.model_name,
+        dimensions=4,
+        adapter="python",
+    )
+    db.add(generation)
+    await db.commit()
+
+    await retrieve(db, "anything", agent_id="agent-x", run_id="run-y")
+
+    row = (await db.execute(select(EmbeddingCall))).scalar_one()
+    assert row.operation == "query"
+    assert row.run_id == "run-y"
+    assert row.agent_id == "agent-x"
+    assert row.generation_id == generation.id

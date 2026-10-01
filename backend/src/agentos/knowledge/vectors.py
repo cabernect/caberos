@@ -22,8 +22,10 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+# NULL agent_id means the shared scope — *not* unscoped. Private documents
+# must never leak into a shared-scope (operator) query.
 _SCOPE_SQL = """
-    (:agent_id IS NULL OR d.agent_id IS NULL OR d.agent_id = :agent_id)
+    (d.agent_id IS NULL OR d.agent_id = :agent_id)
 """
 
 _CANDIDATE_SQL = f"""
