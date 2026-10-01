@@ -509,9 +509,7 @@ async def _generation_spend_map(db: AsyncSession) -> dict[str, dict]:
     }
 
 
-def _generation_response(
-    generation: IndexGeneration, spend: dict | None = None
-) -> dict:
+def _generation_response(generation: IndexGeneration, spend: dict | None = None) -> dict:
     response = {
         "id": generation.id,
         "revision": generation.revision,
@@ -702,11 +700,7 @@ async def list_generations(
         .all()
     )
     spend_map = await _generation_spend_map(db)
-    return {
-        "generations": [
-            _generation_response(row, spend_map.get(row.id)) for row in rows
-        ]
-    }
+    return {"generations": [_generation_response(row, spend_map.get(row.id)) for row in rows]}
 
 
 @router.post("/index/generations/{generation_id}/activate")

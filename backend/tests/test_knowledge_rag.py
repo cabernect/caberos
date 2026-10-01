@@ -789,9 +789,7 @@ def _patch_litellm_embed(monkeypatch, fail: Exception | None = None):
     class _Response:
         def __init__(self, texts):
             self.data = [{"embedding": v} for v in _fake_vectors(texts)]
-            self.usage = SimpleNamespace(
-                prompt_tokens=sum(len(str(t).split()) for t in texts)
-            )
+            self.usage = SimpleNamespace(prompt_tokens=sum(len(str(t).split()) for t in texts))
 
     async def fake_aembedding(**kwargs):
         if fail is not None:

@@ -353,9 +353,7 @@ async def repair_index(db: AsyncSession) -> dict[str, Any]:
             "still_pending": len(missing),
             "reasons": ["embedding resource not ready"],
         }
-    result = await _embed_into_generation(
-        db, generation, resource, missing, operation="repair"
-    )
+    result = await _embed_into_generation(db, generation, resource, missing, operation="repair")
     await _refresh_semantic_states(db, generation.id)
     remaining = await _missing_chunk_ids(db, generation.id)
     return {

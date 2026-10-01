@@ -105,9 +105,7 @@ def _record_call(
     except Exception:
         import logging
 
-        logging.getLogger("agentos.knowledge.embeddings").debug(
-            "Could not record embedding call"
-        )
+        logging.getLogger("agentos.knowledge.embeddings").debug("Could not record embedding call")
 
 
 async def embed_texts(
@@ -140,11 +138,19 @@ async def embed_texts(
             )
         except Exception as error:  # provider/network/timeout — caller degrades
             _record_call(
-                db, resource, provider,
-                operation=operation, generation_id=generation_id, run_id=run_id,
-                agent_id=agent_id, chunk_count=len(batch), tokens_in=0, cost=0.0,
+                db,
+                resource,
+                provider,
+                operation=operation,
+                generation_id=generation_id,
+                run_id=run_id,
+                agent_id=agent_id,
+                chunk_count=len(batch),
+                tokens_in=0,
+                cost=0.0,
                 latency_ms=int((time.monotonic() - started) * 1000),
-                status="error", error=str(error),
+                status="error",
+                error=str(error),
             )
             raise EmbeddingUnavailable(str(error)) from error
         usage = getattr(response, "usage", None)
@@ -154,11 +160,19 @@ async def embed_texts(
         except Exception:
             cost = 0.0
         _record_call(
-            db, resource, provider,
-            operation=operation, generation_id=generation_id, run_id=run_id,
-            agent_id=agent_id, chunk_count=len(batch), tokens_in=tokens_in,
-            cost=cost, latency_ms=int((time.monotonic() - started) * 1000),
-            status="ok", error=None,
+            db,
+            resource,
+            provider,
+            operation=operation,
+            generation_id=generation_id,
+            run_id=run_id,
+            agent_id=agent_id,
+            chunk_count=len(batch),
+            tokens_in=tokens_in,
+            cost=cost,
+            latency_ms=int((time.monotonic() - started) * 1000),
+            status="ok",
+            error=None,
         )
         vectors.extend([item["embedding"] for item in response.data])
     return vectors
