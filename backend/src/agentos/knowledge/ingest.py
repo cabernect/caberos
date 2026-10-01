@@ -1,5 +1,6 @@
 """Document ingestion and shared SQLite full-text retrieval."""
 
+import asyncio
 import hashlib
 import json
 import re
@@ -12,8 +13,114 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..fts import fts5_match_query
 from ..models.document import Document, DocumentChunk
-from .chunker import chunk_extracted_blocks
+from .chunker import ChunkingConfig, ChunkNode, chunk_blocks
 from .extractors import extract_document
+
+
+async def _chunking_config(db: AsyncSession) -> ChunkingConfig:
+    """Chunk parameters from the active retrieval profile (corpus state)."""
+    from ..models.knowledge_index import RetrievalProfile
+
+    profile = await db.scalar(
+        select(RetrievalProfile).where(RetrievalProfile.active.is_(True)).limit(1)
+    )
+    if profile is None:
+        return ChunkingConfig()
+    config = json.loads(profile.config_json or "{}")
+    return ChunkingConfig(
+        parent_tokens=int(config.get("parent_tokens", 450)),
+        child_tokens=int(config.get("child_tokens", 120)),
+        child_overlap=int(config.get("child_overlap", 20)),
+        table_row_limit=int(config.get("table_row_limit", 150)),
+    )
+
+
+async def _write_chunk_nodes(
+    db: AsyncSession,
+    nodes: list[ChunkNode],
+    document: Document,
+    agent_id: str | None,
+) -> list[DocumentChunk]:
+    """Persist a ChunkNode tree in three batched phases — parents (one flush,
+    ids needed for children), children (one bulk add), FTS rows (one
+    executemany). A big document is ~3 round-trips, not ~4.5k.
+
+    Returns the retrievable rows — children and standalone leaves — for the
+    embed-at-ingest seam.
+    """
+    sequence = 0
+
+    def _row(node: ChunkNode, parent_id: str | None) -> DocumentChunk:
+        nonlocal sequence
+        row = DocumentChunk(
+            document_id=document.id,
+            kind=node.kind,
+            parent_id=parent_id,
+            seq=sequence,
+            text=node.text,
+            heading_path=json.dumps(node.heading_path, ensure_ascii=False),
+            page_number=node.page_number,
+            source_location=node.source_location,
+            block_type=node.block_type,
+            token_count=node.token_count,
+        )
+        sequence += 1
+        return row
+
+    # Phase 1: parent rows need ids before children can reference them.
+    tree: list[tuple[ChunkNode, DocumentChunk, list[tuple[ChunkNode, DocumentChunk]]]] = []
+    for node in nodes:
+        if node.kind == "parent":
+            parent_row = _row(node, None)
+            tree.append((node, parent_row, [(child, _row(child, None)) for child in node.children]))
+        else:
+            tree.append((node, _row(node, None), []))
+    db.add_all([parent_row for _node, parent_row, _children in tree])
+    await db.flush()
+
+    # Phase 2: children (parent_id now resolvable) + standalone leaves.
+    retrievable: list[tuple[DocumentChunk, ChunkNode]] = []
+    child_rows: list[DocumentChunk] = []
+    for node, parent_row, children in tree:
+        for child, child_row in children:
+            child_row.parent_id = parent_row.id
+            child_rows.append(child_row)
+            retrievable.append((child_row, child))
+        if parent_row.kind != "parent":
+            retrievable.append((parent_row, node))
+    db.add_all(child_rows)
+    await db.flush()
+
+    # Phase 3: one executemany for every FTS row (children only). An empty
+    # retrievable set (e.g. a scanned PDF) must skip the insert entirely —
+    # executemany with no params raises a bind-parameter error.
+    if not retrievable:
+        return []
+    await db.execute(
+        text(
+            "INSERT INTO document_chunks_fts "
+            "(text, chunk_id, document_id, agent_id, source_path, storage_path, "
+            "heading_path, page_number, sheet_name, source_location) "
+            "VALUES (:content, :chunk_id, :document_id, :agent_id, :source_path, "
+            ":storage_path, :heading_path, :page_number, :sheet_name, :source_location)"
+        ),
+        [
+            {
+                "content": row.text,
+                "chunk_id": row.id,
+                "document_id": document.id,
+                "agent_id": agent_id,
+                "source_path": document.source_path,
+                "storage_path": document.storage_path,
+                "heading_path": row.heading_path,
+                "page_number": row.page_number,
+                "sheet_name": node.sheet_name,
+                "source_location": row.source_location,
+            }
+            for row, node in retrievable
+        ],
+    )
+    return [row for row, _node in retrievable]
 
 
 def _content_hash(path: Path) -> str:
@@ -65,7 +172,9 @@ async def ingest_document(
     elif document.content_hash == content_hash and document.status == "indexed":
         return document
 
-    extracted = extract_document(source_file)
+    # Extraction is CPU-bound (pypdf/openpyxl/docx) — never block the event
+    # loop on a large document.
+    extracted = await asyncio.to_thread(extract_document, source_file)
     await db.execute(
         text("DELETE FROM document_chunks_fts WHERE document_id = :document_id"),
         {"document_id": document.id},
@@ -82,41 +191,20 @@ async def ingest_document(
     document.error = None
     document.indexed_at = datetime.now(UTC)
 
-    chunks = chunk_extracted_blocks(extracted.blocks)
-    for sequence, chunk in enumerate(chunks):
-        row = DocumentChunk(
-            document_id=document.id,
-            seq=sequence,
-            text=chunk.text,
-            heading_path=json.dumps(chunk.heading_path, ensure_ascii=False),
-            page_number=chunk.page_number,
-            source_location=chunk.source_location,
-            block_type=chunk.block_type,
-            token_count=chunk.token_count,
-        )
-        db.add(row)
-        await db.flush()
-        await db.execute(
-            text(
-                "INSERT INTO document_chunks_fts "
-                "(text, chunk_id, document_id, agent_id, source_path, storage_path, "
-                "heading_path, page_number, sheet_name, source_location) "
-                "VALUES (:content, :chunk_id, :document_id, :agent_id, :source_path, "
-                ":storage_path, :heading_path, :page_number, :sheet_name, :source_location)"
-            ),
-            {
-                "content": chunk.text,
-                "chunk_id": row.id,
-                "document_id": document.id,
-                "agent_id": agent_id,
-                "source_path": logical_path,
-                "storage_path": document.storage_path,
-                "heading_path": row.heading_path,
-                "page_number": chunk.page_number,
-                "sheet_name": chunk.sheet_name,
-                "source_location": chunk.source_location,
-            },
-        )
+    config = await _chunking_config(db)
+    nodes = chunk_blocks(extracted.blocks, config)
+    retrievable = await _write_chunk_nodes(db, nodes, document, agent_id)
+
+    # Commit the corpus write before embedding: a large document's embed
+    # phase runs hundreds of batches, and holding this transaction through
+    # it starves every other writer. The document is honest here — indexed
+    # and lexically searchable, 'pending' when a generation expects vectors.
+    from .indexing import embed_chunks_at_ingest, get_active_generation
+
+    document.semantic_state = "pending" if await get_active_generation(db) else "na"
+    await db.commit()
+
+    document.semantic_state = await embed_chunks_at_ingest(db, document, retrievable)
     await db.flush()
     return document
 
@@ -170,7 +258,7 @@ async def search_documents(
                 "ts_rank(c.search_vector, plainto_tsquery('simple', :query)) AS rank "
                 "FROM document_chunks c JOIN documents d ON d.id = c.document_id "
                 "WHERE c.search_vector @@ plainto_tsquery('simple', :query) "
-                "AND (:agent_id IS NULL OR d.agent_id IS NULL OR d.agent_id = :agent_id) "
+                "AND (d.agent_id IS NULL OR d.agent_id = :agent_id) "
                 "ORDER BY rank DESC LIMIT :limit"
             ),
             {"query": " ".join(terms), "agent_id": agent_id, "limit": limit},
@@ -184,7 +272,7 @@ async def search_documents(
                 "FROM document_chunks_fts fts "
                 "JOIN document_chunks dc ON dc.id = fts.chunk_id "
                 "WHERE document_chunks_fts MATCH :query "
-                "AND (:agent_id IS NULL OR fts.agent_id IS NULL OR fts.agent_id = :agent_id) "
+                "AND (fts.agent_id IS NULL OR fts.agent_id = :agent_id) "
                 "ORDER BY rank LIMIT :limit"
             ),
             {"query": fts_query, "agent_id": agent_id, "limit": limit},

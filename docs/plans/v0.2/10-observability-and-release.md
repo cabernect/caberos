@@ -27,6 +27,8 @@ ModelCall
 
 Provider/model filters match runs containing at least one matching call. Spend/latency aggregate calls rather than assigning one provider to an entire run.
 
+**Non-run model calls.** `run_id`/`agent_id` are non-nullable today — but embedding calls (W7's `embedding_calls` ledger: index/ingest/repair/validate/query), provider save-time validation probes, memory auto-extract, and any future system jobs call models outside runs. W10 unifies this: either fold `embedding_calls` into `ModelCall` (via `purpose` + nullable run context) or keep the separate ledger and build a **platform spend** view — all model spend grouped by kind (agent chat | embedding | probe | …), so Observability stops being agent-only. `/api/spend` stays agent-scoped; embedding spend already surfaces on the Vault index surface (`GET /index.embedding_spend`, per-generation `cost`/`tokens_in`).
+
 ## Tool status
 
 Persist and render distinct states:

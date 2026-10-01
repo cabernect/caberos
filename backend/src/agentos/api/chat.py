@@ -408,7 +408,7 @@ async def list_sessions(
             select(Run)
             .where(
                 Run.session_id == sess.id,
-                Run.status.in_(("pending", "running")),
+                Run.status.in_(("pending", "running", "awaiting_approval")),
             )
             .order_by(Run.started_at.desc())
             .limit(1)

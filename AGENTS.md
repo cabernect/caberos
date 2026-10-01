@@ -198,6 +198,17 @@ Tickets **01–09 implemented**: smoke slice, real-model chat + SSE streaming, f
 - **Verification:** `test_skills_studio.py` (24) + `test_skills_api.py` (10) + rewritten syscall/preview fixtures; 694 backend tests pass, `tsc -b` clean.
 - **Deferred:** hub/registry, per-agent built-in disable, live-test subsystem.
 
+**v0.2 W7 status (branch `feat/v0.2-rag`, unmerged — W7 commit `49e4c11` + uncommitted follow-ups):**
+- **RAG v2 implemented:** structured extraction → per-block-type parent/child chunking → FTS lexical + optional hybrid semantic → RRF fusion → bounded parent expansion → excerpts + citations + retrieval trace.
+- **Index generations:** blue-green rebuild/repair/activate/delete; exactly one `active`; concurrent rebuild → 409; `reconcile_stale_builds()` at startup flips committed `building` rows → `failed` (gateway crash hazard closed).
+- **Embedding resource** (`embedding_resources` row): provider + model + `egress_allowed`. Remote providers refuse until egress opted-in (audited `knowledge.embedding_egress_enabled`); local = known local provider types or `localhost`/`127.0.0.1`/`::1`/`0.0.0.0`/`.local` base_url (`provider_is_local` in `knowledge/embeddings.py`). "Local model" = localhost HTTP endpoint (Ollama etc.), not embedded runtime.
+- **`fusion=lexical` is embeddings-off** — `embed_chunks_at_ingest` skips provider calls entirely under lexical (no egress, no spend); uploads land `semantic_state=pending`, a later hybrid flip + Repair fills them.
+- **Embedding ledger:** `embedding_calls` table records every `embed_texts` provider call — operation (`validate`/`index`/`ingest`/`repair`/`query`), tokens, cost, latency, status; plain-string refs survive deletions. `GET /api/knowledge/index.embedding_spend` cumulative; per-generation `cost`/`tokens_in` (index+ingest+repair only — query embeds are per-search spend). `/api/spend` stays agent-scoped; unified platform spend is W10.
+- **Semantic-index panel: built, browser-verified, then REMOVED** — interim UI withdrawn after review; all config/lifecycle is API-only until the W13 frontend rework (`07-rag-v2.md` → "Vault UI — semantic index controls" records the requirements).
+- **Tabular files refused at ingest** — `.xlsx`/`.xls`/`.csv` rejected by `_check_supported()` in `api/knowledge.py` (all three entry points incl. `/from-workspace`): chunking rows is wrong-shaped, needs the deferred row-query layer (v0.2-release-plan → "Structured sources get a row layer"). `_extract_xlsx` stays as dead-but-ready code.
+- **Verification:** `test_knowledge_rag.py` (34) green; full suite 756 pass; `tsc`/`oxlint` clean.
+- **Post-v0.2 backlog:** vault document inspection (`GET /documents/{id}/chunks` + drill-down), structured-source row layer, platform spend view (W10).
+
 **Ticket 10 (Tauri Desktop App):** SHIPPED for macOS ARM64 (Apple Silicon). macOS Intel and Windows builds require cross-compilation/CI and are not yet set up.
 - Tauri 2 shell wraps the React frontend + packaged PyInstaller gateway.
 - Gateway supervisor (`frontend/src-tauri/src/gateway.rs`): starts the PyInstaller gateway in its own process group, routes stdout/stderr to `<app_data_dir>/logs/gateway.log`, kills the full process group on app exit.

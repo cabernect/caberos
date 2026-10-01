@@ -143,7 +143,11 @@ export interface SkillDetail extends SkillInfo {
   compatibility: string;
   allowed_tools: string;
   revisions: SkillRevisionInfo[];
-  validation: { errors: string[]; warnings: string[]; stats: Record<string, number> };
+  validation: {
+    errors: string[];
+    warnings: string[];
+    stats: Record<string, number>;
+  };
   usage: { run_id: string; status: string; created_at: string | null }[];
 }
 
@@ -192,7 +196,15 @@ export interface ArtifactMeta {
 }
 
 export interface PreviewElement {
-  type: "heading" | "paragraph" | "list" | "table" | "image" | "chart" | "notes" | "page_break";
+  type:
+    | "heading"
+    | "paragraph"
+    | "list"
+    | "table"
+    | "image"
+    | "chart"
+    | "notes"
+    | "page_break";
   text?: string;
   level?: number;
   style?: string;
@@ -219,8 +231,18 @@ export interface PreviewSheet {
 
 export interface PreviewPayload {
   kind:
-    | "markdown" | "code" | "text" | "json" | "table" | "image"
-    | "pdf" | "document" | "slides" | "workbook" | "media" | "unknown";
+    | "markdown"
+    | "code"
+    | "text"
+    | "json"
+    | "table"
+    | "image"
+    | "pdf"
+    | "document"
+    | "slides"
+    | "workbook"
+    | "media"
+    | "unknown";
   size: number;
   name: string;
   path: string;
@@ -311,6 +333,53 @@ export interface KnowledgeResult {
   source_location: string | null;
 }
 
+export interface KnowledgeGeneration {
+  id: string;
+  revision: number;
+  status: "building" | "active" | "superseded" | "failed";
+  profile_revision: number;
+  embedding_model: string | null;
+  dimensions: number | null;
+  adapter: string | null;
+  stats: {
+    embedded?: number;
+    failed?: number;
+    total?: number;
+    reason?: string;
+  };
+  /** Spend attributed to this generation's vector set (index/ingest/repair calls). */
+  cost?: number;
+  tokens_in?: number;
+  error: string | null;
+  activated_at: string | null;
+  created_at: string | null;
+}
+
+export interface KnowledgeEmbeddingResource {
+  configured: boolean;
+  id?: string;
+  provider_id?: string;
+  provider_name?: string | null;
+  provider_type?: string | null;
+  model_name?: string;
+  dimensions?: number | null;
+  status?: string;
+  last_error?: string | null;
+  last_validated_at?: string | null;
+  egress_allowed?: boolean;
+  provider_local?: boolean | null;
+  hint?: string;
+}
+
+export interface KnowledgeIndexOverview {
+  profile: { id: string; revision: number; config: Record<string, unknown> };
+  embedding_resource: KnowledgeEmbeddingResource;
+  active_generation: KnowledgeGeneration | null;
+  building_generation: KnowledgeGeneration | null;
+  documents: { pending: number };
+  embedding_spend: { calls: number; tokens_in: number; cost: number };
+}
+
 export interface Citation {
   id: string;
   source_type?: "knowledge" | "web";
@@ -329,7 +398,14 @@ export interface Citation {
 
 export interface Message {
   id: string;
-  role: "user" | "assistant" | "system" | "tool" | "tool_call" | "thinking" | "heartbeat";
+  role:
+    | "user"
+    | "assistant"
+    | "system"
+    | "tool"
+    | "tool_call"
+    | "thinking"
+    | "heartbeat";
   content: string;
   created_at: string;
   run_id: string;
@@ -567,7 +643,11 @@ export interface RunDetail {
   context_tokens: number;
   max_context_tokens: number;
   compacted: boolean;
-  context_breakdown: { system_prompt: number; conversation: number; tools: number };
+  context_breakdown: {
+    system_prompt: number;
+    conversation: number;
+    tools: number;
+  };
   loaded_capabilities: string[];
   messages: MessageOut[];
   audit_records: AuditOut[];

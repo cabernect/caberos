@@ -113,7 +113,9 @@ class BrowserRegistry:
             tmp = None
             session_dir = profile_dir
         else:
-            tmp = tempfile.TemporaryDirectory(prefix=f"agentos-browser-{run_id[:8]}-")
+            tmp = tempfile.TemporaryDirectory(
+                prefix=f"agentos-browser-{run_id[:8]}-", ignore_cleanup_errors=True
+            )
             session_dir = Path(tmp.name)
         session = BrowserSession(binary, session_dir, staging_dir=staging_dir)
         obs = await session.open(

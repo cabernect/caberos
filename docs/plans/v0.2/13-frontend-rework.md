@@ -24,6 +24,12 @@ instance, not a hypothetical.
 - **AgentList / KnowledgeVault / MCPs** got the grid patch
   (`auto-fill + minmax`) but not the rest of the pass — card styling,
   drawer behavior, and empty/error states still diverge.
+- **KnowledgeVault carryover from W7** (`07-rag-v2.md` → "Vault UI — semantic
+  index controls"): an interim semantic-index panel was prototyped, verified,
+  and withdrawn — the API is complete and the spec records the requirements
+  (guided sequence not cockpit, lexical = embeddings-off, conditional egress
+  consent, spend next to the index). (Document-inspection drill-down is a
+  separate post-v0.2 backlog item — see `v0.2-release-plan.md` deferred.)
 - **Channels** is untouched — oldest styling generation on the page set.
 - **Conversation** works but is a ~2,070-line monolith mixing data fetching,
   SSE handling, composer, preview dock, and heartbeat rendering.

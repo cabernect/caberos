@@ -796,7 +796,9 @@ export function Conversation() {
     const recoverableSessions = sessions.filter(
       (session) =>
         session.active_run_id &&
-        (session.active_run_status === "pending" || session.active_run_status === "running"),
+        (session.active_run_status === "pending" ||
+          session.active_run_status === "running" ||
+          session.active_run_status === "awaiting_approval"),
     );
     if (recoverableSessions.length === 0) return;
 

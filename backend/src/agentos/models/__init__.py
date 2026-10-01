@@ -12,6 +12,13 @@ from .contact import Contact
 from .document import Document, DocumentChunk
 from .elicitation import ElicitationRequest
 from .execution_manifest import ExecutionManifest
+from .knowledge_index import (
+    ChunkEmbedding,
+    EmbeddingCall,
+    EmbeddingResource,
+    IndexGeneration,
+    RetrievalProfile,
+)
 from .mcp import ContactMcpBinding, McpServer, McpServerCredential, McpTool
 from .memory import MemoryEntry, MemoryTriple
 from .model_call import ModelCall
@@ -49,6 +56,11 @@ __all__ = [
     "Contact",
     "Document",
     "DocumentChunk",
+    "EmbeddingCall",
+    "EmbeddingResource",
+    "RetrievalProfile",
+    "IndexGeneration",
+    "ChunkEmbedding",
     "ExecutionManifest",
     "ModelCall",
     "RevisionedEntityMixin",

@@ -10,7 +10,7 @@ from typing import Any
 from sqlalchemy import func, or_, select
 
 from ...config import settings
-from ...knowledge.ingest import search_documents
+from ...knowledge.retrieval import retrieve
 from ...models.document import Document, DocumentChunk
 from ...models.source import RunSource
 
@@ -119,12 +119,14 @@ async def doc_search(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     query = args["query"]
     limit = args.get("limit", 5)
     db = kwargs["db"]
-    results = await search_documents(
+    outcome = await retrieve(
         db,
         query,
         limit=limit,
         agent_id=kwargs["agent_id"],
+        run_id=kwargs.get("run_id"),
     )
+    results = outcome["results"]
     run_id = kwargs.get("run_id")
     if run_id:
 
@@ -163,7 +165,14 @@ async def doc_search(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         else:
             await _record_sources()
 
-    response: dict[str, Any] = {"query": query, "results": results, "count": len(results)}
+    response: dict[str, Any] = {
+        "query": query,
+        "results": results,
+        "count": len(results),
+        # Compact trace — always carries degraded[] so the model never
+        # overstates semantic coverage. Full trace lives on the API.
+        "trace": outcome["trace"],
+    }
     if kwargs.get("supports_vision"):
         model_content: list[dict[str, Any]] = []
         seen_visuals: set[tuple[str, int | str]] = set()
