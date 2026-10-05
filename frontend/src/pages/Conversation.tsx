@@ -24,6 +24,8 @@ interface ChatMessage {
   created_at: string;
   run_id?: string;
   run_status?: string;
+  trigger?: string;
+  is_test?: boolean;
   tokens_in?: number;
   tokens_out?: number;
   cost?: number;
@@ -209,6 +211,8 @@ export function Conversation() {
           created_at: m.created_at,
           run_id: m.run_id,
           run_status: m.run_status,
+          trigger: m.trigger,
+          is_test: m.is_test,
           tokens_in: m.tokens_in,
           tokens_out: m.tokens_out,
           cost: m.cost,
@@ -587,6 +591,8 @@ export function Conversation() {
               created_at: m.created_at,
               run_id: m.run_id,
               run_status: m.run_status,
+              trigger: m.trigger,
+              is_test: m.is_test,
               tokens_in: m.tokens_in,
               tokens_out: m.tokens_out,
               cost: m.cost,
@@ -610,6 +616,8 @@ export function Conversation() {
                 created_at: new Date().toISOString(),
                 run_id: data.run_id || `failed-${sessionId}`,
                 run_status: "failed",
+                trigger: undefined,
+                is_test: undefined,
                 tokens_in: undefined,
                 tokens_out: undefined,
                 cost: undefined,
@@ -985,6 +993,8 @@ export function Conversation() {
             created_at: m.created_at,
             run_id: m.run_id,
             run_status: m.run_status,
+          trigger: m.trigger,
+          is_test: m.is_test,
             tokens_in: m.tokens_in,
             tokens_out: m.tokens_out,
             cost: m.cost,
@@ -1905,12 +1915,22 @@ function MessageRow({
     }
   }
 
-  if (message.role === "heartbeat") {
+  // Origin badge for non-chat runs — driven by run.trigger (schedule, heartbeat,
+  // channel…); legacy rows predate trigger and carry role="heartbeat" instead.
+  const origin =
+    message.role === "heartbeat"
+      ? "heartbeat"
+      : message.role === "assistant" && message.trigger && message.trigger !== "user_message"
+        ? message.is_test === true
+          ? "test"
+          : message.trigger
+        : null;
+  if (origin) {
     const ts = message.created_at ? new Date(message.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
     return (
       <div className="mb-6">
         <div className="mb-1.5 flex items-center gap-1.5">
-          <span className="font-mono text-[11px] font-medium" style={{ color: "#7C3AED" }}>♢ heartbeat</span>
+          <span className="font-mono text-[11px] font-medium" style={{ color: "#7C3AED" }}>♢ {origin}</span>
           {ts && (
             <span className="font-mono text-[10px]" style={{ color: "var(--ink-3)" }}>· {ts}</span>
           )}

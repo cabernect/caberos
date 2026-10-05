@@ -37,6 +37,7 @@ from .api import (  # noqa: E402
     observability,
     providers,
     scheduler,
+    schedules,
     settings,
     skills,
 )
@@ -342,6 +343,7 @@ app.include_router(elicitation.router)
 app.include_router(knowledge.router)
 app.include_router(skills.router)
 app.include_router(scheduler.router)
+app.include_router(schedules.router)
 app.include_router(mcp.router)
 app.include_router(notifications.router)
 app.include_router(channels.router)

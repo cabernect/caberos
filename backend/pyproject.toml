@@ -12,6 +12,7 @@ dependencies = [
     "alembic>=1.18.5",
     "bcrypt>=5.0.0",
     "beautifulsoup4>=4.15.0",
+    "croniter>=6.0.0",
     "cryptography>=50.0.0",
     "ddgs>=9.15.0",
     "fastapi>=0.140.13",

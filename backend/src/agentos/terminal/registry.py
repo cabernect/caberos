@@ -150,7 +150,7 @@ class TerminalRegistry:
                 await db.flush()
         else:
             db.add(row)
-            await db.flush()
+            await db.commit()
 
         return {"terminal_id": terminal_id, "status": "running", "pid": proc.pid}
 

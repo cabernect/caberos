@@ -28,6 +28,7 @@ from .operator_session import OperatorSession
 from .provider import Provider
 from .revision import RevisionedEntityMixin, RevisionMixin
 from .run import Message, Run
+from .schedule import Schedule, ScheduleOccurrence, ScheduleRevision
 from .session import Session
 from .skill import Skill, SkillAssignment, SkillRevision
 from .source import RunSource
@@ -71,6 +72,9 @@ __all__ = [
     "SkillRevision",
     "Run",
     "Message",
+    "Schedule",
+    "ScheduleRevision",
+    "ScheduleOccurrence",
     "RunSource",
     "WebSource",
     "AuditRecord",

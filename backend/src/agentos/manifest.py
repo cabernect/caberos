@@ -29,6 +29,8 @@ async def capture_execution_manifest(
     agent_id: str,
     agent_config: Any,
     skill_revision_ids: dict[str, str] | list[str] | None = None,
+    schedule_revision_id: str | None = None,
+    plan_revision_id: str | None = None,
 ) -> ExecutionManifest:
     """Record the run's Execution Manifest. Idempotent per run.
 
@@ -63,6 +65,8 @@ async def capture_execution_manifest(
         agent_version_number=agent_version_number,
         model_provider_id=getattr(model, "provider_id", None),
         model_name=getattr(model, "name", None),
+        schedule_revision_id=schedule_revision_id,
+        plan_revision_id=plan_revision_id,
         # W6: the pin map {skill_name: "rev:<revision_id>" | "live:<hash>"}
         # — mid-run publishes can't wobble a live run, agent-local records
         # its content hash for provenance.

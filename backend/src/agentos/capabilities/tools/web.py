@@ -92,24 +92,35 @@ async def _persist_web_sources(result: dict[str, Any], kwargs: dict[str, Any]) -
     if not db or not run_id:
         return
 
-    for index, item in enumerate(result.get("results", []), start=1):
-        url = item.get("url", "")
-        if not url:
-            continue
-        exists = await db.scalar(
-            select(WebSource.id).where(WebSource.run_id == run_id, WebSource.url == url)
-        )
-        if exists is None:
-            db.add(
-                WebSource(
-                    run_id=run_id,
-                    url=url,
-                    title=item.get("title", ""),
-                    excerpt=item.get("snippet", ""),
-                    rank=index,
-                )
+    async def _write() -> None:
+        for index, item in enumerate(result.get("results", []), start=1):
+            url = item.get("url", "")
+            if not url:
+                continue
+            exists = await db.scalar(
+                select(WebSource.id).where(WebSource.run_id == run_id, WebSource.url == url)
             )
-    await db.flush()
+            if exists is None:
+                db.add(
+                    WebSource(
+                        run_id=run_id,
+                        url=url,
+                        title=item.get("title", ""),
+                        excerpt=item.get("snippet", ""),
+                        rank=index,
+                    )
+                )
+        await db.flush()
+
+    # Write under the session lock so the transaction closes on section exit
+    # instead of staying open across a concurrent sibling tool call (B31).
+    db_lock = kwargs.get("db_lock")
+    if db_lock is not None:
+        async with db_lock:
+            await _write()
+    else:
+        await _write()
+        await db.commit()
 
 
 async def _persist_fetched_source(url: str, title: str, text: str, kwargs: dict[str, Any]) -> None:
@@ -119,23 +130,33 @@ async def _persist_fetched_source(url: str, title: str, text: str, kwargs: dict[
     if not db or not run_id:
         return
 
-    exists = await db.scalar(
-        select(WebSource.id).where(WebSource.run_id == run_id, WebSource.url == url)
-    )
-    if exists is None:
-        rank = (
-            await db.scalar(select(func.count(WebSource.id)).where(WebSource.run_id == run_id)) or 0
-        ) + 1
-        db.add(
-            WebSource(
-                run_id=run_id,
-                url=url,
-                title=title,
-                excerpt=text[:500],
-                rank=rank,
-            )
+    async def _write() -> None:
+        exists = await db.scalar(
+            select(WebSource.id).where(WebSource.run_id == run_id, WebSource.url == url)
         )
-        await db.flush()
+        if exists is None:
+            rank = (
+                await db.scalar(select(func.count(WebSource.id)).where(WebSource.run_id == run_id))
+                or 0
+            ) + 1
+            db.add(
+                WebSource(
+                    run_id=run_id,
+                    url=url,
+                    title=title,
+                    excerpt=text[:500],
+                    rank=rank,
+                )
+            )
+            await db.flush()
+
+    db_lock = kwargs.get("db_lock")
+    if db_lock is not None:
+        async with db_lock:
+            await _write()
+    else:
+        await _write()
+        await db.commit()
 
 
 async def _web_search_html(query: str, max_results: int) -> dict[str, Any]:

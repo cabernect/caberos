@@ -156,7 +156,7 @@ async def close_session(
         # No messages — just mark closed
         session.closed = True
         session.status = "closed"
-        await db.flush()
+        await db.commit()
         return
 
     # Build conversation excerpt for the LLM
@@ -169,6 +169,9 @@ async def close_session(
 
     # --- LLM Call 1: Session summary ---
     await _generate_session_summary(db, agent_config, session, convo)
+    # Close the write txn before the next LLM call — a flush left open across
+    # an LLM call holds the SQLite writer lock for the call's duration (B31).
+    await db.commit()
 
     # --- LLM Call 2: KG triple extraction ---
     await _extract_kg_triples(db, agent_config, session, contact_id, convo)
@@ -176,7 +179,7 @@ async def close_session(
     # Mark closed
     session.closed = True
     session.status = "closed"
-    await db.flush()
+    await db.commit()
 
 
 async def _generate_session_summary(

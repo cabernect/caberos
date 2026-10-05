@@ -25,6 +25,11 @@ class SQLiteBackend(DatabaseBackend):
             db_url,
             echo=False,
             connect_args={"check_same_thread": False},
+            # Concurrent runs each hold a pipeline session plus short-lived
+            # audit/model-call/terminal sessions; the default pool (5+10)
+            # starved under parallel schedule storms (B31).
+            pool_size=10,
+            max_overflow=20,
         )
 
         # Enable WAL mode + busy timeout on every connection.

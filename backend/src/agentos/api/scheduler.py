@@ -1,11 +1,15 @@
-"""Scheduler API — heartbeat configuration and status.
+"""Scheduler API — heartbeat facade over managed schedules.
+
+The heartbeat config still lives on AgentConfig and these endpoints keep
+their shape; underneath, `sync_heartbeat_schedule` projects the config onto
+a managed Schedule row so the v2 engine owns all timing (W8).
 
 Endpoints:
-  GET  /api/scheduler/heartbeat        — list all agents with heartbeat status
-  PUT  /api/scheduler/heartbeat/{id}    — update heartbeat config for an agent
-  POST /api/scheduler/heartbeat/{id}/fire — manually trigger a heartbeat now
-  GET  /api/scheduler/alerts           — list active alerts (consecutive failures)
-  POST /api/scheduler/alerts/{id}/clear — clear an alert
+  GET  /api/scheduler/heartbeat          — list agents + heartbeat status
+  PUT  /api/scheduler/heartbeat/{id}     — update heartbeat config
+  POST /api/scheduler/heartbeat/{id}/fire — fire the managed schedule now
+  GET  /api/scheduler/alerts             — schedules past failure threshold
+  POST /api/scheduler/alerts/{id}/clear  — reset an agent's failure streak
 """
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -48,7 +52,7 @@ async def list_heartbeat(
     result = await db.execute(select(Agent).where(Agent.enabled).order_by(Agent.name))
     agents = result.scalars().all()
 
-    states = scheduler_service.get_all_states()
+    states = await scheduler_service.heartbeat_states(db, [a.id for a in agents])
     out = []
     for agent in agents:
         config = await get_active_config(db, agent.id)
@@ -82,12 +86,11 @@ async def update_heartbeat(
     operator: Operator = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Update heartbeat config for an agent. Only the heartbeat field is updated."""
+    """Update heartbeat config — writes through to the managed schedule."""
     config = await get_active_config(db, agent_id)
     if config is None:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    # Apply partial updates to the heartbeat config
     hb = config.heartbeat
     if req.enabled is not None:
         hb.enabled = req.enabled
@@ -102,6 +105,8 @@ async def update_heartbeat(
     config.heartbeat = hb
 
     version = await save_agent(db, config)
+    await scheduler_service.sync_heartbeat_schedule(db, agent_id)
+    await db.commit()
     return {
         "agent_id": agent_id,
         "version": version.version_number,
@@ -114,20 +119,20 @@ async def fire_heartbeat(
     agent_id: str,
     operator: Operator = Depends(require_operator),
 ) -> dict:
-    """Manually trigger a heartbeat run for an agent."""
+    """Manually run the agent's managed heartbeat schedule now."""
     try:
-        result = await scheduler_service.fire_now(agent_id)
-        return result
+        return await scheduler_service.fire_now(agent_id)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail="Invalid heartbeat configuration") from e
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.get("/alerts")
 async def list_alerts(
     operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    """List active scheduler alerts (consecutive heartbeat failures)."""
-    alerts = scheduler_service.get_alerts()
+    """Schedules (managed or user-created) past their failure threshold."""
+    alerts = await scheduler_service.get_alerts(db)
     return [
         {
             "agent_id": a.agent_id,
@@ -145,7 +150,8 @@ async def list_alerts(
 async def clear_alert(
     agent_id: str,
     operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Clear an alert for an agent."""
-    scheduler_service.clear_alert(agent_id)
+    """Reset the agent's failure streak (acknowledges the alert)."""
+    await scheduler_service.clear_alert(db, agent_id)
     return {"agent_id": agent_id, "cleared": True}

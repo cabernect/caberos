@@ -42,6 +42,44 @@ from .elicitation_registry import elicitation_registry
 from .protocol import SyscallResult, ToolCall
 
 
+class _SessionWriteLock:
+    """asyncio.Lock wrapper that also bounds the session's write transaction.
+
+    Tool implementations write through the run's shared session inside
+    ``async with db_lock``. A bare ``flush()`` leaves the write txn — and
+    SQLite's single-writer lock — open until the next unrelated commit,
+    which under ``asyncio.gather`` can span a sibling's entire execution
+    (B31). Committing on clean exit bounds the write lock to the section
+    itself; rolling back on error keeps the shared session usable instead
+    of leaving it in a failed transaction (PendingRollbackError cascades).
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._lock = asyncio.Lock()
+        self._session = session
+
+    async def __aenter__(self) -> "_SessionWriteLock":
+        await self._lock.acquire()
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        from ..db import retry_locked_transaction
+
+        try:
+            if exc_type is None:
+                try:
+                    await retry_locked_transaction(
+                        self._session.commit, self._session, "tool_write"
+                    )
+                except Exception:
+                    await self._session.rollback()
+                    raise
+            else:
+                await self._session.rollback()
+        finally:
+            self._lock.release()
+
+
 class SyscallHandler:
     """Real syscall handler — mediates every capability call (I2, I3, I4).
 
@@ -59,8 +97,28 @@ class SyscallHandler:
         self.supports_vision = False
         # Serialize DB operations — asyncio.gather may run multiple tool
         # calls concurrently, but SQLAlchemy async sessions are not safe
-        # for concurrent flush/commit.
-        self._db_lock = asyncio.Lock()
+        # for concurrent flush/commit. The lock also closes the write txn
+        # on section exit so no transaction spans a slow sibling tool call.
+        self._db_lock = _SessionWriteLock(db)
+
+    async def _write_audit(self, audit: AuditRecord) -> None:
+        """Persist an audit row on its own session with lock-retry.
+
+        Audit writes run inside an asyncio.gather of concurrent tool calls —
+        a bare flush on the shared run session would hold the SQLite write
+        txn (and its lock) open until the slowest sibling finishes, starving
+        every other run (B31). A fresh session keeps the write short, and a
+        failure here can't poison the run's session.
+        """
+        from ..db import async_session_factory, retry_locked_transaction
+
+        async with async_session_factory() as session:
+
+            async def _persist() -> None:
+                session.add(audit)
+                await session.commit()
+
+            await retry_locked_transaction(_persist, session, f"audit:{audit.id}")
 
     async def mediate(
         self,
@@ -204,6 +262,16 @@ class SyscallHandler:
             # skip the approval gate.
             elif approval_registry.is_session_approved(session.id, call.name, call.args):
                 pass  # Auto-approved for this session
+            elif call.name in getattr(self, "_schedule_auto_approve", ()):
+                # W8: a schedule may pre-approve capabilities inside the agent
+                # ceiling — the permission check above already ran; only the
+                # operator prompt is skipped.
+                pass
+            elif getattr(self, "_is_test_run", False):
+                # Scripted test runs are headless — an approval prompt would
+                # park the run forever. Auto-approve (the ceiling check above
+                # still applies) and keep going.
+                pass
             else:
                 approval_result = await self._await_approval(
                     call=call,
@@ -269,6 +337,7 @@ class SyscallHandler:
             "doc_search",
             "doc_inspect",
             "web_search",
+            "web_fetch",
         ):
             extra_kwargs["db"] = self.db
             extra_kwargs["agent_id"] = agent_config.id
@@ -351,9 +420,7 @@ class SyscallHandler:
                 args=json.dumps(call.args),
                 result=json.dumps(result) if result else None,
             )
-            async with self._db_lock:
-                self.db.add(audit)
-                await self.db.flush()
+            await self._write_audit(audit)
 
             return SyscallResult(
                 output=result,
@@ -393,9 +460,7 @@ class SyscallHandler:
                 latency_ms=elapsed,
                 args=json.dumps(call.args),
             )
-            async with self._db_lock:
-                self.db.add(audit)
-                await self.db.flush()
+            await self._write_audit(audit)
             return SyscallResult(
                 output=None,
                 allowed=False,
@@ -510,9 +575,7 @@ class SyscallHandler:
                 args=json.dumps(call.args),
                 result=json.dumps(result) if result else None,
             )
-            async with self._db_lock:
-                self.db.add(audit)
-                await self.db.flush()
+            await self._write_audit(audit)
 
             return SyscallResult(
                 output=result,
@@ -551,9 +614,7 @@ class SyscallHandler:
                 args=json.dumps(call.args),
                 result=json.dumps({"error": str(e)}),
             )
-            async with self._db_lock:
-                self.db.add(audit)
-                await self.db.flush()
+            await self._write_audit(audit)
             return SyscallResult(
                 output={"error": f"MCP tool error: {e}"},
                 allowed=False,
@@ -586,9 +647,7 @@ class SyscallHandler:
             latency_ms=elapsed,
             args=json.dumps(call.args),
         )
-        async with self._db_lock:
-            self.db.add(audit)
-            await self.db.flush()
+        await self._write_audit(audit)
         return SyscallResult(
             output=None,
             allowed=False,
@@ -630,9 +689,7 @@ class SyscallHandler:
                 latency_ms=elapsed,
                 args=json.dumps(call.args),
             )
-            async with self._db_lock:
-                self.db.add(audit)
-                await self.db.flush()
+            await self._write_audit(audit)
         except Exception:
             logging.getLogger(__name__).debug(
                 "Could not record %s outcome for %s", outcome, call.name
@@ -899,6 +956,13 @@ class SyscallHandler:
         # Register the asyncio.Event so the API can resolve it
         pending = elicitation_registry.register(elicitation_id)
 
+        if getattr(self, "_is_test_run", False):
+            # Headless test run — nobody can answer. Resolve immediately with
+            # the first option (or empty) so the scripted pipeline finishes;
+            # the ElicitationRequest row records responded_by="test".
+            answer = options[0]["label"] if options else ""
+            elicitation_registry.resolve(elicitation_id, answer, "test")
+
         # Emit clarifying_question event so the frontend shows the question + input
         if self._event_emitter:
             result_emit = self._event_emitter(
@@ -1004,9 +1068,7 @@ class SyscallHandler:
             args=json.dumps(call.args),
             result=json.dumps({"response": response}),
         )
-        async with self._db_lock:
-            self.db.add(audit)
-            await self.db.flush()
+        await self._write_audit(audit)
 
         return SyscallResult(
             output={"response": response},

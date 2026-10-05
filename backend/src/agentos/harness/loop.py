@@ -380,7 +380,9 @@ class Harness:
                         .where(SessionModel.id == session.id)
                         .values(conversation_summary=compaction_result.summary)
                     )
-                    await syscall_handler.db.flush()
+                    # Commit — a bare flush would hold the write txn across
+                    # the upcoming model call (B31).
+                    await syscall_handler.db.commit()
                     session.conversation_summary = compaction_result.summary
         else:
             # No compaction — still report token count for the context bar
@@ -418,9 +420,9 @@ class Harness:
 
         max_turns = agent_config.limits.max_turns_per_run
         max_cost = (
-            agent_config.limits.max_cost_per_run
-            if trigger == "user_message"
-            else agent_config.heartbeat.max_cost_per_heartbeat
+            agent_config.heartbeat.max_cost_per_heartbeat
+            if trigger == "heartbeat"
+            else agent_config.limits.max_cost_per_run
         )
         consecutive_tool_failures = 0
         max_consecutive_failures = 5
@@ -500,7 +502,9 @@ class Harness:
                                 .where(SessionModel.id == session.id)
                                 .values(conversation_summary=compaction_result.summary)
                             )
-                            await syscall_handler.db.flush()
+                            # Commit — a bare flush would hold the write txn
+                            # across the retry model call (B31).
+                            await syscall_handler.db.commit()
                             session.conversation_summary = compaction_result.summary
                         result.total_turns -= 1  # the retry reuses this turn
                         continue
@@ -653,6 +657,14 @@ class Harness:
                                 "status": "running",
                             },
                         )
+
+                # Release any open write txn before dispatch — tool calls can
+                # block for minutes (terminal sleep, MCP calls); a SQLite
+                # writer lock held across them starves every other run's
+                # writes under concurrency (B31).
+                _loop_db = getattr(syscall_handler, "db", None)
+                if _loop_db is not None:
+                    await _loop_db.commit()
 
                 # Dispatch all tool calls concurrently within this reasoning step.
                 approval_batch = _approval_batch_for(agent_config, session, calls)
@@ -894,14 +906,17 @@ class Harness:
     ) -> None:
         """Write one ModelCall row per model request (v0.2 foundations).
 
-        Best-effort accounting: the record resolves its DB through the
-        syscall handler (sub-agent handlers carry the parent's run id and
-        their own sub-agent id) and must never break a run.
+        Best-effort accounting on its OWN session (sub-agent handlers carry
+        the parent's run id and their own sub-agent id): a write on the run's
+        session would open the SQLite write txn it holds across whatever the
+        run does next — tool calls can block for minutes, starving every
+        other writer under concurrency (B31). A fresh session + lock-retry
+        keeps the write short and can never poison the run's session.
         """
-        db = getattr(syscall_handler, "db", None)
-        if db is None:
+        if getattr(syscall_handler, "db", None) is None:
             return
         try:
+            from ..db import async_session_factory, retry_locked_transaction
             from ..models.model_call import ModelCall
 
             record_run_id = getattr(syscall_handler, "_parent_run_id", None) or run_id
@@ -923,14 +938,15 @@ class Harness:
                 status=status,
                 error=error[:2000] if error else None,
             )
-            db_lock = getattr(syscall_handler, "_db_lock", None)
-            if db_lock is not None:
-                async with db_lock:
-                    db.add(row)
-                    await db.flush()
-            else:
-                db.add(row)
-                await db.flush()
+            async with async_session_factory() as session:
+
+                async def _persist() -> None:
+                    session.add(row)
+                    await session.commit()
+
+                await retry_locked_transaction(
+                    _persist, session, f"model_call:{record_run_id}:{turn}"
+                )
         except Exception:
             import logging as _log
 

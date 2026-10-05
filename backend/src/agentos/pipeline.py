@@ -209,6 +209,8 @@ class InboundMessage:
     new_session: bool = False  # if true, force create a new session (ignore auto-resume)
     attachments: list[Attachment] = None  # user attachments stored for tool-mediated access
     skill: str | None = None  # slash command: /skillname → auto-load this skill into context
+    # W8: {schedule_id, revision_id, occurrence_id, auto_approve, max_cost}
+    schedule_context: dict | None = None
 
 
 # Ensure capabilities are registered
@@ -251,7 +253,7 @@ class Pipeline:
         # Step 5: Resolve Session (use explicit session_id if provided, else auto-resume)
         # For external channels, always reuse the persistent session for that
         # channel+chat (don't create new ones on idle timeout).
-        is_channel = message.channel not in ("dashboard_chat", "heartbeat")
+        is_channel = message.channel not in ("dashboard_chat", "heartbeat", "schedule")
         session = await self._resolve_session(
             contact.id,
             message.bot_id,
@@ -260,6 +262,11 @@ class Pipeline:
             channel=message.channel if is_channel else None,
             external_user_id=message.external_user_id if is_channel else None,
         )
+
+        # Commit contact/session upserts before idle-session closing — its
+        # summary/KG LLM calls take seconds, and a flush left open across them
+        # holds the SQLite write lock for that whole duration (B31).
+        await self.db.commit()
 
         # Lazy session close: only for dashboard sessions (channel sessions are
         # persistent — they stay open so the conversation continues across
@@ -386,6 +393,7 @@ class Pipeline:
                     resolved_skills = await resolve_effective_skills(self.db, message.bot_id)
                 except Exception:
                     logger.exception("Skill resolution failed for run %s", run.id)
+                    await self.db.rollback()
 
                 # Capture the Execution Manifest — the immutable provenance
                 # record of which revisions this run uses (v0.2 foundations).
@@ -398,9 +406,12 @@ class Pipeline:
                         agent_id=message.bot_id,
                         agent_config=agent_config,
                         skill_revision_ids=skill_pins(resolved_skills),
+                        schedule_revision_id=(message.schedule_context or {}).get("revision_id"),
+                        plan_revision_id=(message.schedule_context or {}).get("plan_revision_id"),
                     )
                 except Exception:
                     logger.exception("Execution manifest capture failed for run %s", run.id)
+                    await self.db.rollback()
 
                 # Get recent messages from this session (last 10)
                 # Exclude the current run — its user message is appended
@@ -454,6 +465,20 @@ class Pipeline:
                     workspace_path=str(workspace_path),
                     sandbox_mode=agent_config.sandbox_mode,
                 )
+
+                # Scripted test runs are headless — the mediator auto-resolves
+                # approval prompts and elicitations instead of parking forever.
+                syscall_handler._is_test_run = run.is_test
+
+                # W8: schedule context — pre-approved capability scope (inside
+                # the agent ceiling) and an optional per-run cost limit.
+                _sched_ctx = message.schedule_context or {}
+                if _sched_ctx:
+                    syscall_handler._schedule_auto_approve = set(
+                        _sched_ctx.get("auto_approve") or []
+                    )
+                    if _sched_ctx.get("max_cost") is not None:
+                        agent_config.limits.max_cost_per_run = float(_sched_ctx["max_cost"])
 
                 # Wrap event_emitter to persist thinking, intermediate text, and
                 # tool_call events as Message rows, so they show up in conversation
@@ -578,6 +603,49 @@ class Pipeline:
                     if event_type == "guardrail_correction":
                         _tkb.clear()
 
+                    # A parked approval flips the run to awaiting_approval so the
+                    # operator can discover it — persist it here (not in the
+                    # transport layer) so scheduled/channel runs behave the same.
+                    if event_type == "tool_call" and payload.get("status") == "pending_approval":
+                        run.status = "awaiting_approval"
+                        await self.db.commit()
+
+                        async def _notify_approval_required() -> None:
+                            try:
+                                from .db import async_session_factory as _sf
+                                from .notifications import create_notification
+
+                                async with _sf() as ndb:
+                                    await create_notification(
+                                        ndb,
+                                        notification_type="approval_required",
+                                        severity="warning",
+                                        title="Approval required",
+                                        message=(
+                                            "An agent is waiting for approval before continuing."
+                                        ),
+                                        action_path=(
+                                            f"/agents/{message.bot_id}/chat?session={session.id}"
+                                        ),
+                                        entity_id=run.id,
+                                    )
+                                    await ndb.commit()
+                            except Exception:
+                                logger.debug(
+                                    "approval_required notification failed",
+                                    exc_info=True,
+                                )
+
+                        import asyncio as _asyncio
+
+                        _asyncio.create_task(_notify_approval_required())
+
+                # Commit all pre-loop writes (run status, manifest, workspace,
+                # attachments) so the SQLite write lock is released before the
+                # first model call — holding it across the model call starves
+                # every other writer when runs overlap (B31).
+                await self.db.commit()
+
                 # Steps 8-11: Run the harness (with guardrailed user message + attachments)
                 result: RunResult = await self.harness.run(
                     agent_config=agent_config,
@@ -597,7 +665,7 @@ class Pipeline:
                 assistant_msg = Message(
                     id=str(uuid.uuid4()),
                     run_id=run.id,
-                    role="assistant" if trigger == "user_message" else "heartbeat",
+                    role="assistant",
                     content=result.final_answer,
                     seq=_msg_seq,
                 )
@@ -741,17 +809,40 @@ class Pipeline:
                 await self.db.commit()
 
             except Exception:
-                # Pipeline exception — mark run as failed
+                # Pipeline exception — mark run as failed. Rollback first: a
+                # mid-flush DB error leaves this session unusable, and the run
+                # object may be expired — so the failure mark goes through a
+                # fresh session (otherwise the run stays 'pending' forever).
                 logger.exception("Pipeline run failed")
-                run.status = "failed"
-                run.error = "The agent run failed due to an internal error."
-                run.completed_at = datetime.now(UTC)
-                run.latency_ms = (
-                    int((run.completed_at - run.started_at).total_seconds() * 1000)
-                    if run.started_at
-                    else 0
+                rid = run.id
+                await self.db.rollback()
+                from sqlalchemy import update as _sa_update
+
+                from .db import (
+                    async_session_factory as _sf,
                 )
-                await self.db.commit()
+                from .db import (
+                    retry_locked_transaction as _rlt,
+                )
+
+                async with _sf() as fail_db:
+
+                    async def _mark_failed() -> None:
+                        await fail_db.execute(
+                            _sa_update(Run)
+                            .where(Run.id == rid)
+                            .values(
+                                status="failed",
+                                error="The agent run failed due to an internal error.",
+                                completed_at=datetime.now(UTC),
+                            )
+                        )
+                        await fail_db.commit()
+
+                    # Retry under lock contention — a single-shot commit can
+                    # itself hit a busy SQLite during a storm, orphaning the
+                    # run as 'running' (B31).
+                    await _rlt(_mark_failed, fail_db, f"mark_failed:{rid}")
                 raise
 
         return run
@@ -883,7 +974,13 @@ class Pipeline:
                     await close_session(self.db, agent_config, s, contact_id)
             await self.db.commit()
         except Exception:
-            pass  # Non-critical — don't block the run
+            # Non-critical — don't block the run. Roll back so a mid-write DB
+            # error doesn't leave this session in a failed transaction state
+            # (every subsequent statement would raise PendingRollbackError).
+            try:
+                await self.db.rollback()
+            except Exception:
+                pass
 
     async def _get_agent_config(self, agent_id: str) -> Any:
         """Load agent config for memory extraction LLM calls."""
