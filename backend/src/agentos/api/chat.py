@@ -370,6 +370,7 @@ async def get_history(
             "content": msg.content,
             "created_at": _iso_utc(msg.created_at),
             "run_id": msg.run_id,
+            "trigger": run.trigger,
         }
         for msg, run in rows
     ]
@@ -554,6 +555,8 @@ async def get_session_messages(
             "created_at": _iso_utc(msg.created_at),
             "run_id": msg.run_id,
             "run_status": run.status,
+            "trigger": run.trigger,
+            "is_test": run.is_test,
             "tokens_in": run.tokens_in,
             "tokens_out": run.tokens_out,
             "cost": run.cost,
