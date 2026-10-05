@@ -27,6 +27,10 @@ import type {
   Provider,
   RunDetail,
   RunSummary,
+  Schedule,
+  ScheduleOccurrence,
+  SchedulePayload,
+  ScheduleTrigger,
   SchedulerAlert,
   SessionInfo,
   Skill,
@@ -940,6 +944,51 @@ export const api = {
     request<{ agent_id: string; cleared: boolean }>(
       `/api/scheduler/alerts/${agentId}/clear`,
       { method: "POST" },
+    ),
+
+  // Schedules (v0.2 W8)
+  listSchedules: () => request<Schedule[]>("/api/schedules"),
+  getSchedule: (id: string) => request<Schedule>(`/api/schedules/${id}`),
+  createSchedule: (data: SchedulePayload) =>
+    request<Schedule>("/api/schedules", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  updateSchedule: (id: string, data: SchedulePayload) =>
+    request<Schedule>(`/api/schedules/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+  pauseSchedule: (id: string) =>
+    request<{ id: string; enabled: boolean }>(`/api/schedules/${id}/pause`, {
+      method: "POST",
+    }),
+  resumeSchedule: (id: string) =>
+    request<Schedule>(`/api/schedules/${id}/resume`, { method: "POST" }),
+  duplicateSchedule: (id: string) =>
+    request<Schedule>(`/api/schedules/${id}/duplicate`, { method: "POST" }),
+  deleteSchedule: (id: string) =>
+    request<{ id: string; archived: boolean }>(`/api/schedules/${id}`, {
+      method: "DELETE",
+    }),
+  runScheduleNow: (id: string) =>
+    request<{ run_id: string | null; status: string; error: string | null }>(
+      `/api/schedules/${id}/run-now`,
+      { method: "POST" },
+    ),
+  testRunSchedule: (id: string) =>
+    request<{ run_id: string | null; status: string; error: string | null }>(
+      `/api/schedules/${id}/test-run`,
+      { method: "POST" },
+    ),
+  previewSchedule: (trigger: ScheduleTrigger, count = 5) =>
+    request<{ timezone: string; occurrences: string[] }>(
+      "/api/schedules/preview",
+      { method: "POST", body: JSON.stringify({ trigger, count }) },
+    ),
+  listScheduleOccurrences: (id: string, limit = 50, offset = 0) =>
+    request<{ occurrences: ScheduleOccurrence[]; total: number }>(
+      `/api/schedules/${id}/occurrences?limit=${limit}&offset=${offset}`,
     ),
 
   // MCP servers

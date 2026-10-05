@@ -203,6 +203,7 @@ async def run_agent(
     skill: str | None = None,
     trigger: str = "user_message",
     channel: str = "dashboard_chat",
+    schedule_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run a single agent turn. The universal entry point.
 
@@ -247,6 +248,7 @@ async def run_agent(
             new_session=new_session,
             attachments=attachments,
             skill=skill,
+            schedule_context=schedule_context,
         )
 
         # Select the model: scripted demo or real LiteLLM

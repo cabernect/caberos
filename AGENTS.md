@@ -198,7 +198,7 @@ Tickets **01–09 implemented**: smoke slice, real-model chat + SSE streaming, f
 - **Verification:** `test_skills_studio.py` (24) + `test_skills_api.py` (10) + rewritten syscall/preview fixtures; 694 backend tests pass, `tsc -b` clean.
 - **Deferred:** hub/registry, per-agent built-in disable, live-test subsystem.
 
-**v0.2 W7 status (branch `feat/v0.2-rag`, unmerged — W7 commit `49e4c11` + uncommitted follow-ups):**
+**v0.2 W7 status (merged — `49e4c11` + `c4c8672`/`ad32d3e`/`76c4bcb` via PR #58):**
 - **RAG v2 implemented:** structured extraction → per-block-type parent/child chunking → FTS lexical + optional hybrid semantic → RRF fusion → bounded parent expansion → excerpts + citations + retrieval trace.
 - **Index generations:** blue-green rebuild/repair/activate/delete; exactly one `active`; concurrent rebuild → 409; `reconcile_stale_builds()` at startup flips committed `building` rows → `failed` (gateway crash hazard closed).
 - **Embedding resource** (`embedding_resources` row): provider + model + `egress_allowed`. Remote providers refuse until egress opted-in (audited `knowledge.embedding_egress_enabled`); local = known local provider types or `localhost`/`127.0.0.1`/`::1`/`0.0.0.0`/`.local` base_url (`provider_is_local` in `knowledge/embeddings.py`). "Local model" = localhost HTTP endpoint (Ollama etc.), not embedded runtime.
@@ -208,6 +208,17 @@ Tickets **01–09 implemented**: smoke slice, real-model chat + SSE streaming, f
 - **Tabular files refused at ingest** — `.xlsx`/`.xls`/`.csv` rejected by `_check_supported()` in `api/knowledge.py` (all three entry points incl. `/from-workspace`): chunking rows is wrong-shaped, needs the deferred row-query layer (v0.2-release-plan → "Structured sources get a row layer"). `_extract_xlsx` stays as dead-but-ready code.
 - **Verification:** `test_knowledge_rag.py` (34) green; full suite 756 pass; `tsc`/`oxlint` clean.
 - **Post-v0.2 backlog:** vault document inspection (`GET /documents/{id}/chunks` + drill-down), structured-source row layer, platform spend view (W10).
+
+**v0.2 W8 status (branch `feat/v0.2-scheduler`, Scheduler v2 implemented — see `docs/plans/v0.2/08-scheduler-v2.md` status block):**
+- **Persistent schedule engine** (`scheduler.py` rewrite): `Schedule`/`ScheduleRevision`/`ScheduleOccurrence` tables; persisted `next_fire_at` is the source of truth — restart/sleep recovery is a DB read + missed-run sweep (`skip`/`run_once`/`catch_up`, `catch_up` capped at 25). Tick = drain due queued occurrences → fire due schedules → commit → spawn run tasks (never run inside the tick transaction).
+- **Triggers:** once / interval / cron (`croniter`) with IANA timezone stored separately. DST: nonexistent wall time fires once at the first valid instant; ambiguous fold time fires once (second pass suppressed). `UTCDateTime` TypeDecorator fixes SQLite's naive-datetime read-back.
+- **Overlap modes:** skip / queue / cancel_previous / allow_parallel (parallel runs are separate sessions — conversation invariant holds). **Failure:** `no_retry` or `bounded_retry(max_attempts, backoff_seconds)` — retries are new occurrences chained via `retry_of`.
+- **Revision pinning:** occurrence pins `revision_id`; edits write new revisions (content-hash-gated); manifest captures `schedule_revision_id` + `plan_revision_id`. `run_now`/`test-run` materialize ad-hoc occurrences.
+- **Heartbeat is a facade:** `agent_config.heartbeat` projects onto a managed `Schedule` (`managed="heartbeat"`) — old `/api/scheduler/heartbeat*` + `/alerts` endpoints unchanged; schedules API rejects edit/delete on managed rows (400). Every enabled agent gets a managed row at startup (heartbeat state inspectable via `/api/schedules`); the page shows them on the Heartbeat tab instead.
+- **Auto-approve:** revision `auto_approve` caps skip the approval prompt *after* normal permission checks — the ceiling never widens. Per-run `max_cost` overrides `limits.max_cost_per_run`; heartbeat cap applies only to `trigger="heartbeat"` (loop bug fixed).
+- **API/UI:** `/api/schedules` CRUD + pause/resume/duplicate/run-now/test-run/preview + paged occurrences. Scheduler page has **two tabs**: **Schedules** (user-created schedules only — managed heartbeat rows filtered out) and **Heartbeat** (the v0.1 per-agent card surface: toggle/prompt/interval/cost/threshold/fire-now via the heartbeat facade). Schedule editor is a **centered modal** with a preset-based cron builder (Daily/Weekdays/Weekly/Monthly + Custom escape hatch) — raw cron never the primary representation; `describeCron()` renders human summaries ("Weekdays at 09:00"). Live fire-instant preview per timezone.
+- **Verification:** merged `test_scheduler.py` (45 tests — facade + durable-scheduler + lock-safety regressions); 793 backend tests pass; `tsc` + `oxlint` + 33 vitest green.
+- **Known limits:** retries re-run the whole task (per-op idempotency keys are W10+); `plan_revision_id` is a forward-compat string ref (no Plan entity yet); alerts are agent-keyed (two failing schedules on one agent collapse); calendar view deferred.
 
 **Ticket 10 (Tauri Desktop App):** SHIPPED for macOS ARM64 (Apple Silicon). macOS Intel and Windows builds require cross-compilation/CI and are not yet set up.
 - Tauri 2 shell wraps the React frontend + packaged PyInstaller gateway.

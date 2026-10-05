@@ -410,6 +410,8 @@ export interface Message {
   created_at: string;
   run_id: string;
   run_status?: string;
+  trigger?: string;
+  is_test?: boolean;
   tokens_in?: number;
   tokens_out?: number;
   cost?: number;
@@ -522,6 +524,85 @@ export interface SchedulerAlert {
   threshold: number;
   last_error: string | null;
   timestamp: string;
+}
+
+export type ScheduleTriggerKind = "once" | "interval" | "cron";
+
+export interface ScheduleTrigger {
+  kind: ScheduleTriggerKind;
+  at?: string | null;
+  every_seconds?: number | null;
+  cron?: string | null;
+  timezone?: string | null;
+}
+
+export interface ScheduleFailurePolicy {
+  mode: "no_retry" | "bounded_retry";
+  max_attempts: number;
+  backoff_seconds: number;
+}
+
+export interface SchedulePolicies {
+  missed: "skip" | "run_once" | "catch_up";
+  overlap: "skip" | "queue" | "cancel_previous" | "allow_parallel";
+  failure: ScheduleFailurePolicy;
+}
+
+export interface Schedule {
+  id: string;
+  agent_id: string;
+  agent_name: string;
+  name: string;
+  enabled: boolean;
+  managed: string | null;
+  revision_number: number;
+  trigger: ScheduleTrigger | null;
+  task_prompt: string | null;
+  policies: SchedulePolicies | null;
+  auto_approve: string[];
+  max_cost: number | null;
+  plan_revision_id: string | null;
+  model_override: Record<string, string> | null;
+  skill: string | null;
+  next_fire_at: string | null;
+  last_fired_at: string | null;
+  last_status: string | null;
+  last_error: string | null;
+  consecutive_failures: number;
+  archived: boolean;
+  created_at: string | null;
+  preview?: string[];
+  occurrences?: ScheduleOccurrence[];
+}
+
+export interface ScheduleOccurrence {
+  id: string;
+  schedule_id: string;
+  revision_id: string;
+  run_id: string | null;
+  scheduled_for: string;
+  status: string;
+  attempt: number;
+  retry_of: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  error: string | null;
+}
+
+export interface SchedulePayload {
+  agent_id: string;
+  name: string;
+  enabled: boolean;
+  trigger: ScheduleTrigger;
+  task_prompt: string;
+  policies: SchedulePolicies;
+  auto_approve: string[];
+  max_cost: number | null;
+  // Not editable in the schedule dialog — echoed back on update so a
+  // full-replacement PUT doesn't wipe API-set values.
+  plan_revision_id?: string | null;
+  model_override?: Record<string, string> | null;
+  skill?: string | null;
 }
 
 export interface McpServerInfo {

@@ -7,6 +7,7 @@ import {
   DashboardSidebar,
   type NavKey,
 } from "@/components/DashboardSidebar";
+import { PageHeader } from "@/components/PageHeader";
 import { CreateAgentModal } from "@/components/CreateAgentModal";
 import { SettingsOverlay } from "@/components/SettingsOverlay";
 import { getSetupGuidePhase, setSetupGuideAgentId, setSetupGuidePhase } from "@/components/setupGuideState";
@@ -144,30 +145,18 @@ export function AgentList() {
 
       {/* Main */}
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* Header */}
-        <div
-          className="flex items-center justify-between px-8 py-5"
-          style={{
-            background: "var(--sidebar)",
-            borderBottom: "1px solid var(--border)",
-          }}
+        <PageHeader
+          icon={Bot}
+          title="Agents"
+          description={
+            loading
+              ? "Loading…"
+              : `${agents.length} agent${agents.length === 1 ? "" : "s"}`
+          }
         >
-          <div className="flex items-center gap-3">
-            <Bot className="h-5 w-5" style={{ color: "var(--accent)" }} />
-            <div>
-              <h1 className="text-[18px] font-semibold text-[var(--ink)]">
-                Agents
-              </h1>
-              <p className="mt-0.5 text-[13px] text-[var(--ink-2)]">
-                {loading
-                  ? "Loading…"
-                  : `${agents.length} agent${agents.length === 1 ? "" : "s"}`}
-              </p>
-            </div>
-          </div>
           <button
             onClick={() => setShowCreate(true)}
-            className="flex items-center gap-1.5 rounded-[6px] px-3 py-2 text-[13px] font-medium transition"
+            className="ml-auto flex items-center gap-1.5 rounded-[6px] px-3 py-2 text-[13px] font-medium transition"
             style={{
               background: "var(--ink)",
               color: "var(--white)",
@@ -180,7 +169,7 @@ export function AgentList() {
             <Plus className="h-4 w-4" />
             New Agent
           </button>
-        </div>
+        </PageHeader>
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto px-8 py-6">
