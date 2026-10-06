@@ -77,6 +77,9 @@ async def kill_process_group(proc: asyncio.subprocess.Process, grace: float = 3.
         pgid = os.getpgid(proc.pid)
     except (ProcessLookupError, PermissionError):
         pgid = None
+    if pgid is not None and pgid <= 1:
+        # Never signal init's group (everything) - fall back to the single process.
+        pgid = None
 
     def _kill(sig: int) -> None:
         try:

@@ -319,12 +319,16 @@ async def test_timeout_kills_the_process(tmp_path):
         proc.wait = AsyncMock(return_value=0)
         return proc
 
+    # kill_process_group signals real process groups on POSIX; the fake process
+    # must never reach it (an AsyncMock pid converts to 1, i.e. "everything").
     with (
         patch.dict("os.environ", {"CABEROS_MXC_EXE_PATH": str(fake_exe)}),
         patch("asyncio.create_subprocess_exec", side_effect=fake_create_subprocess_exec),
+        patch("agentos.sandbox.mxc.kill_process_group", new_callable=AsyncMock) as killer,
     ):
         backend = MxcBackend()
         result = await backend.run_command(str(tmp_path), "sleep 30", timeout=0.05)
 
     assert result.exit_code == -1
     assert "timed out" in result.stderr
+    killer.assert_awaited_once()
