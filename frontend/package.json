@@ -13,7 +13,8 @@
     "desktop:dev": "tauri dev",
     "desktop:build": "tauri build --bundles app",
     "desktop:build:dmg": "npm run desktop:build && bash ../scripts/build-dmg.sh",
-    "build:gateway": "bash ../scripts/build-gateway.sh"
+    "desktop:build:windows": "tauri build --bundles nsis",
+    "build:gateway": "node ../scripts/build-gateway.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",

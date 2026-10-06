@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <a href="../../releases/latest">Download (macOS ARM64)</a> ·
+  <a href="../../releases/latest">Download (macOS · Windows)</a> ·
   <a href="https://caberos.cabernect.workers.dev">Website</a> ·
   <a href="#features">Features</a> ·
   <a href="#quick-start">Quick Start</a> ·
@@ -125,9 +125,9 @@ Four channels route external messages through the same agent pipeline:
 
 ## Quick start
 
-### Option 1: Desktop app (easiest, macOS Apple Silicon)
+### Option 1: Desktop app (easiest, macOS & Windows)
 
-> **Platform support:** The desktop app currently supports **macOS ARM64 (Apple Silicon)** only — M1/M2/M3/M4 chips. macOS Intel and Windows builds require cross-compilation or CI runners and are not yet set up. Use Docker or local dev on other platforms.
+> **Platform support:** **macOS ARM64** (Tier 1) and **Windows x64** (Tier 2, beta). macOS Intel, Windows on ARM and Linux desktop builds are not available yet — use Docker or local dev there. On Windows, shell commands run in a bundled Microsoft Execution Container (MXC) — **no Docker and no WSL required**. It is experimental and needs a one-click, one-time setup (Observability → Health → *Enable shell sandbox*); until then shell is off with a clear reason and every other capability still works. Full matrix: [docs/platform-support.md](docs/platform-support.md).
 
 **Download the latest release:** [GitHub Releases](../../releases/latest)
 
@@ -141,11 +141,26 @@ cd frontend && npm run desktop:build
 open frontend/src-tauri/target/release/bundle/macos/CaberOS.app
 ```
 
+```cmd
+:: Windows — needs VS Build Tools (VCTools workload) + a Windows SDK, and the
+:: MSVC Rust toolchain (rustup default stable-x86_64-pc-windows-msvc), not GNU.
+:: Run both in ONE cmd session: vcvars64 sets the environment for the session it
+:: runs in, and Git's own link.exe would otherwise shadow the MSVC linker.
+call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+cd frontend && npm run desktop:build:windows
+:: -> src-tauri\target\release\bundle\nsis\CaberOS_<version>_x64-setup.exe
+```
+
 The desktop app packages the entire backend as a PyInstaller executable and supervises it. No Python installation required. Gateway logs are at:
 
 ```bash
+# macOS
 tail -f "$HOME/Library/Application Support/com.caberos.desktop/logs/gateway.log"
+# Windows (PowerShell)
+Get-Content -Wait "$env:APPDATA\com.caberos.desktop\logs\gateway.log"
 ```
+
+> **Local rebuilds:** PyInstaller's `--clean` does not prune files already sitting in `frontend/src-tauri/resources/gateway` from an earlier build, so after a version bump delete that folder first — otherwise stale `agentos-<old>.dist-info` metadata gets bundled next to the new one and the gateway can report the old version. CI starts from a fresh checkout, so releases are unaffected.
 
 ### Option 2: Docker (any platform)
 
@@ -160,7 +175,7 @@ The first launch seeds the default operator and two agents (Caber, AgentBuilder)
 
 ### Option 3: Local dev
 
-**Prerequisites:** Python 3.12+, [uv](https://docs.astral.sh/uv/), Node 22+, npm, and either macOS (uses built-in `sandbox-exec`) or Linux (`bubblewrap`).
+**Prerequisites:** Python 3.12+, [uv](https://docs.astral.sh/uv/), Node 22+, npm. For shell sandboxing: macOS (uses built-in `sandbox-exec`) or Linux (`bubblewrap`). Windows uses Microsoft Execution Containers; from a source checkout, point `CABEROS_MXC_EXE_PATH` at the SDK's `wxc-exec.exe` (the installer bundles it). See [docs/platform-support.md](docs/platform-support.md) for details.
 
 ```bash
 git clone <repo-url> && cd foundation-agentos
@@ -239,7 +254,7 @@ The website can also be deployed manually from the Actions tab → "Deploy websi
 | Model transport | LiteLLM |
 | Frontend | React 19, Vite, TypeScript, Tailwind CSS 4 |
 | Desktop | Tauri 2 (Rust) |
-| Sandbox | macOS `sandbox-exec` / Linux `bubblewrap` |
+| Sandbox | seatbelt (macOS), bwrap (Linux), MXC (Windows); Docker fallback on macOS/Linux |
 | Packaging | PyInstaller (gateway), Tauri bundler (desktop) |
 
 ### Key design decisions
@@ -355,7 +370,7 @@ CaberOS tracks every run, every capability call, and every dollar spent.
 
 ## Desktop app
 
-> **Platform support:** macOS ARM64 (Apple Silicon) only. macOS Intel and Windows are not yet supported — use Docker or local dev on those platforms.
+> **Platform support:** macOS ARM64 (Tier 1) and Windows x64 (Tier 2, beta). See [docs/platform-support.md](docs/platform-support.md).
 >
 > **Download:** [Latest release](../../releases/latest)
 
@@ -380,7 +395,7 @@ npm run desktop:dev
 
 ## Docker
 
-The Docker setup runs the full stack: backend (Python + uv + bwrap) and frontend (nginx reverse proxy).
+The Docker setup runs the full stack: backend (Python + uv) and frontend (nginx reverse proxy).
 
 ```bash
 # Build and start
@@ -400,7 +415,7 @@ The Docker setup runs the full stack: backend (Python + uv + bwrap) and frontend
 
 | Service | Image | Port | Notes |
 |---|---|---|---|
-| `backend` | `python:3.12-slim` + uv | 8081 (internal) | bwrap needs `SYS_ADMIN` cap |
+| `backend` | `python:3.12-slim` + uv | 8081 (internal) | Agents can use bwrap (if `SYS_ADMIN` cap present) or Docker isolation |
 | `frontend` | `nginx:alpine` | 80 → `:8080` (host) | Reverse-proxies `/api`, `/health` to backend |
 
 Data persists in the `caberos-data` named volume (SQLite DB, secret key, workspaces, agent homes). To use Postgres instead, uncomment the `db` service and `AGENTOS_DATABASE_URL` in `docker-compose.yml`.

@@ -7,11 +7,33 @@ spools output to bounded files.
 """
 
 import asyncio
+import sys
 import time
 from typing import Any
 
 from ...sandbox import get_backend
 from ...sandbox.base import kill_process_group
+
+
+def shell_dialect_note() -> str:
+    """Which shell the model is writing for, appended to the tool description.
+
+    Models default to POSIX habits (`ls`, `cat`, `$HOME`); on Windows those fail with
+    "not recognized", so the tool says up front that commands go through cmd.exe.
+    """
+    if sys.platform == "win32":
+        return (
+            " Commands run through Windows cmd.exe, not a POSIX shell: use dir, type, findstr, "
+            'copy and %VAR%, or call powershell -NoProfile -Command "..." for scripting.'
+        )
+    return ""
+
+
+def open_mode_shell(command: str) -> list[str]:
+    """Argv for running a command unsandboxed: Windows has no /bin/sh."""
+    if sys.platform == "win32":
+        return ["cmd.exe", "/c", command]
+    return ["/bin/sh", "-c", command]
 
 
 async def terminal_run(
@@ -67,9 +89,7 @@ async def _run_sync(
     if sandbox_mode == "open":
         start = time.monotonic()
         proc = await asyncio.create_subprocess_exec(
-            "/bin/sh",
-            "-c",
-            command,
+            *open_mode_shell(command),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=workspace_path,

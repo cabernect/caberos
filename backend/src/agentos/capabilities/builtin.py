@@ -35,7 +35,7 @@ from .tools.memory import (
 )
 from .tools.skills import skills_list, skills_load, skills_read_resource
 from .tools.subagent import register_subagent_tools
-from .tools.terminal import close_terminal, read_terminal, terminal_run
+from .tools.terminal import close_terminal, read_terminal, shell_dialect_note, terminal_run
 from .tools.web import web_fetch, web_search
 
 
@@ -173,7 +173,7 @@ def register_builtin_capabilities() -> None:
                 "Execute a shell command in the sandbox. By default, blocks until "
                 "the command finishes and returns stdout/stderr. Set async=true to "
                 "run the command in the background — returns a terminal_id you can "
-                "poll with read_terminal and close with close_terminal."
+                "poll with read_terminal and close with close_terminal." + shell_dialect_note()
             ),
             parameters_schema={
                 "type": "object",

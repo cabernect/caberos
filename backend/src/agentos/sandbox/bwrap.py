@@ -11,6 +11,8 @@ from .base import SandboxBackend, ShellResult, kill_process_group
 class BwrapBackend(SandboxBackend):
     """Linux bubblewrap (bwrap) backend."""
 
+    kind = "bwrap"
+
     _probe_cache: bool | None = None
 
     def is_available(self) -> bool:
@@ -41,6 +43,13 @@ class BwrapBackend(SandboxBackend):
         except Exception:
             self._probe_cache = False
         return self._probe_cache
+
+    def unavailable_reason(self) -> str | None:
+        if self.is_available():
+            return None
+        if shutil.which("bwrap") is None:
+            return "bubblewrap is not installed. Install it with: apt install bubblewrap"
+        return "bubblewrap is installed but cannot create user namespaces here."
 
     def spawn_argv(
         self, workspace_path: str, command: str, allow_network: bool = False

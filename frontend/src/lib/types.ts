@@ -772,12 +772,33 @@ export interface OperatorAuditOut {
   created_at: string;
 }
 
+export interface SandboxHealth {
+  kind: string;
+  /**
+   * available = a trusted, vendor-verified isolation boundary is working.
+   * experimental = commands genuinely run, but the backend's own vendor does
+   *   not yet call it a security boundary (see `reason` for the caveat). This
+   *   is the normal working state on Windows (MXC).
+   * unavailable = `terminal` is refused; every other capability still works.
+   */
+  state: "available" | "experimental" | "unavailable";
+  /** For unavailable: why, and how to fix it. For experimental: the trust
+   * caveat to show the operator. Null only when state is available. */
+  reason: string | null;
+  /** Unavailable only because a one-time, user-approved host setup has not run
+   * yet — the desktop app can offer to run it. */
+  setup_required?: boolean;
+}
+
 export interface HealthStatus {
   status: string;
   database: string;
   providers: number;
   agents: number;
   active_runs: number;
+  sandbox?: SandboxHealth | null;
+  /** Gateway version. Compared against the shell's own to catch a stale gateway after an update. */
+  version?: string | null;
   timestamp: string;
 }
 

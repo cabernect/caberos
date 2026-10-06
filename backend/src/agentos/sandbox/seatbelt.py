@@ -44,8 +44,15 @@ def _build_profile(workspace: str, allow_network: bool) -> str:
 class SeatbeltBackend(SandboxBackend):
     """macOS sandbox-exec backend — zero install, built into macOS."""
 
+    kind = "seatbelt"
+
     def is_available(self) -> bool:
         return shutil.which("sandbox-exec") is not None
+
+    def unavailable_reason(self) -> str | None:
+        if self.is_available():
+            return None
+        return "sandbox-exec is not on PATH (unexpected on macOS)."
 
     def spawn_argv(
         self, workspace_path: str, command: str, allow_network: bool = False

@@ -1,4 +1,5 @@
 mod gateway;
+mod shell_sandbox;
 
 use gateway::{GatewayProcess, GATEWAY_PORT};
 use serde::Serialize;
@@ -22,6 +23,11 @@ fn gateway_url(gateway: tauri::State<'_, GatewayProcess>) -> String {
 #[tauri::command]
 fn quit_app(app: AppHandle) {
     app.exit(0);
+}
+
+#[tauri::command]
+async fn enable_shell_sandbox(app: AppHandle) -> Result<(), String> {
+    shell_sandbox::enable(&app).await
 }
 
 #[tauri::command]
@@ -79,6 +85,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             quit_app,
+            enable_shell_sandbox,
             gateway_url,
             gateway_log_path,
             read_dropped_file
@@ -93,6 +100,10 @@ pub fn run() {
         .expect("error while building tauri application");
 
     app.run(|app, event| match event {
+        // Reopen is the macOS dock-icon click. The variant does not exist on
+        // other platforms, so the arm has to be compiled out rather than just
+        // never matched — otherwise the build fails on Windows and Linux.
+        #[cfg(target_os = "macos")]
         RunEvent::Reopen { .. } => {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.unminimize();

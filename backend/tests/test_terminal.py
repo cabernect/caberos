@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import sys
 import time
 
 import pytest
@@ -15,6 +16,11 @@ from agentos.sandbox import get_backend
 from agentos.syscall.mediator import SyscallHandler
 from agentos.syscall.protocol import ToolCall
 from agentos.terminal.registry import TerminalRegistry
+
+posix_only = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="needs POSIX sleep/printf and process groups; Windows kills the tree with taskkill",
+)
 
 
 @pytest.fixture(autouse=True)
@@ -115,6 +121,7 @@ class TestBackgroundStart:
 
 
 class TestIncrementalRead:
+    @posix_only
     async def test_cursor_reads_do_not_duplicate(self, db, terminals):
         result = await terminals.start(
             db,
@@ -137,6 +144,7 @@ class TestIncrementalRead:
 
         await terminals.close(tid, **OWNER)
 
+    @posix_only
     async def test_stderr_tail_returned(self, db, terminals):
         result = await terminals.start(
             db,
@@ -150,6 +158,7 @@ class TestIncrementalRead:
         assert "err-line" in r["stderr"]
         assert "out-line" in r["stdout"]
 
+    @posix_only
     async def test_long_poll_wakes_on_output(self, db, terminals):
         result = await terminals.start(
             db,
@@ -167,6 +176,7 @@ class TestIncrementalRead:
 
         await terminals.close(tid, **OWNER)
 
+    @posix_only
     async def test_long_poll_wakes_on_completion(self, db, terminals):
         result = await terminals.start(
             db, command="sleep 0.3", workspace_path="/tmp", sandbox_mode="open", **OWNER
@@ -200,6 +210,7 @@ class TestCloseAndKill:
         t = terminals._terminals[tid]
         assert t.proc.returncode is not None
 
+    @posix_only
     async def test_close_kills_process_group(self, db, terminals):
         """A command that forks a child must not leave the child running."""
         result = await terminals.start(
@@ -241,6 +252,7 @@ class TestCloseAndKill:
         r = await terminals.close(tid, **OWNER)
         assert "partial" in r["stdout_tail"]
 
+    @posix_only
     async def test_close_for_run_kills_only_that_runs_terminals(self, db, terminals):
         mine = await terminals.start(
             db, command="sleep 30", workspace_path="/tmp", sandbox_mode="open", **OWNER
@@ -295,6 +307,7 @@ class TestRunEndGuard:
         await terminals.close(r1["terminal_id"], **OWNER)
         assert await terminals.active_for_run("run-1") == []
 
+    @posix_only
     async def test_harness_emits_terminals_active(self, db, workspace, terminals, monkeypatch):
         """A run finishing with live terminals surfaces them in the result."""
         from agentos.harness.loop import Harness
@@ -343,6 +356,7 @@ class TestReconcileAndShutdown:
 
         await terminals.close(result["terminal_id"], **OWNER)
 
+    @posix_only
     async def test_shutdown_all_kills_everything(self, db, terminals):
         r1 = await terminals.start(
             db, command="sleep 60", workspace_path="/tmp", sandbox_mode="open", **OWNER
@@ -418,6 +432,7 @@ class TestSyncPath:
         assert close.allowed is True
         assert close.output["status"] in ("completed", "closed")
 
+    @posix_only
     async def test_sync_timeout_kills_process(self, workspace):
         """Regression: sync timeout must kill the process group, not orphan it."""
         from unittest.mock import patch

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -28,6 +29,7 @@ from typing import Any
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..capabilities.tools.terminal import open_mode_shell
 from ..config import settings
 from ..models.terminal import TerminalSession
 from ..sandbox import get_backend
@@ -94,7 +96,7 @@ class TerminalRegistry:
         stderr_path.touch()
 
         if sandbox_mode == "open":
-            argv = ["/bin/sh", "-c", command]
+            argv = open_mode_shell(command)
             env = None
         else:
             backend = get_backend()
@@ -111,7 +113,9 @@ class TerminalRegistry:
             start_new_session=True,
         )
         try:
-            pgid = os.getpgid(proc.pid)
+            # Windows has no process groups; the pid stands in and
+            # kill_process_group walks the tree with taskkill instead.
+            pgid = proc.pid if sys.platform == "win32" else os.getpgid(proc.pid)
         except (ProcessLookupError, PermissionError):
             pgid = proc.pid
 

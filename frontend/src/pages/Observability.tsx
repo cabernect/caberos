@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
+import { invoke } from "@tauri-apps/api/core";
 import { Activity, DollarSign, Zap, AlertTriangle, Clock, TrendingUp, ChevronRight } from "lucide-react";
 import { DashboardSidebar, type NavKey } from "@/components/DashboardSidebar";
 import { api } from "@/lib/api";
@@ -43,6 +44,24 @@ export function Observability() {
       setHealth(null);
     }
   }, []);
+
+  const isDesktop = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  const [setupBusy, setSetupBusy] = useState(false);
+  const [setupError, setSetupError] = useState<string | null>(null);
+
+  // Runs the bundled one-time host setup; Windows shows its own consent prompt.
+  const enableShellSandbox = async () => {
+    setSetupBusy(true);
+    setSetupError(null);
+    try {
+      await invoke("enable_shell_sandbox");
+      await fetchHealth();
+    } catch (error) {
+      setSetupError(typeof error === "string" ? error : "The shell sandbox setup did not finish.");
+    } finally {
+      setSetupBusy(false);
+    }
+  };
 
   useEffect(() => {
     fetchHealth();
@@ -148,12 +167,91 @@ export function Observability() {
                 <button type="button" onClick={() => void fetchHealth()} className="rounded border px-2.5 py-1 text-[11px] text-[var(--ink-2)] hover:bg-[var(--hover)]" style={{ borderColor: "var(--border)", cursor: "pointer" }}>Refresh</button>
               </div>
               {health ? (
-                <div className="mt-4 grid grid-cols-4 gap-3 text-[12px]">
+                <>
+                <div className="mt-4 grid grid-cols-5 gap-3 text-[12px]">
                   <HealthMetric label="Database" value={health.database} good={health.database === "connected"} />
                   <HealthMetric label="Providers" value={String(health.providers)} good={health.providers > 0} />
                   <HealthMetric label="Agents" value={String(health.agents)} good={health.agents > 0} />
                   <HealthMetric label="Active runs" value={String(health.active_runs)} good />
+                  {health.sandbox ? (
+                    <HealthMetric
+                      label="Shell sandbox"
+                      value={
+                        health.sandbox.state === "available"
+                          ? health.sandbox.kind
+                          : health.sandbox.state === "experimental"
+                            ? `${health.sandbox.kind} (experimental)`
+                            : health.sandbox.setup_required
+                              ? "needs setup"
+                              : "off"
+                      }
+                      good={health.sandbox.state !== "unavailable"}
+                      neutral={health.sandbox.state === "unavailable"}
+                    />
+                  ) : null}
                 </div>
+                {health.version && health.version !== __APP_VERSION__ ? (
+                  <div className="mt-3 rounded-md border px-3 py-2" style={{ borderColor: "var(--danger)" }}>
+                    <p className="text-[12px] font-medium text-[var(--danger)]">
+                      Version mismatch: this app is {__APP_VERSION__} but its gateway is {health.version}.
+                    </p>
+                    <p className="mt-1 text-[11px] text-[var(--ink-2)]">
+                      An update replaced the app but not its bundled gateway. Reinstall CaberOS from the
+                      latest release before relying on this session — the two halves may disagree about
+                      the database schema.
+                    </p>
+                  </div>
+                ) : null}
+                {health.sandbox && health.sandbox.state === "experimental" ? (
+                  <div className="mt-3 rounded-md border px-3 py-2" style={{ borderColor: "var(--warning, #b58900)" }}>
+                    <p className="text-[12px] font-medium">
+                      {health.sandbox.kind} executes shell commands, but is not yet a verified security boundary.
+                    </p>
+                    <p className="mt-1 text-[11px] text-[var(--ink-2)]">{health.sandbox.reason}</p>
+                  </div>
+                ) : null}
+                {health.sandbox && health.sandbox.state === "unavailable" ? (
+                  <div className="mt-3 rounded-md border px-3 py-2" style={{ borderColor: "var(--border)" }}>
+                    {health.sandbox.setup_required && isDesktop ? (
+                      <>
+                        <p className="text-[12px] font-medium text-[var(--ink)]">
+                          Shell commands are off until a one-time setup.
+                        </p>
+                        <p className="mt-1 text-[11px] text-[var(--ink-2)]">
+                          Windows will ask for permission once. After that, agent commands run in a restricted
+                          sandbox with no further prompts.
+                        </p>
+                        <div className="mt-2 flex items-center gap-3">
+                          <button
+                            type="button"
+                            disabled={setupBusy}
+                            onClick={() => void enableShellSandbox()}
+                            className="rounded px-3 py-1.5 text-[12px] font-medium"
+                            style={{
+                              background: "var(--accent)",
+                              color: "white",
+                              cursor: setupBusy ? "default" : "pointer",
+                              opacity: setupBusy ? 0.6 : 1,
+                            }}
+                          >
+                            {setupBusy ? "Waiting for Windows…" : "Enable shell sandbox"}
+                          </button>
+                          {setupError ? (
+                            <span className="text-[11px] text-[var(--danger)]">{setupError}</span>
+                          ) : null}
+                        </div>
+                      </>
+                    ) : (
+                      <p className="text-[12px] text-[var(--ink-2)]">
+                        Agents cannot run shell commands on this machine. {health.sandbox.reason}
+                      </p>
+                    )}
+                    <p className="mt-2 text-[11px] text-[var(--ink-3)]">
+                      Every other capability — files, web, memory, skills, knowledge and MCP tools — is unaffected.
+                    </p>
+                  </div>
+                ) : null}
+                </>
               ) : (
                 <div className="mt-4 flex items-center justify-between gap-3 rounded-md border px-3 py-2" style={{ borderColor: "var(--danger)" }}>
                   <p className="text-[12px] text-[var(--danger)]">Health data is unavailable. Check the gateway and retry.</p>
@@ -317,11 +415,23 @@ export function Observability() {
 
 // --- Reusable components ---
 
-function HealthMetric({ label, value, good }: { label: string; value: string; good: boolean }) {
+function HealthMetric({
+  label,
+  value,
+  good,
+  neutral = false,
+}: {
+  label: string;
+  value: string;
+  good: boolean;
+  /** A supported state that is not a failure (e.g. an optional feature that is off). */
+  neutral?: boolean;
+}) {
+  const color = neutral ? "var(--ink-2)" : good ? "var(--accent)" : "var(--danger)";
   return (
     <div className="rounded-md border px-3 py-2" style={{ borderColor: "var(--border)" }}>
       <p className="text-[10px] uppercase tracking-wide text-[var(--ink-3)]">{label}</p>
-      <p className="mt-1 font-medium" style={{ color: good ? "var(--accent)" : "var(--danger)" }}>{value}</p>
+      <p className="mt-1 font-medium" style={{ color }}>{value}</p>
     </div>
   );
 }

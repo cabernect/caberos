@@ -5,6 +5,33 @@ All notable changes to CaberOS are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Windows x64 desktop app (Tier 2, beta): NSIS installer, packaged gateway, WebView2 bootstrapper, per-user install
+- Prioritized shell-sandbox backends with graceful degradation: Seatbelt (macOS) or bwrap (Linux) first, then a Docker fallback on those platforms
+- Windows shell sandbox without Docker or WSL: the installer bundles Microsoft Execution Containers (MXC, MIT, hash-pinned at build time), auto-selected on Windows and reported as `experimental` because Microsoft does not yet call it a security boundary
+- MXC sandbox gets an allowlisted environment: host variables (API keys, tokens) are never forwarded to sandboxed commands
+- First-run "Enable shell sandbox" button in Observability → Health runs MXC's one-time elevated host setup (Windows shows its own permission prompt)
+- `GET /api/health` reports `sandbox` (`kind`, `state`, `reason`, `setup_required`) and the gateway `version`; the dashboard flags a shell/gateway version mismatch
+- Multi-platform release matrix; the updater manifest is built in a dedicated job that fails when a platform is missing
+- `docs/platform-support.md` — canonical platform and sandbox-backend contract
+
+### Fixed
+
+- `get_backend()` raised `RuntimeError` on Windows and any non-macOS/Linux platform instead of degrading
+- An "unavailable" sandbox result was cached for the life of the process, so starting a missing dependency never took effect without restarting the app; unavailable results are now re-probed on each call
+- MXC policy blocked the UI subsystem, so ordinary console programs (`whoami`, PowerShell) died with `STATUS_DLL_INIT_FAILED`; the policy now enables UI while keeping clipboard and input injection blocked
+- Packaged gateway lookup on Windows joined the `.exe` name to the directory name
+- Windows process cleanup left orphaned gateways holding the fixed port; the gateway now runs inside a kill-on-close Job Object
+- `RunEvent::Reopen` was compiled on every platform though it exists only on macOS
+- Bundled YAML/JSON/manifest reads used the locale codepage on Windows (mojibake); now explicit UTF-8
+- The Fernet key was left readable by other local users on Windows, where `chmod(0o600)` is a no-op; now restricted with an ACL
+- Open-mode shell used `/bin/sh` on Windows; now `cmd.exe /c`
+- `scripts/smoke.py` granted a non-existent capability name so the shell step silently did nothing
+- `check-version.sh` assumed `python3`, which Windows does not provide
+
 ## [0.1.8] - Unreleased
 
 ### Added

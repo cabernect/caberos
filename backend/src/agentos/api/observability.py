@@ -9,6 +9,7 @@ GET  /api/operator-audit — operator action audit trail
 GET  /api/stats          — dashboard stats (KPIs + time-series + per-agent)
 """
 
+import asyncio
 import json
 import logging
 from datetime import UTC, datetime
@@ -28,6 +29,7 @@ from ..models.model_call import ModelCall
 from ..models.operator import OperatorAuditLog
 from ..models.provider import Provider
 from ..models.run import Message, Run
+from ..sandbox import probe as sandbox_probe
 
 log = logging.getLogger(__name__)
 
@@ -172,12 +174,25 @@ class OperatorAuditOut(BaseModel):
     created_at: datetime
 
 
+class SandboxStatus(BaseModel):
+    kind: str
+    state: str
+    reason: str | None = None
+    setup_required: bool = False
+
+
 class HealthStatus(BaseModel):
     status: str
     database: str
     providers: int
     agents: int
     active_runs: int
+    sandbox: SandboxStatus
+    # The desktop shell compares this against its own version. An installer that
+    # replaces the shell but leaves the bundled gateway stale would otherwise
+    # run a new frontend against an old backend — silently, and across schema
+    # patches applied by init_db() at startup.
+    version: str | None = None
     timestamp: datetime
 
 
@@ -533,12 +548,15 @@ async def system_health(
     db: AsyncSession = Depends(get_db),
     _op=Depends(require_operator),
 ) -> HealthStatus:
-    """System health check — DB, provider count, agent count, active runs."""
+    """System health check — DB, provider count, agent count, active runs, sandbox."""
+    from .. import __version__
     from ..run_manager import list_active_runs
 
     provider_count = (await db.execute(select(func.count(Provider.id)))).scalar() or 0
     agent_count = (await db.execute(select(func.count(Agent.id)))).scalar() or 0
     active_runs = len(list_active_runs())
+    # Probing spawns subprocesses while no backend is usable; keep that off the loop.
+    sandbox = await asyncio.to_thread(sandbox_probe)
 
     return HealthStatus(
         status="ok",
@@ -546,6 +564,13 @@ async def system_health(
         providers=provider_count,
         agents=agent_count,
         active_runs=active_runs,
+        sandbox=SandboxStatus(
+            kind=sandbox.kind,
+            state=sandbox.state,
+            reason=sandbox.reason,
+            setup_required=sandbox.setup_required,
+        ),
+        version=__version__,
         timestamp=datetime.now(UTC),
     )
 
