@@ -1,6 +1,6 @@
 """Shell capability implementation — shell_run.
 
-Executes in the sandbox (D28 — sandbox-exec on macOS, bwrap on Linux).
+Executes in the sandbox (D28 — sandbox-exec on macOS, bwrap on Linux, MXC on Windows).
 In open sandbox mode, runs directly without the sandbox wrapper.
 """
 
@@ -10,6 +10,20 @@ import time
 from typing import Any
 
 from ...sandbox import get_backend
+
+
+def shell_dialect_note() -> str:
+    """Which shell the model is writing for, appended to the tool description.
+
+    Models default to POSIX habits (`ls`, `cat`, `$HOME`); on Windows those fail with
+    "not recognized", so the tool says up front that commands go through cmd.exe.
+    """
+    if sys.platform == "win32":
+        return (
+            " Commands run through Windows cmd.exe, not a POSIX shell: use dir, type, findstr, "
+            'copy and %VAR%, or call powershell -NoProfile -Command "..." for scripting.'
+        )
+    return ""
 
 
 def _open_mode_shell(command: str) -> list[str]:

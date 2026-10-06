@@ -1,0 +1,5 @@
+{
+  "bundle": {
+    "resources": ["resources/gateway/caberos-gateway", "resources/skills", "resources/mxc"]
+  }
+}

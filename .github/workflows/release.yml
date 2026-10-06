@@ -308,12 +308,14 @@ jobs:
                reputation — choose **More info → Run anyway**
             3. Launch CaberOS — the gateway starts automatically
 
-            **Shell commands on Windows work out of the box with Docker Desktop**
-            installed and running — no WSL required. Without Docker, shell is
-            disabled with a clear reason; every other capability still works.
-            The Observability → Health tab shows exactly what is available and
-            why. See `docs/platform-support.md` for the full backend priority
-            order, including an experimental, opt-in native-Windows path.
+            **Shell commands on Windows need no Docker and no WSL.** The installer
+            bundles Microsoft Execution Containers (MXC). The first time, open
+            Observability → Health and click **Enable shell sandbox** — Windows asks
+            for permission once, then agent commands run in a restricted container.
+            MXC is experimental: Microsoft does not yet call it a security boundary,
+            and it can only reach workspaces on the system drive. Until it is
+            enabled, shell is off with a clear reason; every other capability still
+            works. See `docs/platform-support.md` for details.
 
             ### First login
 

@@ -127,7 +127,7 @@ Four channels route external messages through the same agent pipeline:
 
 ### Option 1: Desktop app (easiest, macOS & Windows)
 
-> **Platform support:** **macOS ARM64** (Tier 1) and **Windows x64** (Tier 2, beta). macOS Intel, Windows on ARM and Linux desktop builds are not available yet — use Docker or local dev there. On Windows, shell commands run in a Docker Desktop container — **no WSL required**; without Docker, shell is disabled with a clear reason and every other capability still works. Full matrix: [docs/platform-support.md](docs/platform-support.md).
+> **Platform support:** **macOS ARM64** (Tier 1) and **Windows x64** (Tier 2, beta). macOS Intel, Windows on ARM and Linux desktop builds are not available yet — use Docker or local dev there. On Windows, shell commands run in a bundled Microsoft Execution Container (MXC) — **no Docker and no WSL required**. It is experimental and needs a one-click, one-time setup (Observability → Health → *Enable shell sandbox*); until then shell is off with a clear reason and every other capability still works. Full matrix: [docs/platform-support.md](docs/platform-support.md).
 
 **Download the latest release:** [GitHub Releases](../../releases/latest)
 
@@ -175,7 +175,7 @@ The first launch seeds the default operator and two agents (Caber, AgentBuilder)
 
 ### Option 3: Local dev
 
-**Prerequisites:** Python 3.12+, [uv](https://docs.astral.sh/uv/), Node 22+, npm. For shell sandboxing: macOS (uses built-in `sandbox-exec`) or Linux (`bubblewrap`). Windows requires Docker Desktop. See [docs/platform-support.md](docs/platform-support.md) for details.
+**Prerequisites:** Python 3.12+, [uv](https://docs.astral.sh/uv/), Node 22+, npm. For shell sandboxing: macOS (uses built-in `sandbox-exec`) or Linux (`bubblewrap`). Windows uses Microsoft Execution Containers; from a source checkout, point `CABEROS_MXC_EXE_PATH` at the SDK's `wxc-exec.exe` (the installer bundles it). See [docs/platform-support.md](docs/platform-support.md) for details.
 
 ```bash
 git clone <repo-url> && cd foundation-agentos
@@ -254,7 +254,7 @@ The website can also be deployed manually from the Actions tab → "Deploy websi
 | Model transport | LiteLLM |
 | Frontend | React 19, Vite, TypeScript, Tailwind CSS 4 |
 | Desktop | Tauri 2 (Rust) |
-| Sandbox | Native backends (seatbelt/bwrap) + Docker fallback |
+| Sandbox | seatbelt (macOS), bwrap (Linux), MXC (Windows); Docker fallback on macOS/Linux |
 | Packaging | PyInstaller (gateway), Tauri bundler (desktop) |
 
 ### Key design decisions

@@ -15,6 +15,18 @@ const rootDir = dirname(scriptsDir);
 
 const isWindows = process.platform === "win32";
 
+// The Windows installer also bundles MXC (the shell sandbox). It is fetched before
+// the skip check below because a reused gateway still needs these resources.
+if (isWindows) {
+  const mxc = spawnSync(process.execPath, [join(scriptsDir, "fetch-mxc.mjs")], {
+    stdio: "inherit",
+  });
+  if (mxc.error || mxc.status !== 0) {
+    console.error("[build-gateway] could not prepare the MXC sandbox binaries");
+    process.exit(mxc.status ?? 1);
+  }
+}
+
 // Tauri's beforeBuildCommand runs this script, so a release that has already
 // built and smoke-tested a gateway would otherwise ship a different, untested
 // binary. Setting CABEROS_SKIP_GATEWAY_BUILD keeps the verified one.

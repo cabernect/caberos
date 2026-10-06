@@ -16,6 +16,7 @@ from agentos.sandbox import get_backend, probe
 from agentos.sandbox.base import SandboxBackend, UnavailableBackend, _backend_cache
 from agentos.sandbox.bwrap import BwrapBackend
 from agentos.sandbox.docker import DockerBackend
+from agentos.sandbox.mxc import MxcBackend
 
 
 def _clear_caches() -> None:
@@ -44,6 +45,7 @@ def test_get_backend_never_raises(platform):
     with (
         patch.object(sys, "platform", platform),
         patch.object(DockerBackend, "is_available", return_value=False),
+        patch.object(MxcBackend, "is_available", return_value=False),
     ):
         backend = get_backend()
     assert isinstance(backend, SandboxBackend)
@@ -143,65 +145,116 @@ def test_get_backend_refresh_forces_a_new_probe():
     assert first is not second
 
 
-def test_mxc_not_tried_by_default():
-    """The opt-in gate must actually gate — MXC never even gets constructed
-    without CABEROS_ENABLE_EXPERIMENTAL_MXC=1, since Microsoft's own SDK says
-    its profiles are not yet a real security boundary."""
-    from agentos.sandbox.docker import DockerBackend as _Docker
+def test_get_backend_does_not_cache_unavailable_result():
+    """An 'unavailable' resolution must not stick — the operator fixes this
+    kind of thing (e.g. starting Docker Desktop) while the app keeps running,
+    and has no way to force a recheck short of restarting it. Regression
+    guard for a real bug: get_backend() used to cache UnavailableBackend just
+    like any other result, so a dependency that came up after the first
+    probe was never noticed again for the life of the process."""
+    # A mutable flag rather than a call counter: BwrapBackend.unavailable_reason()
+    # itself calls is_available() again to build its message, so counting
+    # invocations is brittle — what matters is that get_backend() re-resolves
+    # on the second call instead of returning a cached UnavailableBackend.
+    bwrap_available = False
+
+    def flaky_is_available(self):
+        return bwrap_available
 
     with (
-        patch.dict("os.environ", {}, clear=True),
-        patch.object(sys, "platform", "win32"),
-        patch.object(_Docker, "is_available", return_value=False),
-        patch("agentos.sandbox.mxc.MxcBackend") as mocked_mxc,
+        patch.object(sys, "platform", "linux"),
+        patch.object(BwrapBackend, "is_available", flaky_is_available),
+        patch.object(DockerBackend, "is_available", return_value=False),
     ):
-        get_backend()
+        first = get_backend()
+        bwrap_available = True
+        second = get_backend()  # no refresh=True — must still re-probe
 
-    mocked_mxc.assert_not_called()
+    assert isinstance(first, UnavailableBackend)
+    assert second.kind == "bwrap"
 
 
-def test_mxc_tried_when_opted_in_and_docker_unavailable():
-    from agentos.sandbox.docker import DockerBackend as _Docker
+def test_probe_does_not_cache_unavailable_result():
+    """Mirrors test_get_backend_does_not_cache_unavailable_result() at the
+    probe() layer, which is what the /api/health endpoint actually calls."""
+    bwrap_available = False
+
+    def flaky_is_available(self):
+        return bwrap_available
 
     with (
-        patch.dict("os.environ", {"CABEROS_ENABLE_EXPERIMENTAL_MXC": "1"}),
-        patch.object(sys, "platform", "win32"),
-        patch.object(_Docker, "is_available", return_value=False),
+        patch.object(sys, "platform", "linux"),
+        patch.object(BwrapBackend, "is_available", flaky_is_available),
+        patch.object(DockerBackend, "is_available", return_value=False),
     ):
-        from agentos.sandbox.mxc import MxcBackend
+        first = probe()
+        bwrap_available = True
+        second = probe()  # no refresh=True — must still reflect recovery
 
-        with patch.object(MxcBackend, "is_available", return_value=True):
-            backend = get_backend()
-
-    assert backend.kind == "mxc"
+    assert first.state == "unavailable"
+    assert second.state == "available"
 
 
-def test_docker_still_preferred_over_mxc_when_opted_in():
-    """Even opted in, a trusted backend must win over the untrusted one."""
-    from agentos.sandbox.docker import DockerBackend as _Docker
-    from agentos.sandbox.mxc import MxcBackend
-
+def test_windows_uses_mxc_and_never_constructs_docker():
+    """The Windows desktop app must not need Docker Desktop (or WSL) for shell."""
     with (
-        patch.dict("os.environ", {"CABEROS_ENABLE_EXPERIMENTAL_MXC": "1"}),
         patch.object(sys, "platform", "win32"),
-        patch.object(_Docker, "is_available", return_value=True),
         patch.object(MxcBackend, "is_available", return_value=True),
+        patch("agentos.sandbox.docker.DockerBackend") as docker_ctor,
     ):
         backend = get_backend()
 
-    assert backend.kind == "docker"
+    assert backend.kind == "mxc"
+    docker_ctor.assert_not_called()
+
+
+def test_windows_does_not_fall_back_to_docker_even_when_docker_is_running():
+    with (
+        patch.object(sys, "platform", "win32"),
+        patch.object(MxcBackend, "is_available", return_value=False),
+        patch.object(MxcBackend, "unavailable_reason", return_value="not set up"),
+        patch.object(DockerBackend, "is_available", return_value=True),
+    ):
+        backend = get_backend()
+
+    assert isinstance(backend, UnavailableBackend)
+    assert "docker" not in (backend.unavailable_reason() or "")
+
+
+def test_setup_required_survives_into_the_unavailable_backend_and_probe():
+    """The dashboard offers a one-click setup only when MXC is installed but
+    waiting on its one-time host grant — that fact has to reach probe()."""
+    with (
+        patch.object(sys, "platform", "win32"),
+        patch.object(MxcBackend, "is_available", return_value=False),
+        patch.object(MxcBackend, "unavailable_reason", return_value="needs setup"),
+        patch.object(MxcBackend, "needs_host_setup", return_value=True),
+    ):
+        backend = get_backend()
+        result = probe()
+
+    assert backend.needs_host_setup() is True
+    assert result.state == "unavailable"
+    assert result.setup_required is True
+
+
+def test_setup_not_required_when_a_dependency_is_simply_missing():
+    with (
+        patch.object(sys, "platform", "win32"),
+        patch.object(MxcBackend, "is_available", return_value=False),
+        patch.object(MxcBackend, "unavailable_reason", return_value="wxc-exec.exe not found"),
+        patch.object(MxcBackend, "needs_host_setup", return_value=False),
+    ):
+        result = probe()
+
+    assert result.setup_required is False
 
 
 def test_probe_reports_experimental_for_an_untrusted_working_backend():
     """A backend that works but isn't vendor-trusted must never be reported
     as plain 'available' — that would overclaim isolation strength."""
-    from agentos.sandbox.docker import DockerBackend as _Docker
-    from agentos.sandbox.mxc import MxcBackend
-
     with (
-        patch.dict("os.environ", {"CABEROS_ENABLE_EXPERIMENTAL_MXC": "1"}),
         patch.object(sys, "platform", "win32"),
-        patch.object(_Docker, "is_available", return_value=False),
         patch.object(MxcBackend, "is_available", return_value=True),
         patch.object(MxcBackend, "experimental_notice", return_value="not a real boundary yet"),
     ):
@@ -216,8 +269,8 @@ def test_probe_reports_state_and_reason():
     """probe() always yields a kind and a valid state."""
     result = probe(refresh=True)
     assert result.kind
-    assert result.state in ("available", "unavailable")
+    assert result.state in ("available", "experimental", "unavailable")
     if result.state == "available":
         assert result.reason is None
-    else:
+    elif result.state == "unavailable":
         assert result.reason

@@ -6,7 +6,7 @@ CaberOS runs shell commands in a sandbox to isolate agents from the host filesys
 
 ## Support tiers
 
-CaberOS tries backends in platform-specific order: native sandboxes first (fastest, zero dependencies), then Docker (cross-platform fallback), then refusal with a clear reason.
+CaberOS tries backends in platform-specific order: the native sandbox first (fastest, zero dependencies), then Docker as a fallback on macOS and Linux, then refusal with a clear reason. **Windows is different:** it uses Microsoft Execution Containers (MXC), which the installer bundles — no Docker and no WSL.
 
 ### macOS (Apple Silicon / Intel)
 
@@ -28,40 +28,51 @@ CaberOS tries backends in platform-specific order: native sandboxes first (faste
 
 **Try first:** `bwrap` (requires no daemon). If not available, Docker works as a fallback.
 
-### Windows (x86-64, Windows 11 Pro / Enterprise)
+### Windows (x86-64, Windows 11 24H2 / build 26100 or newer)
 
 | Candidate | Name | Status | Notes |
 |---|---|---|---|
-| — | WSL2 + bwrap | ✗ Not yet | Planned for future release (PR #31, separate from this branch). |
-| `docker` | Docker Desktop | ✓ Only trusted option | Requires Docker Desktop installed and running. |
-| `mxc` | Microsoft Execution Containers | ⚠ Experimental, opt-in only | Never auto-selected — see below. Not a substitute for Docker. |
-| — | Shell disabled | ✗ Unavailable | No candidate found or usable. |
+| `mxc` | Microsoft Execution Containers | ⚠ Experimental, bundled | Ships inside the installer. One-time, one-click setup. No Docker, no WSL. |
+| — | Shell disabled | ✗ Unavailable | MXC is not set up yet, or the Windows build is too old. |
 
-**Desktop app:** the Windows installer (`CaberOS_<version>_x64-setup.exe`, per-user, no admin prompt) is built by `npm run desktop:build:windows` and needs neither WSL nor Python. It installs and runs without Docker; only the `terminal` capability depends on a sandbox backend from the table above. Verified by installing the built installer and querying the packaged gateway: `GET /api/health` → `sandbox: {kind: "docker", state: "available"}`, `version` matching the shell.
+Docker is deliberately **not** a Windows candidate and WSL2 is not used: the desktop app must work without asking anyone to install either.
 
-**Today:** Docker is the only *trusted* sandbox option on Windows. **Important caveat:** Docker Desktop on Windows commonly runs its own Linux VM via WSL2 by default (see below).
+**Desktop app:** the installer (`CaberOS_<version>_x64-setup.exe`, per-user, no admin prompt) is built by `npm run desktop:build:windows`. It needs no Python, Docker or WSL. It bundles MXC under `resources/mxc` (`wxc-exec.exe`, `wxc-host-prep.exe`, and the MIT license), fetched at build time from `@microsoft/mxc-sdk` and pinned by SHA-256 in `scripts/fetch-mxc.mjs` — a changed file fails the build. Both binaries are Authenticode-signed by Microsoft.
 
-> **Note on WSL2:** If you install Docker Desktop on Windows, it typically uses WSL2 internally to run the Linux Docker daemon. Choosing `docker` as the sandbox backend means you're using Docker's container isolation, not "zero WSL anywhere on the machine." To use a native WSL2 sandbox (without Docker), wait for the WSL2+bubblewrap PR to be merged.
+**First run:** open **Observability → Health**. Until MXC is set up, *Shell sandbox* reads "needs setup" with an **Enable shell sandbox** button. Windows then shows its own permission prompt once, because granting containers access to the system drive needs administrator rights. The grant is persistent: it survives reboots and every later command runs with no prompt. Declining changes nothing; shell simply stays off.
 
-#### MXC — genuinely no WSL, but experimental (opt-in only)
-
-[Microsoft Execution Containers](https://github.com/microsoft/mxc) is a real, working Windows-native sandbox with **no WSL involved at all** — verified by hand on this machine (Windows build 26200, `ProcessContainer`/"base-container" tier). Two things are both true:
-
-1. **It works.** A real command executed inside the container and a real file landed on the real host filesystem, with zero elevation needed at runtime.
-2. **Microsoft's own SDK says, verbatim: "no MXC profiles should be treated as security boundaries currently."** That directly conflicts with this project's rule that shell must never run unprotected. So CaberOS never auto-selects it, even when it works — an operator must explicitly set `CABEROS_ENABLE_EXPERIMENTAL_MXC=1`, and `GET /api/health` reports it as `state: "experimental"`, never `"available"`, with Microsoft's caveat included in `reason`.
-
-**Setup (one-time, elevated):**
+The same setup by hand, from an elevated prompt:
 
 ```powershell
-# Requires @microsoft/mxc-sdk installed (npm install @microsoft/mxc-sdk);
-# there is no standalone installer yet — CaberOS does not bundle this binary.
-# From an elevated ("Run as administrator") prompt, once:
-wxc-host-prep.exe prepare-system-drive
+& "$env:LOCALAPPDATA\CaberOS\resources\mxc\wxc-host-prep.exe" prepare-system-drive
 ```
 
-This is a single command, verified to persist without elevation on every run afterward — comparable in cost to WSL2's `wsl --install`, but no reboot and no Linux distribution to configure.
+#### What MXC is — and is not
 
-**Known limitation, verified by hand:** `prepare-system-drive` only grants access to the Windows *system drive* (`C:` on virtually every install). A workspace on any other drive (e.g. `D:`) fails with "Access is denied" — CaberOS detects this and fails fast with an explanation instead of the bare OS error, rather than attempting the doomed call.
+MXC genuinely works (verified by hand, Windows build 26200, `ProcessContainer` / "base-container" tier): commands run inside a container and real files land on the real host disk. But **Microsoft's own SDK says, verbatim: "no MXC profiles should be treated as security boundaries currently."** CaberOS therefore reports it as `state: "experimental"`, never `"available"`, and shows that caveat in the dashboard. It is meaningfully better than running commands unsandboxed, and weaker than Seatbelt or bwrap.
+
+The policy CaberOS applies (confirmed against the real binary's validator, not the SDK's published examples, which differ):
+
+| Area | Behavior |
+|---|---|
+| Writes | Only the agent's own workspace |
+| Reads | Windows directory, plus whatever the container can read by default (e.g. Program Files). **Your user profile is unreadable** (`.ssh`, `.aws`, browser data, etc.) |
+| Network | Blocked by default; allowed per command when the agent requests it |
+| UI subsystem | Enabled — console programs such as `whoami.exe` and PowerShell fail to start without it |
+| Clipboard / input injection | Blocked |
+
+Measured on a real machine: `echo`, `whoami`, PowerShell, directory listing and exit codes all work in roughly 110–530 ms per command; writes to `C:\Windows`, reads of the user profile, and network without permission are all denied.
+
+#### Known limitations (verified by hand)
+
+- **System drive only.** `prepare-system-drive` grants access to the Windows system drive and nothing else. A workspace on another drive fails with "Access is denied"; CaberOS detects this and fails fast with an explanation. The desktop app's default data directory is already on the system drive.
+- **Per-user tool installs are invisible.** Because the user profile is unreadable, programs installed under it — for example Python in `%LOCALAPPDATA%\Programs` (`py` reports "No installed Python found") or Node via a version manager — cannot be started. Tools in Program Files and Windows work.
+- **`git` fails inside the container.** Git stats every parent directory of the workspace, and the container may not read the user profile that contains it. Agents that need git should run in open sandbox mode.
+- **`%TEMP%` is not writable.** MXC always overrides `TEMP`/`TMP` and denies writes there, so tools that stage files in the temp directory fail. Write to the workspace instead.
+- **The environment is an allowlist.** Host environment variables, including API keys and tokens, are never forwarded. Only Windows system variables are passed. `HOME`, `USERPROFILE` and `APPDATA` point into the workspace, and `PATH` lists Windows directories first, then host `PATH` entries under Windows or Program Files.
+- **Commands run through `cmd.exe /c`**, not a POSIX shell. Agents need Windows syntax; the terminal tool description says so.
+- **Timeouts are best-effort:** killing `wxc-exec.exe` is the only lever, and whether it tears down everything it spawned has not been verified.
+- **Windows 11 24H2 (build 26100) or newer** for the stable tier. The Insider-only `IsolationSession` backend is not used.
 
 ## How to tell what you have
 
@@ -80,17 +91,30 @@ curl -H "Authorization: Bearer <session_token>" http://localhost:8081/api/health
 {
   "kind": "seatbelt",
   "state": "available",
-  "reason": null
+  "reason": null,
+  "setup_required": false
 }
 ```
 
-Or when no sandbox is available:
+On Windows with MXC working:
+
+```json
+{
+  "kind": "mxc",
+  "state": "experimental",
+  "reason": "Commands run in a Windows container that limits file access to the agent workspace ...",
+  "setup_required": false
+}
+```
+
+And when MXC is installed but waiting on its one-time setup:
 
 ```json
 {
   "kind": "none",
   "state": "unavailable",
-  "reason": "No sandbox available. bwrap: Bubblewrap is not installed. / docker: Docker is installed but the daemon is not responding. Is it running?"
+  "reason": "No sandbox available. mxc: MXC is present (tier: 'base-container') but not yet set up. One-time setup needed: ...",
+  "setup_required": true
 }
 ```
 
@@ -100,13 +124,16 @@ Or when no sandbox is available:
 |---|---|---|
 | `kind` | `seatbelt`, `bwrap`, `docker`, `mxc`, `none` | The backend CaberOS is using (or would use). |
 | `state` | `available` | Sandbox is ready for shell commands and is a trusted security boundary. |
-| `state` | `experimental` | Commands genuinely run, but the backend's own vendor does not yet call it a security boundary (MXC only, opt-in). See `reason` for the caveat. |
+| `state` | `experimental` | Commands genuinely run, but the backend's own vendor does not yet call it a security boundary (MXC on Windows). See `reason` for the caveat. |
 | `state` | `unavailable` | Shell commands will be refused. See `reason`. |
 | `reason` | string or null | For `unavailable`: why, listing every candidate tried. For `experimental`: the trust caveat to show the operator. Null only when `state` is `available`. |
+| `setup_required` | boolean | `true` when the only thing missing is a one-time, user-approved host setup the desktop app can run (the **Enable shell sandbox** button). `false` when something must be installed instead. |
+
+An `unavailable` result is **not cached**: it is re-checked on each health poll and each shell call, so fixing the problem (finishing setup, starting Docker on macOS/Linux) takes effect without restarting the app.
 
 ### Full health response
 
-The `/api/health` endpoint also reports provider and agent counts:
+The `/api/health` endpoint also reports provider and agent counts, and the gateway `version`:
 
 ```json
 {
@@ -116,10 +143,12 @@ The `/api/health` endpoint also reports provider and agent counts:
   "agents": 3,
   "active_runs": 0,
   "sandbox": {
-    "kind": "docker",
-    "state": "available",
-    "reason": null
+    "kind": "mxc",
+    "state": "experimental",
+    "reason": "...",
+    "setup_required": false
   },
+  "version": "0.1.9",
   "timestamp": "2026-09-17T10:30:45.123456Z"
 }
 ```
@@ -143,20 +172,20 @@ The `/api/health` endpoint also reports provider and agent counts:
 - **Filesystem access:** Read-only to system; writes limited to agent workspace + shared temp dirs
 - **Container caveat:** bwrap may not work inside containers or GitHub Actions runners (namespace limitations). Docker is a fallback in those environments.
 
-### MXC (Windows, experimental, opt-in)
+### MXC (Windows, experimental)
 
-- **Platform:** Windows 11 24H2+ (build 26100+) for the stable `ProcessContainer` tier — verified on build 26200. Not Windows Insider-only for this tier (only Microsoft's `IsolationSession` backend requires Insider Preview, and CaberOS does not use it).
-- **Enable:** Set `CABEROS_ENABLE_EXPERIMENTAL_MXC=1`. Never auto-selected otherwise.
-- **Install:** No standalone installer — `npm install @microsoft/mxc-sdk`, then either add its `bin/<arch>/wxc-exec.exe` to PATH or set `CABEROS_MXC_EXE_PATH` to it directly. CaberOS's Windows desktop packaging does not yet bundle this.
-- **One-time setup:** `wxc-host-prep.exe prepare-system-drive`, elevated, once. Verified persistent afterward with zero elevation.
-- **Trust:** Not a verified security boundary — Microsoft's own words, not CaberOS's caution. Reported as `state: "experimental"`, never `"available"`.
-- **Filesystem access:** System-drive workspaces only (verified limitation of `prepare-system-drive`). A workspace on a different drive is refused with an explanation before ever calling the binary.
+- **Platform:** Windows 11 24H2+ (build 26100+) for the stable `ProcessContainer` tier — verified on build 26200. Not Windows Insider-only for this tier.
+- **Install:** None for end users — bundled in the installer. From a source checkout, set `CABEROS_MXC_EXE_PATH` to the `@microsoft/mxc-sdk` package's `bin/x64/wxc-exec.exe`, or put `wxc-exec` on PATH. The desktop shell sets this variable automatically from its resources.
+- **One-time setup:** `wxc-host-prep.exe prepare-system-drive`, elevated, once — the dashboard button runs exactly this. Persistent afterward.
+- **Trust:** Not a verified security boundary — Microsoft's words, not CaberOS's caution. Reported as `state: "experimental"`, never `"available"`.
+- **Filesystem access:** Writes only to the agent workspace; user profile unreadable; system-drive workspaces only.
 - **Network:** Disabled by default (`network.defaultPolicy: "block"`); agents can request `allow_network=True` per-command.
-- **Timeout behavior:** Best-effort process kill on timeout — unlike Docker, there is no separate "container kill" verb in this CLI, and whether killing `wxc-exec.exe` reliably tears down everything it spawned has not been verified live.
+- **Performance:** ~110–530 ms per command; no VM and no daemon.
+- **Timeout behavior:** Best-effort process kill — unlike Docker there is no separate "container kill" verb in this CLI.
 
-### Docker (all platforms)
+### Docker (macOS and Linux fallback)
 
-- **Platform:** macOS, Linux, Windows
+- **Platform:** macOS, Linux. Not used on Windows.
 - **Install:** [Docker Desktop](https://www.docker.com/products/docker-desktop) or Docker Engine
 - **Start:** Ensure the Docker daemon is running (`docker ps` should work)
 - **Image:** `alpine:3.20` — pulled once during the first probe (not on the first command, so image pulls don't eat into command timeouts)
@@ -217,18 +246,18 @@ sudo systemctl start docker
 
 ### Windows
 
-Install Docker Desktop (the only sandbox option today):
+Nothing to install beyond CaberOS itself:
 
-1. Download [Docker Desktop for Windows](https://www.docker.com/products/docker-desktop)
-2. Run the installer and restart Windows
-3. Launch Docker Desktop (it starts the daemon automatically)
-4. Verify: `docker ps` should work in PowerShell
+1. Run `CaberOS_<version>_x64-setup.exe`
+2. Open CaberOS → **Observability → Health**
+3. Click **Enable shell sandbox** and approve the Windows permission prompt (once)
+4. *Shell sandbox* now reads `mxc (experimental)`
 
-To check that CaberOS can reach the Docker daemon after installation:
+To verify from a terminal instead:
 
 ```powershell
-# Restart the backend (or wait for the next health check)
-# Then query the health endpoint and look for "kind": "docker", "state": "available"
+# Look for "kind": "mxc", "state": "experimental" under "sandbox"
+curl.exe -H "Authorization: Bearer <session_token>" http://127.0.0.1:51718/api/health
 ```
 
 ## Troubleshooting
@@ -265,14 +294,14 @@ which bwrap
 bwrap --version
 ```
 
-### "Docker is installed but the daemon is not responding" (any platform)
+### "Docker is installed but the daemon is not responding" (macOS / Linux)
 
 The Docker daemon is not running. Start it:
 
-- **macOS / Windows:** Launch Docker Desktop
+- **macOS:** Launch Docker Desktop
 - **Linux:** `sudo systemctl start docker`
 
-Then restart the CaberOS backend or wait for the next health check.
+The next health poll (within 15 seconds) picks it up; no restart is needed.
 
 ### Docker pull times out
 
@@ -281,32 +310,41 @@ If the first health check hangs or times out:
 ```bash
 # Manually pull the image (gives you progress feedback):
 docker pull alpine:3.20
-
-# Then restart the backend
 ```
 
 The probe waits up to 120 seconds for the image pull; if your connection is slow, this is expected.
 
-### Shell commands timeout frequently on Windows
+### "MXC is present … but not yet set up" (Windows)
 
-The `docker run` → `alpine` container start sequence on Windows can be slow (200-500ms per command). If commands are timing out, either:
+Click **Enable shell sandbox** in Observability → Health, or run the elevated command shown under *Windows → First run*. If you dismissed the Windows permission prompt, click the button again.
 
-1. Increase `AGENTOS_SANDBOX_TIMEOUT` in your config (default: 30 seconds)
-2. Look for a WSL2+bubblewrap option when PR #31 is merged
+### "wxc-exec.exe was not found" (Windows)
+
+Installed builds bundle it, so this means a damaged install — reinstall CaberOS. From a source checkout, set `CABEROS_MXC_EXE_PATH` to the SDK's `bin/x64/wxc-exec.exe`.
+
+### "cannot access workspaces outside the system drive" (Windows)
+
+MXC's one-time grant covers only the system drive. Keep agent workspaces on `C:` (the default data directory is).
+
+### A command works in PowerShell but "is not recognized" inside CaberOS (Windows)
+
+The container cannot read your user profile, so per-user installs (Python, Node version managers, `~\bin`) are not visible. Use tools installed system-wide.
 
 ## Defaults in different setups
 
 | Setup | Native | Fallback | Status |
 |---|---|---|---|
 | Desktop app (macOS) | seatbelt | docker | Native if Seatbelt works |
+| Desktop app (Windows) | mxc (bundled) | none | Experimental; one-time setup; no Docker or WSL |
 | Local dev (macOS) | seatbelt | docker | Native if Seatbelt works |
 | Local dev (Linux) | bwrap | docker | Native if bwrap works |
+| Local dev (Windows) | mxc | none | Needs `CABEROS_MXC_EXE_PATH` and the one-time setup |
 | Docker (any platform) | none (inside container) | docker (host docker socket) | Requires `--network host` or socket mount to reach host Docker |
 | CI/CD (Linux, GitHub Actions) | bwrap fails (no namespaces) | docker | Docker only |
-| Windows + local dev | none | docker | Docker is the trusted default; MXC available opt-in only |
 
 ## See also
 
 - `docs/spec-v0.1.md` — D28 (Sandbox layer) for architecture details
 - `backend/src/agentos/sandbox/` — Backend implementations (seatbelt.py, bwrap.py, docker.py, mxc.py, base.py)
+- `scripts/fetch-mxc.mjs` — how the Windows installer's MXC binaries are fetched and verified
 - `AGENTS.md` — syscall layer and sandbox integration

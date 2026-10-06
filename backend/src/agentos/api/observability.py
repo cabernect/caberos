@@ -9,6 +9,7 @@ GET  /api/operator-audit — operator action audit trail
 GET  /api/stats          — dashboard stats (KPIs + time-series + per-agent)
 """
 
+import asyncio
 import json
 import logging
 from datetime import UTC, datetime
@@ -138,6 +139,7 @@ class SandboxStatus(BaseModel):
     kind: str
     state: str
     reason: str | None = None
+    setup_required: bool = False
 
 
 class HealthStatus(BaseModel):
@@ -460,7 +462,8 @@ async def system_health(
     provider_count = (await db.execute(select(func.count(Provider.id)))).scalar() or 0
     agent_count = (await db.execute(select(func.count(Agent.id)))).scalar() or 0
     active_runs = len(list_active_runs())
-    sandbox = sandbox_probe()
+    # Probing spawns subprocesses while no backend is usable; keep that off the loop.
+    sandbox = await asyncio.to_thread(sandbox_probe)
 
     return HealthStatus(
         status="ok",
@@ -468,7 +471,12 @@ async def system_health(
         providers=provider_count,
         agents=agent_count,
         active_runs=active_runs,
-        sandbox=SandboxStatus(kind=sandbox.kind, state=sandbox.state, reason=sandbox.reason),
+        sandbox=SandboxStatus(
+            kind=sandbox.kind,
+            state=sandbox.state,
+            reason=sandbox.reason,
+            setup_required=sandbox.setup_required,
+        ),
         version=__version__,
         timestamp=datetime.now(UTC),
     )

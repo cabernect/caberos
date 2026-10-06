@@ -1,14 +1,10 @@
-"""Docker sandbox backend — cross-platform fallback.
+"""Docker sandbox backend — macOS/Linux fallback.
 
 Runs the sandboxed command inside a throwaway container instead of a native
-OS sandbox. Available on every platform Docker runs on, so it is the fallback
-candidate everywhere: behind Seatbelt on macOS, behind bwrap on Linux, and
-(until a native Windows backend exists) the primary option on Windows.
-
-Honest limitation: Docker Desktop on Windows commonly runs its own Linux VM
-via a WSL2 backend by default, so this does not mean "no WSL anywhere on the
-machine" — it means the operator installs one thing (Docker Desktop) instead
-of manually running `wsl --install` then `wsl -e sudo apt install bubblewrap`.
+OS sandbox. It is the fallback candidate behind Seatbelt on macOS and bwrap on
+Linux. It is deliberately not a Windows candidate: the Windows desktop app must
+not require Docker Desktop (which runs its own WSL2 VM) for shell to work —
+Windows uses MXC instead, see mxc.py and base._candidates_for().
 """
 
 import asyncio

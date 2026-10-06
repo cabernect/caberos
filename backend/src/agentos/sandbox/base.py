@@ -36,13 +36,18 @@ class SandboxProbe:
     kind: str
     state: SandboxState
     reason: str | None = None
+    # True when the only thing missing is a one-time, operator-approved host
+    # setup (e.g. MXC's elevated system-drive grant) that the desktop app can
+    # offer to run — as opposed to something the operator must install.
+    setup_required: bool = False
 
 
 class SandboxBackend(ABC):
     """Abstract sandbox backend.
 
-    Implementations: Seatbelt (macOS), bwrap (Linux), Docker (any platform,
-    fallback), and Unavailable (no candidate on this machine works).
+    Implementations: Seatbelt (macOS), bwrap (Linux), Docker (macOS/Linux
+    fallback), MXC (Windows, experimental), and Unavailable (no candidate on
+    this machine works).
     """
 
     # Short identifier surfaced through the health endpoint.
@@ -71,6 +76,10 @@ class SandboxBackend(ABC):
         """Caveat to surface for a working but untrusted (trusted=False) backend."""
         return None
 
+    def needs_host_setup(self) -> bool:
+        """True when this backend is installed but waiting on a one-time host setup."""
+        return False
+
 
 class UnavailableBackend(SandboxBackend):
     """No isolation is possible — refuse shell execution, explain why.
@@ -82,14 +91,18 @@ class UnavailableBackend(SandboxBackend):
 
     kind = "none"
 
-    def __init__(self, reason: str | None = None) -> None:
+    def __init__(self, reason: str | None = None, setup_required: bool = False) -> None:
         self._reason = reason or "No sandbox is available on this platform."
+        self._setup_required = setup_required
 
     def is_available(self) -> bool:
         return False
 
     def unavailable_reason(self) -> str | None:
         return self._reason
+
+    def needs_host_setup(self) -> bool:
+        return self._setup_required
 
     async def run_command(
         self, workspace_path: str, command: str, timeout: int = 30, allow_network: bool = False
@@ -108,34 +121,27 @@ class UnavailableBackend(SandboxBackend):
 
 def _candidates_for(platform: str) -> list[Callable[[], SandboxBackend]]:
     """Ordered constructors to try for this platform, native backend first."""
-    import os
+    if platform == "win32":
+        # Windows has no trusted native sandbox, and the desktop app must not
+        # ask a user to install Docker Desktop or WSL for shell to work. MXC
+        # ships inside the installer; it is reported as "experimental" (never
+        # "available") because Microsoft does not yet call it a security boundary.
+        from .mxc import MxcBackend
+
+        return [MxcBackend]
 
     from .docker import DockerBackend
 
-    native: Callable[[], SandboxBackend] | None = None
+    candidates: list[Callable[[], SandboxBackend]] = []
     if platform == "darwin":
         from .seatbelt import SeatbeltBackend
 
-        native = SeatbeltBackend
+        candidates.append(SeatbeltBackend)
     elif platform.startswith("linux"):
         from .bwrap import BwrapBackend
 
-        native = BwrapBackend
-
-    candidates: list[Callable[[], SandboxBackend]] = []
-    if native is not None:
-        candidates.append(native)
+        candidates.append(BwrapBackend)
     candidates.append(DockerBackend)
-
-    # MXC (Windows only) is never auto-selected ahead of a trusted backend:
-    # Microsoft's own SDK says "no MXC profiles should be treated as security
-    # boundaries currently." An operator opts in explicitly; it is never the
-    # default even when it would technically work.
-    if platform == "win32" and os.environ.get("CABEROS_ENABLE_EXPERIMENTAL_MXC") == "1":
-        from .mxc import MxcBackend
-
-        candidates.append(MxcBackend)
-
     return candidates
 
 
@@ -164,6 +170,7 @@ def get_backend(refresh: bool = False) -> SandboxBackend:
         return _backend_cache[platform]
 
     tried_reasons: list[str] = []
+    setup_required = False
     backend: SandboxBackend | None = None
     for make_backend in _candidates_for(platform):
         candidate = make_backend()
@@ -173,13 +180,19 @@ def get_backend(refresh: bool = False) -> SandboxBackend:
         reason = candidate.unavailable_reason()
         if reason:
             tried_reasons.append(f"{candidate.kind}: {reason}")
+        setup_required = setup_required or candidate.needs_host_setup()
 
     if backend is None:
         if tried_reasons:
             reason = "No sandbox available. " + " / ".join(tried_reasons)
         else:
             reason = f"No sandbox implementation for platform {platform!r}."
-        backend = UnavailableBackend(reason=reason)
+        # Deliberately not cached: the most common fix (e.g. starting Docker
+        # Desktop) happens after the gateway is already running, and the
+        # operator has no way to force a recheck short of restarting the
+        # whole app. Re-probing on every call while broken is cheap next to
+        # staying stuck refusing shell commands for the rest of the process.
+        return UnavailableBackend(reason=reason, setup_required=setup_required)
 
     _backend_cache[platform] = backend
     return backend
@@ -208,10 +221,14 @@ def probe(refresh: bool = False) -> SandboxProbe:
                 state="experimental",
                 reason=backend.experimental_notice(),
             )
-    else:
-        _probe_cache = SandboxProbe(
-            kind=backend.kind,
-            state="unavailable",
-            reason=backend.unavailable_reason(),
-        )
-    return _probe_cache
+        return _probe_cache
+
+    # Mirrors get_backend(): an unavailable result is never cached, so the
+    # health endpoint reflects a dependency (e.g. Docker Desktop) coming up
+    # without requiring an app restart.
+    return SandboxProbe(
+        kind=backend.kind,
+        state="unavailable",
+        reason=backend.unavailable_reason(),
+        setup_required=backend.needs_host_setup(),
+    )

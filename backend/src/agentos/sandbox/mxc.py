@@ -1,36 +1,37 @@
 """Microsoft Execution Containers (MXC) sandbox backend — Windows, experimental.
 
 Verified by hand against the real `@microsoft/mxc-sdk` binary (`wxc-exec.exe`)
-on this machine (Windows build 26200, "base-container"/ProcessContainer
-tier). Two things are true and both matter:
+on Windows build 26200 ("base-container"/ProcessContainer tier). Three things
+are true and all matter:
 
-1. It genuinely works. A real command executed inside the container, with a
-   real file written to the real host filesystem, and it required
-   elevation exactly once — `wxc-host-prep.exe prepare-system-drive` grants
-   the AppContainer SIDs read access to the system-drive root, persists
-   across reboots, and every run after that succeeded with zero elevation.
-   That is a materially better story than WSL2 for CaberOS's Windows users:
-   one command instead of `wsl --install` + installing bubblewrap inside a
-   distribution.
+1. It genuinely works, with no Docker and no WSL. A real command executes
+   inside the container and a real file lands on the real host filesystem.
+   It needs elevation exactly once — `wxc-host-prep.exe prepare-system-drive`
+   grants the AppContainer SIDs access to the system-drive root, persists
+   across reboots, and every run after that needs zero elevation.
 
 2. Microsoft's own SDK README says, verbatim: "no MXC profiles should be
    treated as security boundaries currently," and policies are known to be
-   "overly permissive." That is not a footnote — it directly contradicts
-   this project's own invariant that shell must never run unprotected. This
-   backend is therefore never auto-selected (see base.py's opt-in gate) and
-   is reported through a distinct `SandboxState.experimental`, never
-   `"available"` — see SandboxBackend.trusted.
+   "overly permissive." So this backend is reported through a distinct
+   `"experimental"` state — never `"available"` — see SandboxBackend.trusted.
+   Because Windows has no trusted native sandbox, it is still auto-selected
+   there: the alternative is no shell at all, and the desktop app must not
+   require Docker Desktop or WSL.
 
-Binary distribution: `wxc-exec.exe` ships only inside the
-`@microsoft/mxc-sdk` npm package, under `bin/<arch>/`. There is no
-standalone installer. Until CaberOS's Windows desktop packaging bundles it
-at build time, this backend only activates for a developer who has it on
-PATH or points CABEROS_MXC_EXE_PATH at it directly — which is honest: it
-should never silently claim to work for an end user who has neither.
+3. The policy must enable the UI subsystem (`ui.disable: false`). With the
+   SDK default, ordinary console programs (`whoami.exe`, PowerShell) die with
+   STATUS_DLL_INIT_FAILED because they initialise win32k. Clipboard and input
+   injection stay blocked.
+
+Binary distribution: `wxc-exec.exe` and `wxc-host-prep.exe` ship inside the
+CaberOS Windows installer (`resources/mxc`, hash-pinned at build time) and
+the desktop shell passes the path in CABEROS_MXC_EXE_PATH. A source checkout
+can set that variable itself or put `wxc-exec` on PATH.
 """
 
 import asyncio
 import json
+import ntpath
 import os
 import shutil
 import subprocess
@@ -41,12 +42,6 @@ from pathlib import Path
 from .base import SandboxBackend, ShellResult
 
 _PROBE_TIMEOUT = 10
-_SETUP_HINT = (
-    "Run `wxc-host-prep.exe prepare-system-drive` once from an elevated "
-    "(Run as administrator) prompt. This is a one-time, persistent grant — "
-    "verified to survive without elevation on subsequent runs — not a "
-    "per-run requirement."
-)
 
 
 def _find_exe() -> str | None:
@@ -54,6 +49,124 @@ def _find_exe() -> str | None:
     if override and Path(override).is_file():
         return override
     return shutil.which("wxc-exec")
+
+
+def _setup_hint(exe: str) -> str:
+    prep = Path(exe).with_name("wxc-host-prep.exe")
+    return (
+        "One-time setup needed: use 'Enable shell sandbox' in the CaberOS dashboard, "
+        f'or run `"{prep}" prepare-system-drive` from an elevated (Run as administrator) '
+        "prompt. It is a single persistent grant, not a per-run requirement."
+    )
+
+
+def _ui_policy() -> dict:
+    # Console programs initialise win32k, so UI must be enabled for them to start;
+    # clipboard and input injection stay shut so a command cannot touch either.
+    return {"disable": False, "clipboard": "none", "injection": False}
+
+
+# With no `process.env`, MXC builds the container's environment from the user's
+# persistent environment (found live: a real API key set with `setx` was visible
+# inside the container). So the environment is an explicit allowlist instead, and
+# `process.env` replaces the default entirely.
+_ENV_ALLOWLIST = (
+    "SystemRoot",
+    "SystemDrive",
+    "windir",
+    "ComSpec",
+    "PATHEXT",
+    "OS",
+    "PROCESSOR_ARCHITECTURE",
+    "NUMBER_OF_PROCESSORS",
+    "ProgramFiles",
+    "ProgramFiles(x86)",
+    "ProgramW6432",
+    "CommonProgramFiles",
+    "CommonProgramFiles(x86)",
+    "CommonProgramW6432",
+    "ProgramData",
+    "ALLUSERSPROFILE",
+    "PUBLIC",
+)
+
+# PATH entries under these roots are readable from inside the container; entries
+# elsewhere (the user profile above all) are not, so they are dropped.
+_READABLE_ROOT_VARS = (
+    "SystemRoot",
+    "ProgramFiles",
+    "ProgramFiles(x86)",
+    "ProgramW6432",
+    "ProgramData",
+)
+
+
+# Everything below builds Windows paths for a Windows container, so it uses `ntpath`
+# and ";" explicitly rather than the host's `os.path`/`os.pathsep`. That keeps the
+# result identical on any OS (CI runs these tests on Linux).
+_WINDOWS_PATH_SEP = ";"
+
+
+def _norm(path: str) -> str:
+    return ntpath.normcase(ntpath.normpath(path))
+
+
+def _is_under(path: str, roots: list[str]) -> bool:
+    normalized = _norm(path)
+    return any(normalized == root or normalized.startswith(root + "\\") for root in roots)
+
+
+def _sandbox_path(system_root: str) -> str:
+    # Windows' own directories come first so `whoami`, `curl`, `find` and friends
+    # resolve to the real tools: a host PATH that leads with Git's MSYS `usr\bin`
+    # would otherwise pick MSYS builds, which cannot initialise inside the container.
+    ordered = [
+        ntpath.join(system_root, "System32"),
+        ntpath.join(system_root, "System32", "Wbem"),
+        ntpath.join(system_root, "System32", "WindowsPowerShell", "v1.0"),
+        system_root,
+    ]
+    roots = [
+        _norm(value)
+        for name in _READABLE_ROOT_VARS
+        if (value := os.environ.get(name) or (system_root if name == "SystemRoot" else None))
+    ]
+    for entry in (os.environ.get("PATH") or "").split(_WINDOWS_PATH_SEP):
+        if entry and _is_under(entry, roots):
+            ordered.append(entry)
+
+    unique: list[str] = []
+    seen: set[str] = set()
+    for entry in ordered:
+        key = _norm(entry)
+        if key not in seen:
+            seen.add(key)
+            unique.append(entry)
+    return _WINDOWS_PATH_SEP.join(unique)
+
+
+def _sandbox_env(workspace: str) -> list[str]:
+    """Container environment: allowlisted system variables, HOME set to the workspace."""
+    env: dict[str, str] = {}
+    for name in _ENV_ALLOWLIST:
+        value = os.environ.get(name)
+        if value:
+            env[name] = value
+    system_root = env.setdefault("SystemRoot", "C:\\Windows")
+    env["PATH"] = _sandbox_path(system_root)
+
+    # Same contract as Seatbelt/bwrap: HOME is the workspace, never the real profile.
+    # Tools that keep config (npm, pip, ...) then write somewhere they can.
+    env["HOME"] = workspace
+    env["USERPROFILE"] = workspace
+    env["APPDATA"] = ntpath.join(workspace, "AppData", "Roaming")
+    # MXC requires LOCALAPPDATA to be present and derives the container's private
+    # TEMP from it (always overriding TEMP/TMP). It is only a string here — the real
+    # directory stays unreadable from inside — so the genuine value is passed.
+    env["LOCALAPPDATA"] = os.environ.get("LOCALAPPDATA") or ntpath.join(
+        workspace, "AppData", "Local"
+    )
+    return [f"{name}={value}" for name, value in env.items()]
 
 
 class MxcBackend(SandboxBackend):
@@ -64,6 +177,7 @@ class MxcBackend(SandboxBackend):
 
     _probe_cache: bool | None = None
     _reason: str | None = None
+    _needs_setup: bool = False
 
     def is_available(self) -> bool:
         if self._probe_cache is not None:
@@ -73,9 +187,9 @@ class MxcBackend(SandboxBackend):
         if exe is None:
             self._probe_cache = False
             self._reason = (
-                "wxc-exec.exe not found. MXC ships only inside the @microsoft/mxc-sdk "
-                "npm package (no standalone installer) — set CABEROS_MXC_EXE_PATH to "
-                "its bin/<arch>/wxc-exec.exe, or add it to PATH."
+                "wxc-exec.exe was not found. It ships inside the CaberOS Windows "
+                "installer; from a source checkout, set CABEROS_MXC_EXE_PATH to the "
+                "@microsoft/mxc-sdk bin/x64/wxc-exec.exe, or add it to PATH."
             )
             return False
 
@@ -99,7 +213,8 @@ class MxcBackend(SandboxBackend):
             return True
 
         self._probe_cache = False
-        self._reason = f"MXC is present (tier: {tier!r}) but not yet set up. {_SETUP_HINT}"
+        self._needs_setup = True
+        self._reason = f"MXC is present (tier: {tier!r}) but not yet set up. {_setup_hint(exe)}"
         return False
 
     def _one_time_setup_done(self, exe: str) -> bool:
@@ -127,11 +242,17 @@ class MxcBackend(SandboxBackend):
             self.is_available()
         return None if self._probe_cache else self._reason
 
+    def needs_host_setup(self) -> bool:
+        if self._probe_cache is None:
+            self.is_available()
+        return self._needs_setup
+
     def experimental_notice(self) -> str | None:
         return (
-            "MXC executes commands for real, but Microsoft's own SDK states its "
-            "profiles are not yet a real security boundary. Treat this like running "
-            "without a sandbox, not like bwrap/Seatbelt/Docker isolation."
+            "Commands run in a Windows container that limits file access to the agent "
+            "workspace and blocks the network unless allowed. Microsoft does not yet "
+            "call MXC a security boundary, so it is weaker than bwrap or Seatbelt on "
+            "other platforms."
         )
 
     async def run_command(
@@ -155,7 +276,9 @@ class MxcBackend(SandboxBackend):
         # always on the system drive, so it cannot catch this per-call — fail
         # fast here with a real explanation instead of the opaque OS error.
         system_drive = (os.environ.get("SystemDrive") or "C:").rstrip("\\").upper()
-        workspace_drive = Path(workspace).drive.upper()
+        workspace_drive = (
+            ntpath.splitdrive(workspace_path)[0] or ntpath.splitdrive(workspace)[0]
+        ).upper()
         if workspace_drive and workspace_drive != system_drive:
             return ShellResult(
                 stdout="",
@@ -163,8 +286,8 @@ class MxcBackend(SandboxBackend):
                     f"MXC (experimental) cannot access workspaces outside the system drive "
                     f"({system_drive}\\) — this workspace is on {workspace_drive}\\. "
                     "wxc-host-prep.exe prepare-system-drive only grants rights to the system "
-                    "drive root, with no per-drive option. Move the workspace to the system "
-                    "drive, or use a trusted backend (Docker/bwrap/Seatbelt) instead."
+                    "drive root, with no per-drive option. Keep agent workspaces on the "
+                    "system drive (the desktop app's default data directory already is)."
                 ),
                 exit_code=-1,
                 duration_ms=0,
@@ -229,13 +352,17 @@ def _build_config(workspace: str, command: str, allow_network: bool) -> dict:
     fields are network.defaultPolicy: "allow"|"block" and there is no
     top-level timeout — this backend enforces its own via asyncio.wait_for).
     """
-    readonly = ["C:\\Windows", "C:\\Windows\\System32"]
+    system_root = os.environ.get("SystemRoot") or "C:\\Windows"
     return {
         "version": "0.6.0-alpha",
         "filesystem": {
             "readwritePaths": [workspace],
-            "readonlyPaths": readonly,
+            "readonlyPaths": [system_root, ntpath.join(system_root, "System32")],
         },
         "network": {"defaultPolicy": "allow" if allow_network else "block"},
-        "process": {"commandLine": f'cmd.exe /c cd /d "{workspace}" && {command}'},
+        "ui": _ui_policy(),
+        "process": {
+            "commandLine": f'cmd.exe /c cd /d "{workspace}" && {command}',
+            "env": _sandbox_env(workspace),
+        },
     }

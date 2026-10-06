@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
+import { invoke } from "@tauri-apps/api/core";
 import { Activity, DollarSign, Zap, AlertTriangle, Clock, TrendingUp, ChevronRight } from "lucide-react";
 import { DashboardSidebar, type NavKey } from "@/components/DashboardSidebar";
 import { api } from "@/lib/api";
@@ -43,6 +44,24 @@ export function Observability() {
       setHealth(null);
     }
   }, []);
+
+  const isDesktop = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  const [setupBusy, setSetupBusy] = useState(false);
+  const [setupError, setSetupError] = useState<string | null>(null);
+
+  // Runs the bundled one-time host setup; Windows shows its own consent prompt.
+  const enableShellSandbox = async () => {
+    setSetupBusy(true);
+    setSetupError(null);
+    try {
+      await invoke("enable_shell_sandbox");
+      await fetchHealth();
+    } catch (error) {
+      setSetupError(typeof error === "string" ? error : "The shell sandbox setup did not finish.");
+    } finally {
+      setSetupBusy(false);
+    }
+  };
 
   useEffect(() => {
     fetchHealth();
@@ -162,9 +181,12 @@ export function Observability() {
                           ? health.sandbox.kind
                           : health.sandbox.state === "experimental"
                             ? `${health.sandbox.kind} (experimental)`
-                            : "disabled"
+                            : health.sandbox.setup_required
+                              ? "needs setup"
+                              : "off"
                       }
-                      good={health.sandbox.state === "available"}
+                      good={health.sandbox.state !== "unavailable"}
+                      neutral={health.sandbox.state === "unavailable"}
                     />
                   ) : null}
                 </div>
@@ -190,10 +212,41 @@ export function Observability() {
                 ) : null}
                 {health.sandbox && health.sandbox.state === "unavailable" ? (
                   <div className="mt-3 rounded-md border px-3 py-2" style={{ borderColor: "var(--border)" }}>
-                    <p className="text-[12px] text-[var(--ink-2)]">
-                      Agents cannot run shell commands on this machine. {health.sandbox.reason}
-                    </p>
-                    <p className="mt-1 text-[11px] text-[var(--ink-3)]">
+                    {health.sandbox.setup_required && isDesktop ? (
+                      <>
+                        <p className="text-[12px] font-medium text-[var(--ink)]">
+                          Shell commands are off until a one-time setup.
+                        </p>
+                        <p className="mt-1 text-[11px] text-[var(--ink-2)]">
+                          Windows will ask for permission once. After that, agent commands run in a restricted
+                          sandbox with no further prompts.
+                        </p>
+                        <div className="mt-2 flex items-center gap-3">
+                          <button
+                            type="button"
+                            disabled={setupBusy}
+                            onClick={() => void enableShellSandbox()}
+                            className="rounded px-3 py-1.5 text-[12px] font-medium"
+                            style={{
+                              background: "var(--accent)",
+                              color: "white",
+                              cursor: setupBusy ? "default" : "pointer",
+                              opacity: setupBusy ? 0.6 : 1,
+                            }}
+                          >
+                            {setupBusy ? "Waiting for Windows…" : "Enable shell sandbox"}
+                          </button>
+                          {setupError ? (
+                            <span className="text-[11px] text-[var(--danger)]">{setupError}</span>
+                          ) : null}
+                        </div>
+                      </>
+                    ) : (
+                      <p className="text-[12px] text-[var(--ink-2)]">
+                        Agents cannot run shell commands on this machine. {health.sandbox.reason}
+                      </p>
+                    )}
+                    <p className="mt-2 text-[11px] text-[var(--ink-3)]">
                       Every other capability — files, web, memory, skills, knowledge and MCP tools — is unaffected.
                     </p>
                   </div>
@@ -362,11 +415,23 @@ export function Observability() {
 
 // --- Reusable components ---
 
-function HealthMetric({ label, value, good }: { label: string; value: string; good: boolean }) {
+function HealthMetric({
+  label,
+  value,
+  good,
+  neutral = false,
+}: {
+  label: string;
+  value: string;
+  good: boolean;
+  /** A supported state that is not a failure (e.g. an optional feature that is off). */
+  neutral?: boolean;
+}) {
+  const color = neutral ? "var(--ink-2)" : good ? "var(--accent)" : "var(--danger)";
   return (
     <div className="rounded-md border px-3 py-2" style={{ borderColor: "var(--border)" }}>
       <p className="text-[10px] uppercase tracking-wide text-[var(--ink-3)]">{label}</p>
-      <p className="mt-1 font-medium" style={{ color: good ? "var(--accent)" : "var(--danger)" }}>{value}</p>
+      <p className="mt-1 font-medium" style={{ color }}>{value}</p>
     </div>
   );
 }

@@ -1,4 +1,5 @@
 mod gateway;
+mod shell_sandbox;
 
 use gateway::{GatewayProcess, GATEWAY_PORT};
 use serde::Serialize;
@@ -22,6 +23,11 @@ fn gateway_url(gateway: tauri::State<'_, GatewayProcess>) -> String {
 #[tauri::command]
 fn quit_app(app: AppHandle) {
     app.exit(0);
+}
+
+#[tauri::command]
+async fn enable_shell_sandbox(app: AppHandle) -> Result<(), String> {
+    shell_sandbox::enable(&app).await
 }
 
 #[tauri::command]
@@ -79,6 +85,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             quit_app,
+            enable_shell_sandbox,
             gateway_url,
             gateway_log_path,
             read_dropped_file

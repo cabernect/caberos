@@ -276,6 +276,12 @@ impl GatewayProcess {
             command.env("AGENTOS_SKILLS_DIR", &skills_dir);
         }
 
+        // Windows installers bundle the MXC shell sandbox; tell the gateway where it is.
+        let mxc_exe = resource_dir.join("resources").join("mxc").join("wxc-exec.exe");
+        if mxc_exe.is_file() {
+            command.env("CABEROS_MXC_EXE_PATH", &mxc_exe);
+        }
+
         #[cfg(unix)]
         command.process_group(0);
 
