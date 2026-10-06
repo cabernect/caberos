@@ -2,34 +2,53 @@
 
 from .agent import Agent, AgentVersion
 from .approval import ApprovalRequest
+from .artifact import Artifact, ArtifactRevision
 from .audit import AuditRecord
 from .base import Base, IdMixin, TimestampMixin
+from .browser_profile import BrowserProfile
 from .capability import AgentCapability, Capability
 from .channel_config import ChannelConfig
 from .contact import Contact
 from .document import Document, DocumentChunk
 from .elicitation import ElicitationRequest
+from .execution_manifest import ExecutionManifest
+from .knowledge_index import (
+    ChunkEmbedding,
+    EmbeddingCall,
+    EmbeddingResource,
+    IndexGeneration,
+    RetrievalProfile,
+)
 from .mcp import ContactMcpBinding, McpServer, McpServerCredential, McpTool
 from .memory import MemoryEntry, MemoryTriple
+from .model_call import ModelCall
 from .notification import Notification
 from .operator import Operator, OperatorAuditLog
 from .operator_session import OperatorSession
 from .provider import Provider
+from .revision import RevisionedEntityMixin, RevisionMixin
 from .run import Message, Run
+from .schedule import Schedule, ScheduleOccurrence, ScheduleRevision
 from .session import Session
+from .skill import Skill, SkillAssignment, SkillRevision
 from .source import RunSource
 from .sub_agent import SubAgent
+from .terminal import TerminalSession
 from .web_source import WebSource
 
 __all__ = [
     "Base",
     "IdMixin",
     "TimestampMixin",
+    "BrowserProfile",
     "Agent",
     "AgentVersion",
+    "Artifact",
+    "ArtifactRevision",
     "Capability",
     "AgentCapability",
     "SubAgent",
+    "TerminalSession",
     "McpServer",
     "McpServerCredential",
     "ContactMcpBinding",
@@ -38,9 +57,24 @@ __all__ = [
     "Contact",
     "Document",
     "DocumentChunk",
+    "EmbeddingCall",
+    "EmbeddingResource",
+    "RetrievalProfile",
+    "IndexGeneration",
+    "ChunkEmbedding",
+    "ExecutionManifest",
+    "ModelCall",
+    "RevisionedEntityMixin",
+    "RevisionMixin",
     "Session",
+    "Skill",
+    "SkillAssignment",
+    "SkillRevision",
     "Run",
     "Message",
+    "Schedule",
+    "ScheduleRevision",
+    "ScheduleOccurrence",
     "RunSource",
     "WebSource",
     "AuditRecord",

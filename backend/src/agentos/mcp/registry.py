@@ -26,6 +26,8 @@ from typing import Any
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..capabilities.catalog import mcp_server_grant_name
+from ..capabilities.effects import DEFAULT_MUTATING, effects_from_mcp_annotations
 from ..capabilities.registry import CapabilityDef
 from ..capabilities.registry import registry as cap_registry
 from ..config import settings
@@ -269,10 +271,9 @@ async def _discover_tools(server: McpServer, client: McpClient) -> None:
     """Discover tools from the MCP server and register them as capabilities."""
     tools = await client.list_tools()
 
-    # Apply tool filter if set
-    tool_filter = json.loads(server.tool_filter) if server.tool_filter else None
-    if tool_filter:
-        tools = [t for t in tools if t["name"] in tool_filter]
+    # Register every discovered tool — tool_filter is enforced live at
+    # availability/call time (catalog._is_mcp_available, mediator) so filtered
+    # tools stay listed and can be re-enabled.
 
     from ..db import retry_locked_transaction
 
@@ -284,6 +285,7 @@ async def _discover_tools(server: McpServer, client: McpClient) -> None:
             for tool in tools:
                 cap_name = _namespace(server.name, tool["name"])
                 schema_json = json.dumps(tool["inputSchema"])
+                tool_effects = effects_from_mcp_annotations(tool.get("annotations"))
                 db.add(
                     McpTool(
                         mcp_server_id=server.id,
@@ -294,6 +296,7 @@ async def _discover_tools(server: McpServer, client: McpClient) -> None:
                         egress=True,
                         require_approval=server.require_approval,
                         subject_scoped=True,
+                        effects=json.dumps(sorted(tool_effects)),
                     )
                 )
                 cap_registry.register(
@@ -305,6 +308,7 @@ async def _discover_tools(server: McpServer, client: McpClient) -> None:
                         egress=True,
                         require_approval=server.require_approval,
                         subject_scoped=True,
+                        effects=tool_effects,
                         execute=None,
                     )
                 )
@@ -380,9 +384,6 @@ async def load_tools_from_db() -> None:
 
     tools = []
     for tool, server in tool_rows:
-        tool_filter = json.loads(server.tool_filter) if server.tool_filter else None
-        if tool_filter and tool.tool_name not in tool_filter:
-            continue
         tools.append(tool)
         _tool_map[tool.capability_name] = (tool.mcp_server_id, tool.tool_name)
         cap_registry.register(
@@ -394,6 +395,7 @@ async def load_tools_from_db() -> None:
                 egress=tool.egress,
                 require_approval=tool.require_approval,
                 subject_scoped=tool.subject_scoped,
+                effects=(frozenset(json.loads(tool.effects)) if tool.effects else DEFAULT_MUTATING),
             )
         )
 
@@ -549,8 +551,11 @@ async def get_server_blast_radius(db: AsyncSession, server_id: str) -> list[dict
         config = await get_active_config(db, agent.id)
         if config is None or config.capabilities is None:
             continue
-        granted = {g.name for g in config.capabilities}
+        granted = {g.name for g in config.capabilities if g.enabled}
+        denied = {g.name for g in config.capabilities if not g.enabled}
         used = cap_names & granted
+        if mcp_server_grant_name(server_id) in granted:
+            used |= cap_names - denied
         if used:
             blast.append(
                 {

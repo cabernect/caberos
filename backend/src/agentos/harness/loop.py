@@ -6,6 +6,7 @@ the syscall layer), enforces turn/cost limits, and emits SSE events.
 
 import asyncio
 import json
+import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -40,10 +41,40 @@ class RunResult:
     compacted: bool = False  # whether compaction occurred this run
     context_breakdown: dict[str, int] = field(default_factory=dict)  # per-section token counts
     loaded_capabilities: list[str] = field(default_factory=list)
+    terminals_active: list[str] = field(default_factory=list)
 
 
 # SSE event emitter type: async callable that takes (event_type: str, payload: dict)
 EventEmitter = Callable[[str, dict[str, Any]], Any] | None
+
+# Hard ceiling on a single tool result's serialized size in the history —
+# matches read_file/web_fetch's 50k budget so one call can never overflow
+# the context window on its own.
+TOOL_RESULT_MAX_CHARS = 50_000
+
+_CONTEXT_OVERFLOW_PATTERNS = (
+    "context length",
+    "context_length",
+    "context window",
+    "maximum context",
+    "contextwindowexceeded",
+    "too many tokens",
+    "request too large",
+    "reduce the length",
+    "input is too long",
+    "prompt is too long",
+    "exceeds the limit",
+    "exceeded the token",
+)
+
+
+def _is_context_overflow(err: Exception) -> bool:
+    """Provider rejected the request for exceeding the context window —
+    recoverable via forced compaction, unlike generic errors."""
+    if type(err).__name__ == "ContextWindowExceededError":
+        return True
+    msg = str(err).lower()
+    return any(p in msg for p in _CONTEXT_OVERFLOW_PATTERNS)
 
 
 class ApprovalBatch:
@@ -109,6 +140,7 @@ class Harness:
         attachments: list[Any] | None = None,
         skill: str | None = None,
         parent_config: AgentConfig | None = None,
+        resolved_skills: list[Any] | None = None,
     ) -> RunResult:
         """Execute the agent loop (D19 steps 7-11).
 
@@ -184,6 +216,77 @@ class Harness:
         )
         await capability_catalog.prepare()
         visible_capability_names = capability_catalog.model_capability_names()
+
+        # Saved browser logins (W4): operator-managed persistent profiles the
+        # agent can't enumerate itself — inject name + domain scope so
+        # browser_open(profile=…) is usable without the user spelling it out.
+        browser_profiles: list[dict] = []
+        if "browser_open" in visible_capability_names and getattr(syscall_handler, "db", None):
+            from sqlalchemy import select as _select
+
+            from ..models.browser_profile import BrowserProfile
+
+            try:
+                rows = (await syscall_handler.db.execute(_select(BrowserProfile))).scalars().all()
+                browser_profiles = [
+                    {
+                        "name": p.name,
+                        "allowed_domains": json.loads(p.allowed_domains or "[]"),
+                        "description": p.description,
+                    }
+                    for p in rows
+                ]
+            except Exception:
+                browser_profiles = []
+
+        # W6: resolve the effective skill set from the DB (published +
+        # assigned) + live agent-local workspace scan. The pipeline normally
+        # resolves once and passes it in (so the manifest pins match the
+        # menu); direct harness callers (subagents) resolve here.
+        builder_draft: dict | None = None
+        forced_skill_rendered: dict | None = None
+        _db = getattr(syscall_handler, "db", None)
+        if _db is not None:
+            from sqlalchemy import select as _select
+
+            from ..models.skill import Skill
+            from ..skills.loader import render_skill_dir
+            from ..skills.resolution import pinned_dir, resolve_effective_skills
+
+            if resolved_skills is None:
+                try:
+                    resolved_skills = await resolve_effective_skills(_db, agent_config.id)
+                except Exception:
+                    resolved_skills = []
+
+            # A draft Skill row linked to this session makes it a builder
+            # session — force-load skill-creator and inject the overlay.
+            if getattr(session, "id", None):
+                try:
+                    draft = await _db.scalar(
+                        _select(Skill).where(
+                            Skill.builder_session_id == session.id,
+                            Skill.status == "draft",
+                        )
+                    )
+                    if draft is not None:
+                        builder_draft = {"id": draft.id, "name": draft.name}
+                        if not skill:
+                            skill = "skill-creator"
+                except Exception:
+                    builder_draft = None
+
+            # Render a forced skill from the pinned revision dir so a mid-run
+            # publish can't serve content the menu didn't advertise.
+            if skill and resolved_skills:
+                hit = next((s for s in resolved_skills if s.name == skill), None)
+                if hit is not None:
+                    try:
+                        path = await pinned_dir(_db, hit, run_id)
+                        forced_skill_rendered = render_skill_dir(path, hit.scope)
+                    except Exception:
+                        forced_skill_rendered = None
+
         system_prompt = assemble_system_prompt(
             agent_config,
             message,
@@ -193,6 +296,10 @@ class Harness:
             past_sessions=past_sessions,
             supports_vision=supports_vision,
             enabled_caps=visible_capability_names,
+            browser_profiles=browser_profiles,
+            resolved_skills=resolved_skills,
+            forced_skill_rendered=forced_skill_rendered,
+            builder_draft=builder_draft,
         )
         tool_schemas = assemble_tool_schemas(
             agent_config,
@@ -220,12 +327,14 @@ class Harness:
         model_str = "gpt-4o"  # fallback
         api_key = None
         base_url = None
+        use_responses = False
         if hasattr(self.model, "get_model_info"):
             try:
                 info = await self.model.get_model_info(agent_config.model)
                 model_str = info["model_str"]
                 api_key = info["api_key"]
                 base_url = info["base_url"]
+                use_responses = bool(info.get("use_responses"))
             except Exception:
                 pass
 
@@ -241,6 +350,7 @@ class Harness:
                 previous_summary=compaction_summary,
                 api_key=api_key,
                 base_url=base_url,
+                use_responses=use_responses,
             )
 
             history = system_msgs + compaction_result.messages
@@ -270,7 +380,9 @@ class Harness:
                         .where(SessionModel.id == session.id)
                         .values(conversation_summary=compaction_result.summary)
                     )
-                    await syscall_handler.db.flush()
+                    # Commit — a bare flush would hold the write txn across
+                    # the upcoming model call (B31).
+                    await syscall_handler.db.commit()
                     session.conversation_summary = compaction_result.summary
         else:
             # No compaction — still report token count for the context bar
@@ -308,12 +420,13 @@ class Harness:
 
         max_turns = agent_config.limits.max_turns_per_run
         max_cost = (
-            agent_config.limits.max_cost_per_run
-            if trigger == "user_message"
-            else agent_config.heartbeat.max_cost_per_heartbeat
+            agent_config.heartbeat.max_cost_per_heartbeat
+            if trigger == "heartbeat"
+            else agent_config.limits.max_cost_per_run
         )
         consecutive_tool_failures = 0
         max_consecutive_failures = 5
+        overflow_retried = False
 
         # Steps 8-11: the loop
         while result.total_turns < max_turns:
@@ -332,8 +445,10 @@ class Harness:
             # Step 8: Call model
             # Use streaming if the adapter supports it (LiteLLMAdapter);
             # fall back to non-streaming for ScriptedModel
+            call_started = time.monotonic()
+            streamed_call = hasattr(self.model, "complete_stream")
             try:
-                if hasattr(self.model, "complete_stream"):
+                if streamed_call:
                     response = await self._call_streaming(
                         agent_config, history, tool_schemas, event_emitter
                     )
@@ -347,6 +462,67 @@ class Harness:
                     if response.thinking and event_emitter:
                         await self._emit(event_emitter, "thinking", {"content": response.thinking})
             except Exception as e:
+                # Mid-run context overflow: a tool result or accumulated turns
+                # pushed the request over the window after the pre-loop
+                # compaction ran. Force-compact once and retry the call —
+                # the tail is protected, so if compaction can't shrink it,
+                # there is no recovery and the run must fail.
+                if not overflow_retried and _is_context_overflow(e):
+                    overflow_retried = True
+                    import logging as _log
+
+                    _log.getLogger("agentos.harness.loop").warning(
+                        "Context window exceeded mid-run; forcing compaction and retrying once: %s",
+                        str(e)[:200],
+                    )
+                    system_msgs = (
+                        [history[0]] if history and history[0].get("role") == "system" else []
+                    )
+                    compaction_result = await compact_context(
+                        messages=history[len(system_msgs) :],
+                        agent_config=agent_config,
+                        model_str=model_str,
+                        previous_summary=compaction_summary,
+                        api_key=api_key,
+                        base_url=base_url,
+                        force=True,
+                        use_responses=use_responses,
+                    )
+                    if compaction_result.compacted:
+                        history = system_msgs + compaction_result.messages
+                        compaction_summary = compaction_result.summary
+                        result.compacted = True
+                        if hasattr(syscall_handler, "db") and hasattr(session, "id"):
+                            from sqlalchemy import update as sa_update
+
+                            from ..models.session import Session as SessionModel
+
+                            await syscall_handler.db.execute(
+                                sa_update(SessionModel)
+                                .where(SessionModel.id == session.id)
+                                .values(conversation_summary=compaction_result.summary)
+                            )
+                            # Commit — a bare flush would hold the write txn
+                            # across the retry model call (B31).
+                            await syscall_handler.db.commit()
+                            session.conversation_summary = compaction_result.summary
+                        result.total_turns -= 1  # the retry reuses this turn
+                        continue
+                await self._record_model_call(
+                    syscall_handler,
+                    run_id=run_id,
+                    agent_config=agent_config,
+                    turn=result.total_turns,
+                    model_str=model_str,
+                    streamed=streamed_call,
+                    latency_ms=int((time.monotonic() - call_started) * 1000),
+                    status=(
+                        "timeout"
+                        if isinstance(e, (TimeoutError, asyncio.TimeoutError))
+                        else "error"
+                    ),
+                    error=str(e),
+                )
                 import logging as _log
 
                 _log.getLogger("agentos.harness.loop").exception(
@@ -386,6 +562,13 @@ class Harness:
                         "This model doesn't support tool use (function calling). "
                         "Please select a model that supports tools, or use a different provider."
                     )
+                elif _is_context_overflow(e):
+                    result.final_answer = (
+                        "I ran out of context — the conversation plus recent tool "
+                        "results exceeded the model's context window and could not "
+                        "be compacted far enough. Start a fresh session or use a "
+                        "model with a larger context window."
+                    )
                 else:
                     # Include the actual error so the user can diagnose the issue
                     short_err = error_msg[:200] if len(error_msg) > 200 else error_msg
@@ -401,6 +584,22 @@ class Harness:
             result.tokens_out += response.tokens_out
             result.cached_tokens = response.cached_tokens
             result.total_cost += response.cost
+
+            # Per-model-call accounting (v0.2 foundations)
+            await self._record_model_call(
+                syscall_handler,
+                run_id=run_id,
+                agent_config=agent_config,
+                turn=result.total_turns,
+                model_str=model_str,
+                streamed=streamed_call,
+                latency_ms=int((time.monotonic() - call_started) * 1000),
+                status="ok",
+                tokens_in=response.tokens_in,
+                tokens_out=response.tokens_out,
+                cached_tokens=response.cached_tokens,
+                cost=response.cost,
+            )
 
             # Step 9: Process tool calls
             if response.tool_calls:
@@ -459,6 +658,14 @@ class Harness:
                             },
                         )
 
+                # Release any open write txn before dispatch — tool calls can
+                # block for minutes (terminal sleep, MCP calls); a SQLite
+                # writer lock held across them starves every other run's
+                # writes under concurrency (B31).
+                _loop_db = getattr(syscall_handler, "db", None)
+                if _loop_db is not None:
+                    await _loop_db.commit()
+
                 # Dispatch all tool calls concurrently within this reasoning step.
                 approval_batch = _approval_batch_for(agent_config, session, calls)
 
@@ -471,15 +678,23 @@ class Harness:
                         event_emitter=event_emitter,
                         capability_catalog=capability_catalog,
                         approval_batch=approval_batch,
+                        trigger=trigger,
                     )
 
                 syscall_results = await asyncio.gather(*[_mediate_one(c) for c in calls])
 
                 # Process results in order (to maintain history ordering)
                 for call, syscall_result in zip(calls, syscall_results, strict=True):
-                    # Emit tool_call complete/denied
+                    # Emit the outcome: complete, denied, failed, timeout,
+                    # or interrupted — the caller sees *how* a call ended.
                     if event_emitter:
-                        status = "complete" if syscall_result.allowed else "denied"
+                        status = {
+                            "ok": "complete",
+                            "denied": "denied",
+                            "error": "failed",
+                            "timeout": "timeout",
+                            "interrupted": "interrupted",
+                        }.get(syscall_result.status, "complete")
                         await self._emit(
                             event_emitter,
                             "tool_call",
@@ -502,6 +717,7 @@ class Harness:
                             "name": call.name,
                             "args": call.args,
                             "allowed": syscall_result.allowed,
+                            "status": syscall_result.status,
                             "result": syscall_result.output,
                         }
                     )
@@ -519,26 +735,41 @@ class Harness:
                             consecutive_tool_failures += 1
                         else:
                             consecutive_tool_failures = 0
+                        content: Any = (
+                            syscall_result.model_content
+                            if syscall_result.model_content is not None
+                            else json.dumps(output)
+                            if output
+                            else ""
+                        )
+                        if isinstance(content, str) and len(content) > TOOL_RESULT_MAX_CHARS:
+                            content = (
+                                content[:TOOL_RESULT_MAX_CHARS]
+                                + f"\n\n[truncated — result was {len(content)} chars; "
+                                f"the {TOOL_RESULT_MAX_CHARS}-char limit applies. "
+                                "Narrow the call or page through the data.]"
+                            )
                         history.append(
                             {
                                 "role": "tool",
-                                "content": (
-                                    syscall_result.model_content
-                                    if syscall_result.model_content is not None
-                                    else json.dumps(output)
-                                    if output
-                                    else ""
-                                ),
+                                "content": content,
                                 "tool_call_id": call.id,
                                 "name": call.name,
                             }
                         )
                     else:
                         consecutive_tool_failures += 1
+                        # Tell the model *how* the call ended — a denial is a
+                        # policy decision, an error/timeout is a failure.
+                        prefix = {
+                            "denied": "Denied",
+                            "timeout": "Timed out",
+                            "interrupted": "Interrupted",
+                        }.get(syscall_result.status, "Error")
                         history.append(
                             {
                                 "role": "tool",
-                                "content": f"Denied: {syscall_result.denied_reason}",
+                                "content": f"{prefix}: {syscall_result.denied_reason}",
                                 "tool_call_id": call.id,
                                 "name": call.name,
                             }
@@ -632,12 +863,96 @@ class Harness:
             result.status = "limit_exceeded"
             result.final_answer = "I've reached my turn limit for this run."
 
+        # A run must not silently finish with live terminals — surface them so
+        # the operator/model can read or close them.
+        try:
+            from ..terminal.registry import terminal_registry
+
+            active = await terminal_registry.active_for_run(run_id)
+            if active:
+                result.terminals_active = active
+                if event_emitter:
+                    await self._emit(
+                        event_emitter,
+                        "terminals_active",
+                        {"terminal_ids": active},
+                    )
+        except Exception:
+            pass
+
         # Note: message_complete is emitted by runner.py after the pipeline
         # finishes, with full context metadata (context_tokens, max_context_tokens,
         # compacted, context_breakdown). Don't emit it here — the frontend closes
         # the SSE connection on the first message_complete it receives.
 
         return result
+
+    async def _record_model_call(
+        self,
+        syscall_handler: Any,
+        *,
+        run_id: str,
+        agent_config: AgentConfig,
+        turn: int,
+        model_str: str,
+        streamed: bool,
+        latency_ms: int,
+        status: str,
+        tokens_in: int = 0,
+        tokens_out: int = 0,
+        cached_tokens: int | None = None,
+        cost: float = 0.0,
+        error: str | None = None,
+    ) -> None:
+        """Write one ModelCall row per model request (v0.2 foundations).
+
+        Best-effort accounting on its OWN session (sub-agent handlers carry
+        the parent's run id and their own sub-agent id): a write on the run's
+        session would open the SQLite write txn it holds across whatever the
+        run does next — tool calls can block for minutes, starving every
+        other writer under concurrency (B31). A fresh session + lock-retry
+        keeps the write short and can never poison the run's session.
+        """
+        if getattr(syscall_handler, "db", None) is None:
+            return
+        try:
+            from ..db import async_session_factory, retry_locked_transaction
+            from ..models.model_call import ModelCall
+
+            record_run_id = getattr(syscall_handler, "_parent_run_id", None) or run_id
+            sub_agent_id = getattr(syscall_handler, "_sub_agent_id", None)
+            row = ModelCall(
+                run_id=record_run_id,
+                agent_id=agent_config.id,
+                sub_agent_id=sub_agent_id,
+                turn=turn,
+                provider_id=agent_config.model.provider_id if agent_config.model else None,
+                model_name=agent_config.model.name if agent_config.model else None,
+                model_str=model_str or None,
+                streamed=streamed,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                cached_tokens=cached_tokens,
+                cost=cost,
+                latency_ms=latency_ms,
+                status=status,
+                error=error[:2000] if error else None,
+            )
+            async with async_session_factory() as session:
+
+                async def _persist() -> None:
+                    session.add(row)
+                    await session.commit()
+
+                await retry_locked_transaction(
+                    _persist, session, f"model_call:{record_run_id}:{turn}"
+                )
+        except Exception:
+            import logging as _log
+
+            _log.getLogger("agentos.harness.loop").debug(
+                "Could not record model call for run %s", run_id
+            )
 
     async def _emit(self, emitter: EventEmitter, event_type: str, payload: dict[str, Any]) -> None:
         """Safely emit an SSE event."""

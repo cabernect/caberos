@@ -18,16 +18,13 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import require_operator
 from ..db import get_db
 from ..models.agent import Agent
-from ..models.approval import ApprovalRequest
-from ..models.audit import AuditRecord
 from ..models.contact import Contact
-from ..models.elicitation import ElicitationRequest
 from ..models.operator import Operator
 from ..models.run import Message, Run
 from ..models.session import Session
@@ -35,6 +32,7 @@ from ..models.source import RunSource
 from ..models.web_source import WebSource
 from ..pipeline import Attachment
 from ..run_manager import get_run, get_run_status, start_run, stop_run
+from ..services.data_lifecycle import delete_runs
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -372,6 +370,7 @@ async def get_history(
             "content": msg.content,
             "created_at": _iso_utc(msg.created_at),
             "run_id": msg.run_id,
+            "trigger": run.trigger,
         }
         for msg, run in rows
     ]
@@ -410,7 +409,7 @@ async def list_sessions(
             select(Run)
             .where(
                 Run.session_id == sess.id,
-                Run.status.in_(("pending", "running")),
+                Run.status.in_(("pending", "running", "awaiting_approval")),
             )
             .order_by(Run.started_at.desc())
             .limit(1)
@@ -556,6 +555,8 @@ async def get_session_messages(
             "created_at": _iso_utc(msg.created_at),
             "run_id": msg.run_id,
             "run_status": run.status,
+            "trigger": run.trigger,
+            "is_test": run.is_test,
             "tokens_in": run.tokens_in,
             "tokens_out": run.tokens_out,
             "cost": run.cost,
@@ -584,17 +585,9 @@ async def delete_session(
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    # Delete messages via runs
     run_ids_result = await db.execute(select(Run.id).where(Run.session_id == session_id))
     run_ids = [r[0] for r in run_ids_result.all()]
-
-    if run_ids:
-        # Delete child rows first to satisfy FK constraints
-        await db.execute(delete(Message).where(Message.run_id.in_(run_ids)))
-        await db.execute(delete(AuditRecord).where(AuditRecord.run_id.in_(run_ids)))
-        await db.execute(delete(ApprovalRequest).where(ApprovalRequest.run_id.in_(run_ids)))
-        await db.execute(delete(ElicitationRequest).where(ElicitationRequest.run_id.in_(run_ids)))
-        await db.execute(delete(Run).where(Run.id.in_(run_ids)))
+    await delete_runs(db, run_ids)
 
     await db.delete(session)
     await db.commit()

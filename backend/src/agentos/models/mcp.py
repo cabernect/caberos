@@ -76,3 +76,6 @@ class McpTool(Base, IdMixin, TimestampMixin):
     egress: Mapped[bool] = mapped_column(Boolean, default=False)
     require_approval: Mapped[bool] = mapped_column(Boolean, default=False)
     subject_scoped: Mapped[bool] = mapped_column(Boolean, default=True)
+    # JSON array of effect classes from the tool's protocol annotations
+    # (v0.2). Null means unclassified → treated as mutating.
+    effects: Mapped[str | None] = mapped_column(Text, nullable=True)

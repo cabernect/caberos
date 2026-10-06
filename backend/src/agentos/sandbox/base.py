@@ -6,6 +6,10 @@ candidate is available, the terminal capability is refused with a reason
 naming every candidate that was tried — never a crash mid-run.
 """
 
+import asyncio
+import contextlib
+import os
+import signal
 import sys
 from abc import ABC, abstractmethod
 from collections.abc import Callable
@@ -42,6 +46,58 @@ class SandboxProbe:
     setup_required: bool = False
 
 
+async def kill_process_group(proc: asyncio.subprocess.Process, grace: float = 3.0) -> None:
+    """Terminate the process's whole tree (SIGTERM then SIGKILL; `taskkill /T /F` on Windows).
+
+    On POSIX the process must have been spawned with start_new_session=True so
+    its group contains the whole tree. Windows has no process groups in that
+    sense, so the tree is walked and killed instead. Safe on an already-exited
+    process.
+    """
+    if proc.returncode is not None:
+        return
+    if sys.platform == "win32":
+        with contextlib.suppress(Exception):
+            killer = await asyncio.create_subprocess_exec(
+                "taskkill",
+                "/T",
+                "/F",
+                "/PID",
+                str(proc.pid),
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await killer.wait()
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(proc.wait(), timeout=grace)
+        return
+    try:
+        pgid = os.getpgid(proc.pid)
+    except (ProcessLookupError, PermissionError):
+        pgid = None
+
+    def _kill(sig: int) -> None:
+        try:
+            if pgid is not None:
+                os.killpg(pgid, sig)
+            else:
+                proc.send_signal(sig)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+    _kill(signal.SIGTERM)
+    try:
+        await asyncio.wait_for(asyncio.shield(proc.wait()), timeout=grace)
+        return
+    except TimeoutError:
+        pass
+    _kill(signal.SIGKILL)
+    with contextlib.suppress(Exception):
+        await proc.wait()
+
+
 class SandboxBackend(ABC):
     """Abstract sandbox backend.
 
@@ -63,6 +119,20 @@ class SandboxBackend(ABC):
         self, workspace_path: str, command: str, timeout: int = 30, allow_network: bool = False
     ) -> ShellResult:
         """Run a shell command in the sandbox with the workspace mounted."""
+
+    @abstractmethod
+    def spawn_argv(
+        self, workspace_path: str, command: str, allow_network: bool = False
+    ) -> list[str]:
+        """Argv to launch `command` under this sandbox.
+
+        Used by the terminal registry to spawn long-running processes whose
+        lifecycle it manages itself (process group, spooled output, kill).
+        """
+
+    def spawn_env(self, workspace_path: str) -> dict[str, str] | None:
+        """Env for a spawned sandbox process; None = inherit parent env."""
+        return None
 
     @abstractmethod
     def is_available(self) -> bool:
@@ -103,6 +173,11 @@ class UnavailableBackend(SandboxBackend):
 
     def needs_host_setup(self) -> bool:
         return self._setup_required
+
+    def spawn_argv(
+        self, workspace_path: str, command: str, allow_network: bool = False
+    ) -> list[str]:
+        raise RuntimeError(f"Shell commands are disabled on this machine. {self._reason}")
 
     async def run_command(
         self, workspace_path: str, command: str, timeout: int = 30, allow_network: bool = False

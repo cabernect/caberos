@@ -15,6 +15,9 @@ class AuditRecord(Base, IdMixin):
     capability_name: Mapped[str] = mapped_column(String(255), nullable=False)
     subject_contact_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     allowed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    # Outcome classification (v0.2): ok, denied, error, timeout, interrupted.
+    # `allowed` is the policy decision; `outcome` is how the call ended.
+    outcome: Mapped[str] = mapped_column(String(20), default="ok", nullable=False)
     denied_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     cost: Mapped[float] = mapped_column(Float, default=0.0)
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)

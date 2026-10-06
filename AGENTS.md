@@ -97,6 +97,13 @@ Registered in `capabilities/builtin.py`. Two kinds: `tool` (workspace/shell/web 
 | `skills_list` | tool | no | no | List available skills (name + description only — menu) |
 | `skills_load` | tool | no | no | Load a skill's full content + resource listing |
 | `skills_read_resource` | tool | no | no | Read a resource file from a skill directory (scoped to skill dir) |
+| `artifact_create` | tool | no | no | Create a tracked deliverable (docx/xlsx/pptx/pdf) from a structured spec — never raw Office XML; saves under `artifacts/` |
+| `artifact_inspect` | tool | no | no | Reopen + validate an artifact; report structure + tracking state honestly |
+| `artifact_revise` | tool | no | no | Apply structured ops against a base revision — conflict on external edits, never overwrite |
+| `artifact_adopt` | tool | no | no | Start tracking an existing workspace file (revision 1 snapshot) |
+| `artifact_history` | tool | no | no | List immutable revisions for an artifact, newest first |
+| `artifact_restore` | tool | no | no | Restore an old revision's bytes as a NEW revision (never rewinds) |
+| `artifact_export_pdf` | tool | no | no | Render Office artifact to PDF — LibreOffice if installed, pure-Python reportlab fallback (docx/xlsx); honest status + renderer |
 
 ## Attachments
 
@@ -109,11 +116,26 @@ metadata and workspace-relative references.
 - **Web URLs**: use the existing `web_fetch` capability; URLs are never sent as
   image inputs automatically.
 - **Images**: `read_file` returns image content only when the selected model
-  supports vision. Otherwise it returns a clear limitation.
+  supports vision. Otherwise it returns a clear limitation. Images >15 MB are
+  refused; oversized/high-resolution images are downscaled to ≤1568px before
+  base64 (Pillow).
+- **Documents**: `read_file` never returns raw binary. PDF → per-page text
+  extraction with `start_page`/`end_page` paging (image-only pages report
+  honestly); DOCX/PPTX/XLSX → text flattened from the artifact `to_elements`
+  pipeline; unknown binaries are refused. All reads cap at 50k chars with
+  truncation hints; tool results in history are capped at the same 50k.
+- **Context overflow**: if a mid-run model call exceeds the context window,
+  the harness force-compacts once and retries; unrecoverable overflow fails
+  the run with a clear message.
 
 The `messages.attachments` column stores metadata (type, MIME type, filename,
 and URL when applicable), never base64 content. Uploaded bytes are stored under
 the workspace `attachments/` directory.
+
+Workspace layout convention: `attachments/` holds user-supplied inputs;
+`artifacts/` holds agent-produced deliverables (`artifact_create` prefixes the
+path automatically — subdirs preserved, `attachments/` refused); the workspace
+root and other dirs are scratch space (scripts, drafts, `write_file` output).
 
 ## Storage summary
 
@@ -126,7 +148,9 @@ the workspace `attachments/` directory.
 | Provider keys | DB — encrypted (Fernet) | n/a |
 | Connector tokens | DB — encrypted (Fernet) | n/a |
 | Workspace (working files) | Filesystem — shared directory | n/a |
-| Skills | Filesystem — `skills/` (system) + `workspace/skills/{agent_id}/` (per-agent) | n/a |
+| Skills (governed) | Bytes on disk — `skills/` built-ins + `data/skills-store/{id}/rev-{n}/`; index in DB (`Skill`/`SkillRevision`/`SkillAssignment`) | yes (SkillRevision) |
+| Agent-local skills | Filesystem — `workspace/skills/{agent_id}/` (live, agent-editable) | optional published snapshots |
+| Skill drafts | `workspace/{agent}/skill-drafts/` (builder) + `data/skills-drafts/` (imports) — never scanned | no |
 
 ## Current status
 
@@ -143,6 +167,58 @@ Tickets **01–09 implemented**: smoke slice, real-model chat + SSE streaming, f
 - **Language behavior:** the base prompt instructs the model to detect the user's language and use it for both thinking and replies — no explicit language setting.
 
 **v0.1.7 design rule:** Agent configuration defines the permission ceiling; the harness separately tracks which schemas are loaded into the current run. `capabilities_search` exposes bounded metadata for permitted tools, and `capabilities_load` makes selected schemas available on the next model turn without widening syscall authority.
+
+**v0.2 W1+W2 status (branch `feat/v0.2-artifacts`, unmerged):**
+- **W1 (merged via #49):** background terminals, capability search (ranked OR-token), per-tool MCP `tool_filter` + deny overrides, approval precedence (per-tool → wildcard → default), blast-radius accounting.
+- **W2 Artifact Studio (implemented):** `Artifact`/`ArtifactRevision` models — stable identity, immutable revisions, restore-as-new-revision, conflict detection on external edits, workspace containment, run/message provenance. Format handlers for docx/xlsx/pptx (spec→bytes, never raw XML) + pdf (inspect/validate + build). `artifact_*` capabilities wired through the mediator.
+- **PDF export:** `artifact_export_pdf` uses LibreOffice headless when installed (layout-faithful); otherwise a pure-Python reportlab renderer for docx/xlsx. pptx export requires the layout engine — `renderer_unavailable` honestly. TODO(W4): Chromium render path via the managed browser (positioned HTML for slides).
+- **Verification:** `backend/tests/test_artifacts.py` (22 tests) + `scripts/smoke_artifacts.py` — scripted chain through the real pipeline and `--live` mode driving a real provider end-to-end.
+- **Gaps:** `preview_status` column exists but rendering is W3; `artifact_base_revision_ids` on ExecutionManifest unpopulated; LibreOffice Docker packaging is W10; templates/themes guidance is W6 skills.
+
+**v0.2 W3 status (branch `feat/v0.2-previews`, unmerged):**
+- **W3 File previews + attachments (implemented):** shared preview module serves Conversation, Settings→Workspace, and Skills Studio. `agentos/previews.py` classifies bytes → bounded renderers (markdown/code/text/json/csv-table/image/pdf/docx-elements/pptx-slides/xlsx-workbook/media/unknown). Workspace endpoints (`preview`, `raw`, `pdf-page`) accept `path` or `{artifact_id, revision_id}`; skill endpoints mirror them rooted at the skill dir; composer gets ephemeral `attachments/preview` + `url-preview` (http(s)-only, 256 KB cap).
+- **Frontend:** `components/previews/` — `PreviewPanel` (fetch lifecycle, artifact actions, revision banner, compare diff, restore-as-new-revision, Track history, Add to Vault, desktop open/reveal) + per-kind renderers behind a `PreviewBackend` seam (workspace vs skill roots). Payloads are keyed to their source so stale content never renders against a new file. Binary previews fetch authenticated blobs → object URLs (bearer token can't ride `<img src>`).
+- **Composer tray:** clipboard/drag/picker/URL attachments with stable ids, content-hash dedupe (incl. intra-batch), reorder/remove, ephemeral preview chips (kind + size + PDF first-page thumb), object-URL cleanup, retry retention — `onSend` returning `false` keeps the draft.
+- **Attachment persistence:** message attachments carry workspace-relative `attachments/attachment_{i}_{name}` paths (shared helper in `pipeline.py`) so chat chips open the stored file.
+- **Verification:** `backend/tests/test_previews.py` (36 tests) + `attachmentUtils.test.ts` (5 tests); all surfaces exercised live via Playwright MCP.
+
+**v0.2 W4 status:** Browser automation merged via #53 — managed Chrome-for-Testing, CDP sessions, domain-scoped persistent profiles, domain leash, visible takeover, approval-gated actions, download staging. `web_fetch` stays the non-interactive path.
+
+**v0.2 W5 status:** Plan Mode spec settled then **DEFERRED** (see `docs/plans/v0.2/05-plan-mode.md` banner) — cost outweighs value while per-tool approvals already prevent bad outcomes.
+
+**v0.2 W6 status (branch `feat/v0.2-skills`, unmerged):**
+- **W6 Skills Studio (implemented):** DB is the resolution authority for governed scopes. `Skill`/`SkillRevision`/`SkillAssignment` models; `skills/reconcile.py` seeds built-ins from `skills/builtins.BUILTIN_SKILLS`, migrates legacy `skills/` dirs into the store, indexes agent-local workspace dirs.
+- **Resolution:** `skills/resolution.py` — `resolve_effective_skills()` per agent: published governed rows + live workspace scan, precedence `agent-local > global > built-in`, global respects `availability`/`skill_assignments`. Disabled/archived agent-local rows suppress the live dir. `GET /api/agents/{id}/skills` indexes dirs on read so promote works without a restart.
+- **Pinning:** pipeline resolves once per run; manifest `skill_revision_ids` stores `{name: "rev:<id>" | "live:<sha256>"}` — mid-run publishes can't wobble a live run; `skills_load`/`skills_read_resource` serve the pinned rev (agent-local serves live bytes, pin is provenance only).
+- **Builder:** "Create Skill" opens a normal session flagged builder-mode on a host agent — `skill-creator` force-loaded, ordinary workspace tools write `skill-drafts/`; no publish capability exists by construction.
+- **Imports:** ZIP + repo-URL (GitHub/GitLab/Bitbucket normalized → archive zipball over HTTP) share `skills/importer.py` hardening — traversal, symlinks, zip-bomb caps, `https:`-only; multi-`SKILL.md` repos → pick-list; everything lands `draft`.
+- **Validation** (`skills/validate.py`): errors block publish; warnings (ungranted-but-real capabilities, missing license, token estimate) don't.
+- **Lifecycle:** publish/promote (scope change, history preserved)/duplicate/restore-as-new/disable/archive/purge; purge guarded by active-run manifest pins, built-ins never purge, agent-local purge also removes the live dir.
+- **API/UI:** `/api/skills` scoped views, `/effective`, detail, files/preview/raw/pdf-page (revision-aware), validate, export, drafts, import. React Skills Studio: scope views, detail tabs, publish dialog (scope + assignments), builder launch, import ZIP/URL.
+- **Verification:** `test_skills_studio.py` (24) + `test_skills_api.py` (10) + rewritten syscall/preview fixtures; 694 backend tests pass, `tsc -b` clean.
+- **Deferred:** hub/registry, per-agent built-in disable, live-test subsystem.
+
+**v0.2 W7 status (merged — `49e4c11` + `c4c8672`/`ad32d3e`/`76c4bcb` via PR #58):**
+- **RAG v2 implemented:** structured extraction → per-block-type parent/child chunking → FTS lexical + optional hybrid semantic → RRF fusion → bounded parent expansion → excerpts + citations + retrieval trace.
+- **Index generations:** blue-green rebuild/repair/activate/delete; exactly one `active`; concurrent rebuild → 409; `reconcile_stale_builds()` at startup flips committed `building` rows → `failed` (gateway crash hazard closed).
+- **Embedding resource** (`embedding_resources` row): provider + model + `egress_allowed`. Remote providers refuse until egress opted-in (audited `knowledge.embedding_egress_enabled`); local = known local provider types or `localhost`/`127.0.0.1`/`::1`/`0.0.0.0`/`.local` base_url (`provider_is_local` in `knowledge/embeddings.py`). "Local model" = localhost HTTP endpoint (Ollama etc.), not embedded runtime.
+- **`fusion=lexical` is embeddings-off** — `embed_chunks_at_ingest` skips provider calls entirely under lexical (no egress, no spend); uploads land `semantic_state=pending`, a later hybrid flip + Repair fills them.
+- **Embedding ledger:** `embedding_calls` table records every `embed_texts` provider call — operation (`validate`/`index`/`ingest`/`repair`/`query`), tokens, cost, latency, status; plain-string refs survive deletions. `GET /api/knowledge/index.embedding_spend` cumulative; per-generation `cost`/`tokens_in` (index+ingest+repair only — query embeds are per-search spend). `/api/spend` stays agent-scoped; unified platform spend is W10.
+- **Semantic-index panel: built, browser-verified, then REMOVED** — interim UI withdrawn after review; all config/lifecycle is API-only until the W13 frontend rework (`07-rag-v2.md` → "Vault UI — semantic index controls" records the requirements).
+- **Tabular files refused at ingest** — `.xlsx`/`.xls`/`.csv` rejected by `_check_supported()` in `api/knowledge.py` (all three entry points incl. `/from-workspace`): chunking rows is wrong-shaped, needs the deferred row-query layer (v0.2-release-plan → "Structured sources get a row layer"). `_extract_xlsx` stays as dead-but-ready code.
+- **Verification:** `test_knowledge_rag.py` (34) green; full suite 756 pass; `tsc`/`oxlint` clean.
+- **Post-v0.2 backlog:** vault document inspection (`GET /documents/{id}/chunks` + drill-down), structured-source row layer, platform spend view (W10).
+
+**v0.2 W8 status (branch `feat/v0.2-scheduler`, Scheduler v2 implemented — see `docs/plans/v0.2/08-scheduler-v2.md` status block):**
+- **Persistent schedule engine** (`scheduler.py` rewrite): `Schedule`/`ScheduleRevision`/`ScheduleOccurrence` tables; persisted `next_fire_at` is the source of truth — restart/sleep recovery is a DB read + missed-run sweep (`skip`/`run_once`/`catch_up`, `catch_up` capped at 25). Tick = drain due queued occurrences → fire due schedules → commit → spawn run tasks (never run inside the tick transaction).
+- **Triggers:** once / interval / cron (`croniter`) with IANA timezone stored separately. DST: nonexistent wall time fires once at the first valid instant; ambiguous fold time fires once (second pass suppressed). `UTCDateTime` TypeDecorator fixes SQLite's naive-datetime read-back.
+- **Overlap modes:** skip / queue / cancel_previous / allow_parallel (parallel runs are separate sessions — conversation invariant holds). **Failure:** `no_retry` or `bounded_retry(max_attempts, backoff_seconds)` — retries are new occurrences chained via `retry_of`.
+- **Revision pinning:** occurrence pins `revision_id`; edits write new revisions (content-hash-gated); manifest captures `schedule_revision_id` + `plan_revision_id`. `run_now`/`test-run` materialize ad-hoc occurrences.
+- **Heartbeat is a facade:** `agent_config.heartbeat` projects onto a managed `Schedule` (`managed="heartbeat"`) — old `/api/scheduler/heartbeat*` + `/alerts` endpoints unchanged; schedules API rejects edit/delete on managed rows (400). Every enabled agent gets a managed row at startup (heartbeat state inspectable via `/api/schedules`); the page shows them on the Heartbeat tab instead.
+- **Auto-approve:** revision `auto_approve` caps skip the approval prompt *after* normal permission checks — the ceiling never widens. Per-run `max_cost` overrides `limits.max_cost_per_run`; heartbeat cap applies only to `trigger="heartbeat"` (loop bug fixed).
+- **API/UI:** `/api/schedules` CRUD + pause/resume/duplicate/run-now/test-run/preview + paged occurrences. Scheduler page has **two tabs**: **Schedules** (user-created schedules only — managed heartbeat rows filtered out) and **Heartbeat** (the v0.1 per-agent card surface: toggle/prompt/interval/cost/threshold/fire-now via the heartbeat facade). Schedule editor is a **centered modal** with a preset-based cron builder (Daily/Weekdays/Weekly/Monthly + Custom escape hatch) — raw cron never the primary representation; `describeCron()` renders human summaries ("Weekdays at 09:00"). Live fire-instant preview per timezone.
+- **Verification:** merged `test_scheduler.py` (45 tests — facade + durable-scheduler + lock-safety regressions); 793 backend tests pass; `tsc` + `oxlint` + 33 vitest green.
+- **Known limits:** retries re-run the whole task (per-op idempotency keys are W10+); `plan_revision_id` is a forward-compat string ref (no Plan entity yet); alerts are agent-keyed (two failing schedules on one agent collapse); calendar view deferred.
 
 **Ticket 10 (Tauri Desktop App):** SHIPPED for macOS ARM64 (Apple Silicon). macOS Intel and Windows builds require cross-compilation/CI and are not yet set up.
 - Tauri 2 shell wraps the React frontend + packaged PyInstaller gateway.

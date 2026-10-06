@@ -7,6 +7,7 @@ import {
   DashboardSidebar,
   type NavKey,
 } from "@/components/DashboardSidebar";
+import { PageHeader } from "@/components/PageHeader";
 import { CreateAgentModal } from "@/components/CreateAgentModal";
 import { SettingsOverlay } from "@/components/SettingsOverlay";
 import { getSetupGuidePhase, setSetupGuideAgentId, setSetupGuidePhase } from "@/components/setupGuideState";
@@ -144,30 +145,18 @@ export function AgentList() {
 
       {/* Main */}
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* Header */}
-        <div
-          className="flex items-center justify-between px-8 py-5"
-          style={{
-            background: "var(--sidebar)",
-            borderBottom: "1px solid var(--border)",
-          }}
+        <PageHeader
+          icon={Bot}
+          title="Agents"
+          description={
+            loading
+              ? "Loading…"
+              : `${agents.length} agent${agents.length === 1 ? "" : "s"}`
+          }
         >
-          <div className="flex items-center gap-3">
-            <Bot className="h-5 w-5" style={{ color: "var(--accent)" }} />
-            <div>
-              <h1 className="text-[18px] font-semibold text-[var(--ink)]">
-                Agents
-              </h1>
-              <p className="mt-0.5 text-[13px] text-[var(--ink-2)]">
-                {loading
-                  ? "Loading…"
-                  : `${agents.length} agent${agents.length === 1 ? "" : "s"}`}
-              </p>
-            </div>
-          </div>
           <button
             onClick={() => setShowCreate(true)}
-            className="flex items-center gap-1.5 rounded-[6px] px-3 py-2 text-[13px] font-medium transition"
+            className="ml-auto flex items-center gap-1.5 rounded-[6px] px-3 py-2 text-[13px] font-medium transition"
             style={{
               background: "var(--ink)",
               color: "var(--white)",
@@ -180,19 +169,19 @@ export function AgentList() {
             <Plus className="h-4 w-4" />
             New Agent
           </button>
-        </div>
+        </PageHeader>
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto px-8 py-6">
           {loading ? (
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-4">
               {[0, 1, 2].map((i) => (
                 <div
                   key={i}
-                  className="h-[180px] animate-pulse rounded-lg border"
+                  className="h-[180px] animate-pulse rounded-xl"
                   style={{
-                    borderColor: "var(--border)",
-                    background: "var(--white)",
+                    border: "1px solid var(--border-soft)",
+                    background: "var(--sidebar)",
                   }}
                 />
               ))}
@@ -200,7 +189,7 @@ export function AgentList() {
           ) : agents.length === 0 ? (
             <EmptyState />
           ) : (
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-4">
               {agents.map((agent) => (
                 <AgentCard
                   key={agent.id}
@@ -277,19 +266,11 @@ function AgentCard({
       data-agent-name={agent.name}
       onClick={onClick}
       onKeyDown={(e) => e.key === "Enter" && onClick()}
-      className={`group flex cursor-pointer flex-col rounded-lg border p-5 transition ${guideTarget ? "ring-2 ring-[var(--accent)] ring-offset-2" : ""}`}
+      className={`group flex cursor-pointer flex-col rounded-xl p-5 transition-shadow hover:shadow-md ${guideTarget ? "ring-2 ring-[var(--accent)] ring-offset-2" : ""}`}
       style={{
-        borderColor: "var(--border)",
-        background: "var(--white)",
+        border: "1px solid var(--border-soft)",
+        background: "var(--sidebar)",
         opacity: agent.enabled ? 1 : 0.7,
-      }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.borderColor = "var(--accent)";
-        e.currentTarget.style.boxShadow = "0 2px 8px rgba(61, 82, 213, 0.08)";
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.borderColor = "var(--border)";
-        e.currentTarget.style.boxShadow = "none";
       }}
     >
       {/* Top: avatar + name + status */}

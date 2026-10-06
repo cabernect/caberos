@@ -158,7 +158,7 @@ export function Observability() {
         {/* Dashboard content */}
         <div className="flex-1 overflow-y-auto px-8 py-6">
           <div className="mx-auto max-w-6xl space-y-6">
-            <div className="rounded-[8px] border p-4" style={{ borderColor: "var(--border)", background: "var(--white)" }}>
+            <div className="rounded-xl p-4" style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}>
               <div className="flex items-center justify-between">
                 <div>
                   <h2 className="text-[14px] font-semibold text-[var(--ink)]">System health</h2>
@@ -322,7 +322,7 @@ export function Observability() {
                 {/* Bottom row: agents + recent runs */}
                 <div className="grid grid-cols-2 gap-4">
                   {/* Top agents */}
-                  <div className="rounded-[8px] border p-4" style={{ borderColor: "var(--border)", background: "var(--white)" }}>
+                  <div className="rounded-xl p-4" style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}>
                     <div className="mb-3 flex items-center gap-2">
                       <TrendingUp className="h-4 w-4" style={{ color: "var(--accent)" }} />
                       <h3 className="text-[14px] font-semibold text-[var(--ink)]">Top agents by cost</h3>
@@ -366,7 +366,7 @@ export function Observability() {
                   </div>
 
                   {/* Recent runs */}
-                  <div className="rounded-[8px] border p-4" style={{ borderColor: "var(--border)", background: "var(--white)" }}>
+                  <div className="rounded-xl p-4" style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}>
                     <div className="mb-3 flex items-center justify-between">
                       <h3 className="text-[14px] font-semibold text-[var(--ink)]">Recent runs</h3>
                       <button
@@ -450,7 +450,7 @@ function KpiCard({
   color?: string;
 }) {
   return (
-    <div className="rounded-[8px] border p-4" style={{ borderColor: "var(--border)", background: "var(--white)" }}>
+    <div className="rounded-xl p-4" style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}>
       <div className="flex items-center gap-2">
         <Icon className="h-3.5 w-3.5" style={{ color: color || "var(--ink-3)" }} />
         <p className="text-[11px] font-medium uppercase tracking-wide text-[var(--ink-3)]">{label}</p>
@@ -465,7 +465,7 @@ function KpiCard({
 
 function ChartCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-[8px] border p-4" style={{ borderColor: "var(--border)", background: "var(--white)" }}>
+    <div className="rounded-xl p-4" style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}>
       <h3 className="mb-3 text-[14px] font-semibold text-[var(--ink)]">{title}</h3>
       {children}
     </div>

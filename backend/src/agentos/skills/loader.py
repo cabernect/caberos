@@ -109,9 +109,11 @@ def _get_skill_dirs(agent_id: str) -> list[tuple[Path, str]]:
     wm = WorkspaceManager()
     workspace = Path(wm.create_workspace(agent_id))
 
+    # Agent-local is scanned first because _scan_all_skills is first-wins —
+    # local skills shadow system skills with the same name.
     return [
-        (settings.skills_dir, "system"),
         (workspace / "skills", "agent"),
+        (settings.skills_dir, "system"),
     ]
 
 
@@ -211,6 +213,51 @@ def load_skill(agent_id: str, name: str) -> dict[str, Any] | None:
     if skill.allowed_tools:
         result["allowed_tools"] = skill.allowed_tools
 
+    return result
+
+
+def render_skill_dir(path: Path, source: str = "") -> dict[str, Any] | None:
+    """Render a skill dir into the skills_load response shape.
+
+    Same output as load_skill — body + resource listing + optional spec
+    fields — but from an explicit directory (a pinned revision, a draft dir).
+    Returns None when the dir has no valid SKILL.md.
+    """
+    skill = _load_skill_from_dir(path, source)
+    if skill is None:
+        return None
+
+    resources: list[dict[str, Any]] = []
+    for entry in sorted(path.iterdir()):
+        if entry.name == "SKILL.md":
+            continue
+        if entry.is_file():
+            resources.append({"name": entry.name, "type": "file", "size": entry.stat().st_size})
+        elif entry.is_dir():
+            sub_files = [
+                {
+                    "name": f"{entry.name}/{sub.name}",
+                    "type": "file",
+                    "size": sub.stat().st_size,
+                }
+                for sub in sorted(entry.iterdir())
+                if sub.is_file()
+            ]
+            resources.append({"name": entry.name, "type": "directory", "files": sub_files})
+
+    result: dict[str, Any] = {
+        "name": skill.name,
+        "description": skill.description,
+        "body": skill.body,
+        "resources": resources,
+        "source": source,
+    }
+    if skill.license:
+        result["license"] = skill.license
+    if skill.compatibility:
+        result["compatibility"] = skill.compatibility
+    if skill.allowed_tools:
+        result["allowed_tools"] = skill.allowed_tools
     return result
 
 

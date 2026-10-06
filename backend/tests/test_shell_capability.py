@@ -3,7 +3,7 @@
 import sys
 from unittest.mock import patch
 
-from agentos.capabilities.tools.shell import shell_dialect_note
+from agentos.capabilities.tools.terminal import shell_dialect_note
 
 
 def test_windows_description_says_commands_go_through_cmd_exe():

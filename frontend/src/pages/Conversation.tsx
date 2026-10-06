@@ -1,17 +1,21 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { ArrowDown, PanelLeft, AlertCircle, BookOpen, ChevronDown, FileIcon, Link as LinkIcon, Paperclip, Loader2, MessageSquare } from "lucide-react";
-import { api } from "@/lib/api";
+import { ArrowDown, PanelLeft, AlertCircle, BookOpen, ChevronDown, Paperclip, Loader2, MessageSquare } from "lucide-react";
+import { api, workspaceBackend, type PreviewSource } from "@/lib/api";
 import type { Agent, Message, Provider, SessionInfo } from "@/lib/types";
-import { ToolCallBlock, type ToolCallData, type SubAgentStreamData } from "@/components/ToolCallBlock";
+import { PreviewPanel } from "@/components/previews/PreviewPanel";
+import { useObjectUrl } from "@/components/previews/useObjectUrl";
+import { AttachmentCard } from "@/components/AttachmentCard";
+import { ToolCallBlock, FileChips, collectFileRefs, type ToolCallData, type SubAgentStreamData, type FileRef } from "@/components/ToolCallBlock";
 import { Markdown } from "@/components/Markdown";
 import { ThinkingBlock } from "@/components/ThinkingBlock";
 import { ProcessSteps } from "@/components/ProcessSteps";
 import { ChatSidebar } from "@/components/ChatSidebar";
-import { ChatInputBar, type ChatInputBarHandle, type ContextItem } from "@/components/ChatInputBar";
+import { ChatInputBar, type Attachment, type ChatInputBarHandle, type ContextItem } from "@/components/ChatInputBar";
 import { SettingsOverlay } from "@/components/SettingsOverlay";
 import { useDesktopFileDrop } from "@/lib/desktopFileDrop";
 import { refreshNotifications } from "@/lib/notificationStore";
+import { useResizableWidth } from "@/lib/useResizableWidth";
 
 interface ChatMessage {
   id: string;
@@ -20,6 +24,8 @@ interface ChatMessage {
   created_at: string;
   run_id?: string;
   run_status?: string;
+  trigger?: string;
+  is_test?: boolean;
   tokens_in?: number;
   tokens_out?: number;
   cost?: number;
@@ -118,6 +124,12 @@ export function Conversation() {
   const [compacting, setCompacting] = useState(false);
   const [contextBreakdown, setContextBreakdown] = useState<{ system_prompt: number; conversation: number; tools: number } | undefined>(undefined);
   const [hasModelSelected, setHasModelSelected] = useState(false);
+  const [previewSource, setPreviewSource] = useState<PreviewSource | null>(null);
+  const {
+    width: previewWidth,
+    dragging: previewDragging,
+    startResize: startPreviewResize,
+  } = useResizableWidth({ initial: 420, min: 300, max: 960, storageKey: "caberos.preview.width" });
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -199,6 +211,8 @@ export function Conversation() {
           created_at: m.created_at,
           run_id: m.run_id,
           run_status: m.run_status,
+          trigger: m.trigger,
+          is_test: m.is_test,
           tokens_in: m.tokens_in,
           tokens_out: m.tokens_out,
           cost: m.cost,
@@ -234,7 +248,21 @@ export function Conversation() {
               !apiUserContents.has(m.content) &&
               !mapped.some((mm) => mm.id === m.id),
           );
-          return [...mapped, ...optimistic];
+          // The pipeline persists attachment metadata after the message row —
+          // a reload in that window returns the user message with
+          // attachments=null. Carry the optimistic copy's attachments forward
+          // so the card doesn't flash out mid-run and return on completion.
+          // Only the latest user message can be the in-flight one — patching
+          // older same-text twins would mislabel them.
+          const lastUserIdx = mapped.map((m, i) => (m.role === "user" ? i : -1)).filter((i) => i >= 0).pop();
+          const carried = mapped.map((m, i) => {
+            if (i !== lastUserIdx || m.attachments) return m;
+            const twin = prev.find(
+              (o) => o.role === "user" && o.content === m.content && o.attachments,
+            );
+            return twin ? { ...m, attachments: twin.attachments } : m;
+          });
+          return [...carried, ...optimistic];
         });
       })
       .catch(() => {});
@@ -563,6 +591,8 @@ export function Conversation() {
               created_at: m.created_at,
               run_id: m.run_id,
               run_status: m.run_status,
+              trigger: m.trigger,
+              is_test: m.is_test,
               tokens_in: m.tokens_in,
               tokens_out: m.tokens_out,
               cost: m.cost,
@@ -586,6 +616,8 @@ export function Conversation() {
                 created_at: new Date().toISOString(),
                 run_id: data.run_id || `failed-${sessionId}`,
                 run_status: "failed",
+                trigger: undefined,
+                is_test: undefined,
                 tokens_in: undefined,
                 tokens_out: undefined,
                 cost: undefined,
@@ -772,7 +804,9 @@ export function Conversation() {
     const recoverableSessions = sessions.filter(
       (session) =>
         session.active_run_id &&
-        (session.active_run_status === "pending" || session.active_run_status === "running"),
+        (session.active_run_status === "pending" ||
+          session.active_run_status === "running" ||
+          session.active_run_status === "awaiting_approval"),
     );
     if (recoverableSessions.length === 0) return;
 
@@ -959,6 +993,8 @@ export function Conversation() {
             created_at: m.created_at,
             run_id: m.run_id,
             run_status: m.run_status,
+          trigger: m.trigger,
+          is_test: m.is_test,
             tokens_in: m.tokens_in,
             tokens_out: m.tokens_out,
             cost: m.cost,
@@ -1044,21 +1080,29 @@ export function Conversation() {
     }
   };
 
+  // --- File preview (W3) — shared right-side panel ---
+  const openPreview = useCallback((source: PreviewSource) => {
+    setPreviewSource(source);
+  }, []);
+
+  const closePreview = useCallback(() => setPreviewSource(null), []);
+
+  // Returns success so the composer can keep the draft + tray on failure.
   const handleSend = async (
     text: string,
     modelOverride: { provider_id: string; name: string; thinking_enabled?: boolean | null; thinking_effort?: string | null } | null,
     _context: ContextItem[],
-    attachments?: { type: string; mimeType: string; data: string; filename: string }[],
+    attachments?: Attachment[],
     skill?: string,
-  ) => {
-    if (!agentId) return;
+  ): Promise<boolean> => {
+    if (!agentId) return false;
 
     // Don't allow sending messages from the dashboard into channel sessions
     // (Zalo, Telegram, etc.) — those are external conversations. The dashboard
     // view of a channel session is read-only.
     const activeSession = sessions.find((s) => s.id === activeSessionId);
     if (activeSession?.channel) {
-      return;
+      return false;
     }
 
     // Handle /compact slash command — trigger manual compaction
@@ -1066,7 +1110,7 @@ export function Conversation() {
       if (activeSessionId) {
         handleCompact();
       }
-      return;
+      return true;
     }
 
     // Don't create a session upfront — let the backend auto-resume or create one.
@@ -1087,10 +1131,11 @@ export function Conversation() {
       ]);
     }
 
+    const optimisticId = crypto.randomUUID();
     setMessages((prev) => [
       ...prev,
       {
-        id: crypto.randomUUID(),
+        id: optimisticId,
         role: "user",
         content: text,
         created_at: new Date().toISOString(),
@@ -1099,7 +1144,16 @@ export function Conversation() {
             type: a.type,
             mime_type: a.mimeType,
             filename: a.filename,
-            ...(a.type === "url" || a.type === "image_url" ? { url: a.data } : {}),
+            size: a.size,
+            // Ephemeral thumbnail — the composer's object URL is revoked on
+            // send, so carry a self-owned data URL instead: image bytes are
+            // already base64 for transport; PDF/Office drafts reuse the
+            // backend-rendered thumb. Dropped once the persisted record
+            // (with path) replaces this optimistic one.
+            ...(a.type === "image" && a.data
+              ? { preview_url: `data:${a.mimeType};base64,${a.data}` }
+              : a.thumb ? { preview_url: a.thumb } : {}),
+            ...(a.type === "url" ? { url: a.data } : {}),
           })))
           : null,
       },
@@ -1154,11 +1208,16 @@ export function Conversation() {
       // Step 2: Start streaming events for this session.
       // Only the currently-viewed session is actively streamed.
       startStreaming(runSessionId);
+      return true;
     } catch (err) {
       console.error("Failed to send message:", err);
       setStreaming(null);
       streamingRef.current = null;
       setIsStreaming(false);
+      // Roll back the optimistic message — the run never started, and
+      // the composer keeps the draft + attachments for a retry.
+      setMessages((prev) => prev.filter((m) => m.id !== optimisticId));
+      return false;
     }
   };
 
@@ -1327,8 +1386,37 @@ export function Conversation() {
               const rendered: React.ReactNode[] = [];
               let processGroup: { msg: ChatMessage; index: number }[] = [];
               let groupRunId: string | undefined;
+              // Output files accumulate per run — chips render once, at the
+              // END of the run (after the reply), not mid-run under the
+              // collapsed steps.
+              const runFiles = new Map<string, FileRef[]>();
+              const mergeRefs = (runId: string, refs: FileRef[]) => {
+                const acc = runFiles.get(runId) ?? [];
+                for (const r of refs) {
+                  const key = r.source.path ?? `a:${r.source.artifactId}`;
+                  const idx = acc.findIndex(
+                    (o) => (o.source.path ?? `a:${o.source.artifactId}`) === key
+                  );
+                  if (idx >= 0) acc[idx] = r;
+                  else acc.push(r);
+                }
+                runFiles.set(runId, acc);
+              };
+              const emitRunChips = (runId: string | undefined) => {
+                if (!runId) return;
+                const refs = runFiles.get(runId);
+                if (!refs?.length) return;
+                runFiles.delete(runId);
+                rendered.push(
+                  <FileChips
+                    key={`files-${runId}`}
+                    refs={refs}
+                    onPreview={openPreview}
+                  />
+                );
+              };
 
-              const flushGroup = () => {
+              const flushGroup = (nextRunId?: string) => {
                 if (processGroup.length === 0) return;
                 const steps = processGroup.map((g) => ({
                   type: g.msg.role as "thinking" | "tool_call",
@@ -1338,13 +1426,35 @@ export function Conversation() {
                 const subagentMsgs = groupRunId
                   ? messages.filter((m) => m.subagent_id && m.run_id === groupRunId)
                   : [];
+                // Output files this step group produced — accumulated per run.
+                const fileRefs = collectFileRefs(
+                  processGroup
+                    .filter((g) => g.msg.role === "tool_call")
+                    .map((g) => {
+                      try {
+                        return JSON.parse(g.msg.content) as ToolCallData;
+                      } catch {
+                        return null;
+                      }
+                    })
+                    .filter((c): c is ToolCallData => c !== null)
+                );
+                if (groupRunId && fileRefs.length > 0) {
+                  mergeRefs(groupRunId, fileRefs);
+                }
                 rendered.push(
                   <ProcessSteps
                     key={`process-${processGroup[0].index}`}
                     steps={steps}
                     subagentMessages={subagentMsgs}
+                    onPreview={openPreview}
                   />
                 );
+                // Run ended on tool calls (no reply follows) — emit its
+                // output chips right here, at the run boundary.
+                if (groupRunId && nextRunId !== groupRunId) {
+                  emitRunChips(groupRunId);
+                }
                 processGroup = [];
                 groupRunId = undefined;
               };
@@ -1358,7 +1468,7 @@ export function Conversation() {
                   processGroup.push({ msg, index: i });
                 } else {
                   // Flush any pending process group
-                  flushGroup();
+                  flushGroup(msg.run_id);
 
                   // Find sub-agent messages for run_subagent tool calls
                   let subagentMessages: ChatMessage[] | undefined;
@@ -1372,17 +1482,33 @@ export function Conversation() {
                       }
                     } catch { /* ignore */ }
                   }
+                  const isLastInRun =
+                    i === filtered.length - 1 ||
+                    filtered[i + 1].run_id !== msg.run_id;
+                  const runRefs =
+                    isLastInRun && msg.run_id ? runFiles.get(msg.run_id) : undefined;
+                  if (runRefs) runFiles.delete(msg.run_id!);
                   rendered.push(
                     <MessageRow
                       key={msg.id}
                       message={msg}
-                      isLastInRun={
-                        i === filtered.length - 1 ||
-                        filtered[i + 1].run_id !== msg.run_id
-                      }
+                      isLastInRun={isLastInRun}
                       subagentMessages={subagentMessages}
+                      onPreview={openPreview}
+                      agentId={agentId}
+                      runFileRefs={msg.role === "assistant" ? runRefs : undefined}
                     />
                   );
+                  // Non-assistant run tail — chips still land at the end.
+                  if (isLastInRun && runRefs?.length && msg.role !== "assistant") {
+                    rendered.push(
+                      <FileChips
+                        key={`files-${msg.run_id}`}
+                        refs={runRefs}
+                        onPreview={openPreview}
+                      />
+                    );
+                  }
                 }
               });
               // Flush any remaining process group
@@ -1402,12 +1528,12 @@ export function Conversation() {
             )}
 
             {isStreaming && streaming && (
-              <StreamingMessage streaming={streaming} />
+              <StreamingMessage streaming={streaming} onPreview={openPreview} />
             )}
             {isStreaming && !streaming && <TypingIndicator />}
             {/* Completed streaming block — keeps thinking/tool calls/costs visible after run ends */}
             {!isStreaming && streaming && streaming.completed && (
-              <StreamingMessage streaming={streaming} />
+              <StreamingMessage streaming={streaming} onPreview={openPreview} />
             )}
 
             {/* Compacting indicator */}
@@ -1529,6 +1655,29 @@ export function Conversation() {
         })()}
       </div>
 
+      {/* Shared file preview — resizable right panel (W3). On narrow
+          screens it becomes a full-width overlay instead of crushing
+          the chat below 300px. */}
+      {previewSource && (
+        <div
+          className="relative shrink-0 max-md:fixed max-md:inset-0 max-md:z-40"
+          style={{ width: `min(100%, ${previewWidth}px)` }}
+        >
+          <div
+            onMouseDown={startPreviewResize}
+            className={`absolute -left-1 top-0 z-10 h-full w-2 cursor-col-resize transition-colors hover:bg-[var(--accent)]/40 max-md:hidden ${previewDragging ? "bg-[var(--accent)]/40" : ""}`}
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize preview"
+          />
+          <PreviewPanel
+            agentId={agentId || ""}
+            source={previewSource}
+            onClose={closePreview}
+          />
+        </div>
+      )}
+
       {/* Full-view drag-and-drop overlay */}
       {isDraggingFile && (
         <div
@@ -1566,13 +1715,24 @@ export function Conversation() {
   );
 }
 
-function StreamingMessage({ streaming }: { streaming: StreamingResponse }) {
+function StreamingMessage({
+  streaming,
+  onPreview,
+}: {
+  streaming: StreamingResponse;
+  onPreview?: (source: PreviewSource) => void;
+}) {
   const hasContent = streaming.text || streaming.items.length > 0;
   const endTime = streaming.thinkingEndTime ?? Date.now();
   const currentThinkingDuration = streaming.thinkingStartTime
     ? Math.round((endTime - streaming.thinkingStartTime) / 1000)
     : undefined;
   const isThinkingStreaming = !!streaming.thinking && !streaming.text && !streaming.completed;
+  const fileRefs = collectFileRefs(
+    streaming.items
+      .filter((i) => i.type === "tool")
+      .map((i) => i.data as ToolCallData)
+  );
 
   return (
     <div className="mb-6">
@@ -1598,6 +1758,7 @@ function StreamingMessage({ streaming }: { streaming: StreamingResponse }) {
         return <ToolCallBlock
           key={item.id}
           call={item.data}
+          onPreview={onPreview}
           subagentStream={
             item.data.capability === "run_subagent" && streaming.subagents.size > 0
               ? Array.from(streaming.subagents.entries()).map(([, s]) => ({
@@ -1626,6 +1787,10 @@ function StreamingMessage({ streaming }: { streaming: StreamingResponse }) {
           {!streaming.completed && <span className="streaming-cursor" />}
         </div>
       )}
+
+      {/* Output files the run produced — at the end of the run, not buried
+          inside collapsed tool-call steps. */}
+      {fileRefs.length > 0 && <FileChips refs={fileRefs} onPreview={onPreview} />}
 
       {streaming.guardrailWarnings.length > 0 && (
         <div
@@ -1658,10 +1823,25 @@ function StreamingMessage({ streaming }: { streaming: StreamingResponse }) {
   );
 }
 
-function MessageRow({ message, isLastInRun, subagentMessages }: { message: ChatMessage; isLastInRun?: boolean; subagentMessages?: ChatMessage[] }) {
+function MessageRow({
+  message,
+  isLastInRun,
+  subagentMessages,
+  onPreview,
+  agentId,
+  runFileRefs,
+}: {
+  message: ChatMessage;
+  isLastInRun?: boolean;
+  subagentMessages?: ChatMessage[];
+  onPreview?: (source: PreviewSource) => void;
+  agentId?: string;
+  /** Output files this run produced — rendered at the end of the run. */
+  runFileRefs?: FileRef[];
+}) {
   if (message.role === "user") {
     // Parse attachment metadata (JSON string from the API)
-    let attachmentFiles: { type: string; mime_type: string; filename: string; url?: string }[] = [];
+    let attachmentFiles: { type: string; mime_type: string; filename: string; url?: string; path?: string; size?: number }[] = [];
     if (message.attachments) {
       try {
         const parsed = JSON.parse(message.attachments);
@@ -1677,54 +1857,9 @@ function MessageRow({ message, isLastInRun, subagentMessages }: { message: ChatM
       <div className="mb-6 flex flex-col items-end gap-1.5">
         {attachmentFiles.length > 0 && (
           <div className="flex flex-wrap justify-end gap-1.5">
-            {attachmentFiles.map((f, i) => {
-              const isUrl = f.type === "url" || f.type === "image_url";
-              let urlLabel = f.url || "";
-              try {
-                if (f.url) urlLabel = new URL(f.url).hostname;
-              } catch { /* keep raw */ }
-              const chipStyle: React.CSSProperties = {
-                background: "var(--surface)",
-                border: "1px solid var(--border)",
-                color: "var(--ink-2)",
-                textDecoration: "none",
-              };
-              const chipContent = (
-                <>
-                  {isUrl ? (
-                    <LinkIcon className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--ink-3)" }} />
-                  ) : (
-                    <FileIcon className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--ink-3)" }} />
-                  )}
-                  <span className="font-medium">{isUrl ? urlLabel : f.filename}</span>
-                  <span className="text-[10px]" style={{ color: "var(--ink-3)" }}>
-                    {isUrl ? "LINK" : (f.mime_type.split("/")[1]?.toUpperCase() || f.type)}
-                  </span>
-                </>
-              );
-              return isUrl && f.url ? (
-                <a
-                  key={i}
-                  href={f.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12px] transition hover:opacity-80"
-                  style={chipStyle}
-                  title={f.url}
-                >
-                  {chipContent}
-                </a>
-              ) : (
-                <div
-                  key={i}
-                  className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12px]"
-                  style={chipStyle}
-                  title={f.url || f.filename}
-                >
-                  {chipContent}
-                </div>
-              );
-            })}
+            {attachmentFiles.map((f, i) => (
+              <MessageAttachmentCard key={i} file={f} agentId={agentId} onPreview={onPreview} />
+            ))}
           </div>
         )}
         <div
@@ -1772,7 +1907,7 @@ function MessageRow({ message, isLastInRun, subagentMessages }: { message: ChatM
       }
       return (
         <div className="mb-4">
-          <ToolCallBlock call={data} subagentStream={subagentStream} />
+          <ToolCallBlock call={data} subagentStream={subagentStream} onPreview={onPreview} />
         </div>
       );
     } catch {
@@ -1780,18 +1915,28 @@ function MessageRow({ message, isLastInRun, subagentMessages }: { message: ChatM
     }
   }
 
-  if (message.role === "heartbeat") {
+  // Origin badge for non-chat runs — driven by run.trigger (schedule, heartbeat,
+  // channel…); legacy rows predate trigger and carry role="heartbeat" instead.
+  const origin =
+    message.role === "heartbeat"
+      ? "heartbeat"
+      : message.role === "assistant" && message.trigger && message.trigger !== "user_message"
+        ? message.is_test === true
+          ? "test"
+          : message.trigger
+        : null;
+  if (origin) {
     const ts = message.created_at ? new Date(message.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
     return (
       <div className="mb-6">
         <div className="mb-1.5 flex items-center gap-1.5">
-          <span className="font-mono text-[11px] font-medium" style={{ color: "#7C3AED" }}>♢ heartbeat</span>
+          <span className="font-mono text-[11px] font-medium" style={{ color: "#7C3AED" }}>♢ {origin}</span>
           {ts && (
             <span className="font-mono text-[10px]" style={{ color: "var(--ink-3)" }}>· {ts}</span>
           )}
         </div>
         <div
-          className="border-l-[3px] pl-4 text-[14px] leading-[1.65]"
+          className="markdown-body border-l-[3px] pl-4 text-[14px] leading-[1.65]"
           style={{ borderColor: "#7C3AED" }}
         >
           <Markdown>{message.content}</Markdown>
@@ -1816,6 +1961,10 @@ function MessageRow({ message, isLastInRun, subagentMessages }: { message: ChatM
       <div className="markdown-body text-[14px] leading-[1.65] text-[var(--ink)]">
         <Markdown>{message.content}</Markdown>
       </div>
+      {/* Output files the run produced — end of the run, above sources. */}
+      {runFileRefs && runFileRefs.length > 0 && (
+        <FileChips refs={runFileRefs} onPreview={onPreview} />
+      )}
       {message.citations && message.citations.length > 0 && <CitationList citations={message.citations} />}
       {hasCost && (
         <div className="mt-1.5 font-mono text-[11px]" style={{ color: "var(--ink-3)" }}>
@@ -1888,5 +2037,41 @@ function TypingIndicator() {
         <span className="bounce-dot" />
       </div>
     </div>
+  );
+}
+
+/** Message-level attachment card — the shared AttachmentCard in open mode.
+ *  Images fetch a real thumbnail through the preview backend's blob read;
+ *  files with a stored path open the preview panel; URLs open a new tab. */
+function MessageAttachmentCard({
+  file,
+  agentId,
+  onPreview,
+}: {
+  file: { type: string; mime_type: string; filename: string; url?: string; path?: string; size?: number; preview_url?: string };
+  agentId?: string;
+  onPreview?: (source: PreviewSource) => void;
+}) {
+  const isUrl = file.type === "url" || file.type === "image_url";
+  const isImage = !isUrl && (file.type === "image" || file.mime_type?.startsWith("image/"));
+  // Persisted blob wins once path exists; `preview_url` is the draft's
+  // ephemeral data URL covering the window before persistence lands.
+  const { url: blobUrl } = useObjectUrl(
+    isImage && file.path && agentId
+      ? () => workspaceBackend(agentId).blob({ path: file.path! })
+      : null,
+    [file.path, agentId]
+  );
+
+  return (
+    <AttachmentCard
+      type={file.type}
+      filename={file.filename}
+      mimeType={file.mime_type}
+      size={file.size}
+      url={isUrl ? file.url : undefined}
+      thumbUrl={blobUrl ?? file.preview_url}
+      onOpen={!isUrl && file.path && onPreview ? () => onPreview({ path: file.path! }) : undefined}
+    />
   );
 }

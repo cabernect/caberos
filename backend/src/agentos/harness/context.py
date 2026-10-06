@@ -68,6 +68,10 @@ def assemble_system_prompt(
     past_sessions: list[dict[str, Any]] | None = None,
     supports_vision: bool | None = None,
     enabled_caps: list[str] | None = None,
+    browser_profiles: list[dict[str, Any]] | None = None,
+    resolved_skills: list[Any] | None = None,
+    forced_skill_rendered: dict[str, Any] | None = None,
+    builder_draft: dict[str, Any] | None = None,
 ) -> str:
     """Build the system prompt from base prompt + agent identity (D35 order).
 
@@ -78,11 +82,12 @@ def assemble_system_prompt(
     4. Task (what the agent does — mission, instructions)
     5. MEMORY.md (long-term memory — agent-curated notebook)
     6. Available Skills (menu — names + descriptions only)
-    7. KG facts (knowledge graph — passed in by the harness from the DB)
-    8. Past sessions (episodic — session summaries for topical recall)
-    9. Recall snippets (semantic recall fallback — D34)
-    10. Forced skill (slash command — full body injected when user types /skillname)
-    11. Model capabilities (vision support — tells the agent if it can process images)
+    7. Saved browser logins (operator-managed persistent profiles — W4)
+    8. KG facts (knowledge graph — passed in by the harness from the DB)
+    9. Past sessions (episodic — session summaries for topical recall)
+    10. Recall snippets (semantic recall fallback — D34)
+    11. Forced skill (slash command — full body injected when user types /skillname)
+    12. Model capabilities (vision support — tells the agent if it can process images)
     """
     parts: list[str] = []
 
@@ -109,16 +114,45 @@ def assemble_system_prompt(
     # 6. Skills (D11b — menu only, not auto-injected)
     # The agent sees available skill names + descriptions, then calls
     # skills_load(name) to get the full content when it decides to use one.
-    skill_menu = _load_skill_menu(agent_config)
+    # W6: the pipeline passes DB-resolved skills (published + assigned);
+    # the legacy fs scan is the fallback for callers without a db.
+    if resolved_skills is not None:
+        from ..skills.resolution import format_menu
+
+        skill_menu = format_menu(resolved_skills)
+    else:
+        skill_menu = _load_skill_menu(agent_config)
     if skill_menu:
         parts.append(f"## Available Skills\n\n{skill_menu}")
 
-    # 7. KG facts (D34 — knowledge graph triples for this contact)
+    # 7. Saved browser logins (operator-managed persistent profiles — W4).
+    # The agent can't enumerate these itself — inject name + scope so it can
+    # pass profile="<name>" to browser_open instead of hitting a logged-out
+    # page. Only injected when browser_open is actually enabled.
+    if browser_profiles and "browser_open" in enabled_caps:
+        login_lines = []
+        for p in browser_profiles:
+            domains = p.get("allowed_domains") or []
+            scope = ", ".join(domains) if domains else "any site"
+            note = f" — {p['description']}" if p.get("description") else ""
+            login_lines.append(f"- {p['name']} (sites: {scope}){note}")
+        parts.append(
+            "## Saved Browser Logins\n\n"
+            "The operator created these persistent logins — pass the name as "
+            "browser_open's profile argument to reuse one. Profiles are "
+            "optional: omit profile (or pass an empty value) for a fresh "
+            "isolated session — use a profile only when the task needs that "
+            "site's saved login. If the site asks to log in, reopen with "
+            "visible=true and let the user sign in themselves; never ask for "
+            "or type their credentials.\n\n" + "\n".join(login_lines)
+        )
+
+    # 8. KG facts (D34 — knowledge graph triples for this contact)
     if kg_facts:
         facts_lines = [f"- ({f['subject']}, {f['predicate']}, {f['object']})" for f in kg_facts]
         parts.append("## Known Facts\n\n" + "\n".join(facts_lines))
 
-    # 8. Past sessions (episodic — session summaries for topical recall)
+    # 9. Past sessions (episodic — session summaries for topical recall)
     if past_sessions:
         # Char budget: ~500 chars total, truncate each summary
         budget = 500
@@ -137,22 +171,40 @@ def assemble_system_prompt(
         if session_lines:
             parts.append("## Past Context (recent sessions)\n\n" + "\n".join(session_lines))
 
-    # 9. Recall snippets (D34 — semantic recall fallback, bounded)
+    # 10. Recall snippets (D34 — semantic recall fallback, bounded)
     if recall_snippets:
         snippet_lines = [f"- [{s['key']}] {s['value']}" for s in recall_snippets]
         parts.append("## Relevant Past Context\n\n" + "\n".join(snippet_lines))
 
-    # 10. Forced skill (slash command — /skillname message)
+    # 11. Forced skill (slash command — /skillname message, or builder mode)
     # When the user types /skillname, the skill's full body is injected into
     # context so the agent has the instructions without calling skills_load.
-    if forced_skill:
+    # W6: the caller may pass a pre-rendered skill (resolved + pin-aware) —
+    # otherwise fall back to the legacy sync loader.
+    rendered = forced_skill_rendered
+    if forced_skill and rendered is None:
         from ..skills.loader import load_skill
 
-        skill = load_skill(agent_config.id, forced_skill)
-        if skill:
-            parts.append(f"## Active Skill: {skill['name']}\n\n{skill['body']}")
+        rendered = load_skill(agent_config.id, forced_skill)
+    if rendered:
+        parts.append(f"## Active Skill: {rendered['name']}\n\n{rendered['body']}")
 
-    # 11. Model capabilities — tell the agent what its model can/can't do
+    # Builder-mode sessions: the draft row links the session; tell the agent
+    # where the draft lives and what the boundaries are.
+    if builder_draft:
+        parts.append(
+            "## Skill Builder\n\n"
+            f"This session is drafting the skill `{builder_draft['name']}`. "
+            f"Write and edit its files under `skill-drafts/{builder_draft['name']}/` "
+            "in your workspace — that directory is the only place draft content "
+            "lives, and it is never loaded as a skill until the operator publishes "
+            "it. Interview the operator per the loaded skill-creator guidance, "
+            "keep the draft updated as decisions are made, and tell them to "
+            "review and publish it from the Skills page when it's ready. You "
+            "cannot publish — no such capability exists."
+        )
+
+    # 12. Model capabilities — tell the agent what its model can/can't do
     if supports_vision is not None:
         if supports_vision:
             parts.append(

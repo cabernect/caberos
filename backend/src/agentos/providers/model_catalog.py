@@ -200,11 +200,30 @@ class LiteLLMModelCatalog:
         self.adapter = adapter
 
     async def validate_model(self, provider_id: str, model_name: str) -> bool:
-        """Cheap 1-token completion to validate the model config at save time."""
+        """Cheap completion to validate the model config at save time.
+
+        Follows the adapter's endpoint routing — api.openai.com models
+        validate on /v1/responses (chat completions rejects reasoning
+        models like gpt-6-luna, and 'max_tokens' isn't accepted there).
+        """
         provider = await self.adapter._load_provider(provider_id)
         model_str, api_base = self.adapter._route_model(provider, model_name)
 
-        kwargs: dict[str, Any] = {
+        if self.adapter._model_family(provider, model_name) == "responses":
+            kwargs: dict[str, Any] = {
+                "model": model_str,
+                "input": [{"role": "user", "content": "Hi"}],
+                "max_output_tokens": 16,
+            }
+            if provider["api_key"]:
+                kwargs["api_key"] = provider["api_key"]
+            if api_base or provider["base_url"]:
+                kwargs["api_base"] = api_base or provider["base_url"]
+            kwargs.update(provider["extra_params"])
+            await self.adapter.transport.responses(**kwargs)
+            return True
+
+        kwargs = {
             "model": model_str,
             "messages": [{"role": "user", "content": "Hi"}],
             "max_tokens": 1,

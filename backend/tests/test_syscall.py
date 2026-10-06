@@ -5,7 +5,7 @@ import asyncio
 import pytest
 
 from agentos.capabilities.builtin import register_builtin_capabilities
-from agentos.capabilities.registry import registry
+from agentos.capabilities.registry import CapabilityDef, registry
 from agentos.config_schema import AgentConfig, CapabilityGrant, ModelConfig
 from agentos.harness.loop import ApprovalBatch
 from agentos.syscall.mediator import SyscallHandler
@@ -72,7 +72,15 @@ class TestSyscallHandler:
         )
 
         assert result.allowed is False
+        assert result.status == "error"  # an execution failure, not a policy denial
         assert "execution error" in (result.denied_reason or "")
+
+        from sqlalchemy import select
+
+        from agentos.models.audit import AuditRecord
+
+        audit_result = await db.execute(select(AuditRecord).where(AuditRecord.run_id == "run-1"))
+        assert audit_result.scalars().one().outcome == "error"
 
     async def test_not_granted_capability_denied(self, db, workspace):
         handler = SyscallHandler(db=db, workspace_path=workspace)
@@ -214,6 +222,121 @@ class TestSyscallHandler:
         assert result.output == {"query": "CaberOS", "results": []}
         assert approval_calls == []
 
+    async def test_server_grant_approval_flag_governs_wildcard_mcp_calls(
+        self, db, workspace, monkeypatch
+    ):
+        """A tool covered only by an mcp_server wildcard must use the server
+        grant's require_approval — not the capability def's flag."""
+        from agentos.mcp import registry as mcp_registry
+
+        cap_name = "mcp.demo.server_tool"
+        registry.register(
+            CapabilityDef(
+                name=cap_name,
+                kind="mcp_tool",
+                description="Server tool",
+                parameters_schema={"type": "object", "properties": {}},
+                require_approval=True,  # propagated from McpServer.require_approval
+            )
+        )
+        monkeypatch.setitem(mcp_registry._tool_map, cap_name, ("srv-1", "server_tool"))
+
+        approval_calls: list = []
+
+        async def unexpected_approval(**kwargs):
+            approval_calls.append(kwargs)
+            return True
+
+        from agentos.syscall.protocol import SyscallResult
+
+        async def fake_mcp_execute(**kwargs):
+            return SyscallResult(output={"ok": True})
+
+        handler = SyscallHandler(db=db, workspace_path=workspace)
+        monkeypatch.setattr(handler, "_await_approval", unexpected_approval)
+        monkeypatch.setattr(handler, "_execute_mcp_tool", fake_mcp_execute)
+        agent_config = AgentConfig(
+            id="test-agent",
+            name="Test Agent",
+            model=ModelConfig(provider_id="test-provider", name="test-model"),
+            capabilities=[CapabilityGrant(name="mcp_server:srv-1", require_approval=False)],
+        )
+
+        result = await handler.mediate(
+            call=ToolCall(id="1", name=cap_name, args={}),
+            session=_make_session("contact-1"),
+            agent_config=agent_config,
+            run_id="run-mcp-wildcard-approval",
+        )
+
+        assert result.allowed is True
+        assert result.output == {"ok": True}
+        assert approval_calls == []
+
+    async def test_tool_filter_denies_granted_mcp_tool(self, db, workspace, monkeypatch):
+        """A granted tool still denied when the server's tool_filter excludes
+        it — and an empty filter ([]) denies every tool on the server."""
+        import json
+        from unittest.mock import AsyncMock
+
+        from agentos.mcp import registry as mcp_registry
+        from agentos.models.mcp import McpServer
+
+        cap_name = "mcp.demo.filtered_tool"
+        registry.register(
+            CapabilityDef(
+                name=cap_name,
+                kind="mcp_tool",
+                description="Filtered tool",
+                parameters_schema={"type": "object", "properties": {}},
+            )
+        )
+        server = McpServer(
+            id="srv-filtered",
+            name="demo",
+            transport="stdio",
+            command="demo",
+            enabled=True,
+            tool_filter=json.dumps(["other_tool"]),
+        )
+        db.add(server)
+        await db.flush()
+        monkeypatch.setitem(mcp_registry._tool_map, cap_name, (server.id, "filtered_tool"))
+        execute = AsyncMock(
+            return_value={"content": [{"type": "text", "text": "ok"}], "isError": False}
+        )
+        monkeypatch.setattr(mcp_registry, "execute_mcp_tool", execute)
+
+        handler = SyscallHandler(db=db, workspace_path=workspace)
+        agent_config = AgentConfig(
+            id="test-agent",
+            name="Test Agent",
+            model=ModelConfig(provider_id="test-provider", name="test-model"),
+            capabilities=[CapabilityGrant(name="mcp_server:srv-filtered", require_approval=False)],
+        )
+
+        result = await handler.mediate(
+            call=ToolCall(id="1", name=cap_name, args={}),
+            session=_make_session("contact-1"),
+            agent_config=agent_config,
+            run_id="run-mcp-filtered",
+        )
+        assert result.allowed is False
+        assert "filtered" in (result.denied_reason or "")
+        assert execute.call_count == 0
+
+        # Empty filter = every tool off (distinct from null = unfiltered)
+        server.tool_filter = json.dumps([])
+        await db.flush()
+        result = await handler.mediate(
+            call=ToolCall(id="2", name=cap_name, args={}),
+            session=_make_session("contact-1"),
+            agent_config=agent_config,
+            run_id="run-mcp-filtered-empty",
+        )
+        assert result.allowed is False
+        assert execute.call_count == 0
+
     async def test_approval_batch_waits_before_mixed_calls_execute(
         self, db, workspace, monkeypatch
     ):
@@ -304,7 +427,74 @@ class TestSyscallHandler:
         records = result.scalars().all()
         assert len(records) == 1
         assert records[0].allowed is False
+        assert records[0].outcome == "denied"
         assert records[0].denied_reason == "not granted"
+
+    async def test_timeout_status(self, db, workspace):
+        """A tool that raises TimeoutError reports status=timeout, not error/denied."""
+
+        async def _timeout(**_kwargs):
+            raise TimeoutError("timed out")
+
+        registry.register(
+            CapabilityDef(
+                name="slow_tool",
+                kind="tool",
+                description="slow",
+                parameters_schema={"type": "object", "properties": {}},
+                execute=_timeout,
+            )
+        )
+        handler = SyscallHandler(db=db, workspace_path=workspace)
+        result = await handler.mediate(
+            call=ToolCall(id="1", name="slow_tool", args={}),
+            session=_make_session("contact-1"),
+            agent_config=_make_agent_config(["slow_tool"]),
+            run_id="run-timeout",
+        )
+        assert result.allowed is False
+        assert result.status == "timeout"
+
+    async def test_interrupted_status_audited(self, db, workspace):
+        """Cancelling an in-flight call writes outcome=interrupted to the audit log."""
+        from sqlalchemy import select
+
+        from agentos.models.audit import AuditRecord
+
+        started = asyncio.Event()
+
+        async def _hang(**_kwargs):
+            started.set()
+            await asyncio.Event().wait()
+
+        registry.register(
+            CapabilityDef(
+                name="hang_tool",
+                kind="tool",
+                description="hangs",
+                parameters_schema={"type": "object", "properties": {}},
+                execute=_hang,
+            )
+        )
+        handler = SyscallHandler(db=db, workspace_path=workspace)
+        task = asyncio.create_task(
+            handler.mediate(
+                call=ToolCall(id="1", name="hang_tool", args={}),
+                session=_make_session("contact-1"),
+                agent_config=_make_agent_config(["hang_tool"]),
+                run_id="run-interrupt",
+            )
+        )
+        await asyncio.wait_for(started.wait(), timeout=5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        audit = await db.scalar(
+            select(AuditRecord).where(AuditRecord.capability_name == "hang_tool")
+        )
+        assert audit is not None
+        assert audit.outcome == "interrupted"
 
     async def test_large_read_file_output_is_not_truncated(self, db, workspace):
         import os

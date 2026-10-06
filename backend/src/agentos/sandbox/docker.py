@@ -102,11 +102,10 @@ class DockerBackend(SandboxBackend):
             self.is_available()
         return None if self._probe_cache else self._reason
 
-    async def run_command(
-        self, workspace_path: str, command: str, timeout: int = 30, allow_network: bool = False
-    ) -> ShellResult:
+    def _docker_argv(
+        self, workspace_path: str, command: str, allow_network: bool, container_name: str
+    ) -> list[str]:
         workspace = str(Path(workspace_path).resolve())
-        container_name = f"caberos-sandbox-{uuid.uuid4().hex}"
         args = [
             "docker",
             "run",
@@ -125,6 +124,26 @@ class DockerBackend(SandboxBackend):
         if not allow_network:
             args += ["--network", "none"]
         args += [_SANDBOX_IMAGE, "/bin/sh", "-c", command]
+        return args
+
+    def spawn_argv(
+        self, workspace_path: str, command: str, allow_network: bool = False
+    ) -> list[str]:
+        """Argv for a background terminal.
+
+        The terminal registry kills the local `docker run` client on close, which
+        does not stop the container the daemon is running; `--rm` removes it once
+        its command ends. Prefer a native backend for long-running terminals.
+        """
+        return self._docker_argv(
+            workspace_path, command, allow_network, f"caberos-sandbox-{uuid.uuid4().hex}"
+        )
+
+    async def run_command(
+        self, workspace_path: str, command: str, timeout: int = 30, allow_network: bool = False
+    ) -> ShellResult:
+        container_name = f"caberos-sandbox-{uuid.uuid4().hex}"
+        args = self._docker_argv(workspace_path, command, allow_network, container_name)
 
         start = time.monotonic()
         proc = await asyncio.create_subprocess_exec(

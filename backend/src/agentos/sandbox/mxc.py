@@ -30,6 +30,7 @@ can set that variable itself or put `wxc-exec` on PATH.
 """
 
 import asyncio
+import contextlib
 import json
 import ntpath
 import os
@@ -39,9 +40,28 @@ import tempfile
 import time
 from pathlib import Path
 
-from .base import SandboxBackend, ShellResult
+from .base import SandboxBackend, ShellResult, kill_process_group
 
 _PROBE_TIMEOUT = 10
+
+
+_POLICY_PREFIX = "caberos-mxc-"
+_POLICY_MAX_AGE_SECONDS = 3600
+
+
+def _sweep_stale_policies() -> None:
+    """Delete policy files left by spawned terminals that outlived their call.
+
+    spawn_argv hands the file to a process whose lifetime the terminal registry
+    owns, so nothing can delete it right after launch. A policy holds only the
+    workspace path and an allowlisted environment, no secrets, so an hour of
+    lag before cleanup is harmless.
+    """
+    cutoff = time.time() - _POLICY_MAX_AGE_SECONDS
+    for stale in Path(tempfile.gettempdir()).glob(f"{_POLICY_PREFIX}*.json"):
+        with contextlib.suppress(OSError):
+            if stale.stat().st_mtime < cutoff:
+                stale.unlink()
 
 
 def _find_exe() -> str | None:
@@ -255,57 +275,63 @@ class MxcBackend(SandboxBackend):
             "other platforms."
         )
 
-    async def run_command(
-        self, workspace_path: str, command: str, timeout: int = 30, allow_network: bool = False
-    ) -> ShellResult:
-        exe = _find_exe()
-        if exe is None:
-            return ShellResult(
-                stdout="",
-                stderr="MXC backend selected but wxc-exec.exe disappeared.",
-                exit_code=-1,
-                duration_ms=0,
-            )
-
-        workspace = str(Path(workspace_path).resolve())
-
+    def _refusal(self, workspace_path: str, workspace: str) -> str | None:
+        """Why this workspace cannot be sandboxed, or None when it can."""
         # `prepare-system-drive` grants the AppContainer SIDs access to the
         # Windows system drive only (verified by hand: works flawlessly for a
         # workspace on C:, fails with a bare "Access is denied" for one on
         # D:). is_available()'s probe runs under %TEMP%, which is virtually
-        # always on the system drive, so it cannot catch this per-call — fail
-        # fast here with a real explanation instead of the opaque OS error.
+        # always on the system drive, so it cannot catch this per-call - fail
+        # fast with a real explanation instead of the opaque OS error.
         system_drive = (os.environ.get("SystemDrive") or "C:").rstrip("\\").upper()
         workspace_drive = (
             ntpath.splitdrive(workspace_path)[0] or ntpath.splitdrive(workspace)[0]
         ).upper()
         if workspace_drive and workspace_drive != system_drive:
-            return ShellResult(
-                stdout="",
-                stderr=(
-                    f"MXC (experimental) cannot access workspaces outside the system drive "
-                    f"({system_drive}\\) — this workspace is on {workspace_drive}\\. "
-                    "wxc-host-prep.exe prepare-system-drive only grants rights to the system "
-                    "drive root, with no per-drive option. Keep agent workspaces on the "
-                    "system drive (the desktop app's default data directory already is)."
-                ),
-                exit_code=-1,
-                duration_ms=0,
+            return (
+                f"MXC (experimental) cannot access workspaces outside the system drive "
+                f"({system_drive}\\) - this workspace is on {workspace_drive}\\. "
+                "wxc-host-prep.exe prepare-system-drive only grants rights to the system "
+                "drive root, with no per-drive option. Keep agent workspaces on the "
+                "system drive (the desktop app's default data directory already is)."
             )
+        return None
 
+    def spawn_argv(
+        self, workspace_path: str, command: str, allow_network: bool = False
+    ) -> list[str]:
+        """Argv for `wxc-exec.exe <policy.json>`; the policy file is swept on later calls.
+
+        Raises RuntimeError rather than returning an argv when the command cannot be
+        sandboxed, so a terminal never starts unconfined.
+        """
+        exe = _find_exe()
+        if exe is None:
+            raise RuntimeError("MXC backend selected but wxc-exec.exe disappeared.")
+        workspace = str(Path(workspace_path).resolve())
+        refusal = self._refusal(workspace_path, workspace)
+        if refusal:
+            raise RuntimeError(refusal)
+        _sweep_stale_policies()
         config = _build_config(workspace, command, allow_network)
-
-        start = time.monotonic()
         with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False, prefix="caberos-mxc-"
+            mode="w", suffix=".json", delete=False, prefix=_POLICY_PREFIX
         ) as f:
             json.dump(config, f)
-            config_path = f.name
+        return [exe, f.name]
+
+    async def run_command(
+        self, workspace_path: str, command: str, timeout: int = 30, allow_network: bool = False
+    ) -> ShellResult:
+        start = time.monotonic()
+        try:
+            argv = self.spawn_argv(workspace_path, command, allow_network)
+        except RuntimeError as exc:
+            return ShellResult(stdout="", stderr=str(exc), exit_code=-1, duration_ms=0)
 
         try:
             proc = await asyncio.create_subprocess_exec(
-                exe,
-                config_path,
+                *argv,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -322,16 +348,11 @@ class MxcBackend(SandboxBackend):
                 )
             except TimeoutError:
                 # Best-effort: unlike DockerBackend there is no separate
-                # "container kill" verb exposed by this CLI — killing the
-                # wxc-exec.exe process is the only lever available, and
+                # "container kill" verb exposed by this CLI - killing the
+                # wxc-exec.exe tree is the only lever available, and
                 # whether that reliably tears down whatever it spawned
                 # inside the ProcessContainer has not been verified live.
-                if proc.returncode is None:
-                    proc.kill()
-                try:
-                    await asyncio.wait_for(proc.wait(), timeout=5)
-                except (TimeoutError, ProcessLookupError):
-                    pass
+                await kill_process_group(proc, grace=5)
                 elapsed = int((time.monotonic() - start) * 1000)
                 return ShellResult(
                     stdout="",
@@ -340,7 +361,7 @@ class MxcBackend(SandboxBackend):
                     duration_ms=elapsed,
                 )
         finally:
-            Path(config_path).unlink(missing_ok=True)
+            Path(argv[1]).unlink(missing_ok=True)
 
 
 def _build_config(workspace: str, command: str, allow_network: bool) -> dict:

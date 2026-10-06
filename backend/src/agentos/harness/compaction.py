@@ -343,6 +343,7 @@ async def generate_summary(
     model_str: str,
     api_key: str | None = None,
     base_url: str | None = None,
+    use_responses: bool = False,
 ) -> str:
     """Phase 3: Generate or update a structured summary of the middle messages.
 
@@ -386,17 +387,39 @@ async def generate_summary(
 
     messages = [{"role": "user", "content": prompt}]
 
-    kwargs: dict[str, Any] = {
-        "model": model_str,
-        "messages": messages,
-        "max_tokens": 1000,  # Summary should be compact
-    }
-    if api_key:
-        kwargs["api_key"] = api_key
-    if base_url:
-        kwargs["api_base"] = base_url
-
     try:
+        if use_responses:
+            # Responses API — the default for api.openai.com models. Reasoning
+            # models reject max_tokens/chat-completions entirely, so summaries
+            # must go through /v1/responses too. Generous output cap: reasoning
+            # tokens share the budget with the summary text.
+            kwargs: dict[str, Any] = {
+                "model": model_str,
+                "input": messages,
+                "max_output_tokens": 2000,
+            }
+            if api_key:
+                kwargs["api_key"] = api_key
+            if base_url:
+                kwargs["api_base"] = base_url
+            response = await litellm.aresponses(**kwargs)
+            content = ""
+            for item in getattr(response, "output", []) or []:
+                if getattr(item, "type", "") == "message":
+                    for block in getattr(item, "content", []) or []:
+                        if getattr(block, "type", "") in ("output_text", "text"):
+                            content += getattr(block, "text", "") or ""
+            return content
+        kwargs = {
+            "model": model_str,
+            "messages": messages,
+            "max_tokens": 1000,  # Summary should be compact
+        }
+        if api_key:
+            kwargs["api_key"] = api_key
+        if base_url:
+            kwargs["api_base"] = base_url
+
         response = await litellm.acompletion(**kwargs)
         return response.choices[0].message.content or ""
     except Exception as e:
@@ -530,6 +553,7 @@ async def compact_context(
     api_key: str | None = None,
     base_url: str | None = None,
     force: bool = False,
+    use_responses: bool = False,
 ) -> CompactionResult:
     """Run the 4-phase compaction pipeline.
 
@@ -601,6 +625,7 @@ async def compact_context(
         model_str=model_str,
         api_key=api_key,
         base_url=base_url,
+        use_responses=use_responses,
     )
 
     # Phase 4: Reassemble

@@ -26,6 +26,7 @@ from .api import (  # noqa: E402
     agent_files,
     agents,
     approvals,
+    browser,
     channels,
     chat,
     data,
@@ -36,6 +37,7 @@ from .api import (  # noqa: E402
     observability,
     providers,
     scheduler,
+    schedules,
     settings,
     skills,
 )
@@ -112,9 +114,13 @@ async def lifespan(app: FastAPI):
     async with async_session_factory() as db:
 
         async def _reconcile_runs() -> None:
-            # Find orphaned running runs
+            # Find orphaned runs — pending/awaiting_approval rows are just as
+            # dead as running ones: their in-memory execution context is gone,
+            # so they would sit as zombie "running" rows forever.
             orphaned = await db.execute(
-                select(Run.id, Run.agent_id, Run.session_id).where(Run.status == "running")
+                select(Run.id, Run.agent_id, Run.session_id).where(
+                    Run.status.in_(["pending", "running", "awaiting_approval"])
+                )
             )
             orphaned_rows = orphaned.all()
             if not orphaned_rows:
@@ -152,6 +158,38 @@ async def lifespan(app: FastAPI):
             await db.commit()
 
         await retry_locked_transaction(_reconcile_runs, db, "startup_reconcile_runs")
+
+        # Index generations: a gateway kill mid-build leaves a committed
+        # 'building' row that would 409 every future rebuild — reconcile to
+        # 'failed' (same dead-context argument as interrupted runs).
+        from .knowledge.indexing import reconcile_stale_builds
+
+        stale = await reconcile_stale_builds(db)
+        if stale:
+            logging.getLogger("agentos.main").info(
+                "[startup] Marked %d stale index generation(s) failed",
+                stale,
+            )
+
+        # Terminal processes never survive a gateway restart — reconcile
+        # persisted `running` rows to `interrupted`.
+        from .terminal.registry import terminal_registry
+
+        interrupted = await terminal_registry.reconcile_startup(db)
+        if interrupted:
+            logging.getLogger("agentos.main").info(
+                "[startup] Marked %d terminal(s) interrupted from previous run",
+                interrupted,
+            )
+        await db.commit()
+
+    # Sync skills on disk into Skill/SkillRevision rows (W6): seeds built-ins,
+    # migrates legacy imports out of skills/, indexes agent-local workspace dirs.
+    from .skills.reconcile import reconcile_skills
+
+    async with async_session_factory() as db:
+        await retry_locked_transaction(lambda: reconcile_skills(db), db, "startup_reconcile_skills")
+        await db.commit()
 
     # Clean up expired auth sessions from previous runs
     from .auth import cleanup_expired_sessions
@@ -216,6 +254,16 @@ async def lifespan(app: FastAPI):
     )
 
     yield
+
+    # Shutdown: kill every background terminal process group and browser
+    # session first — agents must not orphan processes on gateway exit.
+    from .terminal.registry import terminal_registry
+
+    await terminal_registry.shutdown_all()
+
+    from .browser.registry import browser_registry
+
+    await browser_registry.shutdown_all()
 
     # Shutdown: disconnect all MCP servers
     await mcp_registry.disconnect_all()
@@ -295,12 +343,14 @@ app.include_router(elicitation.router)
 app.include_router(knowledge.router)
 app.include_router(skills.router)
 app.include_router(scheduler.router)
+app.include_router(schedules.router)
 app.include_router(mcp.router)
 app.include_router(notifications.router)
 app.include_router(channels.router)
 app.include_router(observability.router)
 app.include_router(settings.router)
 app.include_router(data.router)
+app.include_router(browser.router)
 
 
 @app.get("/health")

@@ -1,9 +1,9 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import {
-  X, Save, Copy, Download, Upload, Power, Trash2,
+  X, Save, Copy, Download, Upload, Power, Trash2, ArrowLeft,
   FileText, Folder, ChevronRight, ChevronDown, FolderOpen,
 } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { useConfirm } from "@/lib/confirmHook";
 import type {
   Agent,
@@ -18,6 +18,7 @@ import type {
 } from "@/lib/types";
 import { ModelSelect } from "@/components/ModelSelect";
 import { ThinkingToggle } from "@/components/ThinkingToggle";
+import { PreviewPanel } from "@/components/previews/PreviewPanel";
 
 interface SettingsOverlayProps {
   agent: Agent | null;
@@ -128,7 +129,7 @@ export function SettingsOverlay({ agent, open, onClose, onSaved, providers }: Se
           )}
           {tab === "Memory" && <MemoryTab agentId={agent?.id || ""} onClose={onClose} showSaved={showSaved} />}
           {tab === "Skills" && <SkillsTab agentId={agent?.id || ""} showSaved={showSaved} />}
-          {tab === "Workspace" && <WorkspaceTab agentId={agent?.id || ""} />}
+          {tab === "Workspace" && <WorkspaceTab agentId={agent?.id || ""} showSaved={showSaved} />}
           {tab === "Channels" && <ChannelsTab agentId={agent?.id || ""} />}
         </div>
       </div>
@@ -481,6 +482,7 @@ function capabilityState(agent: Agent | null, allCaps: CapabilityInfo[]) {
   const serverModes = new Map<string, GrantMode>();
   const approvals = new Set<string>();
   const serverApprovals = new Map<string, boolean>();
+  const denied = new Set<string>();
 
   if (agent?.capabilities) {
     for (const grant of agent.capabilities) {
@@ -493,7 +495,8 @@ function capabilityState(agent: Agent | null, allCaps: CapabilityInfo[]) {
       }
       const kind = allCaps.find((cap) => cap.name === grant.name)?.kind || "tool";
       const mode = grantMode(grant, kind);
-      if (mode !== "none") grantModes.set(grant.name, mode);
+      if (mode === "none") denied.add(grant.name);
+      else grantModes.set(grant.name, mode);
       if (grant.require_approval) approvals.add(grant.name);
     }
   } else {
@@ -505,7 +508,7 @@ function capabilityState(agent: Agent | null, allCaps: CapabilityInfo[]) {
     }
   }
 
-  return { grantModes, serverModes, approvals, serverApprovals };
+  return { grantModes, serverModes, approvals, serverApprovals, denied };
 }
 
 function CapabilitiesTab({
@@ -522,6 +525,7 @@ function CapabilitiesTab({
   const [serverModes, setServerModes] = useState<Map<string, GrantMode>>(new Map());
   const [approvals, setApprovals] = useState<Set<string>>(new Set());
   const [serverApprovals, setServerApprovals] = useState<Map<string, boolean>>(new Map());
+  const [denied, setDenied] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [allCaps, setAllCaps] = useState<CapabilityInfo[]>(FALLBACK_CAPABILITIES);
@@ -554,11 +558,18 @@ function CapabilitiesTab({
     setServerModes(state.serverModes);
     setApprovals(state.approvals);
     setServerApprovals(state.serverApprovals);
+    setDenied(state.denied);
   }, [agent, allCaps]);
 
   const modeFor = (cap: CapabilityInfo): GrantMode => {
-    if (cap.server_id && serverModes.has(cap.server_id)) {
-      return serverModes.get(cap.server_id) || "none";
+    if (cap.kind === "mcp_tool") {
+      // Explicit entries beat the server wildcard (same precedence as backend).
+      if (denied.has(cap.name)) return "none";
+      if (grantModes.has(cap.name)) return grantModes.get(cap.name)!;
+      if (cap.server_id && serverModes.has(cap.server_id)) {
+        return serverModes.get(cap.server_id) || "none";
+      }
+      return "none";
     }
     return grantModes.get(cap.name) || "none";
   };
@@ -568,6 +579,7 @@ function CapabilitiesTab({
     serverModeMap: Map<string, GrantMode> = serverModes,
     approvalSet: Set<string> = approvals,
     serverApprovalMap: Map<string, boolean> = serverApprovals,
+    deniedSet: Set<string> = denied,
   ) => {
     if (!agent) return;
     setSaving(true);
@@ -596,7 +608,8 @@ function CapabilitiesTab({
       }
       for (const [serverId, serverCaps] of mcpServers) {
         const serverMode = serverModeMap.get(serverId) || "none";
-        if (serverId !== "other" && serverMode !== "none") {
+        const serverGranted = serverId !== "other" && serverMode !== "none";
+        if (serverGranted) {
           caps.push({
             name: `${SERVER_GRANT_PREFIX}${serverId}`,
             subject: "none",
@@ -604,9 +617,20 @@ function CapabilitiesTab({
               serverApprovalMap.get(serverId) ?? serverCaps.some((cap) => cap.egress),
             always_loaded: serverMode === "always",
           });
-          continue;
         }
         for (const cap of serverCaps) {
+          // Explicit deny overrides the wildcard — keep the grant so the
+          // backend honors it (exact match beats the server grant).
+          if (deniedSet.has(cap.name)) {
+            caps.push({
+              name: cap.name,
+              enabled: false,
+              subject: "none",
+              require_approval: false,
+              always_loaded: false,
+            });
+            continue;
+          }
           const mode = modeMap.get(cap.name) || "none";
           if (mode !== "none") {
             caps.push({
@@ -622,9 +646,8 @@ function CapabilitiesTab({
       await api.updateAgent(agent.id, { capabilities: caps });
       onSaved();
     } catch (error) {
-      const message = error instanceof Error ? error.message : "";
       setSaveError(
-        message.startsWith("503:")
+        error instanceof ApiError && error.status === 503
           ? "The database is busy. Nothing was saved; please retry."
           : "Could not save capability settings; please retry.",
       );
@@ -635,6 +658,7 @@ function CapabilitiesTab({
         setServerModes(state.serverModes);
         setApprovals(state.approvals);
         setServerApprovals(state.serverApprovals);
+        setDenied(state.denied);
         onSaved();
       } catch {
       }
@@ -644,11 +668,35 @@ function CapabilitiesTab({
   };
 
   const updateMode = (name: string, mode: GrantMode) => {
+    const cap = allCaps.find((c) => c.name === name);
     const next = new Map(grantModes);
-    if (mode === "none") next.delete(name);
-    else next.set(name, mode);
+    const nextDenied = new Set(denied);
+    const inherited =
+      cap?.kind === "mcp_tool" && cap.server_id
+        ? serverModes.get(cap.server_id) || "none"
+        : "none";
+    if (cap?.kind === "mcp_tool" && inherited !== "none") {
+      // Under a granted server: explicit entries only exist as overrides —
+      // matching the inherited mode falls back to inheriting, "none" writes
+      // an explicit deny, anything else writes an explicit grant.
+      if (mode === inherited) {
+        next.delete(name);
+        nextDenied.delete(name);
+      } else if (mode === "none") {
+        next.delete(name);
+        nextDenied.add(name);
+      } else {
+        next.set(name, mode);
+        nextDenied.delete(name);
+      }
+    } else {
+      if (mode === "none") next.delete(name);
+      else next.set(name, mode);
+      nextDenied.delete(name);
+    }
     setGrantModes(next);
-    void saveCapabilities(next, serverModes, approvals, serverApprovals);
+    setDenied(nextDenied);
+    void saveCapabilities(next, serverModes, approvals, serverApprovals, nextDenied);
   };
 
   const updateServerMode = (serverId: string, mode: GrantMode, caps: CapabilityInfo[]) => {
@@ -685,13 +733,25 @@ function CapabilitiesTab({
 
   const setAllModes = (caps: CapabilityInfo[], enable: boolean) => {
     const next = new Map(grantModes);
+    const nextDenied = new Set(denied);
     for (const cap of caps) {
       if (enable) next.set(cap.name, cap.kind === "mcp_tool" ? "on_demand" : "always");
       else next.delete(cap.name);
+      nextDenied.delete(cap.name);
     }
     setGrantModes(next);
-    void saveCapabilities(next, serverModes, approvals, serverApprovals);
+    setDenied(nextDenied);
+    void saveCapabilities(next, serverModes, approvals, serverApprovals, nextDenied);
   };
+
+  // A row inherits when the server wildcard covers it and it has no explicit
+  // grant or deny of its own (backend: exact match beats the wildcard).
+  const isInherited = (cap: CapabilityInfo) =>
+    cap.kind === "mcp_tool" &&
+    !!cap.server_id &&
+    serverModes.has(cap.server_id) &&
+    !denied.has(cap.name) &&
+    !grantModes.has(cap.name);
 
   // Group capabilities: built-in vs MCP (grouped by stable server ID)
   const builtinCaps = allCaps.filter((cap) => cap.kind !== "mcp_tool");
@@ -751,6 +811,7 @@ function CapabilitiesTab({
         title="Built-in Tools"
         caps={builtinCaps}
         modeFor={modeFor}
+        isInherited={isInherited}
         onModeChange={updateMode}
         onSetAll={setAllModes}
         approvals={approvals}
@@ -767,6 +828,7 @@ function CapabilitiesTab({
             title={`MCP: ${serverName}`}
             caps={caps}
             modeFor={modeFor}
+            isInherited={isInherited}
             onModeChange={updateMode}
             onSetAll={setAllModes}
             approvals={approvals}
@@ -795,6 +857,7 @@ function CapabilityGroup({
   title,
   caps,
   modeFor,
+  isInherited,
   onModeChange,
   onSetAll,
   approvals,
@@ -808,6 +871,7 @@ function CapabilityGroup({
   title: string;
   caps: CapabilityInfo[];
   modeFor: (cap: CapabilityInfo) => GrantMode;
+  isInherited: (cap: CapabilityInfo) => boolean;
   onModeChange: (name: string, mode: GrantMode) => void;
   onSetAll: (caps: CapabilityInfo[], enable: boolean) => void;
   approvals: Set<string>;
@@ -891,7 +955,7 @@ function CapabilityGroup({
         <div className="space-y-1.5 px-4 pb-3">
           {caps.map((cap) => {
             const mode = modeFor(cap);
-            const viaServer = serverGrantActive && serverMode !== "none";
+            const viaServer = serverGrantActive && serverMode !== "none" && isInherited(cap);
             const needsApproval = approvals.has(cap.name);
             return (
               <div
@@ -927,20 +991,19 @@ function CapabilityGroup({
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
-                  {viaServer ? (
+                  {viaServer && (
                     <span className="font-mono text-[10px] text-[var(--ink-3)]">via server</span>
-                  ) : (
-                    <select
-                      value={mode}
-                      onChange={(event) => onModeChange(cap.name, event.target.value as GrantMode)}
-                      className="rounded-[4px] border px-1.5 py-1 text-[10px]"
-                      style={{ borderColor: "var(--border)", color: "var(--ink-2)", background: "var(--white)" }}
-                    >
-                      <option value="none">Not permitted</option>
-                      <option value="on_demand">On demand</option>
-                      <option value="always">Always</option>
-                    </select>
                   )}
+                  <select
+                    value={mode}
+                    onChange={(event) => onModeChange(cap.name, event.target.value as GrantMode)}
+                    className="rounded-[4px] border px-1.5 py-1 text-[10px]"
+                    style={{ borderColor: "var(--border)", color: "var(--ink-2)", background: "var(--white)" }}
+                  >
+                    <option value="none">Not permitted</option>
+                    <option value="on_demand">On demand</option>
+                    <option value="always">Always</option>
+                  </select>
                   {!viaServer && mode !== "none" && cap.egress && (
                     <label className="flex items-center gap-1.5 text-[10px] text-[var(--ink-2)]">
                       <input type="checkbox" checked={needsApproval} onChange={() => toggleApproval(cap.name)} style={{ cursor: "pointer" }} />
@@ -1020,7 +1083,7 @@ function SkillsTab({ agentId, showSaved }: { agentId: string; showSaved: (msg: s
         api.listSkills(),
         api.listAgentSkills(agentId),
       ]);
-      setSystemSkills(globalData.skills);
+      setSystemSkills(globalData.skills.filter((s) => s.scope !== "agent-local"));
       setAgentSkills(agentData);
     } catch {} finally {
       setLoading(false);
@@ -1042,11 +1105,11 @@ function SkillsTab({ agentId, showSaved }: { agentId: string; showSaved: (msg: s
     showSaved("Skill deleted");
   };
 
-  const handlePromote = async (name: string) => {
+  const handlePromote = async (skill: Skill) => {
     try {
-      await api.promoteSkill(name, agentId);
+      await api.promoteSkill(skill.id!, { change_summary: "promoted from agent settings" });
       load();
-      showSaved(`Promoted "${name}" to global`);
+      showSaved(`Promoted "${skill.name}" to global`);
     } catch (e) {
       showSaved(`Promote failed: ${e instanceof Error ? e.message : "error"}`);
     }
@@ -1119,14 +1182,16 @@ function SkillsTab({ agentId, showSaved }: { agentId: string; showSaved: (msg: s
                   )}
                 </div>
                 <div className="flex items-center gap-2 ml-2">
-                  <button
-                    onClick={() => handlePromote(skill.name)}
-                    className="text-[12px] text-[var(--accent)] transition hover:underline"
-                    style={{ border: "none", background: "none", cursor: "pointer" }}
-                    title="Promote to global"
-                  >
-                    Promote
-                  </button>
+                  {skill.id && (
+                    <button
+                      onClick={() => handlePromote(skill)}
+                      className="text-[12px] text-[var(--accent)] transition hover:underline"
+                      style={{ border: "none", background: "none", cursor: "pointer" }}
+                      title="Promote to global"
+                    >
+                      Promote
+                    </button>
+                  )}
                   <button
                     onClick={() => handleDeleteAgentSkill(skill.name)}
                     className="text-[var(--ink-3)] transition hover:text-[var(--danger)]"
@@ -1145,123 +1210,327 @@ function SkillsTab({ agentId, showSaved }: { agentId: string; showSaved: (msg: s
 }
 
 // --- Workspace Tab ---
+//
+// Lazy file tree + split preview (W3): each directory fetches its children
+// on first expand — the API lists one level at a time — and caches them by
+// path, indenting nested levels like the Skills resource tree. The tree
+// stays navigable on the left while the shared PreviewPanel renders the
+// selected file on the right; narrow layouts fall back to a full-width
+// preview with Back.
 
-function WorkspaceTab({ agentId }: { agentId: string }) {
-  const [path, setPath] = useState("");
-  const [entries, setEntries] = useState<WorkspaceEntry[]>([]);
-  const [fileContent, setFileContent] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+interface WorkspaceTreeProps {
+  /** dir path ("" = root) → loaded children */
+  tree: Map<string, WorkspaceEntry[]>;
+  expanded: Set<string>;
+  loadingDirs: Set<string>;
+  previewPath: string | null;
+  onToggle: (dirPath: string) => void;
+  onOpen: (filePath: string) => void;
+  onDelete: (entry: WorkspaceEntry, rel: string) => void;
+}
 
-  const load = useCallback(async (p: string) => {
+function WorkspaceTab({ agentId, showSaved }: { agentId: string; showSaved: (msg: string) => void }) {
+  const { confirm } = useConfirm();
+  const [tree, setTree] = useState<Map<string, WorkspaceEntry[]>>(new Map());
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [loadingDirs, setLoadingDirs] = useState<Set<string>>(new Set());
+  const [previewPath, setPreviewPath] = useState<string | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  // Saved when the preview opens: where the browser was scrolled and which
+  // row was selected, so closing the preview lands the operator back
+  // exactly where they left off.
+  const browseStateRef = useRef<{ scrollTop: number; selected: string | null }>({
+    scrollTop: 0,
+    selected: null,
+  });
+
+  const fetchDir = useCallback(async (dirPath: string) => {
     if (!agentId) return;
-    setLoading(true);
-    setFileContent(null);
+    setLoadingDirs((prev) => new Set(prev).add(dirPath));
     try {
-      const result = await api.listWorkspace(agentId, p);
-      if (result.type === "dir") {
-        setEntries(result.entries || []);
-      } else {
-        setFileContent(result.content || "");
-        setEntries([]);
-      }
+      const result = await api.listWorkspace(agentId, dirPath);
+      const list = result.type === "dir" ? result.entries ?? [] : [];
+      setTree((prev) => new Map(prev).set(dirPath, list));
     } catch {
-      setEntries([]);
+      // Same contract as before: a failed listing renders as empty.
+      setTree((prev) => new Map(prev).set(dirPath, []));
     } finally {
-      setLoading(false);
+      setLoadingDirs((prev) => {
+        const next = new Set(prev);
+        next.delete(dirPath);
+        return next;
+      });
     }
   }, [agentId]);
 
-  useEffect(() => { load(""); }, [load]);
+  useEffect(() => { void fetchDir(""); }, [fetchDir]);
 
-  const navigate = (name: string) => {
-    const newPath = path ? `${path}/${name}` : name;
-    setPath(newPath);
-    load(newPath);
+  const toggleDir = (dirPath: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(dirPath)) next.delete(dirPath);
+      else next.add(dirPath);
+      return next;
+    });
+    if (!tree.has(dirPath) && !loadingDirs.has(dirPath)) void fetchDir(dirPath);
   };
 
-  const goUp = () => {
-    const parts = path.split("/").filter(Boolean);
-    parts.pop();
-    const up = parts.join("/");
-    setPath(up);
-    load(up);
+  const openFile = (filePath: string) => {
+    browseStateRef.current = {
+      scrollTop: listRef.current?.scrollTop ?? 0,
+      selected: filePath,
+    };
+    setPreviewPath(filePath);
   };
 
-  const breadcrumbs = path ? path.split("/").filter(Boolean) : [];
+  const closePreview = () => {
+    const saved = browseStateRef.current;
+    setPreviewPath(null);
+    // Restore the browser's scroll + focus after React remounts the list.
+    requestAnimationFrame(() => {
+      if (listRef.current) listRef.current.scrollTop = saved.scrollTop;
+      if (saved.selected) {
+        listRef.current
+          ?.querySelector<HTMLButtonElement>(`[data-path="${CSS.escape(saved.selected)}"]`)
+          ?.focus();
+      }
+    });
+  };
+
+  const errDetail = (e: unknown) => {
+    const m = e instanceof Error ? e.message : String(e);
+    try {
+      return JSON.parse(m.replace(/^\d+:\s*/, "")).detail ?? m;
+    } catch {
+      return m;
+    }
+  };
+
+  // Splice a deleted path out of its parent's cached children; deleting a
+  // dir also drops its cached subtree (expanded/loading state included) —
+  // the server already removed everything, so no refetch is needed.
+  const pruneDeleted = (rel: string, wasDir: boolean) => {
+    const parent = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
+    const name = rel.split("/").pop()!;
+    setTree((prev) => {
+      const next = new Map(prev);
+      const list = next.get(parent);
+      if (list) next.set(parent, list.filter((e) => e.name !== name));
+      if (wasDir) {
+        for (const key of [...next.keys()]) {
+          if (key === rel || key.startsWith(`${rel}/`)) next.delete(key);
+        }
+      }
+      return next;
+    });
+    if (wasDir) {
+      const pruneSet = (prev: Set<string>) => {
+        const next = new Set(prev);
+        for (const key of [...next]) {
+          if (key === rel || key.startsWith(`${rel}/`)) next.delete(key);
+        }
+        return next;
+      };
+      setExpanded(pruneSet);
+      setLoadingDirs(pruneSet);
+    }
+  };
+
+  const handleDelete = async (entry: WorkspaceEntry, rel: string) => {
+    const ok = await confirm({
+      title: `Delete ${entry.type === "dir" ? "folder" : "file"}?`,
+      message: `Delete "${rel}"${entry.type === "dir" ? " and everything inside it" : ""}? This cannot be undone.`,
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await api.deleteWorkspaceEntry(agentId, rel);
+      if (previewPath === rel || previewPath?.startsWith(`${rel}/`)) closePreview();
+      pruneDeleted(rel, entry.type === "dir");
+      showSaved(`Deleted ${entry.name}`);
+    } catch (e) {
+      showSaved(`Delete failed: ${errDetail(e)}`);
+    }
+  };
+
+  const rootEntries = tree.get("");
+
+  const treeList = (
+    <div ref={listRef} className="h-full overflow-auto py-1">
+      <WorkspaceTreeLevel
+        dirPath=""
+        depth={0}
+        tree={tree}
+        expanded={expanded}
+        loadingDirs={loadingDirs}
+        previewPath={previewPath}
+        onToggle={toggleDir}
+        onOpen={openFile}
+        onDelete={(entry, rel) => void handleDelete(entry, rel)}
+      />
+      {rootEntries && rootEntries.length === 0 && (
+        <p className="py-8 text-center text-[13px] text-[var(--ink-3)]">Empty directory.</p>
+      )}
+    </div>
+  );
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-1 text-[12px] text-[var(--ink-2)]">
-        <button onClick={() => { setPath(""); load(""); }} style={{ border: "none", background: "none", cursor: "pointer", color: "var(--accent)" }}>
-          workspace
-        </button>
-        {breadcrumbs.map((part, i) => (
-          <span key={i} className="flex items-center gap-1">
-            <ChevronRight className="h-3 w-3" />
-            <button
-              onClick={() => {
-                const p = breadcrumbs.slice(0, i + 1).join("/");
-                setPath(p);
-                load(p);
-              }}
-              style={{ border: "none", background: "none", cursor: "pointer", color: i === breadcrumbs.length - 1 ? "var(--ink)" : "var(--accent)" }}
-            >
-              {part}
-            </button>
-          </span>
-        ))}
+      <div className="flex items-center gap-1.5 text-[12px] text-[var(--ink-2)]">
+        <FolderOpen className="h-3.5 w-3.5" style={{ color: "var(--accent)" }} />
+        <span>workspace</span>
       </div>
 
-      {loading ? (
+      {!rootEntries ? (
         <p className="text-[13px] text-[var(--ink-2)]">Loading…</p>
-      ) : fileContent !== null ? (
+      ) : previewPath ? (
         <div>
-          <button onClick={goUp} className="mb-2 flex items-center gap-1 text-[12px] text-[var(--accent)]" style={{ border: "none", background: "none", cursor: "pointer" }}>
-            <FolderOpen className="h-3.5 w-3.5" /> Back
-          </button>
-          <pre
-            className="max-h-[60vh] overflow-auto rounded-[5px] border p-3 font-mono text-[12px] leading-[1.5] text-[var(--ink)]"
-            style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+          {/* Narrow layouts get a full-width preview with a way back —
+              the split browser column only exists at md+. */}
+          <button
+            onClick={closePreview}
+            className="mb-2 flex items-center gap-1.5 rounded-[5px] px-2 py-1 text-[12px] text-[var(--ink-2)] transition hover:bg-[var(--surface)] md:hidden"
+            style={{ border: "none", background: "none", cursor: "pointer" }}
           >
-            {fileContent}
-          </pre>
+            <ArrowLeft className="h-3.5 w-3.5" /> Back to Workspace
+          </button>
+          <div className="flex gap-0 overflow-hidden rounded-[5px] border border-[var(--border)]" style={{ height: "60vh" }}>
+            <div className="hidden w-56 shrink-0 overflow-auto border-r border-[var(--border)] p-2 md:block">
+              {treeList}
+            </div>
+            <div className="min-w-0 flex-1">
+              <PreviewPanel
+                agentId={agentId}
+                source={{ path: previewPath }}
+                onClose={closePreview}
+                onDeleted={(p) => {
+                  closePreview();
+                  showSaved(`Deleted ${p.split("/").pop()}`);
+                  // A delete happened inside the file's parent dir — refetch
+                  // it if its children were already loaded so the tree stays
+                  // in sync with the server.
+                  const parent = p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
+                  if (tree.has(parent)) void fetchDir(parent);
+                }}
+              />
+            </div>
+          </div>
         </div>
-      ) : entries.length === 0 ? (
-        <p className="py-8 text-center text-[13px] text-[var(--ink-3)]">Empty directory.</p>
       ) : (
-        <div className="space-y-1">
-          {path && (
-            <button
-              onClick={goUp}
-              className="flex w-full items-center gap-2 rounded-[5px] px-3 py-2 text-[13px] text-[var(--ink-2)] transition hover:bg-[var(--surface)]"
-              style={{ border: "none", background: "none", cursor: "pointer" }}
-            >
-              <FolderOpen className="h-4 w-4" /> ..
-            </button>
-          )}
-          {entries.map((entry) => (
-            <button
-              key={entry.name}
-              onClick={() => navigate(entry.name)}
-              className="flex w-full items-center gap-2 rounded-[5px] px-3 py-2 text-[13px] text-[var(--ink)] transition hover:bg-[var(--surface)]"
-              style={{ border: "none", background: "none", cursor: "pointer" }}
-            >
-              {entry.type === "dir" ? (
-                <Folder className="h-4 w-4" style={{ color: "var(--accent)" }} />
-              ) : (
-                <FileText className="h-4 w-4" style={{ color: "var(--ink-3)" }} />
-              )}
-              <span>{entry.name}</span>
-              {entry.type === "file" && (
-                <span className="ml-auto font-mono text-[11px] text-[var(--ink-3)]">
-                  {entry.size > 1024 ? `${(entry.size / 1024).toFixed(1)}KB` : `${entry.size}B`}
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
+        <div style={{ maxHeight: "60vh" }}>{treeList}</div>
       )}
     </div>
+  );
+}
+
+function WorkspaceTreeLevel({
+  dirPath,
+  depth,
+  tree,
+  expanded,
+  loadingDirs,
+  previewPath,
+  onToggle,
+  onOpen,
+  onDelete,
+}: WorkspaceTreeProps & { dirPath: string; depth: number }) {
+  const entries = tree.get(dirPath) ?? [];
+  return (
+    <>
+      {entries.map((entry) => {
+        const rel = dirPath ? `${dirPath}/${entry.name}` : entry.name;
+        if (entry.type === "dir") {
+          const isOpen = expanded.has(rel);
+          const Chevron = isOpen ? ChevronDown : ChevronRight;
+          const FolderIcon = isOpen ? FolderOpen : Folder;
+          const kids = tree.get(rel);
+          return (
+            <div key={rel}>
+              <div
+                className="group flex w-full items-center rounded-[5px] transition hover:bg-[var(--surface)]"
+                style={{ background: previewPath === rel ? "var(--surface)" : "none" }}
+              >
+                <button
+                  data-path={rel}
+                  onClick={() => onToggle(rel)}
+                  className="flex min-w-0 flex-1 items-center gap-1.5 py-1.5 pr-3 text-[13px]"
+                  style={{ paddingLeft: `${depth * 16 + 8}px`, border: "none", background: "none", cursor: "pointer", color: "var(--ink)" }}
+                >
+                  <Chevron className="h-3 w-3 shrink-0 text-[var(--ink-3)]" />
+                  <FolderIcon className="h-4 w-4 shrink-0" style={{ color: "var(--accent)" }} />
+                  <span className="truncate">{entry.name}</span>
+                </button>
+                <WorkspaceDeleteButton name={entry.name} onClick={() => onDelete(entry, rel)} />
+              </div>
+              {isOpen &&
+                (loadingDirs.has(rel) && !kids ? (
+                  <p
+                    className="py-1.5 text-[12px] text-[var(--ink-3)]"
+                    style={{ paddingLeft: `${(depth + 1) * 16 + 26}px` }}
+                  >
+                    Loading…
+                  </p>
+                ) : kids && kids.length === 0 ? (
+                  <p
+                    className="py-1.5 text-[12px] text-[var(--ink-3)]"
+                    style={{ paddingLeft: `${(depth + 1) * 16 + 26}px` }}
+                  >
+                    Empty
+                  </p>
+                ) : (
+                  <WorkspaceTreeLevel
+                    dirPath={rel}
+                    depth={depth + 1}
+                    tree={tree}
+                    expanded={expanded}
+                    loadingDirs={loadingDirs}
+                    previewPath={previewPath}
+                    onToggle={onToggle}
+                    onOpen={onOpen}
+                    onDelete={onDelete}
+                  />
+                ))}
+            </div>
+          );
+        }
+        return (
+          <div
+            key={rel}
+            className="group flex w-full items-center rounded-[5px] transition hover:bg-[var(--surface)]"
+            style={{ background: previewPath === rel ? "var(--surface)" : "none" }}
+          >
+            <button
+              data-path={rel}
+              onClick={() => onOpen(rel)}
+              className="flex min-w-0 flex-1 items-center gap-2 py-1.5 pr-3 text-[13px]"
+              style={{ paddingLeft: `${depth * 16 + 26}px`, border: "none", background: "none", cursor: "pointer", color: "var(--ink)" }}
+            >
+              <FileText className="h-4 w-4 shrink-0" style={{ color: "var(--ink-3)" }} />
+              <span className="truncate">{entry.name}</span>
+              <span className="ml-auto shrink-0 font-mono text-[11px] text-[var(--ink-3)]">
+                {entry.size > 1024 ? `${(entry.size / 1024).toFixed(1)}KB` : `${entry.size}B`}
+              </span>
+            </button>
+            <WorkspaceDeleteButton name={entry.name} onClick={() => onDelete(entry, rel)} />
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+function WorkspaceDeleteButton({ name, onClick }: { name: string; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      aria-label={`Delete ${name}`}
+      title={`Delete ${name}`}
+      className="mr-1 shrink-0 rounded-[3px] p-1 text-[var(--ink-3)] opacity-0 transition hover:bg-[var(--white)] hover:text-[var(--danger)] group-hover:opacity-100"
+      style={{ border: "none", cursor: "pointer" }}
+    >
+      <Trash2 className="h-3.5 w-3.5" />
+    </button>
   );
 }
 

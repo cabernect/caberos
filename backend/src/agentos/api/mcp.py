@@ -143,7 +143,7 @@ async def create_server(
         url=req.url,
         headers=json.dumps(req.headers) if req.headers else None,
         env_template=json.dumps(req.env_template) if req.env_template else None,
-        tool_filter=json.dumps(req.tool_filter) if req.tool_filter else None,
+        tool_filter=json.dumps(req.tool_filter) if req.tool_filter is not None else None,
         enabled=req.enabled,
     )
     db.add(server)
@@ -194,6 +194,7 @@ async def delete_server(
 class UpdateServerRequest(BaseModel):
     require_approval: bool | None = None
     enabled: bool | None = None
+    tool_filter: list[str] | None = None
 
 
 @router.patch("/servers/{server_id}")
@@ -229,6 +230,12 @@ async def update_server(
         server.enabled = req.enabled
         reconnect_needed = True
 
+    # tool_filter uses model_fields_set to distinguish three states:
+    # omitted = no change, explicit null = clear filter (all tools on),
+    # list = allowlist ([] disables every tool while staying connected).
+    if "tool_filter" in req.model_fields_set:
+        server.tool_filter = json.dumps(req.tool_filter) if req.tool_filter is not None else None
+
     await db.commit()
 
     # Reconnect/disconnect if enabled state changed
@@ -242,6 +249,7 @@ async def update_server(
         "id": server.id,
         "require_approval": server.require_approval,
         "enabled": server.enabled,
+        "tool_filter": json.loads(server.tool_filter) if server.tool_filter is not None else None,
         "connected": mcp_registry.is_server_connected(server.id),
     }
 

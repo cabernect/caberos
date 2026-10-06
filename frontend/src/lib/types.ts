@@ -97,25 +97,197 @@ export interface AgentVersion {
 }
 
 export interface Skill {
+  /** Governed Skill row id — null for loose file entries. */
+  id: string | null;
   name: string;
   type: "directory" | "file";
   description: string;
+  status?: string;
 }
 
+// W6 Skills Studio — DB-backed skill library.
+export type SkillScope = "built-in" | "global" | "agent-local";
+export type SkillStatus = "draft" | "published" | "disabled" | "archived";
+
 export interface SkillInfo {
+  id: string;
   name: string;
   description: string;
-  source: string;
-  path: string;
+  scope: SkillScope;
+  status: SkillStatus;
+  owner_agent_id: string | null;
+  owner_name: string | null;
+  availability: "all" | "selected";
+  assigned_agent_ids: string[];
+  assigned_names: string[];
+  current_revision: number | null;
   resource_count: number;
-  license?: string;
-  compatibility?: string;
+  builder_session_id: string | null;
+  updated_at: string | null;
+}
+
+export interface SkillRevisionInfo {
+  id: string;
+  revision_number: number;
+  content_hash: string;
+  change_summary: string | null;
+  source_run_id: string | null;
+  validation_result: { errors?: string[]; warnings?: string[] };
+  is_current: boolean;
+  created_at: string | null;
+}
+
+export interface SkillDetail extends SkillInfo {
+  body: string;
+  license: string;
+  compatibility: string;
+  allowed_tools: string;
+  revisions: SkillRevisionInfo[];
+  validation: {
+    errors: string[];
+    warnings: string[];
+    stats: Record<string, number>;
+  };
+  usage: { run_id: string; status: string; created_at: string | null }[];
+}
+
+export interface EffectiveSkill {
+  name: string;
+  description: string;
+  scope: SkillScope;
+  skill_id: string | null;
+  revision_id: string | null;
+  pin: string;
+  shadows: string[];
+}
+
+export interface SkillCandidate {
+  path: string;
+  dir_name: string;
+  name: string;
+  description: string;
+}
+
+export interface SkillImportResult {
+  imported: { id: string; name: string }[];
+  errors?: string[];
+  candidates?: SkillCandidate[];
 }
 
 export interface WorkspaceEntry {
   name: string;
   type: "dir" | "file";
   size: number;
+}
+
+// --- File previews (W3) ---
+
+export interface ArtifactMeta {
+  id: string;
+  format: string;
+  tracking_status: string;
+  current_path: string;
+  current_revision_id: string | null;
+  current_revision_number: number | null;
+  revision_count: number;
+  viewing_revision_id: string | null;
+  viewing_revision_number: number | null;
+  newer_exists: boolean;
+}
+
+export interface PreviewElement {
+  type:
+    | "heading"
+    | "paragraph"
+    | "list"
+    | "table"
+    | "image"
+    | "chart"
+    | "notes"
+    | "page_break";
+  text?: string;
+  level?: number;
+  style?: string;
+  items?: string[];
+  header?: string[];
+  rows?: unknown[][];
+  data_url?: string;
+  categories?: string[];
+  series?: { name: string; values: number[] }[];
+}
+
+export interface PreviewSlide {
+  title: string | null;
+  elements: PreviewElement[];
+  truncated?: boolean;
+}
+
+export interface PreviewSheet {
+  name: string;
+  rows: unknown[][];
+  row_count: number;
+  truncated: boolean;
+}
+
+export interface PreviewPayload {
+  kind:
+    | "markdown"
+    | "code"
+    | "text"
+    | "json"
+    | "table"
+    | "image"
+    | "pdf"
+    | "document"
+    | "slides"
+    | "workbook"
+    | "media"
+    | "unknown";
+  size: number;
+  name: string;
+  path: string;
+  /** Operator-only absolute path — the desktop shell uses it for
+   *  open/reveal-in-finder. Always the live file, even for revision views. */
+  absolute_path?: string;
+  artifact: ArtifactMeta | null;
+  content?: string;
+  truncated?: boolean;
+  language?: string;
+  valid?: boolean;
+  header?: string[];
+  rows?: unknown[][];
+  total_rows?: number;
+  mime?: string;
+  svg?: boolean;
+  page_count?: number;
+  format?: string;
+  elements?: PreviewElement[];
+  slides?: PreviewSlide[];
+  slide_count?: number;
+  /** PPTX canvas dims in EMU — lets the panel frame slides at their true aspect. */
+  slide_width?: number;
+  slide_height?: number;
+  sheets?: PreviewSheet[];
+  formulas_recalculated?: boolean;
+  media?: "audio" | "video";
+  too_large?: boolean;
+  /** Ephemeral-upload previews only — first PDF page as base64 PNG. */
+  thumb_png?: string;
+  error?: string;
+}
+
+export interface ArtifactRevisionInfo {
+  revision_id: string;
+  revision_number: number;
+  content_hash: string;
+  byte_size: number;
+  change_summary: string | null;
+  created_by: string | null;
+  created_at: string | null;
+  source_run_id: string | null;
+  source_message_id: string | null;
+  base_revision_id: string | null;
+  current: boolean;
 }
 
 export interface KnowledgeScope {
@@ -161,6 +333,53 @@ export interface KnowledgeResult {
   source_location: string | null;
 }
 
+export interface KnowledgeGeneration {
+  id: string;
+  revision: number;
+  status: "building" | "active" | "superseded" | "failed";
+  profile_revision: number;
+  embedding_model: string | null;
+  dimensions: number | null;
+  adapter: string | null;
+  stats: {
+    embedded?: number;
+    failed?: number;
+    total?: number;
+    reason?: string;
+  };
+  /** Spend attributed to this generation's vector set (index/ingest/repair calls). */
+  cost?: number;
+  tokens_in?: number;
+  error: string | null;
+  activated_at: string | null;
+  created_at: string | null;
+}
+
+export interface KnowledgeEmbeddingResource {
+  configured: boolean;
+  id?: string;
+  provider_id?: string;
+  provider_name?: string | null;
+  provider_type?: string | null;
+  model_name?: string;
+  dimensions?: number | null;
+  status?: string;
+  last_error?: string | null;
+  last_validated_at?: string | null;
+  egress_allowed?: boolean;
+  provider_local?: boolean | null;
+  hint?: string;
+}
+
+export interface KnowledgeIndexOverview {
+  profile: { id: string; revision: number; config: Record<string, unknown> };
+  embedding_resource: KnowledgeEmbeddingResource;
+  active_generation: KnowledgeGeneration | null;
+  building_generation: KnowledgeGeneration | null;
+  documents: { pending: number };
+  embedding_spend: { calls: number; tokens_in: number; cost: number };
+}
+
 export interface Citation {
   id: string;
   source_type?: "knowledge" | "web";
@@ -179,11 +398,20 @@ export interface Citation {
 
 export interface Message {
   id: string;
-  role: "user" | "assistant" | "system" | "tool" | "tool_call" | "thinking" | "heartbeat";
+  role:
+    | "user"
+    | "assistant"
+    | "system"
+    | "tool"
+    | "tool_call"
+    | "thinking"
+    | "heartbeat";
   content: string;
   created_at: string;
   run_id: string;
   run_status?: string;
+  trigger?: string;
+  is_test?: boolean;
   tokens_in?: number;
   tokens_out?: number;
   cost?: number;
@@ -222,7 +450,15 @@ export interface ToolCallEvent {
   id: string;
   capability: string;
   args: Record<string, unknown>;
-  status: "pending" | "pending_approval" | "running" | "complete" | "denied";
+  status:
+    | "pending"
+    | "pending_approval"
+    | "running"
+    | "complete"
+    | "denied"
+    | "failed"
+    | "timeout"
+    | "interrupted";
   result?: unknown;
   approval_id?: string;
   approval_batch_id?: string;
@@ -288,6 +524,85 @@ export interface SchedulerAlert {
   threshold: number;
   last_error: string | null;
   timestamp: string;
+}
+
+export type ScheduleTriggerKind = "once" | "interval" | "cron";
+
+export interface ScheduleTrigger {
+  kind: ScheduleTriggerKind;
+  at?: string | null;
+  every_seconds?: number | null;
+  cron?: string | null;
+  timezone?: string | null;
+}
+
+export interface ScheduleFailurePolicy {
+  mode: "no_retry" | "bounded_retry";
+  max_attempts: number;
+  backoff_seconds: number;
+}
+
+export interface SchedulePolicies {
+  missed: "skip" | "run_once" | "catch_up";
+  overlap: "skip" | "queue" | "cancel_previous" | "allow_parallel";
+  failure: ScheduleFailurePolicy;
+}
+
+export interface Schedule {
+  id: string;
+  agent_id: string;
+  agent_name: string;
+  name: string;
+  enabled: boolean;
+  managed: string | null;
+  revision_number: number;
+  trigger: ScheduleTrigger | null;
+  task_prompt: string | null;
+  policies: SchedulePolicies | null;
+  auto_approve: string[];
+  max_cost: number | null;
+  plan_revision_id: string | null;
+  model_override: Record<string, string> | null;
+  skill: string | null;
+  next_fire_at: string | null;
+  last_fired_at: string | null;
+  last_status: string | null;
+  last_error: string | null;
+  consecutive_failures: number;
+  archived: boolean;
+  created_at: string | null;
+  preview?: string[];
+  occurrences?: ScheduleOccurrence[];
+}
+
+export interface ScheduleOccurrence {
+  id: string;
+  schedule_id: string;
+  revision_id: string;
+  run_id: string | null;
+  scheduled_for: string;
+  status: string;
+  attempt: number;
+  retry_of: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  error: string | null;
+}
+
+export interface SchedulePayload {
+  agent_id: string;
+  name: string;
+  enabled: boolean;
+  trigger: ScheduleTrigger;
+  task_prompt: string;
+  policies: SchedulePolicies;
+  auto_approve: string[];
+  max_cost: number | null;
+  // Not editable in the schedule dialog — echoed back on update so a
+  // full-replacement PUT doesn't wipe API-set values.
+  plan_revision_id?: string | null;
+  model_override?: Record<string, string> | null;
+  skill?: string | null;
 }
 
 export interface McpServerInfo {
@@ -409,7 +724,11 @@ export interface RunDetail {
   context_tokens: number;
   max_context_tokens: number;
   compacted: boolean;
-  context_breakdown: { system_prompt: number; conversation: number; tools: number };
+  context_breakdown: {
+    system_prompt: number;
+    conversation: number;
+    tools: number;
+  };
   loaded_capabilities: string[];
   messages: MessageOut[];
   audit_records: AuditOut[];

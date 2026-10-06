@@ -15,6 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
+from ..fts import fts5_match_query
 from ..models.memory import MemoryEntry
 
 
@@ -93,7 +94,11 @@ async def _recall_fts5(
     limit: int,
 ) -> list[dict[str, Any]]:
     """FTS5 recall (SQLite)."""
-    safe_query = query.replace('"', '""')
+    # Sanitize to quoted terms — raw input can contain FTS5 syntax
+    # (colons, parens, *) that produced "no such column" errors.
+    safe_query = fts5_match_query(query, operator="OR")
+    if safe_query is None:
+        return []
     result = await db.execute(
         text(
             "SELECT m.id, m.key, m.value, m.tags "

@@ -7,11 +7,27 @@ FROM python:3.12-slim AS base
 # - ca-certificates for HTTPS
 # - git for workspace operations
 # - curl for healthchecks
+# - Chromium shared libs for the managed browser runtime (W4 — installed
+#   on demand via POST /api/browser/runtime, these are its dependencies)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bubblewrap \
     ca-certificates \
     git \
     curl \
+    libnss3 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libdrm2 \
+    libxkbcommon0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxrandr2 \
+    libgbm1 \
+    libasound2 \
+    libpango-1.0-0 \
+    libcairo2 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv (fast Python package manager)
@@ -44,6 +60,7 @@ ENV AGENTOS_CONTROL_PLANE_HOST=0.0.0.0 \
     AGENTOS_WORKSPACE_ROOT=/data/workspaces \
     AGENTOS_AGENT_HOME_ROOT=/data/agents \
     AGENTOS_SKILLS_DIR=/opt/caberos/skills \
+    AGENTOS_BROWSER_NO_SANDBOX=1 \
     PYDANTIC_DISABLE_PLUGINS=1
 
 EXPOSE 8081

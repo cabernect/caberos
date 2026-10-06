@@ -26,6 +26,11 @@ class SyscallResult:
     cost: float = 0.0
     latency_ms: int = 0
     audit_id: str | None = None
+    # Outcome classification (v0.2): "ok", "denied", "error", "timeout",
+    # "interrupted". `allowed` is False whenever status != "ok" — the call
+    # produced no result; `status` says why. A failed call is not the same
+    # as a denied one.
+    status: str = "ok"
     # Optional provider-native content to add to the next model request.
     # Normal tool output remains safe for the UI and audit log.
     model_content: Any = None

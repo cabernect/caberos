@@ -59,6 +59,40 @@ async def test_search_returns_only_bounded_metadata(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_search_ranks_partial_token_matches(monkeypatch):
+    from agentos.capabilities.catalog import CapabilityRunCatalog
+    from agentos.mcp import registry as mcp_registry
+
+    navigate = "mcp.playwright.browser_navigate"
+    find = "mcp.playwright.browser_find"
+    unrelated = "mcp.playwright.take_screenshot"
+    for name, description in (
+        (navigate, "Navigate to a URL"),
+        (find, "Search the accessibility snapshot of the current page"),
+        (unrelated, "Take a screenshot of the current page"),
+    ):
+        registry.register(
+            CapabilityDef(
+                name=name,
+                kind="mcp_tool",
+                description=description,
+                parameters_schema={"type": "object", "properties": {}},
+            )
+        )
+        monkeypatch.setitem(mcp_registry._tool_map, name, ("pw-server", name.rsplit(".", 1)[-1]))
+
+    catalog = CapabilityRunCatalog(
+        _agent_config(navigate, find, unrelated), db=None, run_id="run-1"
+    )
+
+    results = await catalog.search("playwright browser mcp search web")
+
+    names = [item["name"] for item in results]
+    # find matches 4 tokens (search in description), navigate 3, screenshot only "mcp"
+    assert names == [find, navigate, unrelated]
+
+
+@pytest.mark.asyncio
 async def test_load_makes_an_exact_capability_visible(monkeypatch):
     from agentos.capabilities.catalog import CapabilityRunCatalog
 

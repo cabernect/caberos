@@ -16,6 +16,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config_schema import AgentConfig
+from ..fts import fts5_match_query
 from ..models.session import Session
 
 
@@ -57,7 +58,13 @@ async def search_history(
 
     Called on-demand by the agent via the search_history tool.
     """
-    safe_query = query.replace('"', '""')
+    # Sanitize to quoted terms — raw input can contain FTS5 syntax
+    # (colons, parens, *) that produced "no such column" errors. OR keeps
+    # recall broad; FTS5 rank surfaces rows matching the most terms, and
+    # explicit "quoted phrases" still require the whole phrase.
+    safe_query = fts5_match_query(query, operator="OR")
+    if safe_query is None:
+        return []
     result = await db.execute(
         text(
             "SELECT f.message_id, f.run_id, f.session_id, f.content "
@@ -91,7 +98,12 @@ async def search_session_summaries(
 
     Returns matching summaries for injection into the system prompt.
     """
-    safe_query = query.replace('"', '""')
+    # Sanitize to quoted terms — raw input can contain FTS5 syntax
+    # (colons, parens, *) that produced "no such column" errors. OR because
+    # this is topical recall over a natural-language message.
+    safe_query = fts5_match_query(query, operator="OR")
+    if safe_query is None:
+        return []
     result = await db.execute(
         text(
             "SELECT f.session_id, f.summary "
@@ -144,7 +156,7 @@ async def close_session(
         # No messages — just mark closed
         session.closed = True
         session.status = "closed"
-        await db.flush()
+        await db.commit()
         return
 
     # Build conversation excerpt for the LLM
@@ -157,6 +169,9 @@ async def close_session(
 
     # --- LLM Call 1: Session summary ---
     await _generate_session_summary(db, agent_config, session, convo)
+    # Close the write txn before the next LLM call — a flush left open across
+    # an LLM call holds the SQLite writer lock for the call's duration (B31).
+    await db.commit()
 
     # --- LLM Call 2: KG triple extraction ---
     await _extract_kg_triples(db, agent_config, session, contact_id, convo)
@@ -164,7 +179,7 @@ async def close_session(
     # Mark closed
     session.closed = True
     session.status = "closed"
-    await db.flush()
+    await db.commit()
 
 
 async def _generate_session_summary(

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { ToolCallBlock, type ToolCallData, type SubAgentStreamData } from "@/components/ToolCallBlock";
 import { ThinkingBlock } from "@/components/ThinkingBlock";
+import type { PreviewSource } from "@/lib/api";
 
 interface ThinkingBlockData {
   content: string;
@@ -15,9 +16,10 @@ interface ProcessStep {
 interface ProcessStepsProps {
   steps: ProcessStep[];
   subagentMessages?: { id: string; role: string; content: string }[];
+  onPreview?: (source: PreviewSource) => void;
 }
 
-export function ProcessSteps({ steps, subagentMessages }: ProcessStepsProps) {
+export function ProcessSteps({ steps, subagentMessages, onPreview }: ProcessStepsProps) {
   const [expanded, setExpanded] = useState(false);
 
   if (steps.length === 0) return null;
@@ -90,6 +92,7 @@ export function ProcessSteps({ steps, subagentMessages }: ProcessStepsProps) {
                   key={i}
                   call={data}
                   subagentStream={subagentStream}
+                  onPreview={onPreview}
                 />
               );
             } catch {

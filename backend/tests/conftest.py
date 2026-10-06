@@ -19,6 +19,7 @@ async def db_engine():
         channel_config,
         contact,
         document,
+        knowledge_index,
         mcp,
         memory,
         operator,
@@ -26,6 +27,7 @@ async def db_engine():
         provider,
         run,
         session,
+        skill,
         source,
         sub_agent,
     )
@@ -88,7 +90,14 @@ async def db_engine():
             )
         )
     yield engine
-    await engine.dispose()
+    try:
+        await engine.dispose()
+    except Exception:
+        # aiosqlite's worker thread can exit before StaticPool finalizes the
+        # shared connection on slow/CI hosts, leaving dispose() to fail on a
+        # missing 'connection' key — teardown is best-effort for a disposable
+        # in-memory engine.
+        pass
 
 
 @pytest_asyncio.fixture
@@ -113,6 +122,34 @@ def workspace(tmp_path):
     ws = tmp_path / "workspace"
     ws.mkdir()
     return str(ws)
+
+
+@pytest.fixture
+def skills_env(tmp_path, monkeypatch):
+    """Patch all four skill roots into tmp_path."""
+    import agentos.config as cfg
+
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    store = tmp_path / "skills-store"
+    drafts = tmp_path / "skills-drafts"
+    ws = tmp_path / "workspaces"
+    ws.mkdir()
+    monkeypatch.setattr(cfg.settings, "skills_dir", skills_dir)
+    monkeypatch.setattr(cfg.settings, "skills_store_root", store)
+    monkeypatch.setattr(cfg.settings, "skills_drafts_root", drafts)
+    monkeypatch.setattr(cfg.settings, "workspace_root", ws)
+    return tmp_path
+
+
+@pytest_asyncio.fixture
+async def skills_agent(db):
+    from agentos.models.agent import Agent
+
+    a = Agent(id="agent-1", name="Caber", enabled=True)
+    db.add(a)
+    await db.flush()
+    return a
 
 
 @pytest.fixture(autouse=True)

@@ -1,6 +1,7 @@
 name: Tests
 
-# Runs backend tests and frontend type-check on every PR and push to main.
+# Runs backend tests and frontend type-check on every PR (any base —
+# includes feature-branch-to-feature-branch umbrella PRs) and push to main.
 # Does not require any API keys — tests use ScriptedModel (no real LLM).
 
 permissions:
@@ -11,7 +12,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
 
 jobs:
   backend-tests:

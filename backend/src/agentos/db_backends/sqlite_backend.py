@@ -25,6 +25,11 @@ class SQLiteBackend(DatabaseBackend):
             db_url,
             echo=False,
             connect_args={"check_same_thread": False},
+            # Concurrent runs each hold a pipeline session plus short-lived
+            # audit/model-call/terminal sessions; the default pool (5+10)
+            # starved under parallel schedule storms (B31).
+            pool_size=10,
+            max_overflow=20,
         )
 
         # Enable WAL mode + busy timeout on every connection.
@@ -52,13 +57,20 @@ class SQLiteBackend(DatabaseBackend):
             contact,
             document,
             elicitation,
+            execution_manifest,
+            knowledge_index,
             mcp,
             memory,
+            model_call,
+            notification,
             operator,
+            operator_session,
             provider,
             run,
             session,
+            source,
             sub_agent,
+            web_source,
         )
         from ..models.base import Base
 
@@ -142,6 +154,11 @@ class SQLiteBackend(DatabaseBackend):
             ("runs", "compacted", "BOOLEAN DEFAULT 0"),
             ("runs", "context_breakdown", "TEXT NOT NULL DEFAULT '{}'"),
             ("runs", "loaded_capabilities", "TEXT NOT NULL DEFAULT '[]'"),
+            ("mcp_tools", "effects", "TEXT"),
+            ("audit_records", "outcome", "VARCHAR(20) DEFAULT 'ok'"),
+            ("documents", "semantic_state", "VARCHAR(20) NOT NULL DEFAULT 'na'"),
+            ("document_chunks", "kind", "VARCHAR(10) NOT NULL DEFAULT 'chunk'"),
+            ("document_chunks", "parent_id", "VARCHAR(36)"),
         ]
         for table, column, col_type in patches:
             if not await self.column_exists(conn, table, column):
@@ -295,6 +312,7 @@ class SQLiteBackend(DatabaseBackend):
             "TEXT",
             "INTEGER DEFAULT 0",
             "VARCHAR(36)",
+            "VARCHAR(20) DEFAULT 'ok'",
             "VARCHAR(30) NOT NULL DEFAULT 'paragraph'",
             "VARCHAR(50)",
             "VARCHAR(255)",
@@ -304,6 +322,8 @@ class SQLiteBackend(DatabaseBackend):
             "VARCHAR(20) DEFAULT 'deny'",
             "TEXT NOT NULL DEFAULT '[]'",
             "TEXT NOT NULL DEFAULT '{}'",
+            "VARCHAR(20) NOT NULL DEFAULT 'na'",
+            "VARCHAR(10) NOT NULL DEFAULT 'chunk'",
         }:
             raise ValueError("Invalid database column type")
         await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"))

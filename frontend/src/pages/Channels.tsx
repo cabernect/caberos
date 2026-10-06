@@ -226,8 +226,8 @@ export function Channels() {
             {/* Add form */}
             {showAdd && (
               <div
-                className="mb-4 rounded-[8px] border p-4"
-                style={{ borderColor: "var(--border)", background: "var(--white)" }}
+                className="mb-4 rounded-xl p-4"
+                style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
               >
                 <h3 className="mb-3 text-[14px] font-semibold text-[var(--ink)]">New Channel</h3>
                 <div className="space-y-3">
@@ -360,8 +360,8 @@ export function Channels() {
                   return (
                     <div
                       key={ch.id}
-                      className="rounded-[8px] border p-4"
-                      style={{ borderColor: "var(--border)", background: "var(--white)" }}
+                      className="rounded-xl p-4"
+                      style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
                     >
                       <div className="flex items-start justify-between">
                         <div className="flex items-center gap-3">
