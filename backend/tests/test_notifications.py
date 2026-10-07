@@ -463,3 +463,44 @@ async def test_prune_notifications_ages_out_rows_and_deliveries(db):
     assert [n.id for n in remaining] == [item.id]
     deliveries = (await db.execute(select(NotificationDelivery))).scalars().all()
     assert [d.notification_id for d in deliveries] == [item.id]
+
+
+@pytest.mark.asyncio
+async def test_startup_reconcile_interrupts_pending_approvals(db):
+    """B42 — a pending approval's wait lives in an in-memory event, so every
+    pending row is dead after a restart. Reconcile marks them interrupted
+    so a stale card can't "succeed" on a dead run; decided rows are left."""
+    from agentos.main import reconcile_pending_approvals
+    from agentos.models.approval import ApprovalRequest
+
+    db.add_all(
+        [
+            ApprovalRequest(
+                id="ap-dead",
+                run_id="r-dead",
+                capability_name="terminal",
+                args="{}",
+                status="pending",
+            ),
+            ApprovalRequest(
+                id="ap-decided",
+                run_id="r-dead",
+                capability_name="terminal",
+                args="{}",
+                status="approved",
+            ),
+        ]
+    )
+    await db.commit()
+
+    marked = await reconcile_pending_approvals(db)
+    await db.commit()
+
+    assert marked == 1
+    rows = {
+        a.id: a
+        for a in (await db.execute(select(ApprovalRequest))).scalars().all()
+    }
+    assert rows["ap-dead"].status == "interrupted"
+    assert rows["ap-dead"].decided_by == "system_restart"
+    assert rows["ap-decided"].status == "approved"

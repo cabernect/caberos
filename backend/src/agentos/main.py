@@ -80,6 +80,26 @@ async def _session_sweeper() -> None:
             print(f"[sweeper] Error: {e}")
 
 
+async def reconcile_pending_approvals(db) -> int:
+    """Mark every still-pending ApprovalRequest interrupted at startup.
+
+    The wait lives in an in-memory asyncio.Event (B42) — a restart orphans
+    the row even when its Run row already carries a terminal status. Left
+    pending, a stale card still renders approve/deny and the click writes
+    a successful decision on a dead run. Returns the count marked.
+    """
+    from sqlalchemy import update
+
+    from .models.approval import ApprovalRequest
+
+    result = await db.execute(
+        update(ApprovalRequest)
+        .where(ApprovalRequest.status == "pending")
+        .values(status="interrupted", decided_by="system_restart")
+    )
+    return result.rowcount or 0
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown."""
@@ -122,6 +142,18 @@ async def lifespan(app: FastAPI):
                     Run.status.in_(["pending", "running", "awaiting_approval"])
                 )
             )
+            # Pending approvals die with the process — their wait lives in an
+            # in-memory asyncio.Event (B42), so every pending row is stale at
+            # boot even if its run row already carries a terminal status.
+            marked = await reconcile_pending_approvals(db)
+            if marked:
+                # Commit here — the run-reconcile below early-returns without
+                # committing when no orphaned runs exist.
+                await db.commit()
+                logging.getLogger("agentos.main").info(
+                    "[startup] Marked %d pending approval(s) interrupted", marked
+                )
+
             orphaned_rows = orphaned.all()
             if not orphaned_rows:
                 return

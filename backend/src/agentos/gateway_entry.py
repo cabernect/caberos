@@ -45,9 +45,39 @@ def _verify_bundled_data() -> None:
         )
 
 
+def _start_parent_watchdog() -> None:
+    """Exit the gateway when the parent Tauri app dies (B42 fencing).
+
+    kill -9 / a crash gives the parent no chance to reap us, and SIGPIPE on
+    the log pipe only fires if we happen to write — a silent orphan can hold
+    the port and serve stale code indefinitely. ``getppid()`` changes when
+    init (or a subreaper) adopts the orphan, and no legitimate reparenting
+    happens while the app is alive, so any flip means the parent is gone.
+
+    POSIX only — Windows skips this: the KILL_ON_JOB_CLOSE job object in
+    ``gateway.rs`` already terminates the tree on force-kill.
+    """
+    if sys.platform == "win32":
+        return
+
+    import threading
+    import time
+
+    parent_pid = os.getppid()
+
+    def _watch() -> None:
+        while True:
+            if os.getppid() != parent_pid:
+                os._exit(0)
+            time.sleep(2)
+
+    threading.Thread(target=_watch, name="parent-watchdog", daemon=True).start()
+
+
 def main() -> None:
     os.environ.setdefault("PYDANTIC_DISABLE_PLUGINS", "1")
     _verify_bundled_data()
+    _start_parent_watchdog()
     log_level, access_log = configure_logging()
     uvicorn.run(
         "agentos.main:app",

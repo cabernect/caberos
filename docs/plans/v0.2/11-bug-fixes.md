@@ -522,7 +522,7 @@ Verified live: `algorithmic-art` detail → 200 with 11 usage rows.
 
 **Signing postmortem (2026-10-06, verified in `usernoted` logs):** the UN migration surfaced a deeper blocker — Tauri's linker ad-hoc signature gives each binary a hash-derived identifier (`caberos-<cdhash>`), and `usernotificationsd`'s entitlement check requires the code-signing identifier to equal `CFBundleIdentifier`. Every UN call logged `Entitlement 'com.apple.private.usernotifications.bundle-identifiers' required ... not allowed` → the app permanently read `denied` regardless of the System Settings toggle. Fix proven live: **ad-hoc re-sign with an explicit identifier** — `codesign --force --deep -s - --identifier com.caberos.desktop` → `Entitlement check success: matching bundle identifiers` → `Presenting as banner`. No Apple account required; an Apple Development cert or Developer ID works equally well (any stable signature whose identifier matches the bundle id). Wired into the pipeline: `scripts/sign-app.sh` runs at the end of `desktop:build`; distribution still needs Developer ID for Gatekeeper, but local notifications no longer depend on it.
 
-### B42 — Zombie gateway resurrects reconciled runs + approval state is not durable (OPEN)
+### B42 — Zombie gateway resurrects reconciled runs + approval state is not durable (PARTIALLY FIXED — reaping done 2026-10-06)
 
 **Symptom (2026-10-06, operator report — "error in the latest run"):** run `793bbde9` (`vietnam-stock-market-analyst`, user asked about VN30) parked on two `web_search` approvals at 06:06 and showed `running` for ~6h across multiple app restarts. Eventually the whole gateway wedged — requests accepted, zero bytes returned. Separately reported by operator: outside the chatview the session shows "waiting approval", inside the chatview **no approval card renders**.
 
@@ -535,6 +535,14 @@ Verified live: `algorithmic-art` detail → 200 with 11 usage rows.
    - **Fix direction:** persist pending-approval state durably — either write the `tool_call` message row with `status=pending_approval` + `approval_id` at creation (not after decision), or have the session/run API join pending `approval_requests` so the chatview can render the card without SSE replay. Same applies to `elicitation_requests`.
 
 **Verified state after fix:** clean restart → run `interrupted`, API responsive, approvals still `pending` in DB (inert). Neither fix implemented — needs the ownership-fencing + durable-approval persistence work.
+
+**Update (2026-10-06) — reaping is now structural, approval staleness reconciled:**
+
+- **Windows was already fenced** (PR #65): the gateway joins a `KILL_ON_JOB_CLOSE` Job Object — the kernel terminates the whole tree when the app dies, including Task-Manager force-kill (`gateway.rs` `win_job`).
+- **macOS/Linux now fenced** via a parent-death watchdog in `gateway_entry._start_parent_watchdog`: a daemon thread polls `os.getppid()` every 2s and `os._exit(0)`s when the ppid *flips* (init/subreaper adoption = parent gone). Kill −9 verified live: `kill -9` on the app → gateway + port 51718 gone within 5s; normal launch unaffected. The earlier accidental self-limit was SIGPIPE on the broken stdout pipe — worked only if the orphan happened to log; the watchdog makes it deterministic.
+- **Ownership-token fencing (zombie write rejection) — unnecessary now.** It only mattered while a zombie could survive; the watchdog caps the multi-writer window at the ~2s adoption lag. No live zombie, nothing to fence against.
+- **Pending approvals reconcile** to `interrupted` (`decided_by="system_restart"`) at startup via `reconcile_pending_approvals` — runs BEFORE the orphan-early-return and commits independently, so a stale card can't click through a successful "approved" write on a dead run. Operator decision: interrupted is terminal — no resume.
+- **Still open:** (a) durable card hydration — `getSessionMessages` never joins `approval_requests`, so a post-restart reload renders the tool_call row's persisted `pending_approval` status without a live `approval_id` target; the click 400s honestly (`"Approval already interrupted"`) but the card shouldn't render actionable at all. (b) Port-claim honesty — a *foreign* process on :51718 (dev uvicorn, second app copy) still hangs on "Connecting" instead of naming the squatter.
 
 ### B43 — OS pings silently dropped when the UI thread is busy; audit says `delivered` anyway (FIXED)
 
