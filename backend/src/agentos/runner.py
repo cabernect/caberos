@@ -50,7 +50,6 @@ from typing import Any
 from sqlalchemy import select
 
 from .agent_service import get_active_config
-from .db import async_session_factory
 from .harness.loop import Harness
 from .harness.scripted_model import ScriptedModel, ScriptedResponse
 from .models.agent import Agent
@@ -227,13 +226,21 @@ async def run_agent(
     """
     import uuid as _uuid
 
+    # Resolve the factory through the module attribute at call time — tests
+    # monkeypatch agentos.db.async_session_factory, and a `from` import
+    # would keep the stale binding to the real engine.
+    from .db import async_session_factory
+
     # Create a fresh DB session for this run
     async with async_session_factory() as db:
-        # Verify agent exists
+        # Verify agent exists and is enabled — a disabled agent must not
+        # execute runs from any trigger (chat, schedule, heartbeat, channel).
         result = await db.execute(select(Agent).where(Agent.id == agent_id))
         agent = result.scalar_one_or_none()
         if agent is None:
             raise ValueError(f"Agent not found: {agent_id}")
+        if not agent.enabled:
+            raise ValueError(f"Agent is disabled: {agent_id}")
 
         # Build the inbound message
         inbound = InboundMessage(

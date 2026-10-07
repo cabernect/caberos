@@ -48,7 +48,6 @@
   --muted-foreground: var(--ink-2);
   --accent-foreground: var(--white);
   --destructive: var(--danger);
-  --border: var(--border);
   --input: var(--border);
   --ring: var(--accent);
   --radius: 0.375rem;

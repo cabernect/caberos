@@ -618,6 +618,11 @@ async def _notify_failure(db: AsyncSession, sched: Schedule) -> None:
         message=sched.last_error or "scheduled run failed",
         action_path="/scheduler",
         entity_id=sched.id,
+        entity_type="schedule",
+        agent_id=sched.agent_id,
+        # Deterministic daily key — an identical error on a NEW streak still
+        # notifies (the content-hash fallback would dedup it away).
+        event_id=f"schedule_failed:{sched.id}:{_now().date().isoformat()}",
     )
     log.warning(
         "Schedule %s (%s) failed %d times (threshold=%d) — %s",

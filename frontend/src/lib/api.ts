@@ -21,6 +21,8 @@ import type {
   Message,
   ModelInfo,
   Notification,
+  NotificationPrefs,
+  NotificationPrefsPatch,
   Operator,
   OperatorAuditOut,
   PreviewPayload,
@@ -215,6 +217,10 @@ export const api = {
 
   gatewayHealth: () => request<{ status: string }>("/health"),
   gatewayLogPath: () => invoke<string>("gateway_log_path"),
+  gatewayError: () =>
+    isDesktopShell
+      ? invoke<string | null>("gateway_error").catch(() => null)
+      : Promise.resolve(null),
 
   // Auth
   login: (username: string, password: string) =>
@@ -266,6 +272,7 @@ export const api = {
       persona?: string;
       task?: string;
       sandbox_mode?: "strict" | "open";
+      yolo_mode?: boolean;
       capabilities?: CapabilityGrant[] | null;
       limits?: Limits;
       heartbeat?: HeartbeatConfig;
@@ -668,9 +675,15 @@ export const api = {
       `/api/chat/${agentId}/sessions`,
       { method: "POST", body: JSON.stringify({ title }) },
     ),
-  getSessionMessages: (agentId: string, sessionId: string, limit = 100) =>
-    request<Message[]>(
-      `/api/chat/${agentId}/sessions/${sessionId}/messages?limit=${limit}`,
+  getSessionMessages: (
+    agentId: string,
+    sessionId: string,
+    limit = 100,
+    beforeId?: string,
+  ) =>
+    request<{ messages: Message[]; has_more: boolean }>(
+      `/api/chat/${agentId}/sessions/${sessionId}/messages?limit=${limit}` +
+        (beforeId ? `&before_id=${encodeURIComponent(beforeId)}` : ""),
     ),
   deleteSession: (agentId: string, sessionId: string) =>
     request<{ deleted: boolean }>(
@@ -693,9 +706,10 @@ export const api = {
     }),
 
   // Notifications
-  listNotifications: (unreadOnly = false) =>
+  listNotifications: (unreadOnly = false, signal?: AbortSignal) =>
     request<Notification[]>(
       `/api/notifications${unreadOnly ? "?unread_only=true" : ""}`,
+      { signal },
     ),
   markNotificationRead: (id: string) =>
     request<{ updated: boolean }>(`/api/notifications/${id}/read`, {
@@ -705,6 +719,75 @@ export const api = {
     request<{ updated: boolean }>("/api/notifications/read-all", {
       method: "POST",
     }),
+  // W9 — delivery state, prefs, frontend-driven emits
+  reportDelivery: (notificationId: string, adapter: string, state: string, error?: string) =>
+    request<{ recorded: boolean }>(`/api/notifications/${notificationId}/delivery`, {
+      method: "POST",
+      body: JSON.stringify({ adapter, state, error: error ?? null }),
+    }),
+  failedDeliveries: () =>
+    request<{ notification: Notification; adapter: string; attempts: number }[]>(
+      "/api/notifications/deliveries/failed",
+    ),
+  getNotificationPrefs: () => request<NotificationPrefs>("/api/notifications/prefs"),
+  putNotificationPrefs: (prefs: NotificationPrefsPatch) =>
+    request<NotificationPrefs>("/api/notifications/prefs", {
+      method: "PUT",
+      body: JSON.stringify(prefs),
+    }),
+  emitNotification: (data: {
+    notification_type: string;
+    title: string;
+    message: string;
+    severity?: string;
+    action_path?: string | null;
+    entity_id?: string | null;
+    entity_type?: string | null;
+    event_id?: string | null;
+  }) =>
+    request<Notification>("/api/notifications/emit", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  // W9 — SSE fan-out; one event per committed notification row
+  streamNotifications: async function* (
+    signal?: AbortSignal,
+  ): AsyncGenerator<Notification> {
+    const base = await baseReady;
+    const resp = await fetch(`${base}/api/notifications/stream`, {
+      credentials: "include",
+      headers: authHeaders(),
+      signal,
+    });
+    if (!resp.ok) throw await apiError(resp);
+    if (!resp.body) return;
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buffer.indexOf("\n\n")) !== -1) {
+        const raw = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+        let data = "";
+        for (const line of raw.split("\n")) {
+          if (line.startsWith("data: ")) data += line.slice(6);
+        }
+        if (!data) continue;
+        try {
+          const payload = JSON.parse(data);
+          if (payload?.type === "notification" && payload.notification) {
+            yield payload.notification as Notification;
+          }
+        } catch {
+          // keepalive / malformed frame — skip
+        }
+      }
+    }
+  },
 
   // Data migration
   importBackup: async (file: File) => {

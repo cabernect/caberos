@@ -613,7 +613,7 @@ class Pipeline:
                         async def _notify_approval_required() -> None:
                             try:
                                 from .db import async_session_factory as _sf
-                                from .notifications import create_notification
+                                from .notifications import call_brief, create_notification
 
                                 async with _sf() as ndb:
                                     await create_notification(
@@ -621,13 +621,13 @@ class Pipeline:
                                         notification_type="approval_required",
                                         severity="warning",
                                         title="Approval required",
-                                        message=(
-                                            "An agent is waiting for approval before continuing."
-                                        ),
+                                        message=(f"Waiting to run {call_brief(payload)}."),
                                         action_path=(
                                             f"/agents/{message.bot_id}/chat?session={session.id}"
                                         ),
                                         entity_id=run.id,
+                                        entity_type="run",
+                                        agent_id=message.bot_id,
                                     )
                                     await ndb.commit()
                             except Exception:

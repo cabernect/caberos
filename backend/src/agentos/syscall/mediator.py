@@ -205,7 +205,10 @@ class SyscallHandler:
         # None (all tools), which carries require_approval itself.
         grant = _grant_for(agent_config, call.name, server_id)
         needs_approval = grant.require_approval if grant else cap.require_approval
-        if needs_approval and not settings.yolo_mode:
+        # Approval bypass — global flag (env/persisted) OR this agent's own
+        # yolo_mode. agent_config is always the parent AgentConfig, so the
+        # flag also covers the agent's sub-agent calls.
+        if needs_approval and not (settings.yolo_mode or getattr(agent_config, "yolo_mode", False)):
             # External channel sessions use a configurable approval policy
             # (v0.1.3: replaces the hardcoded channel bypass).
             if session.channel:
@@ -944,6 +947,8 @@ class SyscallHandler:
                     message=question,
                     action_path=f"/agents/{agent_config.id}/chat?session={session.id}",
                     entity_id=run_id,
+                    entity_type="run",
+                    agent_id=agent_config.id,
                 )
                 await el_session.commit()
 

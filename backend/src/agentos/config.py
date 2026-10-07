@@ -144,7 +144,7 @@ def _apply_persisted_overrides() -> None:
         saved = json.loads(path.read_text())
     except Exception:
         return
-    for key in ("browser_binary",):
+    for key in ("browser_binary", "yolo_mode"):
         if key in saved and not env_pinned(key):
             setattr(settings, key, saved[key])
 

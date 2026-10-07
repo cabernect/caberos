@@ -10,9 +10,11 @@ from agentos.config_schema import AgentConfig, CapabilityGrant, ModelConfig
 from agentos.harness.loop import Harness
 from agentos.harness.scripted_model import ScriptedModel, ScriptedResponse
 from agentos.memory.auto_extract import merge_auto_extracted_memory
+from agentos.models.agent import Agent
 from agentos.models.audit import AuditRecord
 from agentos.models.run import Message, Run
 from agentos.pipeline import Attachment, InboundMessage, Pipeline
+from agentos.runner import run_agent
 
 
 def test_auto_extracted_memory_uses_one_deduplicated_section():
@@ -106,6 +108,33 @@ async def test_pipeline_full_run(db, workspace, tmp_path, monkeypatch):
     assert len(audits) == 1
     assert audits[0].capability_name == "terminal"
     assert audits[0].allowed is True
+
+
+@pytest.mark.asyncio
+async def test_run_agent_refuses_disabled_agent(db):
+    """A disabled agent must not execute runs — the gate covers every
+    trigger (chat, schedule, heartbeat, channel) since all funnel through
+    run_agent (B39)."""
+    config = AgentConfig(
+        id="disabled-agent",
+        name="Disabled Agent",
+        model=ModelConfig(provider_id="test", name="scripted"),
+    )
+    await create_agent(db, config)
+    agent = await db.scalar(select(Agent).where(Agent.id == "disabled-agent"))
+    agent.enabled = False
+    await db.commit()
+
+    # "is disabled" specifically — "Agent not found: disabled-agent" would
+    # also satisfy match="disabled" while hitting the wrong code path (and
+    # the wrong DB entirely when the session factory isn't patched).
+    with pytest.raises(ValueError, match="is disabled"):
+        await run_agent(
+            agent_id="disabled-agent",
+            text="hi",
+            user_id="u1",
+            is_test=True,
+        )
 
 
 @pytest.mark.asyncio

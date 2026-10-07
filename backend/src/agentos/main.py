@@ -80,6 +80,74 @@ async def _session_sweeper() -> None:
             print(f"[sweeper] Error: {e}")
 
 
+async def reconcile_pending_approvals(db) -> int:
+    """Mark every still-pending ApprovalRequest interrupted at startup.
+
+    The wait lives in an in-memory asyncio.Event (B42) — a restart orphans
+    the row even when its Run row already carries a terminal status. Left
+    pending, a stale card still renders approve/deny and the click writes
+    a successful decision on a dead run.
+
+    Also writes a ``tool_call`` row per stale approval so the run's timeline
+    shows the parked call as interrupted instead of vanishing silently —
+    tool_call messages persist only on terminal status, and a killed
+    pending call never gets one. Returns the count marked.
+    """
+    import json
+    import uuid
+
+    from sqlalchemy import func, select, update
+
+    from .models.approval import ApprovalRequest
+    from .models.run import Message
+
+    stale = (
+        (await db.execute(select(ApprovalRequest).where(ApprovalRequest.status == "pending")))
+        .scalars()
+        .all()
+    )
+    if not stale:
+        return 0
+
+    next_seq: dict[str, int] = {}
+    for approval in stale:
+        if approval.run_id not in next_seq:
+            next_seq[approval.run_id] = (
+                await db.scalar(
+                    select(func.coalesce(func.max(Message.seq), -1)).where(
+                        Message.run_id == approval.run_id
+                    )
+                )
+                or -1
+            ) + 1
+        db.add(
+            Message(
+                id=str(uuid.uuid4()),
+                run_id=approval.run_id,
+                role="tool_call",
+                content=json.dumps(
+                    {
+                        "id": f"interrupted-{approval.id}",
+                        "capability": approval.capability_name,
+                        "args": json.loads(approval.args or "{}"),
+                        "status": "interrupted",
+                        "result": "Gateway restarted while awaiting approval",
+                        "approval_id": approval.id,
+                    }
+                ),
+                seq=next_seq[approval.run_id],
+            )
+        )
+        next_seq[approval.run_id] += 1
+
+    await db.execute(
+        update(ApprovalRequest)
+        .where(ApprovalRequest.id.in_([a.id for a in stale]))
+        .values(status="interrupted", decided_by="system_restart")
+    )
+    return len(stale)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown."""
@@ -122,6 +190,18 @@ async def lifespan(app: FastAPI):
                     Run.status.in_(["pending", "running", "awaiting_approval"])
                 )
             )
+            # Pending approvals die with the process — their wait lives in an
+            # in-memory asyncio.Event (B42), so every pending row is stale at
+            # boot even if its run row already carries a terminal status.
+            marked = await reconcile_pending_approvals(db)
+            if marked:
+                # Commit here — the run-reconcile below early-returns without
+                # committing when no orphaned runs exist.
+                await db.commit()
+                logging.getLogger("agentos.main").info(
+                    "[startup] Marked %d pending approval(s) interrupted", marked
+                )
+
             orphaned_rows = orphaned.all()
             if not orphaned_rows:
                 return
@@ -154,10 +234,30 @@ async def lifespan(app: FastAPI):
                     message="A background run was interrupted by a gateway restart.",
                     action_path=f"/agents/{row.agent_id}/chat?session={row.session_id}",
                     entity_id=row.id,
+                    entity_type="run",
+                    agent_id=row.agent_id,
                 )
             await db.commit()
 
         await retry_locked_transaction(_reconcile_runs, db, "startup_reconcile_runs")
+
+        # Retention — the inbox is append-only otherwise (B47).
+        from .notifications import prune_notifications
+
+        async def _prune_notifications() -> None:
+            deleted = await prune_notifications(db)
+            await db.commit()
+            if deleted:
+                logging.getLogger("agentos.main").info(
+                    "[startup] Pruned %d notification(s) older than 30d", deleted
+                )
+
+        try:
+            await retry_locked_transaction(_prune_notifications, db, "startup_prune_notifications")
+        except Exception:
+            logging.getLogger("agentos.main").debug(
+                "[startup] notification prune failed", exc_info=True
+            )
 
         # Index generations: a gateway kill mid-build leaves a committed
         # 'building' row that would 409 every future rebuild — reconcile to

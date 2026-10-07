@@ -107,6 +107,7 @@ class UpdateAgentRequest(BaseModel):
     limits: dict[str, Any] | None = None
     heartbeat: dict[str, Any] | None = None
     sandbox_mode: str | None = None
+    yolo_mode: bool | None = None
 
 
 class DuplicateAgentRequest(BaseModel):
@@ -176,6 +177,7 @@ async def get_agent_route(
         "heartbeat": config.heartbeat.model_dump(),
         "workspace": config.workspace,
         "sandbox_mode": config.sandbox_mode,
+        "yolo_mode": config.yolo_mode,
     }
 
 
@@ -233,6 +235,8 @@ async def update_agent_route(
         config.task = req.task
     if req.sandbox_mode is not None:
         config.sandbox_mode = req.sandbox_mode
+    if req.yolo_mode is not None:
+        config.yolo_mode = req.yolo_mode
     if req.capabilities is not None:
         from ..config_schema import CapabilityGrant
 

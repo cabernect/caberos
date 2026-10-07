@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { DashboardSidebar, type NavKey } from "@/components/DashboardSidebar";
 import { PageHeader } from "@/components/PageHeader";
 import { api } from "@/lib/api";
+import { notificationTarget } from "@/lib/notificationLinks";
 import type { Notification } from "@/lib/types";
 
 const severityIcon = {
@@ -116,13 +117,20 @@ export function Notifications() {
                       <Icon className="mt-0.5 h-4 w-4 shrink-0" style={{ color: severityColor[item.severity] }} />
                       <div className="min-w-0 flex-1">
                         <div className="flex items-start justify-between gap-4">
-                          <h2 className="text-[14px] font-medium text-[var(--ink)]">{item.title}</h2>
+                          <h2 className="text-[14px] font-medium text-[var(--ink)]">
+                            {item.title}
+                            {item.agent_name && (
+                              <span className="ml-2 rounded-[3px] px-1.5 py-0.5 align-middle font-mono text-[10px] font-normal" style={{ background: "var(--border)", color: "var(--ink-2)" }}>
+                                {item.agent_name}
+                              </span>
+                            )}
+                          </h2>
                           <time className="shrink-0 font-mono text-[10px] text-[var(--ink-3)]">{new Date(item.created_at).toLocaleString()}</time>
                         </div>
                         <p className="mt-1 max-w-3xl text-[13px] leading-6 text-[var(--ink-2)]">{item.message}</p>
                         <div className="mt-2 flex items-center gap-3">
                           {!item.read && <button type="button" onClick={() => void markRead(item)} className="text-[12px] font-medium text-[var(--accent)] hover:underline" style={{ cursor: "pointer" }}>Mark as read</button>}
-                          {item.action_path && <button type="button" onClick={() => { void markRead(item); navigate(item.action_path!); }} className="text-[12px] font-medium text-[var(--accent)] hover:underline" style={{ cursor: "pointer" }}>Open related page</button>}
+                          {(item.action_path || item.entity_type) && <button type="button" onClick={() => { void markRead(item); navigate(notificationTarget(item)); }} className="text-[12px] font-medium text-[var(--accent)] hover:underline" style={{ cursor: "pointer" }}>Open related page</button>}
                         </div>
                       </div>
                     </article>

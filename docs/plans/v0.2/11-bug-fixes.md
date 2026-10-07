@@ -413,6 +413,197 @@ Verified live: `algorithmic-art` detail → 200 with 11 usage rows.
 **Symptom (W8 §2.4, 2026-10-02):** duplicating a schedule at revision 2 returns `"revision_number": 2`, while the clone's actual `schedule_revisions` row is `revision_number=1` (verified in DB). The response serializes the copied config against the source's rev field. Harmless but misleading — the UI card then displays the correct rev (1) after refetch.
 
 **Fix applied (2026-10-02):** `duplicate_schedule` fetches `current_revision` for the clone after `write_revision` and serializes against it. Regression: `test_duplicate_reports_clone_revision`. **Independent re-verification (2026-10-02):** source bumped to `revision_number=2` via PUT → `POST /duplicate` response reports `revision_number: 1`; DB confirms the clone holds exactly rev 1. FIXED.
+### B34 — `vault_index_degraded` never emits when a rebuild finishes "successfully" with a broken embedding resource (FIXED)
+
+**Symptom (W9 §5.2, 2026-10-05, live on :8081):** corrupted the embedding provider's `encrypted_key`, then `POST /api/knowledge/index/rebuild` → **200** with a generation committed `status="active"`, `failed=6552`, reason "embedding resource not ready". **No `vault_index_degraded` notification was emitted** — the vault is silently degraded to lexical-only while the generation reports active. The operator gets no ping for a state the feature explicitly wants surfaced.
+
+**Root cause:** `_notify_index_degraded` in `backend/src/agentos/knowledge/indexing.py` was only invoked on the exception path and by `reconcile_stale_builds` — not when a generation activates cleanly but degraded.
+
+**Fix (2026-10-05):** after a clean activation, `run_rebuild` inspects `stats_json` — `failed > 0` now emits `vault_index_degraded` (title "Knowledge index degraded", message includes `embedded/total` + reason, `event_id=vault_index_degraded:{generation.id}` for per-generation dedup). `activate_generation` emits the same when chunks remain unembedded because the resource isn't ready. `_notify_index_degraded` gained a `title` kwarg so build *failures* still read "build failed" vs. degraded-active "degraded".
+
+**Verified live:** `POST /api/knowledge/index/rebuild` with `unvalidated` resource → generation `5618f6f0` active `0/6552` embedded → notification `vault_index_degraded:5618f6f0-…` emitted, SSE fan-out observed, action_path `/knowledge`.
+
+**Independently re-verified (2026-10-05):** fresh rebuild against the still-`unvalidated` OpenAI embed resource → generation `6cec83e3-2da1-42d5-a40a-d182049468f9` committed `status="active"`, `embedded=0`, `failed=6552`, reason "embedding resource not ready" → notification row `vault_index_degraded:6cec83e3-…`, title "Knowledge index degraded", message carries `0/6552` + reason, `action_path=/knowledge`, unread.
+
+### B35 — Notification prefs writes are lost-update prone: any tab PUTs its full stale blob (FIXED)
+
+**Symptom (W9 §6–§8, 2026-10-05, live, reproduced twice):** `saveNotificationPrefs` merged the caller's patch into the module cache and PUT the **entire blob**. Any tab whose cache predates a newer write reverted untouched fields (banner's delayed `markAsked` reverted quiet hours; a closed tab's late permission resolution reverted `defaults.browser`).
+
+**Root cause:** replace-semantics PUT of the whole prefs object — the last full-blob writer wins, including writers patched against a stale cache.
+
+**Fix (2026-10-05):** patch protocol end-to-end. Backend `PUT /prefs` merges the request onto the **stored** row (was: onto a fresh-defaults blob); `defaults`/`quiet_hours`/`permissions` merge shallowly, `overrides` merges per event type, `null` deletes an override (omission can't express delete). Frontend: `NotificationPrefsPatch` type; `saveNotificationPrefs` PUTs the patch, not the blob; every call site sends only owned keys (master toggle, quiet-hours rows, override selects, banner `markAsked` — all audited; "Default" sends `null`).
+
+**Verified:** pytest `test_prefs_patch_merges_onto_stored` + live on :8081 — `{"permissions":{"tauri_asked":true}}` left quiet hours + overrides intact; `{"overrides":{"run_failed":null}}` deleted only that key. 58 vitest incl. null-delete regression.
+
+**Independently re-verified (2026-10-05):** seeded `quiet_hours` + two `overrides` via PATCH-shaped PUT → `{"permissions":{"tauri_asked":true}}` → quiet hours and both overrides survived (previously wiped); `{"overrides":{"run_failed":null}}` deleted only that key, `elicitation_required` override kept. `saveNotificationPrefs` PUTs the patch, not the blob — `NotificationPrefsForm`/`NotificationPermissionBanner` send owned keys only.
+
+### B36 — Prefs changes in one tab never reach other tabs' caches (FIXED)
+
+**Symptom (W9 §7.3 live test, 2026-10-05):** enabled quiet hours covering the current window via PUT, emitted an event — the leader tab reported `browser|delivered` + `toast|delivered` anyway. Its prefs cache predated the write; `inQuietHours` evaluated a stale matrix. Suppression only corrected after the tab happened to reload (`suppressed` observed on retry).
+
+**Root cause:** `notificationPrefs.ts` caches the blob per-tab at load; nothing invalidates a peer's cache — the leader keeps stale quiet-hours/override state indefinitely while holding ping authority.
+
+**Fix (2026-10-05):** `crossTab` gains a `prefs` gossip message — `saveNotificationPrefs` broadcasts after a successful PUT; every tab's store subscribes `onPrefsChanged → loadNotificationPrefs()` (re-fetch, never trust a broadcast blob). Only covers tab-origin writes; a `curl` PUT still requires reload — acceptable, same contract as before.
+
+**Verified:** vitest "re-fetches prefs when a peer tab broadcasts a prefs change" + live re-run of §7.3 (`suppressed` on both surfaces, row stays unread).
+
+**Independently re-verified (2026-10-05, agent-browser, 2× localhost:5173 tabs):** quiet-hours window widened to 14:00–17:00 via tab B's settings UI (its own `saveNotificationPrefs` → gossip). Tab A's cache still held 14:00–16:00 — a stale tab would show a toast for a 16:0x emit. Emitted `test:v2gossip1` → tab A showed **no** toast and the leader reported `toast/suppressed` — tab A's cache was refreshed by the `prefs` gossip (`onPrefsChanged → loadNotificationPrefs`, no reload).
+
+### B37 — `ERR_INSUFFICIENT_RESOURCES` still reachable: unbounded poll + unguarded store re-instantiation (FIXED)
+
+**Symptom (W9 §8.4/§10 live run, 2026-10-05, Playwright headless):** during the test-result pass the page wedged — DevTools console showed hundreds of `Failed to load resource: net::ERR_INSUFFICIENT_RESOURCES @ /api/notifications` in ~4/sec bursts (the 5 s inbox poll failing instantly against an exhausted socket pool), and navigation timed out entirely. Same user-visible signature as the original "site won't load" report.
+
+**Root cause (two compounding defects):**
+1. `setInterval(poll, 5000)` fired regardless of the previous tick and `api.request()` had **no timeout** — a slow/hung fetch stacked one socket per tick until the per-origin pool was gone.
+2. ~4 failing polls/sec implies multiple live store instances in one page: Vite can re-instantiate `notificationStore.ts`/`crossTab.ts` through a dependency update where the `import.meta.hot.dispose` handler isn't reached, leaving a second poller/SSE/channel alive.
+
+**Fix (2026-10-05):** (a) poll serialized via `pollInFlight` guard and bounded with `AbortSignal.timeout(15_000)` — worst case one socket per store instance; (b) `notificationStore` and `crossTab` stash their cleanup on `globalThis` at module init — a re-instantiated module always kills the previous instance's timers/socket/channel regardless of accept boundaries (`__agentosNotifStoreStop`, `__agentosCrossTabStop`).
+
+**Verified:** 58/58 vitest, tsc clean. Post-fix, exactly one delivery report per adapter per event (leader-only) in live emit checks; prior zombie evidence was the 3-socket leader set matching 3 browser instances — now additionally protected when instances multiply.
+
+**Independently re-verified (2026-10-05, agent-browser):** 3 same-origin tabs → exactly **1** upstream `:8081` connection (leader-only SSE, survived tab churn/re-election); `pollInFlight` guard + `AbortSignal.timeout(15_000)` confirmed in source and live (no overlapping `/api/notifications` polls, no `ERR_INSUFFICIENT_RESOURCES` in console/network log); live emit → exactly one delivery row, `attempts=1`. **Residual found → B38.**
+
+### B38 — Notification poll-seen while a tab is a follower is permanently never reported (FIXED)
+
+**Symptom (2026-10-05, agent-browser, 3× localhost:5173 tabs):** during leader-election churn (third tab joining + SSE reconnect gap) emitted five notifications `test:v2burst1-5`. Minutes later: still `read=0`, **zero `notification_deliveries` rows** — no tab ever reported delivered/suppressed for them. A live probe emitted after election settled reported `toast/suppressed` within a second, so the pipeline itself was healthy — the gap items are permanently stranded.
+
+**Root cause:** `process()` in `notificationStore.ts` ran `seenIds.add(n.id)` **before** the `leader` checks. Any tab whose 5 s poll picks up a notification while its local `leader` flag is `false` marks it seen and skips the reports; when that tab later wins the election the items are already in its `seenIds` so its poll never re-processes them, and `retryFailedDeliveries()` only retries existing `failed` rows — never-reported items have no row to retry. Consequences: missing delivery-audit rows, and a toast the user never sees if the only processing pass ran on a hidden follower (inbox unread state is still correct).
+
+**Fix applied (2026-10-05):** `deferredReports` — `process()` records every unread id it handles while `!leader`; `markRead` drops ids (read rows never need reports). On promotion (`onLeaderChange(true)`), before `retryFailedDeliveries`, each deferred id is re-`process()`ed with `reportsOnly=true`: full leader-side pass (suppression/quiet-hours re-evaluation, `reportToastAggregate`, `fireOsAdapter`) but no duplicate toast — the tab already rendered it as a follower. Regressions: `promotion to leader reports items poll-seen as follower (B38)` + `promotion skips items the user already read (B38)` in `notificationStore.test.ts` (12/12 file, 58→60 Vitest suite).
+
+**Related fix (same commit, found while auditing pulled W8):** `scheduler.py::_notify_failure` emitted `schedule_failed` with no `event_id` — content-hash fallback would dedup a *new* failure streak producing an identical error message. Now keyed `schedule_failed:{schedule_id}:{YYYY-MM-DD}` + `entity_type="schedule"`, matching the pre-rewrite emitter's daily-dedup semantics at schedule granularity.
+
+### B39 — Disabled agents still execute runs and accept chat: `enabled` is never enforced (FIXED)
+
+**Symptom (2026-10-05, operator report):** "I still can run the disabled agent… I can also click into the disabled agent in GUI." Disabling an agent dimmed its card but every execution path still worked — chat sent real runs, and nothing in the UI told you the agent was off.
+
+**Root cause:** `run_agent()` — the single entry point for every trigger (dashboard chat, schedules, heartbeat, channel webhooks) — verified the agent *exists* but never checked `agent.enabled`. The chat route pre-checked existence only, and `Conversation.tsx` rendered a fully functional composer for disabled agents. `enabled` was cosmetic.
+
+**Fix applied (2026-10-05):**
+- `runner.py` — `run_agent` raises `ValueError("Agent is disabled: {id}")` before building the inbound message. Schedules/heartbeats hitting a disabled agent now record an honest `failed` occurrence with that error; channel webhooks log it.
+- `api/chat.py` — `POST /api/chat/{id}/message` returns `400 "Agent is disabled"` up front (previously the refusal would have surfaced as a run failure / 500).
+- `Conversation.tsx` — disabled-agent banner ("read-only — re-enable in Agents") + composer `disabled` while `agent.enabled === false`; no-model banner suppressed on disabled agents.
+- Card still navigates — history stays readable; only execution is gated.
+
+**Verified:** `test_run_agent_refuses_disabled_agent` in `test_pipeline.py` (8/8 file); `tsc` clean. Live: `POST /api/chat/45a754cb/message` (pre-disabled agent) → `400 Agent is disabled` on the restarted gateway.
+
+### B40 — OS pings suppressed while the app window is merely unfocused (FIXED)
+
+**Symptom (2026-10-05, operator report — Tauri debug app):** chat view left open on the agent, operator switched to another application, `run_completed` landed → **no macOS notification**, no toast; the inbox row was auto-marked read. Same would occur in a backgrounded-but-on-screen browser window.
+
+**Root cause:** focus suppression equated "operator is looking" with `document.visibilityState === "visible"` (`selfTabVisible()` gating the local check in `isSuppressed`). A window that stays on-screen but loses OS focus still reports `visible` — `visibilityState` tracks page occlusion/minimize, not window focus. So the exact case OS pings exist for (you're in another app) was classified as "already watching" and suppressed + auto-read.
+
+**Fix applied (2026-10-05):** "looking" now means *visible AND focused*.
+- `crossTab.ts` — new `selfFocused()` = `selfVisible() && document.hasFocus()`; heartbeat/hello gossip a `focused` flag (`PeerState.focused`, backfilled `?? visible` for pre-B40 peers); `window` `focus`/`blur` listeners re-beat on focus change; `peerFocusKeys()` only unions keys from peers that are `visible && focused`. Exported `selfTabFocused()`.
+- `focusRegistry.ts` — `isSuppressed` local check gates on `selfTabFocused()`; peer side inherits the tighter `peerFocusKeys()`.
+- Toasts and leader election deliberately unchanged: `anyPeerVisible()`/toast gating stays visibility-only (an unfocused window still displays a toast to glance back at); leadership doesn't care about focus.
+- Regression: `visible-but-unfocused window does not suppress (B40)` in `focusRegistry.test.ts` — focused entity + unfocused window → not suppressed.
+
+**Verified:** Vitest 61/61, `tsc` clean. Live re-check pending a Tauri reload — the fix lands when the running debug app next loads the dev frontend.
+
+**Semantics refined (2026-10-05, operator decision):** focus suppression now gates **toast + auto-read only**. The OS adapter (`browser`/`system`) bypasses focus suppression entirely — the ping doubles as the completion signal even when you're already on the page. Quiet hours still suppress all pings. Delivery audit: focused → `toast|suppressed` + `browser|delivered`; quiet → both `suppressed`.
+
+**Note:** suppression failures now resolve toward the *extra* ping — a focused-window false negative (e.g. focus inside DevTools) pings anyway rather than missing one.
+
+### B41 — macOS-level notification switch invisible to the app: toggle + audit lie (FIXED)
+
+**Symptom (2026-10-05, operator report — bundled `CaberOS.app`):** operator disabled CaberOS under System Settings → Notifications → the in-app "Enable notifications" toggle still showed enabled, and deliveries kept auditing `system|delivered` while macOS dropped every post.
+
+**Root cause:** `tauri-plugin-notification`'s desktop permission methods are hardcoded — `isPermissionGranted()`/`requestPermission()` unconditionally return `Granted` (`desktop.rs`). Its send path is `notify-rust` → `mac-notification-sys` → `NSUserNotificationCenter`, an API that predates the per-app permission model and is removed on macOS 26/27: posts silently vanish, `show()` still returns `Ok`. Three lies stacked: the toggle showed pref-not-permission, `osPermissionState()` always reported `granted`, and `deliverOs` audited `delivered` for posts the OS discarded. (Same dead path explains dev-mode no-shows — additionally dev posts under a spoofed `com.apple.Terminal` identity with no bundle.)
+
+**Fix applied (2026-10-05):** migrate to `UNUserNotificationCenter` (the real per-app permission API) + honest state plumbing.
+- `Cargo.toml` — `[target.'cfg(target_os = "macos")']`: `mac-usernotifications 0.3.1` + `notify-rust 4.18` with `preview-macos-un` (feature-unifies the plugin's own `notify-rust` onto the modern backend).
+- `lib.rs` — two app commands: `notification_os_state` → `get_notification_settings()` mapped `Authorized|Provisional|Ephemeral→granted`, `Denied→denied`, `NotDetermined|other→default`, error→`unavailable`; `notification_os_request` → `request_auth()` (`true→granted`, `false→denied`, err→`unavailable`). Non-macOS builds return `unavailable`. Registered in `generate_handler!` (app commands need no capability grant).
+- `notifAdapters.ts` — desktop `osPermissionState`/`requestOsPermission` now `invoke` the commands instead of the plugin's stubs; `deliverOs` reads state, requests once when `default`, and reports `{state:"failed", error:"permission_<state>"}` unless actually granted — the audit can no longer claim delivery macOS denied. Browser path untouched.
+- `NotificationPrefsForm.tsx` — the pre-existing `perm === "denied"` blocked-hint finally works (it never fired under the stub); re-checks permission on window `focus` (macOS toggles change outside the app); the hint deep-links to `x-apple.systempreferences:com.apple.Notifications-Settings` via `tauri-plugin-opener`.
+- Frontend bump already in place: `tauri` 2.12.1 / `tauri-plugin-notification` 2.5.1 (fixed the JS↔Rust version mismatch that hard-blocked `tauri build`).
+
+**Verified:** `cargo check` clean (dev profile), `tsc -b` clean, Vitest 61/61. End-to-end on the rebuilt bundle: OS toggle off → app shows `denied` + blocked hint, deliveries audit `system|failed permission_denied`; toggle on → real banner via `UNUserNotificationCenter`, including while the app is frontmost.
+
+**Signing postmortem (2026-10-06, verified in `usernoted` logs):** the UN migration surfaced a deeper blocker — Tauri's linker ad-hoc signature gives each binary a hash-derived identifier (`caberos-<cdhash>`), and `usernotificationsd`'s entitlement check requires the code-signing identifier to equal `CFBundleIdentifier`. Every UN call logged `Entitlement 'com.apple.private.usernotifications.bundle-identifiers' required ... not allowed` → the app permanently read `denied` regardless of the System Settings toggle. Fix proven live: **ad-hoc re-sign with an explicit identifier** — `codesign --force --deep -s - --identifier com.caberos.desktop` → `Entitlement check success: matching bundle identifiers` → `Presenting as banner`. No Apple account required; an Apple Development cert or Developer ID works equally well (any stable signature whose identifier matches the bundle id). Wired into the pipeline: `scripts/sign-app.sh` runs at the end of `desktop:build`; distribution still needs Developer ID for Gatekeeper, but local notifications no longer depend on it.
+
+### B42 — Zombie gateway resurrects reconciled runs + approval state is not durable (FIXED 2026-10-06)
+
+**Symptom (2026-10-06, operator report — "error in the latest run"):** run `793bbde9` (`vietnam-stock-market-analyst`, user asked about VN30) parked on two `web_search` approvals at 06:06 and showed `running` for ~6h across multiple app restarts. Eventually the whole gateway wedged — requests accepted, zero bytes returned. Separately reported by operator: outside the chatview the session shows "waiting approval", inside the chatview **no approval card renders**.
+
+**Root cause — two halves, both traceable to process lifecycle:**
+
+1. **Zombie gateway re-asserts `running`.** Killing the app binary (`pkill` on `Contents/MacOS/caberos`) orphans its `caberos-gateway` child, which keeps :51718, keeps the DB, and keeps the run's in-memory asyncio task awaiting approvals. B2's startup reconcile in the *new* gateway marks the row `interrupted` — but the zombie's still-live task checkpoints status back to `running` on its next write. Reconcile wins the write; the zombie wins the rewrite. Verified live: `kill -9` of every caberos-gateway + relaunch → reconcile ran at startup → `793bbde9` → `interrupted` instantly. Collateral during the zombie window: `sqlite3.OperationalError: database is locked` on `INSERT INTO runs` (a second run attempt, `cf180d52`, died at insert) and total gateway starvation (single wedged write transaction queues every DB request — the "zero bytes" hang).
+   - **Fix direction:** (a) app exit must reap the gateway child (Tauri sidecar kill-on-exit / process-group kill, not just the main binary); (b) reconcile needs *ownership fencing* — a run row should record its owning gateway instance id, and the owner heartbeats; reconcile only sweeps rows whose owner is dead, and zombie writes get rejected by an owner-token check. A run also needs an approval/expiry timeout — "pending forever" is not a terminal state but behaves like one with zero operator signal.
+
+2. **B28 fix only covers live in-memory context.** The approval card is rebuilt by replaying `tool_call`/`approval_id` SSE events from `ctx.events` — which requires `get_run(run_id)` to hit a live `RunContext`. Pending approvals live only in `approval_requests` rows; `getSessionMessages` never hydrates them, and `Conversation.tsx` learns `approval_id` solely from the live stream (`:500`). Owner dead → `stream_run_events` 404 → card unrecoverable forever, while the outside-chatview surface still correctly reports `awaiting_approval`/`waiting` from DB state.
+   - **Fix direction:** persist pending-approval state durably — either write the `tool_call` message row with `status=pending_approval` + `approval_id` at creation (not after decision), or have the session/run API join pending `approval_requests` so the chatview can render the card without SSE replay. Same applies to `elicitation_requests`.
+
+**Verified state after fix:** clean restart → run `interrupted`, API responsive, approvals still `pending` in DB (inert). Neither fix implemented — needs the ownership-fencing + durable-approval persistence work.
+
+**Update (2026-10-06) — reaping is now structural, approval staleness reconciled:**
+
+- **Windows was already fenced** (PR #65): the gateway joins a `KILL_ON_JOB_CLOSE` Job Object — the kernel terminates the whole tree when the app dies, including Task-Manager force-kill (`gateway.rs` `win_job`).
+- **macOS/Linux now fenced** via a parent-death watchdog in `gateway_entry._start_parent_watchdog`: a daemon thread polls `os.getppid()` every 2s and `os._exit(0)`s when the ppid *flips* (init/subreaper adoption = parent gone). Kill −9 verified live: `kill -9` on the app → gateway + port 51718 gone within 5s; normal launch unaffected. The earlier accidental self-limit was SIGPIPE on the broken stdout pipe — worked only if the orphan happened to log; the watchdog makes it deterministic.
+- **Ownership-token fencing (zombie write rejection) — unnecessary now.** It only mattered while a zombie could survive; the watchdog caps the multi-writer window at the ~2s adoption lag. No live zombie, nothing to fence against.
+- **Pending approvals reconcile** to `interrupted` (`decided_by="system_restart"`) at startup via `reconcile_pending_approvals` — runs BEFORE the orphan-early-return and commits independently, so a stale card can't click through a successful "approved" write on a dead run. Operator decision: interrupted is terminal — no resume.
+- **Durable timeline hydration (2026-10-06):** the feared "dead card looks actionable" turned out to be worse and quieter — `tool_call` messages only persist on *terminal* status (`pipeline.py`), so a call killed mid-approval left no row at all and simply vanished from the timeline. `reconcile_pending_approvals` now writes a `role="tool_call"` row per stale approval (`status="interrupted"`, capability + args + `approval_id`, next `seq` for the run) so the run's tail explains itself. No card can render actionable because `pending_approval` never persists.
+- **Port-claim honesty (2026-10-06):** `gateway_entry._claim_port_or_die` bind-probes the port before uvicorn; on conflict it names the holder (`lsof`/`netstat` → `ps`/`tasklist` for the full path — a dev box now prints e.g. `/Applications/CaberOS.app/.../caberos-gateway (pid N)`) and exits 3. The Rust side watches the spawned child (`GatewayProcess` monitor thread, 500ms `try_wait` poll, `stopping` flag distinguishes intentional kills) — on spontaneous death `gateway_error` returns the last FATAL line from gateway.log. The frontend asks for it after 8 failed health polls (~12s) and shows it instead of spinning "Starting the local gateway…" forever. Verified live: squatter test against the real app's port printed the full holder path + exit 3.
+- **Still open:** nothing structural. Residual: while a *foreign healthy CaberOS gateway* squats (second app copy), the app's health check succeeds against it — no ownership token distinguishes "ours" from "theirs" (deliberately descoped).
+
+### B43 — OS pings silently dropped when the UI thread is busy; audit says `delivered` anyway (FIXED)
+
+**Symptom (2026-10-06, operator report):** `approval_required` pings produced macOS banners, but every `run_completed` ping didn't — while the delivery audit recorded `system|delivered` for all of them.
+
+**Root cause — two stacked defects in the send path:**
+
+1. **`block_on_current` drops the send before dispatch.** `sendNotification` → `notify_rust::Notification::show()` → `send_blocking` → `block_on_current(send_and_wait_for_delivery)`. On a tokio worker thread, `block_on_current` checks `CFRunLoop::main().is_waiting()` and returns `Err(MainThreadNotRunning)` when the main run loop isn't idle *at that instant* — **before the send future is ever polled**, so `addNotificationRequest` is never called. The gate exists because `block_on` parks the calling thread and needs the loop already pumping to guarantee the completion handler wakes it. `run_completed` fires exactly when the app is busiest (SSE teardown, DOM churn) → is_waiting false → silent drop. Approvals landed during idle moments → delivered. Verified in `usernoted` + app-process logs: only the two approval sends ever produced "Adding notification request"; the four `run_completed` sends (with `Getting notification settings` permission checks at the exact audit times) produced nothing.
+2. **The plugin discards the result.** `tauri-plugin-notification`'s desktop `show()` does `tauri::async_runtime::spawn(async move { let _ = notification.show(); })` — the JS `sendNotification` returns as soon as the payload is prepared, so `deliverOs` reported `delivered` for sends that never reached macOS.
+
+**Fix:** new `notification_os_send(title, body)` Tauri command (`frontend/src-tauri/src/lib.rs`) calling `mac_usernotifications::send()` — the **async** path: dispatch → `addNotificationRequest` → await the completion handler → real `Ok`/`Err` back to JS. No `is_waiting` gate (the future simply pends until the main loop next pumps — a GUI app pumps continuously). `deliverOs` (`frontend/src/lib/notifAdapters.ts`) invokes it and propagates errors into the delivery audit; on `unavailable` (non-macOS) it falls back to the plugin's `sendNotification`, whose Windows/Linux paths don't have the run-loop gate.
+
+**Also verified:** inbox ordering fix — `GET /api/notifications` now orders by `julianday(created_at)` because the stored column is text and mixed ISO shapes (`T`+offset vs space-separated) break lexicographic `ORDER BY` (all `T` rows sorted above all space rows regardless of time). Regression test: `test_inbox_orders_mixed_timestamp_formats`.
+
+### B44 — Session messages endpoint returns the FIRST 100 rows; new replies invisible once a session outgrows the limit (FIXED)
+
+**Symptom (2026-10-06, operator report):** "cannot see the model output in chatview" — the run completed (`tokens_out` > 0, assistant row in DB) but the reply never rendered, even on reload.
+
+**Root cause:** `GET /api/chat/{agent}/sessions/{id}/messages` ordered `Run.started_at ASC, Message.seq ASC` then applied `.limit(100)` — returning the session's **oldest** 100 rows. The operator's session had 112 rows (tool_call rows count), so every message past row 100 — including the newest model output — was silently cut. The chatview showed a frozen prefix; every new reply vanished on reload.
+
+**Fix:** `backend/src/agentos/api/chat.py` — order DESC + LIMIT, then `reversed()` in Python: the endpoint now returns the newest `limit` rows in chronological order. Regression test: `test_session_messages_limit_returns_newest` (5 runs × 2 msgs, `limit=4` → the newest four, ascending).
+
+**Follow-up — cursor pagination for >100-row sessions:** the window fix alone left older rows unreachable in the UI. Added `before_id` cursor + `has_more` to the endpoint (returns `{messages, has_more}`), `Message.id` as final sort tiebreaker (seq resets per run, `started_at` can tie), and scroll-top lazy loading in `Conversation.tsx` (`loadOlderMessages` + scroll anchoring via `useLayoutEffect`, 50-row pages, id-deduped prepends, spinner row).
+
+**Cursor subtlety:** timestamp comparisons must go through `cast(col, String)` on both sides — `server_default func.now()` stores second precision (`'SS'`) while ORM-bound datetimes rebind microseconds (`'SS.000000'`), so a typed row-value `<` lets the cursor row compare *less than itself* and leak into the next page. Ordering uses the same casted expressions so predicate and sort share one total order.
+
+### B45 — YOLO mode reset on every app restart; no chatview indication (FIXED)
+
+**Symptom (2026-10-06, operator report):** "when I enable yolo mode, it's not saved when I close the app" — and no warning in the chat view while it's on.
+
+**Root cause:** `PUT /api/settings/yolo` mutated the in-memory `settings` singleton only; the `app-settings.json` overlay (`persist_setting`/`_apply_persisted_overrides`) whitelisted `browser_binary` alone. On restart the field's `False` default won.
+
+**Fix:** `yolo_mode` added to the overlay whitelist; `set_yolo_mode` now calls `persist_setting` and returns 409 when `AGENTOS_YOLO_MODE` is env/.env-pinned (same contract as `browser_binary`). Function-level `from ..config import env_pinned, persist_setting` preserved so the `settings_overlay` test fixture (monkeypatches `config.env_pinned`) still applies. Chatview gets a pinned danger strip above the message area ("YOLO mode is on — tools run without approval"); `SettingsOverlay.toggleYolo` dispatches `caberos:yolo-mode` so the banner updates live without remount. Verified live: enabled → restarted the packaged app → `GET /yolo` returns `true`.
+
+**Tests:** `test_yolo_persists_across_overlay` (PUT → file → overlay re-apply → off persists as explicit `false`), `test_yolo_put_refused_when_env_pinned`.
+
+### B46 — YOLO toggle is global but sits in a per-agent panel (FIXED → per-agent flag)
+
+**Symptom (2026-10-06, operator report):** "why is yolo mode set for every agent" — the toggle card sits atop the agent-scoped Capabilities tab, but `settings.yolo_mode` bypasses approvals for *all* agents.
+
+**Fix:** `AgentConfig.yolo_mode` (versioned — a toggle writes a new AgentVersion, so "when did this agent go unsupervised" is auditable). Mediator bypasses when `settings.yolo_mode or agent_config.yolo_mode`; `agent_config` is always the parent config so the flag also covers the agent's sub-agent calls. `PUT /api/agents/{id}` accepts `yolo_mode`; `GET` returns it. The overlay card now writes the agent field and reads "for this agent only"; when the global flag is on it shows "Forced on for all agents" with a **turn off global override** action (the global `/api/settings/yolo` endpoints stay for env/ops use). Chatview banner fires on `global OR agent`.
+
+**Tests:** `test_agent_yolo_skips_approval_gate` (yolo agent executes approval-gated calls without asking), `test_agent_yolo_off_still_gates` (default config still parks on `_await_approval`). Verified live: global reset to `false`, per-agent PUT created version 10 with the flag on, other agents unaffected.
+
+### B47 — Notifications carry no agent context or content; inbox grows forever; quiet hours silence blocking approvals (FIXED)
+
+**Symptom (2026-10-06, operator ask):** "can it be more detail like from which agent and a brief of content?" — every ping read "Run completed" / "An agent is waiting…" with no agent name and no hint of what happened. Audit also found: `Notification`/`NotificationDelivery` had no retention (append-only forever), and quiet hours suppressed `approval_required` — a blocked run could stall silently overnight.
+
+**Fix:**
+- `Notification.agent_id` + `agent_name` (snapshot at emit — survives renames/deletes, no join). Emitters pass `agent_id`; name resolved in `create_notification`. Badge renders beside the title in inbox + toast.
+- Content briefs per event: `run_completed` carries the first ~160 chars of the final assistant reply (`excerpt_reply` queries `Message`); `run_failed` the one-lined error; `approval_required` a `call_brief(payload)` — capability + headline arg + `(+N more)` for batches; `elicitation_required` keeps the question. `one_line()`/`call_brief()` helpers in `notifications.py`.
+- `prune_notifications(db, max_age_days=30)` runs at gateway startup (`main.py` lifespan) — deletes old notification + delivery rows via `julianday` compare (mixed timestamp formats can't dodge the cutoff).
+- `HITL_TYPES = {approval_required, elicitation_required}` pierce quiet hours in the delivery coordinator; explicit per-type mutes still win. Settings copy updated to say approvals still reach you.
+
+**Deploy-time crash caught (same class as the timestamp bugs — test DBs never exercise the patch path):** `sqlite_backend.add_column` whitelists column types; `VARCHAR(64)` wasn't in it → gateway died in `init_db` on first boot of the installed app. Fixed to `VARCHAR(255)` + explicit `CREATE INDEX` for `agent_id` (ALTER doesn't create indexes for existing DBs). Tests pass because fresh test DBs go through `create_all` — a schema-patch smoke against a real DB copy is still a gap.
+
+**Also observed during deploy:** a leftover dev `uvicorn` squatting on :8081 — packaged app silently talked to stale code (B42 class again; killed it).
+
+**Tests:** `test_agent_attribution_snapshots_name`, `test_prune_notifications_ages_out_rows_and_deliveries`; vitest `quiet hours do NOT silence approval_required`. Verified live: columns + `ix_notifications_agent_id` in the app DB, gateway healthy after patch.
 
 ## Tests first
 

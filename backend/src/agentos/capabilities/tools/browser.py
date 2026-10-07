@@ -31,6 +31,34 @@ async def browser_open(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     # "scheduled work never opens surprise windows"). Refuse honestly —
     # the agent can proceed headless or ask the user via agent_ask_user.
     if args.get("visible") and kwargs.get("trigger", "user_message") != "user_message":
+        # The operator can't see a headless refusal — surface it so a human
+        # can take over the browser session (W9). Once per run.
+        try:
+            from ...db import async_session_factory
+            from ...notifications import create_notification
+
+            async with async_session_factory() as ndb:
+                await create_notification(
+                    ndb,
+                    notification_type="browser_takeover_required",
+                    severity="warning",
+                    title="Browser takeover requested",
+                    message=(
+                        f"A background run asked for a visible browser at {url} "
+                        "— it needs an interactive run to continue (login, "
+                        "captcha, or manual steps). Open the agent's chat and "
+                        "ask it to open the browser visibly."
+                    ),
+                    action_path=f"/agents/{kwargs.get('agent_id')}/chat",
+                    entity_id=kwargs.get("run_id"),
+                    entity_type="run",
+                    agent_id=kwargs.get("agent_id"),
+                    event_id=f"browser_takeover:{kwargs.get('run_id')}",
+                )
+                await ndb.commit()
+        except Exception:
+            pass
+
         return {
             "status": "visible_refused",
             "detail": (

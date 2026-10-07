@@ -529,21 +529,44 @@ function CapabilitiesTab({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [allCaps, setAllCaps] = useState<CapabilityInfo[]>(FALLBACK_CAPABILITIES);
-  const [yoloMode, setYoloMode] = useState(false);
+  // Per-agent YOLO — skips approval gates for this agent only. The global
+  // AGENTOS_YOLO_MODE / persisted flag is an ops override: when it's on,
+  // every agent bypasses approvals and this toggle is advisory.
+  const [yoloMode, setYoloMode] = useState(agent?.yolo_mode ?? false);
+  const [globalYolo, setGlobalYolo] = useState(false);
 
-  // Fetch YOLO mode state
   useEffect(() => {
-    api.getYoloMode().then((r) => setYoloMode(r.yolo_mode)).catch(() => {});
+    setYoloMode(agent?.yolo_mode ?? false);
+  }, [agent?.yolo_mode]);
+
+  useEffect(() => {
+    api.getYoloMode().then((r) => setGlobalYolo(r.yolo_mode)).catch(() => {});
   }, []);
 
   const toggleYolo = async () => {
+    if (!agent) return;
     const next = !yoloMode;
     setYoloMode(next);
     try {
-      await api.setYoloMode(next);
+      await api.updateAgent(agent.id, { yolo_mode: next });
       showSaved(next ? "YOLO mode ON — approvals disabled" : "YOLO mode OFF");
+      window.dispatchEvent(
+        new CustomEvent("caberos:yolo-mode", {
+          detail: { agentId: agent.id, enabled: next },
+        }),
+      );
     } catch {
       setYoloMode(!next); // revert on error
+    }
+  };
+
+  const disableGlobalYolo = async () => {
+    try {
+      await api.setYoloMode(false);
+      setGlobalYolo(false);
+      showSaved("Global YOLO override off");
+    } catch {
+      showSaved("Global override is env-pinned — unset AGENTOS_YOLO_MODE");
     }
   };
 
@@ -766,18 +789,18 @@ function CapabilitiesTab({
 
   return (
     <div className="space-y-3">
-      {/* YOLO mode banner */}
+      {/* YOLO mode banner — per-agent approval bypass */}
       <div
         className="flex items-center justify-between rounded-[6px] border px-4 py-3"
         style={{
-          borderColor: yoloMode ? "var(--danger)" : "var(--border)",
-          background: yoloMode ? "rgba(239,68,68,0.05)" : "transparent",
+          borderColor: yoloMode || globalYolo ? "var(--danger)" : "var(--border)",
+          background: yoloMode || globalYolo ? "rgba(239,68,68,0.05)" : "transparent",
         }}
       >
         <div>
           <div className="flex items-center gap-2">
             <span className="text-[13px] font-semibold text-[var(--ink)]">YOLO Mode</span>
-            {yoloMode && (
+            {(yoloMode || globalYolo) && (
               <span
                 className="rounded-full px-2 py-0.5 text-[9px] font-mono uppercase"
                 style={{ background: "var(--danger)", color: "#fff" }}
@@ -787,17 +810,32 @@ function CapabilitiesTab({
             )}
           </div>
           <p className="mt-0.5 text-[11px] text-[var(--ink-3)]">
-            Skip all approval gates. Tools execute immediately without confirmation.
+            Skip approval gates for this agent only. Tools execute immediately without confirmation.
           </p>
+          {globalYolo && (
+            <p className="mt-0.5 text-[11px] font-medium" style={{ color: "var(--danger)" }}>
+              Forced on for all agents via the global YOLO setting.{" "}
+              <button
+                type="button"
+                onClick={disableGlobalYolo}
+                className="underline underline-offset-2"
+                style={{ color: "var(--danger)", background: "none", border: "none", cursor: "pointer", font: "inherit", padding: 0 }}
+              >
+                turn off global override
+              </button>
+            </p>
+          )}
         </div>
         <button
           onClick={toggleYolo}
+          disabled={globalYolo}
           className="rounded-[5px] px-3 py-1.5 text-[12px] font-medium transition"
           style={{
             border: "1px solid var(--border)",
             background: yoloMode ? "var(--danger)" : "none",
             color: yoloMode ? "#fff" : "var(--ink-2)",
-            cursor: "pointer",
+            cursor: globalYolo ? "not-allowed" : "pointer",
+            opacity: globalYolo ? 0.5 : 1,
           }}
         >
           {yoloMode ? "Disable" : "Enable"}

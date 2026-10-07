@@ -717,6 +717,11 @@ async def publish_skill(
 
     result = await _validate_now(db, skill)
     if result["errors"]:
+        await _notify_skill_publish_failed(
+            skill.id,
+            skill.name,
+            "; ".join(str(e) for e in result["errors"][:3]),
+        )
         raise HTTPException(
             status_code=422,
             detail={"message": "validation failed", "errors": result["errors"]},
@@ -733,9 +738,38 @@ async def publish_skill(
             validation=result,
         )
     except SkillError as e:
+        await _notify_skill_publish_failed(skill.id, skill.name, str(e))
         raise HTTPException(status_code=e.status_code, detail=str(e)) from e
     await db.commit()
     return {"published": True, "revision": revision.revision_number, "id": skill.id}
+
+
+async def _notify_skill_publish_failed(skill_id: str, skill_name: str, error: str) -> None:
+    """Record a publish failure in the inbox (W9) — dedup keyed on the
+    error content so repeated identical failures collapse once. Fresh
+    session: never entangle the request session's pending state."""
+    try:
+        import hashlib
+
+        from ..db import async_session_factory
+        from ..notifications import create_notification
+
+        digest = hashlib.sha256(error.encode()).hexdigest()[:12]
+        async with async_session_factory() as ndb:
+            await create_notification(
+                ndb,
+                notification_type="skill_publish_failed",
+                severity="error",
+                title=f"Skill '{skill_name}' failed to publish",
+                message=error[:300],
+                action_path="/skills",
+                entity_id=skill_id,
+                entity_type="skill",
+                event_id=f"skill_publish_failed:{skill_id}:{digest}",
+            )
+            await ndb.commit()
+    except Exception:
+        pass
 
 
 class PromoteBody(BaseModel):

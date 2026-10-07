@@ -279,6 +279,19 @@ async def rebuild_index(db: AsyncSession) -> IndexGeneration:
 
             await _activate(db, generation)
             await db.commit()
+            # An "active" generation can still be degraded — resource down
+            # or embed batches failed mid-build leaves unembedded chunks
+            # that silently drop to lexical. Surface it (B34).
+            stats = json.loads(generation.stats_json or "{}")
+            failed = int(stats.get("failed", 0))
+            total = int(stats.get("total", 0))
+            if failed:
+                reason = stats.get("reason") or "embedding calls failed"
+                await _notify_index_degraded(
+                    generation,
+                    f"activated degraded — {total - failed}/{total} chunks embedded ({reason})",
+                    title="Knowledge index degraded",
+                )
         except Exception as error:
             # A failed build is a committed record, not a silent rollback —
             # partial vectors stay queryable for diagnosis and the row can
@@ -288,6 +301,7 @@ async def rebuild_index(db: AsyncSession) -> IndexGeneration:
             generation.status = "failed"
             generation.error = str(error)[:500]
             await db.commit()
+            await _notify_index_degraded(generation, str(error))
             raise
         return generation
 
@@ -328,6 +342,12 @@ async def activate_generation(db: AsyncSession, generation_id: str) -> IndexGene
     if missing and resource is not None and resource.status == "ready":
         await _embed_into_generation(db, generation, resource, missing)
     await _activate(db, generation)
+    if missing and (resource is None or resource.status != "ready"):
+        await _notify_index_degraded(
+            generation,
+            f"activated with {len(missing)} chunks still unembedded (embedding resource not ready)",
+            title="Knowledge index degraded",
+        )
     return generation
 
 
@@ -363,6 +383,37 @@ async def repair_index(db: AsyncSession) -> dict[str, Any]:
     }
 
 
+async def _notify_index_degraded(
+    generation: IndexGeneration, detail: str, *, title: str = "Knowledge index build failed"
+) -> None:
+    """Emit vault_index_degraded — a failed/degraded index build is async
+    background work the operator can't otherwise see (W9)."""
+    try:
+        from ..db import async_session_factory
+        from ..notifications import create_notification
+
+        async with async_session_factory() as ndb:
+            await create_notification(
+                ndb,
+                notification_type="vault_index_degraded",
+                severity="warning",
+                title=title,
+                message=(
+                    f"Index generation {generation.id[:8]}: {detail[:200]}. "
+                    "Retrieval falls back to lexical search until a rebuild succeeds."
+                ),
+                action_path="/knowledge",
+                entity_id=generation.id,
+                entity_type="index_generation",
+                event_id=f"vault_index_degraded:{generation.id}",
+            )
+            await ndb.commit()
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).debug("vault_index_degraded emit failed", exc_info=True)
+
+
 async def reconcile_stale_builds(db: AsyncSession) -> int:
     """Mark generations 'failed' that were 'building' when the process died.
 
@@ -370,12 +421,16 @@ async def reconcile_stale_builds(db: AsyncSession) -> int:
     committed 'building' row is stale by definition. Without this it would
     block every future rebuild with 409.
     """
-    result = await db.execute(
-        update(IndexGeneration)
-        .where(IndexGeneration.status == "building")
-        .values(status="failed", error="Gateway restarted during build")
-    )
-    return result.rowcount or 0
+    stale = (
+        await db.scalars(select(IndexGeneration).where(IndexGeneration.status == "building"))
+    ).all()
+    for generation in stale:
+        generation.status = "failed"
+        generation.error = "Gateway restarted during build"
+    await db.flush()
+    for generation in stale:
+        await _notify_index_degraded(generation, "Gateway restarted during build")
+    return len(stale)
 
 
 async def delete_generation(db: AsyncSession, generation_id: str) -> bool:

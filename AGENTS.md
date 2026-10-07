@@ -59,7 +59,8 @@ To test: start both servers (backend on :8081, frontend on :5173), then use Play
 3. **Implement end-to-end** (vertical slice: DB + API + harness + sandbox + frontend).
 4. **Verify** against the ticket's acceptance criteria.
 5. **Commit** per ticket. No Co-Authored-By lines. **Always ask the user for permission before committing or pushing.**
-6. **Update this file** if you learn something that a fresh session needs to know.
+6. **Before every push, run the local equivalent of `test.yml` (CI):** `cd backend && uv run ruff check src/ tests/ && uv run ruff format --check src/ tests/ && uv run pytest -q`, and for frontend changes `cd frontend && npm run lint && npm run build`. Do not push when any step fails — format violations fail CI just like test failures (`uv run ruff format src/ tests/` fixes them).
+7. **Update this file** if you learn something that a fresh session needs to know.
 
 ## System prompt + memory flow
 

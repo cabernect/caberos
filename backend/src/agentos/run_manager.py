@@ -19,7 +19,7 @@ import asyncio
 from dataclasses import dataclass, field
 
 from .db import async_session_factory
-from .notifications import create_notification
+from .notifications import call_brief, create_notification, one_line
 from .pipeline import Attachment
 from .runner import run_agent
 
@@ -33,10 +33,28 @@ async def _notify_run_event(
     run_id: str,
     agent_id: str,
     session_id: str,
+    excerpt_reply: bool = False,
 ) -> None:
     action_path = f"/agents/{agent_id}/chat?session={session_id}"
     try:
         async with async_session_factory() as db:
+            if excerpt_reply:
+                # run_completed carries the tail of the assistant reply so the
+                # ping itself tells the operator what came back.
+                from sqlalchemy import select
+
+                from .models.run import Message
+
+                last = await db.scalar(
+                    select(Message.content)
+                    .where(Message.run_id == run_id, Message.role == "assistant")
+                    .order_by(Message.seq.desc())
+                    .limit(1)
+                )
+                if last:
+                    from .notifications import one_line
+
+                    message = one_line(last)
             await create_notification(
                 db,
                 notification_type=notification_type,
@@ -45,6 +63,8 @@ async def _notify_run_event(
                 message=message,
                 action_path=action_path,
                 entity_id=run_id,
+                entity_type="run",
+                agent_id=agent_id,
             )
             await db.commit()
     except Exception:
@@ -180,7 +200,7 @@ async def start_run(
                         notification_type="approval_required",
                         severity="warning",
                         title="Approval required",
-                        message="An agent is waiting for approval before continuing.",
+                        message=f"Waiting to run {call_brief(payload)}.",
                         run_id=rid,
                         agent_id=ctx.agent_id,
                         session_id=ctx.session_id,
@@ -196,7 +216,7 @@ async def start_run(
                             notification_type="run_failed",
                             severity="error",
                             title="Run failed",
-                            message=payload.get("error", "An agent run failed."),
+                            message=one_line(payload.get("error") or "An agent run failed.", 240),
                             run_id=rid,
                             agent_id=ctx.agent_id,
                             session_id=ctx.session_id,
@@ -212,6 +232,7 @@ async def start_run(
                             run_id=rid,
                             agent_id=ctx.agent_id,
                             session_id=ctx.session_id,
+                            excerpt_reply=True,
                         )
                     )
             ctx.append_event(event_type, payload)

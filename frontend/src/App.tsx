@@ -21,6 +21,7 @@ import { Notifications } from "./pages/Notifications";
 import { UpdateChecker } from "./components/UpdateChecker";
 import { SetupGuide } from "./components/SetupGuide";
 import { NotificationToasts } from "./components/NotificationToasts";
+import { NotificationPermissionBanner } from "./components/NotificationPermissionBanner";
 import { ThemeProvider } from "./lib/theme";
 
 export default function App() {
@@ -34,6 +35,7 @@ export default function App() {
 function AppContent() {
   const [gatewayReady, setGatewayReady] = useState<boolean | null>(null);
   const [gatewayAttempt, setGatewayAttempt] = useState(0);
+  const [gatewayError, setGatewayError] = useState<string | null>(null);
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [setupData, setSetupData] = useState<{ providers: Provider[]; agents: Agent[] } | null>(null);
 
@@ -41,6 +43,7 @@ function AppContent() {
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
 
+    let attempts = 0;
     const checkGateway = async () => {
       try {
         await api.gatewayHealth();
@@ -50,6 +53,15 @@ function AppContent() {
       } catch {
         if (!cancelled) {
           setGatewayReady(false);
+          attempts += 1;
+          // Give a slow gateway a fair window, then check whether it has
+          // already died (e.g. a foreign process holding the port) so the
+          // screen can name the cause instead of spinning forever.
+          if (attempts === 8) {
+            void api.gatewayError().then((error) => {
+              if (!cancelled && error) setGatewayError(error);
+            });
+          }
           retryTimer = setTimeout(checkGateway, 1500);
         }
       }
@@ -87,6 +99,7 @@ function AppContent() {
     return (
       <GatewayStatus
         retrying={gatewayReady === false}
+        error={gatewayError}
         onRetry={() => {
           setGatewayReady(null);
           setGatewayAttempt((attempt) => attempt + 1);
@@ -174,6 +187,7 @@ function AppContent() {
         />
       )}
       {authed && <NotificationToasts />}
+      {authed && <NotificationPermissionBanner />}
     </BrowserRouter>
     </ConfirmProvider>
     <UpdateChecker />
@@ -212,7 +226,15 @@ function QuitConfirmationBridge() {
   return null;
 }
 
-function GatewayStatus({ retrying, onRetry }: { retrying: boolean; onRetry: () => void }) {
+function GatewayStatus({
+  retrying,
+  error,
+  onRetry,
+}: {
+  retrying: boolean;
+  error?: string | null;
+  onRetry: () => void;
+}) {
   return (
     <div
       className="flex min-h-screen items-center justify-center bg-[var(--color-background)] px-6"
@@ -228,9 +250,21 @@ function GatewayStatus({ retrying, onRetry }: { retrying: boolean; onRetry: () =
         <p className="mt-2 text-sm text-[var(--ink-2)]">
           {retrying ? "Starting the local gateway…" : "Preparing your workspace…"}
         </p>
-        <p className="mt-2 max-w-sm text-xs text-[var(--ink-3)]">
-          CaberOS will continue automatically when the gateway is ready.
-        </p>
+        {error ? (
+          <p className="mt-3 max-w-md rounded-md border border-[var(--border)] bg-[var(--color-surface)] px-3 py-2 font-mono text-xs text-[var(--ink-2)]">
+            {error}
+          </p>
+        ) : (
+          <p className="mt-2 max-w-sm text-xs text-[var(--ink-3)]">
+            CaberOS will continue automatically when the gateway is ready.
+          </p>
+        )}
+        {error && (
+          <p className="mt-2 max-w-sm text-xs text-[var(--ink-3)]">
+            Free the port and relaunch CaberOS — or if another CaberOS window is already running,
+            close this one and use it.
+          </p>
+        )}
         {retrying && (
           <button
             type="button"
