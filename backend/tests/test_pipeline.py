@@ -125,7 +125,10 @@ async def test_run_agent_refuses_disabled_agent(db):
     agent.enabled = False
     await db.commit()
 
-    with pytest.raises(ValueError, match="disabled"):
+    # "is disabled" specifically — "Agent not found: disabled-agent" would
+    # also satisfy match="disabled" while hitting the wrong code path (and
+    # the wrong DB entirely when the session factory isn't patched).
+    with pytest.raises(ValueError, match="is disabled"):
         await run_agent(
             agent_id="disabled-agent",
             text="hi",

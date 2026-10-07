@@ -50,7 +50,6 @@ from typing import Any
 from sqlalchemy import select
 
 from .agent_service import get_active_config
-from .db import async_session_factory
 from .harness.loop import Harness
 from .harness.scripted_model import ScriptedModel, ScriptedResponse
 from .models.agent import Agent
@@ -226,6 +225,11 @@ async def run_agent(
         ValueError: If the agent doesn't exist
     """
     import uuid as _uuid
+
+    # Resolve the factory through the module attribute at call time — tests
+    # monkeypatch agentos.db.async_session_factory, and a `from` import
+    # would keep the stale binding to the real engine.
+    from .db import async_session_factory
 
     # Create a fresh DB session for this run
     async with async_session_factory() as db:
