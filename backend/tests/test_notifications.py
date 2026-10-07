@@ -139,13 +139,9 @@ async def test_concurrent_same_event_id_collapses(tmp_path):
     the in-memory engine shares one connection and can't race."""
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/t.db")
     async with engine.begin() as conn:
+        # create_all now builds ux_notifications_event_id itself — it's a
+        # declared model Index, so the manual DDL is no longer needed.
         await conn.run_sync(Base.metadata.create_all)
-        await conn.execute(
-            text(
-                "CREATE UNIQUE INDEX ux_notifications_event_id "
-                "ON notifications(event_id) WHERE event_id IS NOT NULL"
-            )
-        )
     factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
     async def emit(session: AsyncSession):

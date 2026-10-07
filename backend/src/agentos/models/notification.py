@@ -1,6 +1,6 @@
 """Persistent operator notifications + per-surface delivery state (W9)."""
 
-from sqlalchemy import Boolean, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import Base, IdMixin, TimestampMixin
@@ -8,6 +8,18 @@ from .base import Base, IdMixin, TimestampMixin
 
 class Notification(Base, IdMixin, TimestampMixin):
     __tablename__ = "notifications"
+    # Same partial unique index the init_db patch creates for existing DBs —
+    # declaring it keeps create_all-built schemas (tests, fresh installs)
+    # dedupe-capable too. Partial because event_id is nullable.
+    __table_args__ = (
+        Index(
+            "ux_notifications_event_id",
+            "event_id",
+            unique=True,
+            sqlite_where=text("event_id IS NOT NULL"),
+            postgresql_where=text("event_id IS NOT NULL"),
+        ),
+    )
 
     notification_type: Mapped[str] = mapped_column(String(50), nullable=False)
     severity: Mapped[str] = mapped_column(String(20), nullable=False, default="info")

@@ -10,9 +10,11 @@ subscribers — the in-app inbox is written first, always.
 import asyncio
 import hashlib
 import logging
+import uuid
+from datetime import datetime, timezone
 
 from sqlalchemy import delete, event, func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models.notification import Notification, NotificationDelivery
@@ -128,50 +130,61 @@ async def create_notification(
     if existing:
         return existing
 
-    item = Notification(
-        notification_type=notification_type,
-        severity=severity,
-        title=title,
-        message=message,
-        action_path=action_path,
-        entity_id=entity_id,
-        entity_type=entity_type,
-        agent_id=agent_id,
-        agent_name=agent_name,
-        event_id=event_id,
+    # INSERT ... ON CONFLICT DO NOTHING — one atomic statement, so a unique-
+    # index collision can't error the caller's transaction the way the old
+    # savepoint+retry needed to. (That savepoint also broke under aiosqlite
+    # on a SELECT-only session: the legacy driver layer emits SAVEPOINT
+    # while still in autocommit, the INSERT then opens the implicit BEGIN,
+    # and RELEASE fails with "no such savepoint" — B32.)
+    now = datetime.now(timezone.utc)
+    values = {
+        "id": str(uuid.uuid4()),
+        "notification_type": notification_type,
+        "severity": severity,
+        "title": title,
+        "message": message,
+        "action_path": action_path,
+        "entity_id": entity_id,
+        "entity_type": entity_type,
+        "agent_id": agent_id,
+        "agent_name": agent_name,
+        "event_id": event_id,
+        "read": False,
+        "created_at": now,
+        "updated_at": now,
+    }
+    if db.bind and db.bind.dialect.name == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        stmt = pg_insert(Notification.__table__).values(**values)
+    else:
+        stmt = sqlite_insert(Notification.__table__).values(**values)
+    # Bare ON CONFLICT DO NOTHING — the unique index on event_id is partial
+    # (WHERE event_id IS NOT NULL), which can't be named as a conflict
+    # target without repeating its WHERE clause; the bare form covers any
+    # constraint violation anyway.
+    result = await db.execute(stmt.on_conflict_do_nothing())
+    item = await db.scalar(
+        select(Notification).where(Notification.event_id == event_id).limit(1)
     )
-    # SAVEPOINT — a unique-index collision must not roll back the caller's
-    # surrounding transaction. The racing winner may still be uncommitted
-    # (invisible to our re-select), so retry once: if it commits in the
-    # gap we return it; if it rolled back our insert lands.
-    for attempt in range(2):
-        try:
-            async with db.begin_nested():
-                db.add(item)
-                await db.flush()
-            break
-        except IntegrityError:
-            winner = await db.scalar(
-                select(Notification).where(Notification.event_id == event_id)
-            )
-            if winner is not None:
-                return winner
-            if attempt == 1:
-                raise
-            # Still invisible — rebuild the row and try once more.
-            item = Notification(
-                notification_type=notification_type,
-                severity=severity,
-                title=title,
-                message=message,
-                action_path=action_path,
-                entity_id=entity_id,
-                entity_type=entity_type,
-                agent_id=agent_id,
-                agent_name=agent_name,
-                event_id=event_id,
-            )
-    _emit_after_commit(db, item)
+    if item is None:
+        # Insert conflicted but the winner isn't visible to our transaction
+        # yet — same race the old retry loop covered. Report success-shape;
+        # the row will appear on the winner's commit either way.
+        return Notification(
+            notification_type=notification_type,
+            severity=severity,
+            title=title,
+            message=message,
+            action_path=action_path,
+            entity_id=entity_id,
+            entity_type=entity_type,
+            agent_id=agent_id,
+            agent_name=agent_name,
+            event_id=event_id,
+        )
+    if result.rowcount:
+        _emit_after_commit(db, item)
     return item
 
 
