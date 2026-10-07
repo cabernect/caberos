@@ -30,6 +30,20 @@ async fn enable_shell_sandbox(app: AppHandle) -> Result<(), String> {
     shell_sandbox::enable(&app).await
 }
 
+/// Non-null once the gateway has died on its own — the message names the
+/// cause (usually a port holder, from the gateway's own FATAL log line) so
+/// the frontend can show it instead of spinning on "Starting…" forever.
+#[tauri::command]
+fn gateway_error(app: AppHandle, gateway: tauri::State<'_, GatewayProcess>) -> Option<String> {
+    let log_path = app
+        .path()
+        .app_data_dir()
+        .ok()?
+        .join("logs")
+        .join("gateway.log");
+    gateway.error_detail(&log_path)
+}
+
 #[tauri::command]
 fn gateway_log_path(app: AppHandle) -> Result<String, String> {
     app.path()
@@ -159,6 +173,7 @@ pub fn run() {
             quit_app,
             enable_shell_sandbox,
             gateway_url,
+            gateway_error,
             gateway_log_path,
             read_dropped_file,
             notification_os_state,

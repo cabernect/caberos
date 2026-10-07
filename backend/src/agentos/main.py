@@ -86,18 +86,66 @@ async def reconcile_pending_approvals(db) -> int:
     The wait lives in an in-memory asyncio.Event (B42) — a restart orphans
     the row even when its Run row already carries a terminal status. Left
     pending, a stale card still renders approve/deny and the click writes
-    a successful decision on a dead run. Returns the count marked.
+    a successful decision on a dead run.
+
+    Also writes a ``tool_call`` row per stale approval so the run's timeline
+    shows the parked call as interrupted instead of vanishing silently —
+    tool_call messages persist only on terminal status, and a killed
+    pending call never gets one. Returns the count marked.
     """
-    from sqlalchemy import update
+    import json
+    import uuid
+
+    from sqlalchemy import func, select, update
 
     from .models.approval import ApprovalRequest
+    from .models.run import Message
 
-    result = await db.execute(
+    stale = (
+        await db.execute(
+            select(ApprovalRequest).where(ApprovalRequest.status == "pending")
+        )
+    ).scalars().all()
+    if not stale:
+        return 0
+
+    next_seq: dict[str, int] = {}
+    for approval in stale:
+        if approval.run_id not in next_seq:
+            next_seq[approval.run_id] = (
+                await db.scalar(
+                    select(func.coalesce(func.max(Message.seq), -1)).where(
+                        Message.run_id == approval.run_id
+                    )
+                )
+                or -1
+            ) + 1
+        db.add(
+            Message(
+                id=str(uuid.uuid4()),
+                run_id=approval.run_id,
+                role="tool_call",
+                content=json.dumps(
+                    {
+                        "id": f"interrupted-{approval.id}",
+                        "capability": approval.capability_name,
+                        "args": json.loads(approval.args or "{}"),
+                        "status": "interrupted",
+                        "result": "Gateway restarted while awaiting approval",
+                        "approval_id": approval.id,
+                    }
+                ),
+                seq=next_seq[approval.run_id],
+            )
+        )
+        next_seq[approval.run_id] += 1
+
+    await db.execute(
         update(ApprovalRequest)
-        .where(ApprovalRequest.status == "pending")
+        .where(ApprovalRequest.id.in_([a.id for a in stale]))
         .values(status="interrupted", decided_by="system_restart")
     )
-    return result.rowcount or 0
+    return len(stale)
 
 
 @asynccontextmanager

@@ -217,6 +217,10 @@ export const api = {
 
   gatewayHealth: () => request<{ status: string }>("/health"),
   gatewayLogPath: () => invoke<string>("gateway_log_path"),
+  gatewayError: () =>
+    isDesktopShell
+      ? invoke<string | null>("gateway_error").catch(() => null)
+      : Promise.resolve(null),
 
   // Auth
   login: (username: string, password: string) =>

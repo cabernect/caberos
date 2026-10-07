@@ -470,8 +470,11 @@ async def test_startup_reconcile_interrupts_pending_approvals(db):
     """B42 — a pending approval's wait lives in an in-memory event, so every
     pending row is dead after a restart. Reconcile marks them interrupted
     so a stale card can't "succeed" on a dead run; decided rows are left."""
+    import json
+
     from agentos.main import reconcile_pending_approvals
     from agentos.models.approval import ApprovalRequest
+    from agentos.models.run import Message
 
     db.add_all(
         [
@@ -479,7 +482,7 @@ async def test_startup_reconcile_interrupts_pending_approvals(db):
                 id="ap-dead",
                 run_id="r-dead",
                 capability_name="terminal",
-                args="{}",
+                args='{"command": "rm -rf tmp/"}',
                 status="pending",
             ),
             ApprovalRequest(
@@ -489,6 +492,7 @@ async def test_startup_reconcile_interrupts_pending_approvals(db):
                 args="{}",
                 status="approved",
             ),
+            Message(id="m-0", run_id="r-dead", role="user", content="hi", seq=5),
         ]
     )
     await db.commit()
@@ -504,3 +508,20 @@ async def test_startup_reconcile_interrupts_pending_approvals(db):
     assert rows["ap-dead"].status == "interrupted"
     assert rows["ap-dead"].decided_by == "system_restart"
     assert rows["ap-decided"].status == "approved"
+
+    # The parked call leaves an interrupted tool_call row on the timeline
+    # instead of vanishing — only for stale approvals, never decided ones.
+    tool_rows = [
+        m
+        for m in (await db.execute(select(Message).where(Message.run_id == "r-dead")))
+        .scalars()
+        .all()
+        if m.role == "tool_call"
+    ]
+    assert len(tool_rows) == 1
+    payload = json.loads(tool_rows[0].content)
+    assert payload["status"] == "interrupted"
+    assert payload["capability"] == "terminal"
+    assert payload["args"] == {"command": "rm -rf tmp/"}
+    assert payload["approval_id"] == "ap-dead"
+    assert tool_rows[0].seq == 6

@@ -1,9 +1,13 @@
 use std::{
     env, fs,
-    io::{Read, Write},
+    io::{Read, Seek, SeekFrom, Write},
     path::PathBuf,
     process::{Child, Command, Stdio},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    time::Duration,
 };
 
 #[cfg(unix)]
@@ -191,8 +195,13 @@ fn forward_output<R: Read + Send + 'static>(mut reader: R, log: Arc<Mutex<Rotati
 }
 
 pub struct GatewayProcess {
-    child: Mutex<Option<Child>>,
+    child: Arc<Mutex<Option<Child>>>,
     port: Mutex<Option<u16>>,
+    /// Set when the gateway dies on its own (port conflict, crash) — the
+    /// frontend reads it to stop spinning on "Starting the local gateway…"
+    /// and name the cause. Intentional kills via `stop()` don't set it.
+    last_error: Arc<Mutex<Option<String>>>,
+    stopping: Arc<AtomicBool>,
     /// Held for the lifetime of the gateway; dropping it kills the process tree.
     #[cfg(windows)]
     job: Mutex<Option<win_job::JobObject>>,
@@ -207,8 +216,10 @@ impl Drop for GatewayProcess {
 impl GatewayProcess {
     pub fn new() -> Self {
         Self {
-            child: Mutex::new(None),
+            child: Arc::new(Mutex::new(None)),
             port: Mutex::new(None),
+            last_error: Arc::new(Mutex::new(None)),
+            stopping: Arc::new(AtomicBool::new(false)),
             #[cfg(windows)]
             job: Mutex::new(None),
         }
@@ -218,10 +229,19 @@ impl GatewayProcess {
         self.port.lock().ok().and_then(|port| *port)
     }
 
+    pub fn last_error(&self) -> Option<String> {
+        self.last_error.lock().ok().and_then(|error| error.clone())
+    }
+
     pub fn start(&self, app: &AppHandle) -> Result<(), String> {
         let Some(executable) = gateway_executable(app)? else {
             return Ok(());
         };
+
+        self.stopping.store(false, Ordering::SeqCst);
+        if let Ok(mut error) = self.last_error.lock() {
+            *error = None;
+        }
 
         let port = GATEWAY_PORT;
 
@@ -343,10 +363,66 @@ impl GatewayProcess {
             .lock()
             .map_err(|_| "CaberOS gateway port lock was poisoned".to_string())?;
         *gateway_port = Some(port);
+        drop(gateway_port);
+        drop(process);
+
+        // Watch the child for a spontaneous death — a port conflict or a
+        // startup crash otherwise leaves the frontend polling a port that
+        // will never answer. `stop()` removes the child from the slot (and
+        // sets `stopping`), which is how an intentional kill is told apart
+        // from the gateway dying on its own.
+        let monitor_child = Arc::clone(&self.child);
+        let monitor_error = Arc::clone(&self.last_error);
+        let monitor_stopping = Arc::clone(&self.stopping);
+        std::thread::spawn(move || loop {
+            std::thread::sleep(Duration::from_millis(500));
+            let Ok(mut guard) = monitor_child.lock() else {
+                break;
+            };
+            let Some(child) = guard.as_mut() else {
+                break;
+            };
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    if !monitor_stopping.load(Ordering::SeqCst) {
+                        if let Ok(mut slot) = monitor_error.lock() {
+                            *slot =
+                                Some(format!("CaberOS gateway exited with status {status}"));
+                        }
+                    }
+                    *guard = None;
+                    break;
+                }
+                Ok(None) => {}
+                Err(_) => break,
+            }
+        });
         Ok(())
     }
 
+    /// The gateway's own diagnosis, read back from its log: the entry point
+    /// writes a FATAL line naming the port holder before exiting, which is
+    /// far more useful than a bare exit code.
+    pub fn error_detail(&self, log_path: &std::path::Path) -> Option<String> {
+        let base = self.last_error()?;
+        let mut file = fs::File::open(log_path).ok()?;
+        let len = file.metadata().ok()?.len();
+        file.seek(SeekFrom::Start(len.saturating_sub(64 * 1024))).ok()?;
+        let mut tail = Vec::new();
+        file.read_to_end(&mut tail).ok()?;
+        let fatal = String::from_utf8_lossy(&tail)
+            .lines()
+            .rev()
+            .find(|line| line.contains("FATAL"))
+            .map(|line| line.trim().to_string());
+        Some(match fatal {
+            Some(line) => format!("{line} (log: {})", log_path.display()),
+            None => format!("{base}. See {}", log_path.display()),
+        })
+    }
+
     pub fn stop(&self) {
+        self.stopping.store(true, Ordering::SeqCst);
         let Ok(mut process) = self.child.lock() else {
             return;
         };
