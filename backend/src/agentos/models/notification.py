@@ -42,9 +42,7 @@ class NotificationDelivery(Base, IdMixin, TimestampMixin):
     """One row per (notification, adapter) — delivered/suppressed/failed."""
 
     __tablename__ = "notification_deliveries"
-    __table_args__ = (
-        UniqueConstraint("notification_id", "adapter", name="uq_delivery_adapter"),
-    )
+    __table_args__ = (UniqueConstraint("notification_id", "adapter", name="uq_delivery_adapter"),)
 
     notification_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     adapter: Mapped[str] = mapped_column(String(30), nullable=False)

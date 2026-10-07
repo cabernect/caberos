@@ -200,31 +200,52 @@ async def test_delivery_report_upserts_attempts(client, db):
 @pytest.mark.asyncio
 async def test_failed_deliveries_filters_unread_and_attempts(client, db):
     unread_failed = await create_notification(
-        db, notification_type="run_failed", severity="error",
-        title="A", message="m", entity_id="r1", event_id="e:r1",
+        db,
+        notification_type="run_failed",
+        severity="error",
+        title="A",
+        message="m",
+        entity_id="r1",
+        event_id="e:r1",
     )
     read_failed = await create_notification(
-        db, notification_type="run_failed", severity="error",
-        title="B", message="m", entity_id="r2", event_id="e:r2",
+        db,
+        notification_type="run_failed",
+        severity="error",
+        title="B",
+        message="m",
+        entity_id="r2",
+        event_id="e:r2",
     )
     exhausted = await create_notification(
-        db, notification_type="run_failed", severity="error",
-        title="C", message="m", entity_id="r3", event_id="e:r3",
+        db,
+        notification_type="run_failed",
+        severity="error",
+        title="C",
+        message="m",
+        entity_id="r3",
+        event_id="e:r3",
     )
     read_failed.read = True
     db.add_all(
         [
             NotificationDelivery(
-                notification_id=unread_failed.id, adapter="browser",
-                state="failed", attempts=1,
+                notification_id=unread_failed.id,
+                adapter="browser",
+                state="failed",
+                attempts=1,
             ),
             NotificationDelivery(
-                notification_id=read_failed.id, adapter="browser",
-                state="failed", attempts=1,
+                notification_id=read_failed.id,
+                adapter="browser",
+                state="failed",
+                attempts=1,
             ),
             NotificationDelivery(
-                notification_id=exhausted.id, adapter="browser",
-                state="failed", attempts=2,
+                notification_id=exhausted.id,
+                adapter="browser",
+                state="failed",
+                attempts=2,
             ),
         ]
     )
@@ -285,9 +306,7 @@ async def test_prefs_patch_merges_onto_stored(client):
     assert merged["permissions"]["browser_asked"] is True
 
     # null deletes just that event's override (omission can't express it).
-    put2 = await client.put(
-        "/api/notifications/prefs", json={"overrides": {"run_failed": None}}
-    )
+    put2 = await client.put("/api/notifications/prefs", json={"overrides": {"run_failed": None}})
     assert put2.json()["overrides"] == {}
 
 
@@ -297,8 +316,12 @@ async def test_broadcast_fires_only_after_commit(db):
     q = notif.subscribe()
     try:
         item = await create_notification(
-            db, notification_type="run_completed", severity="success",
-            title="done", message="m", entity_id="run-9",
+            db,
+            notification_type="run_completed",
+            severity="success",
+            title="done",
+            message="m",
+            entity_id="run-9",
             event_id="run_completed:run-9",
         )
         assert q.empty()  # uncommitted — nothing visible yet
@@ -316,16 +339,22 @@ async def test_rollback_never_broadcasts(db):
     q = notif.subscribe()
     try:
         await create_notification(
-            db, notification_type="run_failed", severity="error",
-            title="ghost", message="m", entity_id="run-x",
+            db,
+            notification_type="run_failed",
+            severity="error",
+            title="ghost",
+            message="m",
+            entity_id="run-x",
             event_id="ghost:run-x",
         )
         await db.rollback()
         # A subsequent unrelated commit must not flush the stale listener.
         db.add(
             Notification(
-                notification_type="x", severity="info",
-                title="y", message="z",
+                notification_type="x",
+                severity="info",
+                title="y",
+                message="z",
             )
         )
         await db.commit()
@@ -497,10 +526,7 @@ async def test_startup_reconcile_interrupts_pending_approvals(db):
     await db.commit()
 
     assert marked == 1
-    rows = {
-        a.id: a
-        for a in (await db.execute(select(ApprovalRequest))).scalars().all()
-    }
+    rows = {a.id: a for a in (await db.execute(select(ApprovalRequest))).scalars().all()}
     assert rows["ap-dead"].status == "interrupted"
     assert rows["ap-dead"].decided_by == "system_restart"
     assert rows["ap-decided"].status == "approved"

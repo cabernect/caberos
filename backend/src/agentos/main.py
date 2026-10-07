@@ -102,10 +102,10 @@ async def reconcile_pending_approvals(db) -> int:
     from .models.run import Message
 
     stale = (
-        await db.execute(
-            select(ApprovalRequest).where(ApprovalRequest.status == "pending")
-        )
-    ).scalars().all()
+        (await db.execute(select(ApprovalRequest).where(ApprovalRequest.status == "pending")))
+        .scalars()
+        .all()
+    )
     if not stale:
         return 0
 
@@ -253,9 +253,7 @@ async def lifespan(app: FastAPI):
                 )
 
         try:
-            await retry_locked_transaction(
-                _prune_notifications, db, "startup_prune_notifications"
-            )
+            await retry_locked_transaction(_prune_notifications, db, "startup_prune_notifications")
         except Exception:
             logging.getLogger("agentos.main").debug(
                 "[startup] notification prune failed", exc_info=True

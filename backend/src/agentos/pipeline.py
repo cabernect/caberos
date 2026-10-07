@@ -621,9 +621,7 @@ class Pipeline:
                                         notification_type="approval_required",
                                         severity="warning",
                                         title="Approval required",
-                                        message=(
-                                            f"Waiting to run {call_brief(payload)}."
-                                        ),
+                                        message=(f"Waiting to run {call_brief(payload)}."),
                                         action_path=(
                                             f"/agents/{message.bot_id}/chat?session={session.id}"
                                         ),

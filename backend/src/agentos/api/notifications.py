@@ -67,11 +67,7 @@ async def list_notifications(
     # julianday normalizes the stored string — plain ORDER BY breaks when rows
     # mix ISO variants ("T"+offset vs space separator), sorting all T-rows
     # above all space-rows regardless of actual time.
-    query = (
-        select(Notification)
-        .order_by(func.julianday(Notification.created_at).desc())
-        .limit(100)
-    )
+    query = select(Notification).order_by(func.julianday(Notification.created_at).desc()).limit(100)
     if unread_only:
         query = query.where(Notification.read.is_(False))
     result = await db.execute(query)

@@ -11,7 +11,7 @@ import asyncio
 import hashlib
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import delete, event, func, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -115,9 +115,7 @@ async def create_notification(
     if agent_id:
         from .models.agent import Agent
 
-        agent_name = await db.scalar(
-            select(Agent.name).where(Agent.id == agent_id).limit(1)
-        )
+        agent_name = await db.scalar(select(Agent.name).where(Agent.id == agent_id).limit(1))
     if event_id is None:
         digest = hashlib.sha256(
             f"{notification_type}|{entity_id}|{title}|{message}".encode()
@@ -136,7 +134,7 @@ async def create_notification(
     # on a SELECT-only session: the legacy driver layer emits SAVEPOINT
     # while still in autocommit, the INSERT then opens the implicit BEGIN,
     # and RELEASE fails with "no such savepoint" — B32.)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     values = {
         "id": str(uuid.uuid4()),
         "notification_type": notification_type,
@@ -164,9 +162,7 @@ async def create_notification(
     # target without repeating its WHERE clause; the bare form covers any
     # constraint violation anyway.
     result = await db.execute(stmt.on_conflict_do_nothing())
-    item = await db.scalar(
-        select(Notification).where(Notification.event_id == event_id).limit(1)
-    )
+    item = await db.scalar(select(Notification).where(Notification.event_id == event_id).limit(1))
     if item is None:
         # Insert conflicted but the winner isn't visible to our transaction
         # yet — same race the old retry loop covered. Report success-shape;

@@ -114,12 +114,15 @@ def _port_holder(port: int) -> str | None:
                 pid = lines[0][1]
                 # lsof's COMMAND column truncates at 15 chars ("caberos-g") —
                 # ps resolves the full path so the holder is unambiguous.
-                name = subprocess.run(
-                    ["ps", "-p", pid, "-o", "comm="],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                ).stdout.strip() or lines[0][0]
+                name = (
+                    subprocess.run(
+                        ["ps", "-p", pid, "-o", "comm="],
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                    ).stdout.strip()
+                    or lines[0][0]
+                )
                 return f"{name} (pid {pid})"
     except Exception:
         return None

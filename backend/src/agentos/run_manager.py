@@ -216,9 +216,7 @@ async def start_run(
                             notification_type="run_failed",
                             severity="error",
                             title="Run failed",
-                            message=one_line(
-                                payload.get("error") or "An agent run failed.", 240
-                            ),
+                            message=one_line(payload.get("error") or "An agent run failed.", 240),
                             run_id=rid,
                             agent_id=ctx.agent_id,
                             session_id=ctx.session_id,

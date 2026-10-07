@@ -208,9 +208,7 @@ class SyscallHandler:
         # Approval bypass — global flag (env/persisted) OR this agent's own
         # yolo_mode. agent_config is always the parent AgentConfig, so the
         # flag also covers the agent's sub-agent calls.
-        if needs_approval and not (
-            settings.yolo_mode or getattr(agent_config, "yolo_mode", False)
-        ):
+        if needs_approval and not (settings.yolo_mode or getattr(agent_config, "yolo_mode", False)):
             # External channel sessions use a configurable approval policy
             # (v0.1.3: replaces the hardcoded channel bypass).
             if session.channel:

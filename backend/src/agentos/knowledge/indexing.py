@@ -422,9 +422,7 @@ async def reconcile_stale_builds(db: AsyncSession) -> int:
     block every future rebuild with 409.
     """
     stale = (
-        await db.scalars(
-            select(IndexGeneration).where(IndexGeneration.status == "building")
-        )
+        await db.scalars(select(IndexGeneration).where(IndexGeneration.status == "building"))
     ).all()
     for generation in stale:
         generation.status = "failed"

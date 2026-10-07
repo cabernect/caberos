@@ -820,6 +820,7 @@ async def get_alerts(db: AsyncSession) -> list[SchedulerAlert]:
         )
     return alerts
 
+
 async def clear_alert(db: AsyncSession, agent_id: str) -> None:
     await db.execute(
         update(Schedule).where(Schedule.agent_id == agent_id).values(consecutive_failures=0)

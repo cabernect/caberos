@@ -555,10 +555,7 @@ async def get_session_messages(
         ).one_or_none()
         if cursor is None:
             raise HTTPException(404, "cursor message not found")
-        filters.append(
-            tuple_(started_txt, Message.seq, created_txt, Message.id)
-            < tuple_(*cursor)
-        )
+        filters.append(tuple_(started_txt, Message.seq, created_txt, Message.id) < tuple_(*cursor))
     result = await db.execute(
         select(Message, Run)
         .join(Run, Message.run_id == Run.id)
