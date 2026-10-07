@@ -58,7 +58,7 @@ export function PhoneNav({ active, onNavigate, onLogout }: PhoneNavProps) {
   return createPortal(
     <>
       {moreOpen && (
-        <div className="fixed inset-0 z-[60]" role="dialog" aria-modal="true" aria-label="More">
+        <div className="fixed inset-0 z-[85]" role="dialog" aria-modal="true" aria-label="More">
           <button
             type="button"
             aria-label="Close menu"
@@ -104,7 +104,7 @@ export function PhoneNav({ active, onNavigate, onLogout }: PhoneNavProps) {
 
       <nav
         aria-label="Primary"
-        className="fixed inset-x-0 bottom-0 z-[70] flex items-stretch"
+        className="fixed inset-x-0 bottom-0 z-[86] flex items-stretch"
         style={{
           height: "var(--shell-bottom)",
           paddingBottom: "env(safe-area-inset-bottom)",
