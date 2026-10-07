@@ -154,10 +154,32 @@ async def lifespan(app: FastAPI):
                     message="A background run was interrupted by a gateway restart.",
                     action_path=f"/agents/{row.agent_id}/chat?session={row.session_id}",
                     entity_id=row.id,
+                    entity_type="run",
+                    agent_id=row.agent_id,
                 )
             await db.commit()
 
         await retry_locked_transaction(_reconcile_runs, db, "startup_reconcile_runs")
+
+        # Retention — the inbox is append-only otherwise (B47).
+        from .notifications import prune_notifications
+
+        async def _prune_notifications() -> None:
+            deleted = await prune_notifications(db)
+            await db.commit()
+            if deleted:
+                logging.getLogger("agentos.main").info(
+                    "[startup] Pruned %d notification(s) older than 30d", deleted
+                )
+
+        try:
+            await retry_locked_transaction(
+                _prune_notifications, db, "startup_prune_notifications"
+            )
+        except Exception:
+            logging.getLogger("agentos.main").debug(
+                "[startup] notification prune failed", exc_info=True
+            )
 
         # Index generations: a gateway kill mid-build leaves a committed
         # 'building' row that would 409 every future rebuild — reconcile to

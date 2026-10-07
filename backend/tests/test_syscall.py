@@ -384,6 +384,72 @@ class TestSyscallHandler:
         assert [result.allowed for result in results] == [False, True]
         assert executed == ["allowed"]
 
+    async def test_agent_yolo_skips_approval_gate(self, db, workspace, monkeypatch):
+        """Per-agent yolo_mode bypasses the approval gate for that agent's
+        calls — same effect as the global flag, but scoped."""
+        handler = SyscallHandler(db=db, workspace_path=workspace)
+        agent_config = AgentConfig(
+            id="test-agent",
+            name="Test Agent",
+            model=ModelConfig(provider_id="test-provider", name="test-model"),
+            capabilities=[CapabilityGrant(name="terminal", require_approval=True)],
+            yolo_mode=True,
+        )
+        session = _make_session("contact-1")
+        asked: list[str] = []
+
+        async def fake_approval(*, call, **kwargs):
+            asked.append(call.id)
+            return True
+
+        async def fake_execute(**kwargs):
+            return {"stdout": "ok"}
+
+        monkeypatch.setattr(handler, "_await_approval", fake_approval)
+        monkeypatch.setattr(registry.get("terminal"), "execute", fake_execute)
+
+        result = await handler.mediate(
+            call=ToolCall(id="c1", name="terminal", args={"command": "x"}),
+            session=session,
+            agent_config=agent_config,
+            run_id="run-yolo",
+        )
+
+        assert result.allowed is True
+        assert asked == []
+
+    async def test_agent_yolo_off_still_gates(self, db, workspace, monkeypatch):
+        """Default config (yolo off, global off) must still park on approval."""
+        handler = SyscallHandler(db=db, workspace_path=workspace)
+        agent_config = AgentConfig(
+            id="test-agent",
+            name="Test Agent",
+            model=ModelConfig(provider_id="test-provider", name="test-model"),
+            capabilities=[CapabilityGrant(name="terminal", require_approval=True)],
+        )
+        session = _make_session("contact-1")
+        asked: list[str] = []
+
+        async def fake_approval(*, call, **kwargs):
+            asked.append(call.id)
+            return True
+
+        async def fake_execute(**kwargs):
+            return {"stdout": "ok"}
+
+        monkeypatch.setattr(handler, "_await_approval", fake_approval)
+        monkeypatch.setattr(registry.get("terminal"), "execute", fake_execute)
+
+        result = await handler.mediate(
+            call=ToolCall(id="c1", name="terminal", args={"command": "x"}),
+            session=session,
+            agent_config=agent_config,
+            run_id="run-gated",
+        )
+
+        assert result.allowed is True
+        assert asked == ["c1"]
+
     async def test_audit_record_written(self, db, workspace):
         from sqlalchemy import select
 

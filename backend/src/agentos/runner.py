@@ -229,11 +229,14 @@ async def run_agent(
 
     # Create a fresh DB session for this run
     async with async_session_factory() as db:
-        # Verify agent exists
+        # Verify agent exists and is enabled — a disabled agent must not
+        # execute runs from any trigger (chat, schedule, heartbeat, channel).
         result = await db.execute(select(Agent).where(Agent.id == agent_id))
         agent = result.scalar_one_or_none()
         if agent is None:
             raise ValueError(f"Agent not found: {agent_id}")
+        if not agent.enabled:
+            raise ValueError(f"Agent is disabled: {agent_id}")
 
         # Build the inbound message
         inbound = InboundMessage(

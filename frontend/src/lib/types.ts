@@ -45,6 +45,7 @@ export interface Agent {
   compaction?: CompactionConfig;
   workspace?: string;
   sandbox_mode?: "strict" | "open";
+  yolo_mode?: boolean;
 }
 
 export interface CapabilityGrant {
@@ -760,8 +761,40 @@ export interface Notification {
   message: string;
   action_path: string | null;
   entity_id: string | null;
+  entity_type: string | null;
+  /** Which agent produced the event (null for system-scoped events).
+   *  agent_name is a snapshot taken at emit time — it survives renames. */
+  agent_id: string | null;
+  agent_name: string | null;
+  event_id: string | null;
   read: boolean;
   created_at: string;
+}
+
+// W9 — per-event x per-surface prefs + quiet hours + permission state.
+export type NotifSurface = "inbox" | "toast" | "browser" | "system";
+export type SurfacePrefs = Record<NotifSurface, boolean>;
+
+export interface NotificationPrefs {
+  defaults: SurfacePrefs;
+  overrides: Record<string, Partial<SurfacePrefs>>;
+  quiet_hours: {
+    enabled: boolean;
+    start: string; // "HH:MM" local
+    end: string;
+    tz: string | null;
+  };
+  permissions: { browser_asked: boolean; tauri_asked: boolean };
+}
+
+/** Write-side shape for PUT /prefs — clients send only the fields they
+ *  mean to change; the backend merges onto the stored blob (B35). A null
+ *  override deletes that event's entry (omission can't express delete). */
+export interface NotificationPrefsPatch {
+  defaults?: Partial<SurfacePrefs>;
+  overrides?: Record<string, Partial<SurfacePrefs> | null>;
+  quiet_hours?: Partial<NotificationPrefs["quiet_hours"]>;
+  permissions?: Partial<NotificationPrefs["permissions"]>;
 }
 
 export interface OperatorAuditOut {

@@ -159,10 +159,31 @@ class SQLiteBackend(DatabaseBackend):
             ("documents", "semantic_state", "VARCHAR(20) NOT NULL DEFAULT 'na'"),
             ("document_chunks", "kind", "VARCHAR(10) NOT NULL DEFAULT 'chunk'"),
             ("document_chunks", "parent_id", "VARCHAR(36)"),
+            # W9 notifications — event-level idempotency + suppression entity
+            ("notifications", "event_id", "VARCHAR(255)"),
+            ("notifications", "entity_type", "VARCHAR(50)"),
+            ("notifications", "agent_id", "VARCHAR(255)"),
+            ("notifications", "agent_name", "VARCHAR(255)"),
         ]
         for table, column, col_type in patches:
             if not await self.column_exists(conn, table, column):
                 await self.add_column(conn, table, column, col_type)
+
+        # ALTER TABLE can't add UNIQUE — the index enforces event_id
+        # idempotency for INSERT-or-ignore dedup (W9).
+        await conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_notifications_event_id "
+                "ON notifications(event_id) WHERE event_id IS NOT NULL"
+            )
+        )
+        # Same for the agent filter index — add_column alone doesn't create it.
+        await conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_notifications_agent_id "
+                "ON notifications(agent_id) WHERE agent_id IS NOT NULL"
+            )
+        )
 
         # Migrate existing channels to auto_approve to preserve current behavior.
         # New channels default to deny (set by the model default).

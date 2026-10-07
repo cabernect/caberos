@@ -97,6 +97,10 @@ class AgentConfig(BaseModel):
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
     compaction: CompactionConfig = Field(default_factory=CompactionConfig)
     sandbox_mode: Literal["strict", "open"] = "strict"  # strict=workspace only, open=any path
+    # Per-agent approval bypass — skips approval gates for THIS agent's runs
+    # (including its sub-agent calls). The global AGENTOS_YOLO_MODE / settings
+    # flag remains the ops-level override for every agent.
+    yolo_mode: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return self.model_dump()

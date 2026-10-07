@@ -21,6 +21,7 @@ import { Notifications } from "./pages/Notifications";
 import { UpdateChecker } from "./components/UpdateChecker";
 import { SetupGuide } from "./components/SetupGuide";
 import { NotificationToasts } from "./components/NotificationToasts";
+import { NotificationPermissionBanner } from "./components/NotificationPermissionBanner";
 import { ThemeProvider } from "./lib/theme";
 
 export default function App() {
@@ -174,6 +175,7 @@ function AppContent() {
         />
       )}
       {authed && <NotificationToasts />}
+      {authed && <NotificationPermissionBanner />}
     </BrowserRouter>
     </ConfirmProvider>
     <UpdateChecker />

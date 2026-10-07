@@ -18,7 +18,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import String, cast, func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import require_operator
@@ -102,8 +102,11 @@ async def send_message(
 
     async with async_session_factory() as check_db:
         result = await check_db.execute(select(Agent).where(Agent.id == agent_id))
-        if result.scalar_one_or_none() is None:
+        agent = result.scalar_one_or_none()
+        if agent is None:
             raise HTTPException(status_code=404, detail="Agent not found")
+        if not agent.enabled:
+            raise HTTPException(status_code=400, detail="Agent is disabled")
 
         # Pre-check: refuse to start if no model is configured (and not a test run).
         # Skip this check if the user provided a model_override — they're
@@ -523,16 +526,54 @@ async def get_session_messages(
     operator: Operator = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
     limit: int = 100,
-) -> list[dict]:
-    """Get messages for a specific session, ordered by run then sequence."""
+    before_id: str | None = None,
+) -> dict:
+    """Get the latest ``limit`` messages for a session, chronologically.
+
+    Pass ``before_id`` — the oldest loaded message id — to page upward through
+    history; ``has_more`` reports whether older rows remain.
+    """
+    # DESC + LIMIT grabs the newest window; ASC + LIMIT would pin the list to
+    # the session's first `limit` rows — anything past that (i.e. every new
+    # reply once the window fills) silently vanished from the chatview.
+    # Message.id is the final tiebreaker: seq resets per run and started_at can
+    # tie, so without it the ordering has gaps the cursor can't partition.
+    # All timestamp comparisons go through CAST-to-text: server_default rows
+    # store second precision while ORM-bound datetimes rebind microseconds —
+    # comparing typed values lets a cursor row compare less than itself and
+    # leak into the next page.
+    started_txt = cast(Run.started_at, String)
+    created_txt = cast(Message.created_at, String)
+    filters = [Run.session_id == session_id, Run.agent_id == agent_id]
+    if before_id is not None:
+        cursor = (
+            await db.execute(
+                select(started_txt, Message.seq, created_txt, Message.id)
+                .join(Run, Message.run_id == Run.id)
+                .where(Message.id == before_id, *filters)
+            )
+        ).one_or_none()
+        if cursor is None:
+            raise HTTPException(404, "cursor message not found")
+        filters.append(
+            tuple_(started_txt, Message.seq, created_txt, Message.id)
+            < tuple_(*cursor)
+        )
     result = await db.execute(
         select(Message, Run)
         .join(Run, Message.run_id == Run.id)
-        .where(Run.session_id == session_id, Run.agent_id == agent_id)
-        .order_by(Run.started_at.asc(), Message.seq.asc(), Message.created_at.asc())
-        .limit(limit)
+        .where(*filters)
+        .order_by(
+            started_txt.desc(),
+            Message.seq.desc(),
+            created_txt.desc(),
+            Message.id.desc(),
+        )
+        .limit(limit + 1)
     )
-    rows = result.all()
+    fetched = result.all()
+    has_more = len(fetched) > limit
+    rows = list(reversed(fetched[:limit]))
     run_ids = {run.id for _, run in rows}
     source_rows = (
         await db.execute(select(RunSource).where(RunSource.run_id.in_(run_ids)))
@@ -547,27 +588,30 @@ async def get_session_messages(
         web_source_rows = await db.execute(select(WebSource).where(WebSource.run_id.in_(run_ids)))
         for source in web_source_rows.scalars().all():
             sources_by_run.setdefault(source.run_id, []).append(_web_source_response(source))
-    return [
-        {
-            "id": msg.id,
-            "role": msg.role,
-            "content": msg.content,
-            "created_at": _iso_utc(msg.created_at),
-            "run_id": msg.run_id,
-            "run_status": run.status,
-            "trigger": run.trigger,
-            "is_test": run.is_test,
-            "tokens_in": run.tokens_in,
-            "tokens_out": run.tokens_out,
-            "cost": run.cost,
-            "subagent_id": msg.subagent_id,
-            "attachments": msg.attachments,
-            "citations": sources_by_run.get(msg.run_id, [])
-            if msg.role in ("assistant", "heartbeat")
-            else [],
-        }
-        for msg, run in rows
-    ]
+    return {
+        "messages": [
+            {
+                "id": msg.id,
+                "role": msg.role,
+                "content": msg.content,
+                "created_at": _iso_utc(msg.created_at),
+                "run_id": msg.run_id,
+                "run_status": run.status,
+                "trigger": run.trigger,
+                "is_test": run.is_test,
+                "tokens_in": run.tokens_in,
+                "tokens_out": run.tokens_out,
+                "cost": run.cost,
+                "subagent_id": msg.subagent_id,
+                "attachments": msg.attachments,
+                "citations": sources_by_run.get(msg.run_id, [])
+                if msg.role in ("assistant", "heartbeat")
+                else [],
+            }
+            for msg, run in rows
+        ],
+        "has_more": has_more,
+    }
 
 
 @router.delete("/{agent_id}/sessions/{session_id}")

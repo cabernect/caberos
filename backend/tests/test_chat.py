@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import select, text
 
-from agentos.api.chat import delete_session, list_sessions
+from agentos.api.chat import delete_session, get_session_messages, list_sessions
 from agentos.models.agent import Agent
 from agentos.models.contact import Contact
 from agentos.models.execution_manifest import ExecutionManifest
@@ -164,3 +164,77 @@ async def test_delete_session_removes_full_run_cascade(db):
     assert remaining_fts.scalar() == 0
     remaining_sessions = await db.execute(select(Session).where(Session.id == session_id))
     assert remaining_sessions.scalar_one_or_none() is None
+
+
+@pytest.mark.asyncio
+async def test_session_messages_limit_returns_newest(db):
+    """ASC + LIMIT pinned the list to the session's first `limit` rows — once
+    a session outgrew it, every new reply vanished from the chatview (B44)."""
+    agent_id = "limit-agent"
+    session_id = "limit-session"
+    db.add(Agent(id=agent_id, name="Limit Agent"))
+    db.add(
+        Contact(
+            id="limit-contact",
+            channel="dashboard_chat",
+            bot_id=agent_id,
+            external_user_id="operator-1",
+        )
+    )
+    db.add(
+        Session(
+            id=session_id,
+            agent_id=agent_id,
+            contact_id="limit-contact",
+            status="active",
+        )
+    )
+    # Five runs × two messages each — seq resets per run. started_at is
+    # explicit because same-commit rows can share a timestamp.
+    base = datetime.now(UTC)
+    for i in range(5):
+        run_id = f"limit-run-{i}"
+        db.add(
+            Run(
+                id=run_id,
+                session_id=session_id,
+                contact_id="limit-contact",
+                agent_id=agent_id,
+                status="completed",
+                trigger="user_message",
+                started_at=base.replace(second=i),
+            )
+        )
+        db.add(Message(id=f"{run_id}-u", run_id=run_id, role="user", content=f"q{i}", seq=0))
+        db.add(Message(id=f"{run_id}-a", run_id=run_id, role="assistant", content=f"a{i}", seq=1))
+    await db.commit()
+
+    page = await get_session_messages(
+        agent_id, session_id, operator=SimpleNamespace(id="operator-1"), db=db, limit=4
+    )
+    # The newest four messages, still chronological — and older rows remain.
+    assert page["has_more"] is True
+    assert [m["content"] for m in page["messages"]] == ["q3", "a3", "q4", "a4"]
+
+    # Page upward: everything strictly before the oldest loaded message.
+    older = await get_session_messages(
+        agent_id,
+        session_id,
+        operator=SimpleNamespace(id="operator-1"),
+        db=db,
+        limit=4,
+        before_id=page["messages"][0]["id"],
+    )
+    assert [m["content"] for m in older["messages"]] == ["q1", "a1", "q2", "a2"]
+    assert older["has_more"] is True
+
+    oldest = await get_session_messages(
+        agent_id,
+        session_id,
+        operator=SimpleNamespace(id="operator-1"),
+        db=db,
+        limit=4,
+        before_id=older["messages"][0]["id"],
+    )
+    assert [m["content"] for m in oldest["messages"]] == ["q0", "a0"]
+    assert oldest["has_more"] is False

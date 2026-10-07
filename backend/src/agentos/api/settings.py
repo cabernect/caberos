@@ -1,6 +1,6 @@
 """Global app settings API — runtime toggles like YOLO mode."""
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ..auth import require_operator
@@ -30,7 +30,15 @@ async def set_yolo_mode(
     req: YoloModeUpdate,
     operator: Operator = Depends(require_operator),
 ) -> YoloModeOut:
-    settings.yolo_mode = req.yolo_mode
+    from ..config import env_pinned, persist_setting
+
+    if env_pinned("yolo_mode"):
+        raise HTTPException(
+            status_code=409,
+            detail="yolo_mode is pinned by AGENTOS_YOLO_MODE — "
+            "remove it from the environment or .env to manage it here",
+        )
+    persist_setting("yolo_mode", req.yolo_mode)
     return YoloModeOut(yolo_mode=settings.yolo_mode)
 
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useCallback } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ArrowDown, PanelLeft, AlertCircle, BookOpen, ChevronDown, Paperclip, Loader2, MessageSquare } from "lucide-react";
 import { api, workspaceBackend, type PreviewSource } from "@/lib/api";
@@ -15,6 +15,7 @@ import { ChatInputBar, type Attachment, type ChatInputBarHandle, type ContextIte
 import { SettingsOverlay } from "@/components/SettingsOverlay";
 import { useDesktopFileDrop } from "@/lib/desktopFileDrop";
 import { refreshNotifications } from "@/lib/notificationStore";
+import { setFocusedEntities } from "@/lib/focusRegistry";
 import { useResizableWidth } from "@/lib/useResizableWidth";
 
 interface ChatMessage {
@@ -33,6 +34,23 @@ interface ChatMessage {
   attachments?: string | null;
   citations?: Message["citations"];
 }
+
+const mapApiMessage = (m: Message): ChatMessage => ({
+  id: m.id,
+  role: m.role,
+  content: m.content,
+  created_at: m.created_at,
+  run_id: m.run_id,
+  run_status: m.run_status,
+  trigger: m.trigger,
+  is_test: m.is_test,
+  tokens_in: m.tokens_in,
+  tokens_out: m.tokens_out,
+  cost: m.cost,
+  subagent_id: m.subagent_id,
+  attachments: m.attachments,
+  citations: m.citations,
+});
 
 interface TurnCost {
   turnNumber: number;
@@ -122,6 +140,9 @@ export function Conversation() {
   const [maxContextTokens, setMaxContextTokens] = useState<number | undefined>(undefined);
   const [compacted, setCompacted] = useState(false);
   const [compacting, setCompacting] = useState(false);
+  const [hasMoreHistory, setHasMoreHistory] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [yoloMode, setYoloMode] = useState(false);
   const [contextBreakdown, setContextBreakdown] = useState<{ system_prompt: number; conversation: number; tools: number } | undefined>(undefined);
   const [hasModelSelected, setHasModelSelected] = useState(false);
   const [previewSource, setPreviewSource] = useState<PreviewSource | null>(null);
@@ -138,6 +159,12 @@ export function Conversation() {
   const streamingRef = useRef<StreamingResponse | null>(null);
   const inputBarRef = useRef<ChatInputBarHandle>(null);
   const dragCounterRef = useRef(0);
+  // History pagination — oldest message id returned by the API plus re-entry
+  // guards. Scroll-top loads prepend older pages; anchorRef keeps the
+  // viewport pinned to the same spot while they land.
+  const oldestFetchedIdRef = useRef<string | null>(null);
+  const loadingOlderRef = useRef(false);
+  const anchorRef = useRef<{ height: number; top: number } | null>(null);
 
   // Support multiple concurrent runs — one per session.
   // Each entry tracks the run's streaming state, runId, and lastEventId.
@@ -196,30 +223,43 @@ export function Conversation() {
     }
   }, [searchParams, sessions]);
 
+  // YOLO mode banner — global flag fetched once; the per-agent flag lives on
+  // `agent` and is kept live by the CustomEvent from SettingsOverlay's toggle.
+  useEffect(() => {
+    api.getYoloMode().then((r) => setYoloMode(r.yolo_mode)).catch(() => {});
+    const onYolo = (e: Event) => {
+      const d = (e as CustomEvent<{ agentId: string; enabled: boolean }>).detail;
+      setAgent((prev) =>
+        prev && prev.id === d.agentId ? { ...prev, yolo_mode: d.enabled } : prev,
+      );
+    };
+    window.addEventListener("caberos:yolo-mode", onYolo);
+    return () => window.removeEventListener("caberos:yolo-mode", onYolo);
+  }, []);
+
+  // W9 — declare what the operator is looking at so matching notifications
+  // suppress their pings (inbox still records, auto-read).
+  useEffect(() => {
+    const keys: string[] = [];
+    if (agentId) keys.push(`agent:${agentId}`);
+    if (activeSessionId) keys.push(`session:${activeSessionId}`);
+    setFocusedEntities(keys);
+    return () => setFocusedEntities([]);
+  }, [agentId, activeSessionId]);
+
   useEffect(() => {
     if (!agentId || !activeSessionId) {
       setMessages([]);
+      setHasMoreHistory(false);
+      oldestFetchedIdRef.current = null;
       return;
     }
     api
       .getSessionMessages(agentId, activeSessionId)
-      .then((msgs) => {
-        let mapped = msgs.map((m: Message) => ({
-          id: m.id,
-          role: m.role,
-          content: m.content,
-          created_at: m.created_at,
-          run_id: m.run_id,
-          run_status: m.run_status,
-          trigger: m.trigger,
-          is_test: m.is_test,
-          tokens_in: m.tokens_in,
-          tokens_out: m.tokens_out,
-          cost: m.cost,
-          subagent_id: m.subagent_id,
-          attachments: m.attachments,
-          citations: m.citations,
-        }));
+      .then((res) => {
+        oldestFetchedIdRef.current = res.messages[0]?.id ?? null;
+        setHasMoreHistory(res.has_more);
+        let mapped = res.messages.map(mapApiMessage);
         // If this session has an active run that we're streaming, drop the
         // run's non-user messages (thinking, tool_call, assistant) — they're
         // shown by the streaming block. Keep the user message.
@@ -583,23 +623,10 @@ export function Conversation() {
         // MessageRow (with hover/copy/cost) instead of staying as a
         // StreamingMessage block. Also clears the streaming UI.
         if (activeSessionRef.current === sessionId && agentId) {
-          api.getSessionMessages(agentId, sessionId).then((msgs) => {
-            const mappedMessages = msgs.map((m: Message) => ({
-              id: m.id,
-              role: m.role,
-              content: m.content,
-              created_at: m.created_at,
-              run_id: m.run_id,
-              run_status: m.run_status,
-              trigger: m.trigger,
-              is_test: m.is_test,
-              tokens_in: m.tokens_in,
-              tokens_out: m.tokens_out,
-              cost: m.cost,
-              subagent_id: m.subagent_id,
-              attachments: m.attachments,
-              citations: m.citations,
-            }));
+          api.getSessionMessages(agentId, sessionId).then((res) => {
+            oldestFetchedIdRef.current = res.messages[0]?.id ?? null;
+            setHasMoreHistory(res.has_more);
+            const mappedMessages = res.messages.map(mapApiMessage);
 
             // A top-level run failure can happen before the pipeline stores
             // an assistant message. Keep that failure visible instead of
@@ -659,8 +686,8 @@ export function Conversation() {
     const poll = async () => {
       if (cancelled) return;
       try {
-        const msgs = await api.getSessionMessages(agentId, activeSessionId);
-        const latestRun = msgs[msgs.length - 1]?.run_id;
+        const { messages: polled } = await api.getSessionMessages(agentId, activeSessionId);
+        const latestRun = polled[polled.length - 1]?.run_id;
         if (!latestRun || latestRun === lastRunId) return;
 
         const status = await api.getRunStatus(agentId, latestRun);
@@ -864,6 +891,39 @@ export function Conversation() {
     entry.abortController = null;
   };
 
+  const loadOlderMessages = async () => {
+    const sessionId = activeSessionRef.current;
+    const oldestId = oldestFetchedIdRef.current;
+    const container = scrollContainerRef.current;
+    if (!agentId || !sessionId || !oldestId || !container) return;
+    if (loadingOlderRef.current || !hasMoreHistory) return;
+    loadingOlderRef.current = true;
+    setLoadingOlder(true);
+    try {
+      const res = await api.getSessionMessages(agentId, sessionId, 50, oldestId);
+      if (activeSessionRef.current !== sessionId) return;
+      const older = res.messages.map(mapApiMessage);
+      setHasMoreHistory(res.has_more);
+      if (older.length > 0) {
+        oldestFetchedIdRef.current = older[0].id;
+        anchorRef.current = {
+          height: container.scrollHeight,
+          top: container.scrollTop,
+        };
+        setMessages((prev) => {
+          const seen = new Set(prev.map((m) => m.id));
+          return [...older.filter((m) => !seen.has(m.id)), ...prev];
+        });
+      }
+    } catch {
+      // Cursor can go stale after a reload — just stop paging for this view.
+      setHasMoreHistory(false);
+    } finally {
+      loadingOlderRef.current = false;
+      setLoadingOlder(false);
+    }
+  };
+
   const handleScroll = () => {
     const container = scrollContainerRef.current;
     if (!container) return;
@@ -872,7 +932,19 @@ export function Conversation() {
       100;
     autoScrollRef.current = nearBottom;
     setShowJumpToLatest(!nearBottom);
+    if (container.scrollTop < 80) void loadOlderMessages();
   };
+
+  // Restore scroll position after an older page prepends — keep the same
+  // messages under the cursor instead of jumping to the top.
+  useLayoutEffect(() => {
+    const anchor = anchorRef.current;
+    const container = scrollContainerRef.current;
+    if (anchor && container) {
+      container.scrollTop = container.scrollHeight - anchor.height + anchor.top;
+      anchorRef.current = null;
+    }
+  }, [messages]);
 
   const prefersReducedMotion = useRef(
     typeof window !== "undefined" &&
@@ -906,6 +978,8 @@ export function Conversation() {
     activeSessionRef.current = null;
     setActiveSessionId(null);
     setMessages([]);
+    setHasMoreHistory(false);
+    oldestFetchedIdRef.current = null;
     setStreaming(null);
     setIsStreaming(false);
     setActiveElicitation(null);
@@ -941,6 +1015,8 @@ export function Conversation() {
     // bleed into the new session's view (the useEffect will fetch the
     // new session's messages and populate them).
     setMessages([]);
+    setHasMoreHistory(false);
+    oldestFetchedIdRef.current = null;
 
     // If switching to a session that has an active run, restore its streaming state
     const entry = runEntriesRef.current.get(id);
@@ -984,25 +1060,10 @@ export function Conversation() {
     setRunningSessionIds(new Set(runEntriesRef.current.keys()));
     // Reload messages so the partial response becomes persistent
     if (agentId && activeSessionId) {
-      api.getSessionMessages(agentId, activeSessionId).then((msgs) => {
-        setMessages(
-          msgs.map((m: Message) => ({
-            id: m.id,
-            role: m.role,
-            content: m.content,
-            created_at: m.created_at,
-            run_id: m.run_id,
-            run_status: m.run_status,
-          trigger: m.trigger,
-          is_test: m.is_test,
-            tokens_in: m.tokens_in,
-            tokens_out: m.tokens_out,
-            cost: m.cost,
-            subagent_id: m.subagent_id,
-            attachments: m.attachments,
-            citations: m.citations,
-          })),
-        );
+      api.getSessionMessages(agentId, activeSessionId).then((res) => {
+        oldestFetchedIdRef.current = res.messages[0]?.id ?? null;
+        setHasMoreHistory(res.has_more);
+        setMessages(res.messages.map(mapApiMessage));
       }).catch(() => {});
     }
   };
@@ -1028,6 +1089,8 @@ export function Conversation() {
       if (activeSessionId === id) {
         setActiveSessionId(null);
         setMessages([]);
+        setHasMoreHistory(false);
+        oldestFetchedIdRef.current = null;
       }
       loadSessions();
     } catch {}
@@ -1363,12 +1426,24 @@ export function Conversation() {
 
         {/* Messages */}
         <div className="relative flex min-h-0 flex-1 flex-col">
+        {(yoloMode || agent?.yolo_mode) && (
+          <div className="flex items-center justify-center gap-2 border-b border-[var(--danger)]/30 bg-[rgba(239,68,68,0.06)] px-4 py-1.5 text-[12px] font-medium text-[var(--danger)]">
+            <AlertCircle className="h-3.5 w-3.5" />
+            YOLO mode is on — tools run without approval
+          </div>
+        )}
         <div
           ref={scrollContainerRef}
           onScroll={handleScroll}
           className="relative flex-1 overflow-y-auto"
         >
           <div className="mx-auto w-full max-w-[672px] px-6 py-6">
+            {loadingOlder && (
+              <div className="flex items-center justify-center gap-2 pb-4 text-[12px] text-[var(--ink-2)]">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Loading earlier messages…
+              </div>
+            )}
             {messages.length === 0 && !isStreaming && (
               <div className="flex h-full flex-col items-center justify-center pt-32 text-center">
                 <h2 className="text-[18px] font-semibold text-[var(--ink)]">
@@ -1571,8 +1646,25 @@ export function Conversation() {
         )}
         </div>
 
+        {/* Disabled agent banner — the composer stays dead too (B39) */}
+        {agent && agent.enabled === false && (
+          <div
+            className="flex items-center gap-2 px-4 py-3 text-[13px] text-[var(--ink-2)]"
+            style={{
+              background: "var(--sidebar)",
+              borderTop: "1px solid var(--border)",
+            }}
+          >
+            <AlertCircle className="h-4 w-4 shrink-0 text-[var(--ink-3)]" />
+            <span>
+              This agent is disabled — conversation history is read-only.
+              Re-enable it in Agents to chat.
+            </span>
+          </div>
+        )}
+
         {/* No provider / no model configured banner */}
-        {agent && !hasModelSelected && (
+        {agent && agent.enabled !== false && !hasModelSelected && (
           (() => {
             const noProviders = providers.length === 0;
             const noModel = !agent.provider_id || !agent.model;
@@ -1636,6 +1728,7 @@ export function Conversation() {
               defaultThinkingEnabled={agent?.thinking_enabled ?? null}
               defaultThinkingEffort={agent?.thinking_effort ?? null}
               disabled={
+                agent?.enabled === false ||
                 (isStreaming && !activeElicitation) ||
                 compacting
               }

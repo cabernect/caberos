@@ -156,3 +156,41 @@ def test_persisted_overlay_applies_when_not_pinned(tmp_path, monkeypatch):
 
     config._apply_persisted_overrides()
     assert config.settings.browser_binary == "/saved/chrome"
+
+
+# --- YOLO mode --------------------------------------------------------------
+# Same seam: PUT /api/settings/yolo must survive restarts via the
+# app-settings.json overlay, with env/.env pins still winning.
+
+
+async def test_yolo_persists_across_overlay(client, settings_overlay, monkeypatch):
+    import agentos.config as config
+
+    monkeypatch.setattr(config.settings, "yolo_mode", False)
+
+    resp = await client.put("/api/settings/yolo", json={"yolo_mode": True})
+    assert resp.status_code == 200 and resp.json()["yolo_mode"] is True
+    assert config.settings.yolo_mode is True
+
+    saved = json.loads((settings_overlay / "app-settings.json").read_text())
+    assert saved["yolo_mode"] is True
+
+    # Restart: the overlay re-applies the saved value over the field default.
+    config.settings.yolo_mode = False
+    config._apply_persisted_overrides()
+    assert config.settings.yolo_mode is True
+
+    # Off persists as an explicit false, not a missing key.
+    resp = await client.put("/api/settings/yolo", json={"yolo_mode": False})
+    assert resp.status_code == 200
+    saved = json.loads((settings_overlay / "app-settings.json").read_text())
+    assert saved["yolo_mode"] is False
+
+
+async def test_yolo_put_refused_when_env_pinned(client, settings_overlay, monkeypatch):
+    import agentos.config as config
+
+    monkeypatch.setattr(config, "env_pinned", lambda key: True)
+    resp = await client.put("/api/settings/yolo", json={"yolo_mode": True})
+    assert resp.status_code == 409
+    assert "AGENTOS_YOLO_MODE" in resp.json()["detail"]

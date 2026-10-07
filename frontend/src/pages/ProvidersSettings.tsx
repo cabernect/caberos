@@ -34,6 +34,7 @@ import { LogoMark } from "@/components/LogoMark";
 import type { ThemeMode } from "@/lib/theme";
 import { useTheme } from "@/lib/themeHook";
 import { resetSetupGuideState } from "@/components/setupGuideState";
+import { NotificationPrefsForm } from "@/components/NotificationPrefsForm";
 
 // Open URLs in the system browser when running inside Tauri,
 // fall back to normal browser navigation otherwise.
@@ -518,6 +519,19 @@ function GeneralTab({
             </div>
             <ThemePicker mode={mode} onChange={setMode} />
           </div>
+        </div>
+      </div>
+
+      {/* Notifications (W9) */}
+      <div>
+        <h2 className="mb-3 text-[14px] font-semibold text-[var(--ink)]">
+          Notifications
+        </h2>
+        <div
+          className="rounded-xl p-5"
+          style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
+        >
+          <NotificationPrefsForm />
         </div>
       </div>
 
