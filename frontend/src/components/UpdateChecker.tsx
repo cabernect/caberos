@@ -50,7 +50,7 @@ export function UpdateChecker() {
 
   return (
     <div
-      className="fixed bottom-4 right-4 z-50 flex items-start gap-3 rounded-lg border p-4 shadow-lg"
+      className="fixed bottom-[calc(1rem+var(--shell-bottom))] right-4 z-50 flex items-start gap-3 rounded-lg border p-4 shadow-lg"
       style={{ borderColor: "var(--accent)", background: "var(--white)", maxWidth: "380px" }}
     >
       <div
