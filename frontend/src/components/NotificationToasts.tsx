@@ -27,7 +27,7 @@ export function NotificationToasts() {
   if (toasts.length === 0) return null;
 
   return (
-    <div className="pointer-events-none fixed bottom-5 right-5 z-[90] flex w-[320px] flex-col gap-2">
+    <div className="pointer-events-none fixed bottom-[calc(1.25rem+var(--shell-bottom))] right-5 z-[90] flex w-[320px] flex-col gap-2">
       {toasts.map((item) => (
         <div
           key={item.id}

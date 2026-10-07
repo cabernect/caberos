@@ -89,7 +89,7 @@ export function SetupGuide({ setupIncomplete }: SetupGuideProps) {
   return (
     <aside
       aria-label="CaberOS setup guide"
-      className="fixed bottom-6 right-6 z-[80] w-[min(360px,calc(100vw-32px))] rounded-xl border p-5 shadow-xl"
+      className="fixed bottom-[calc(1.5rem+var(--shell-bottom))] right-6 z-[80] w-[min(360px,calc(100vw-32px))] rounded-xl border p-5 shadow-xl"
       style={{ background: "var(--white)", borderColor: "var(--accent)", boxShadow: "0 12px 36px rgba(28, 28, 28, 0.16)" }}
     >
       <div className="flex items-start justify-between gap-4">

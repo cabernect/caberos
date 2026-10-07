@@ -14,8 +14,10 @@ import {
 } from "lucide-react";
 import { LogoMark } from "@/components/LogoMark";
 import { NotificationCenter } from "@/components/NotificationCenter";
+import { PhoneNav } from "@/components/PhoneNav";
 import { api } from "@/lib/api";
 import { getStoredSidebarCollapsed, setStoredSidebarCollapsed } from "@/lib/sidebarState";
+import { useShellMode } from "@/lib/shellMode";
 
 export type NavKey =
   | "agents"
@@ -58,6 +60,7 @@ export function DashboardSidebar({
   onToggleCollapse,
   agentCount,
 }: DashboardSidebarProps) {
+  const mode = useShellMode();
   const [loadedAgentCount, setLoadedAgentCount] = useState<number | undefined>(undefined);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => getStoredSidebarCollapsed() ?? collapsed,
@@ -104,8 +107,17 @@ export function DashboardSidebar({
     },
   ];
 
+  // Phones get a bottom tab bar instead of any sidebar.
+  if (mode === "phone") {
+    return <PhoneNav active={active} onNavigate={onNavigate} onLogout={onLogout} />;
+  }
+
+  // Tablets are held on the icon rail so content keeps its width; the stored
+  // preference still applies when the window is wide again.
+  const railOnly = mode === "tablet";
+
   // Collapsed strip — icons only
-  if (sidebarCollapsed) {
+  if (sidebarCollapsed || railOnly) {
     return (
       <div
         className="flex flex-col items-center gap-2 py-3"
@@ -116,14 +128,18 @@ export function DashboardSidebar({
           borderRight: "1px solid var(--caberos-sidebar-border)",
         }}
       >
-        <button
-          onClick={handleToggleCollapse}
-          className="flex h-7 w-7 items-center justify-center rounded text-[var(--ink-2)] transition hover:bg-[var(--border)] hover:text-[var(--ink)]"
-          style={{ border: "none", background: "none", cursor: "pointer" }}
-          title="Expand sidebar"
-        >
-          <PanelLeft className="h-4 w-4" />
-        </button>
+        {railOnly ? (
+          <LogoMark className="h-6 w-6 shrink-0" color="var(--brand)" />
+        ) : (
+          <button
+            onClick={handleToggleCollapse}
+            className="flex h-7 w-7 items-center justify-center rounded text-[var(--ink-2)] transition hover:bg-[var(--border)] hover:text-[var(--ink)]"
+            style={{ border: "none", background: "none", cursor: "pointer" }}
+            title="Expand sidebar"
+          >
+            <PanelLeft className="h-4 w-4" />
+          </button>
+        )}
         <div style={{ borderBottom: "1px solid var(--sidebar-divider)", width: 28 }} />
         {sections.flatMap((s) => s.items).map((item) => {
           const Icon = item.icon;

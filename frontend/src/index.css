@@ -424,3 +424,27 @@
   font-weight: 600;
   background: var(--sidebar);
 }
+
+/* ── Adaptive shell ─────────────────────────────────────────────────────────
+   Phones (≤ 699px) get a bottom tab bar (components/PhoneNav). Pages size their
+   root to the viewport, so leave room for the bar. Keep the breakpoint in sync
+   with PHONE_MAX_WIDTH in lib/shellMode.ts. Until pages move onto shared layout
+   primitives, the gutter override below stands in for per-page responsive classes. */
+:root {
+  --shell-bottom: 0px;
+}
+
+@media (max-width: 699px) {
+  :root {
+    --shell-bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .h-screen {
+    height: calc(100dvh - var(--shell-bottom));
+  }
+
+  .px-8 {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+}
