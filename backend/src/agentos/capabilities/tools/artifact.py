@@ -11,10 +11,14 @@ from ...artifacts.service import ArtifactError
 
 
 def _provenance(kwargs: dict[str, Any]) -> dict[str, Any]:
+    # source_message_id is only a real message id — the tool call's
+    # correlation id lives on call_id (a call id is not a message id).
     return {
         "created_by": kwargs.get("agent_id"),
         "source_run_id": kwargs.get("run_id"),
-        "source_message_id": kwargs.get("call_id"),
+        "source_message_id": kwargs.get("message_id"),
+        "call_id": kwargs.get("call_id"),
+        "sub_agent_id": kwargs.get("sub_agent_id"),
     }
 
 
@@ -86,7 +90,7 @@ async def artifact_adopt(args: dict[str, Any], workspace_path: str, **kwargs: An
             workspace_path=workspace_path,
             rel_path=args["path"],
             change_summary=args.get("change_summary"),
-            created_by=kwargs.get("agent_id"),
+            **_provenance(kwargs),
         )
     except ArtifactError as e:
         return {"error": str(e)}

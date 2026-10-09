@@ -14,6 +14,7 @@ from typing import Any
 
 from ..capabilities.catalog import CapabilityRunCatalog
 from ..config_schema import AgentConfig
+from ..services.tool_status import tool_event_status
 from ..syscall.protocol import SyscallHandler, SyscallResult, ToolCall
 from .context import assemble_system_prompt, assemble_tool_schemas, build_message_history
 from .guardrails import apply_guardrails
@@ -693,13 +694,6 @@ class Harness:
                     # Emit the outcome: complete, denied, failed, timeout,
                     # or interrupted — the caller sees *how* a call ended.
                     if event_emitter:
-                        status = {
-                            "ok": "complete",
-                            "denied": "denied",
-                            "error": "failed",
-                            "timeout": "timeout",
-                            "interrupted": "interrupted",
-                        }.get(syscall_result.status, "complete")
                         await self._emit(
                             event_emitter,
                             "tool_call",
@@ -707,8 +701,11 @@ class Harness:
                                 "id": call.id,
                                 "capability": call.name,
                                 "args": call.args,
-                                "status": status,
+                                "status": tool_event_status(syscall_result.status),
                                 "result": syscall_result.output,
+                                # denied_reason so the UI and the audit row
+                                # report the same failure/denial cause.
+                                "reason": syscall_result.denied_reason,
                                 "approval_batch_id": approval_batch.id if approval_batch else None,
                                 "approval_batch_size": approval_batch.size
                                 if approval_batch
