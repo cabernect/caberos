@@ -7,6 +7,7 @@ import type {
   Approval,
   ArtifactRevisionInfo,
   AuditOut,
+  PlatformSpendSummary,
   CapabilityGrant,
   CapabilityInfo,
   ChannelInfo,
@@ -28,6 +29,7 @@ import type {
   PreviewPayload,
   Provider,
   RunDetail,
+  RunFilters,
   RunSummary,
   Schedule,
   ScheduleOccurrence,
@@ -1229,22 +1231,24 @@ export const api = {
     ),
 
   // Observability (Ticket 09)
-  listRuns: (params?: {
-    agent_id?: string;
-    status?: string;
-    trigger?: string;
-    is_test?: boolean;
-    limit?: number;
-    offset?: number;
-  }) => {
+  listRuns: (params?: RunFilters) => {
     const qs = new URLSearchParams();
-    if (params?.agent_id) qs.set("agent_id", params.agent_id);
-    if (params?.status) qs.set("status", params.status);
-    if (params?.trigger) qs.set("trigger", params.trigger);
+    const keys: (keyof RunFilters)[] = [
+      "agent_id", "status", "trigger", "provider_id", "model", "purpose",
+      "kind", "schedule_id", "channel", "capability", "tool_status",
+      "browser_profile", "artifact_format", "retrieval_mode", "effect",
+      "since", "until",
+    ];
+    for (const key of keys) {
+      const v = params?.[key];
+      if (v !== undefined && v !== "") qs.set(key, String(v));
+    }
     if (params?.is_test !== undefined)
       qs.set("is_test", String(params.is_test));
-    if (params?.limit) qs.set("limit", String(params.limit));
-    if (params?.offset) qs.set("offset", String(params.offset));
+    if (params?.retrieval_degraded !== undefined)
+      qs.set("retrieval_degraded", String(params.retrieval_degraded));
+    if (params?.limit !== undefined) qs.set("limit", String(params.limit));
+    if (params?.offset !== undefined) qs.set("offset", String(params.offset));
     const q = qs.toString();
     return request<RunSummary[]>(`/api/runs${q ? `?${q}` : ""}`);
   },
@@ -1254,6 +1258,11 @@ export const api = {
     capability_name?: string;
     allowed?: boolean;
     run_id?: string;
+    outcome?: string;
+    call_id?: string;
+    sub_agent_id?: string;
+    since?: string;
+    until?: string;
     limit?: number;
     offset?: number;
   }) => {
@@ -1264,6 +1273,11 @@ export const api = {
     if (params?.allowed !== undefined)
       qs.set("allowed", String(params.allowed));
     if (params?.run_id) qs.set("run_id", params.run_id);
+    if (params?.outcome) qs.set("outcome", params.outcome);
+    if (params?.call_id) qs.set("call_id", params.call_id);
+    if (params?.sub_agent_id) qs.set("sub_agent_id", params.sub_agent_id);
+    if (params?.since) qs.set("since", params.since);
+    if (params?.until) qs.set("until", params.until);
     if (params?.limit) qs.set("limit", String(params.limit));
     if (params?.offset) qs.set("offset", String(params.offset));
     const q = qs.toString();
@@ -1273,6 +1287,25 @@ export const api = {
     const qs = new URLSearchParams({ days: String(days) });
     if (agentId) qs.set("agent_id", agentId);
     return request<SpendSummary>(`/api/spend?${qs.toString()}`);
+  },
+  getPlatformSpend: (params: {
+    days?: number;
+    agent_id?: string;
+    provider_id?: string;
+    model?: string;
+    purpose?: string;
+    kind?: string;
+    until?: string;
+  } = {}) => {
+    const qs = new URLSearchParams({ scope: "platform" });
+    if (params.days !== undefined) qs.set("days", String(params.days));
+    if (params.agent_id) qs.set("agent_id", params.agent_id);
+    if (params.provider_id) qs.set("provider_id", params.provider_id);
+    if (params.model) qs.set("model", params.model);
+    if (params.purpose) qs.set("purpose", params.purpose);
+    if (params.kind) qs.set("kind", params.kind);
+    if (params.until) qs.set("until", params.until);
+    return request<PlatformSpendSummary>(`/api/spend?${qs.toString()}`);
   },
   listOperatorAudit: (limit = 50, offset = 0) =>
     request<OperatorAuditOut[]>(

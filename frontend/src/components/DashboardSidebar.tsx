@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useMediaQuery } from "@/lib/useMediaQuery";
 import {
   Bot,
   CalendarClock,
@@ -62,14 +63,30 @@ export function DashboardSidebar({
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => getStoredSidebarCollapsed() ?? collapsed,
   );
+  // <768: always the 48px icon strip — full nav slides over as a modal
+  // layer. Desktop stored preferences are never touched.
+  const isNarrow = useMediaQuery("(max-width: 767px)");
+  const [mobileOpen, setMobileOpen] = useState(false);
+  useEffect(() => {
+    if (!isNarrow) setMobileOpen(false);
+  }, [isNarrow]);
 
   const handleToggleCollapse = () => {
+    if (isNarrow) {
+      setMobileOpen((v) => !v);
+      return;
+    }
     setSidebarCollapsed((current) => {
       const next = !current;
       setStoredSidebarCollapsed(next);
       return next;
     });
     onToggleCollapse();
+  };
+
+  const navigateAndClose = (key: NavKey) => {
+    setMobileOpen(false);
+    onNavigate(key);
   };
 
   useEffect(() => {
@@ -104,9 +121,9 @@ export function DashboardSidebar({
     },
   ];
 
-  // Collapsed strip — icons only
-  if (sidebarCollapsed) {
-    return (
+  // Collapsed strip — icons only. On <768 it is ALWAYS the in-flow rail;
+  // the expanded nav only ever appears as an overlay.
+  const strip = (
       <div
         className="flex flex-col items-center gap-2 py-3"
         style={{
@@ -181,11 +198,13 @@ export function DashboardSidebar({
           <LogOut className="h-4 w-4" />
         </button>
       </div>
-    );
-  }
+  );
 
-  // Expanded sidebar
-  return (
+  if (isNarrow ? !mobileOpen : sidebarCollapsed) return strip;
+
+  // Expanded sidebar — a fixed overlay + scrim below 768px so the
+  // content column keeps its full width.
+  const expandedAside = (
     <aside
       className="flex flex-col overflow-visible border-r transition-all duration-200"
       style={{
@@ -193,6 +212,9 @@ export function DashboardSidebar({
         minWidth: 240,
         background: "var(--sidebar)",
         borderColor: "var(--caberos-sidebar-border)",
+        ...(isNarrow
+          ? { position: "fixed" as const, top: 0, left: 0, bottom: 0, zIndex: 40 }
+          : {}),
       }}
     >
       {/* Brand + collapse toggle */}
@@ -228,7 +250,7 @@ export function DashboardSidebar({
                 key={item.key}
                 item={item}
                 isActive={active === item.key}
-                onClick={() => onNavigate(item.key)}
+                onClick={() => navigateAndClose(item.key)}
               />
             ))}
           </div>
@@ -241,7 +263,7 @@ export function DashboardSidebar({
         <NavButton
           item={{ key: "settings", label: "Settings", icon: Settings }}
           isActive={active === "settings"}
-          onClick={() => onNavigate("settings")}
+          onClick={() => navigateAndClose("settings")}
         />
         <button
           onClick={onLogout}
@@ -262,6 +284,26 @@ export function DashboardSidebar({
       </div>
     </aside>
   );
+
+  if (isNarrow && mobileOpen) {
+    return (
+      <>
+        {strip}
+        <div
+          data-testid="sidebar-scrim"
+          onClick={() => setMobileOpen(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.35)",
+            zIndex: 39,
+          }}
+        />
+        {expandedAside}
+      </>
+    );
+  }
+  return expandedAside;
 }
 
 function NavButton({

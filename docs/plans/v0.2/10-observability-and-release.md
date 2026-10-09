@@ -1,5 +1,8 @@
 # v0.2.0 Observability and Release Hardening
 
+> Release hardening is a separate final workstream — the release/security/
+> restore-point sections below are NOT completed by the W10 observability work.
+
 ## Outcome
 
 Operators can explain what every complex v0.2 run used, changed, produced, and cost, and the signed desktop/Docker releases reproduce the verified behavior on clean and upgraded installations.
@@ -63,6 +66,18 @@ Provider/model/purpose, agent, trigger/Schedule, channel, Plan, capability/statu
 - Migrate built-in/global/local Skills without authority expansion.
 - Preserve existing citations and rebuild only derived indexes.
 - Failed migration leaves prior state recoverable.
+
+## W10 observability — implemented decisions
+
+Settled during implementation (stages 1–5, branch `feat/v0.2.0-observability`):
+
+- **Unified ledger.** `model_calls` is the single table; `embedding_calls` is dropped. `kind` is the transport/domain (`chat`, `embedding`, `probe`, `extract`, `title`), `purpose` the intent (`reasoning`, `embedding`). Embedding provenance lives in `detail` (`resource_id`, `generation_id`, `operation`, `chunk_count`). Non-run calls carry `run_id`/`agent_id` NULL — probes are platform-scoped, extraction/title calls keep the agent (and run for extraction). `ModelCall.run_id` is an indexed nullable string reference, intentionally **not** a DB foreign key: six orphan rows existed in the field and ledger records must survive run deletion. DB-enforced integrity is traded for durability; application-level conversation deletion still deletes model calls explicitly, unchanged.
+- **Two spend scopes, honestly named.** `GET /api/spend` defaults to `scope=agent` — the historic `Run`-totals shape for backward compatibility (legacy pre-ledger runs keep showing). `scope=platform` reads ledger calls only, includes runless/deleted-run calls, and excludes positively identified test runs. The two totals are not algebraically equal by design; the UI says so.
+- **Thinking tokens are reported, not computed.** `thinking_tokens` is preserved `None` vs explicit `0`, never automatically added to `tokens_out` (some providers already include it), and displayed as "Not reported" when NULL.
+- **Correlation is exact, never temporal.** `call_id` + `sub_agent_id` on audits, approvals, elicitations, terminal sessions, artifact revisions, and first-citation run sources. Children join parents only on the exact pair; NULL legacy rows stay rootless. A fast tool may finish before a domain row exists — in-flight state is SSE-only, not persisted.
+- **Audit timestamps.** `audit_records.created_at` is additive: legacy rows stay NULL (`estimated_time` on the timeline), new rows get real UTC. Nothing backfills fabricated time.
+- **Redaction is a read boundary.** Stored rows are untouched; the API projects safe payloads — per-capability allowlists, recursive secret-key rejection, regex redaction before truncation, fail-closed on malformed/sensitive bodies. Flat legacy lists (`audit_records`, `messages`, `model_calls`, `manifest`) go through the same projector as the timeline.
+- **Deferred by design.** No browser-session filter (no durable session identity exists — sessions are derived, not stored). No Plan-step linkage or model fallback events (no Plan storage yet). No third tool table. Historical rows untouched.
 
 ## Release verification
 

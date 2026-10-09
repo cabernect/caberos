@@ -697,14 +697,70 @@ export interface AuditOut {
   id: string;
   run_id: string;
   agent_id: string;
+  sub_agent_id: string | null;
+  call_id: string | null;
   capability_name: string;
   allowed: boolean;
+  outcome: string;
   denied_reason: string | null;
   cost: number;
   latency_ms: number;
   args: string;
   result: string | null;
+  effects: string[] | null;
   created_at: string | null;
+}
+
+export interface ModelCallOut {
+  id: string;
+  run_id: string | null;
+  agent_id: string | null;
+  sub_agent_id: string | null;
+  turn: number;
+  kind: string;
+  purpose: string;
+  provider_id: string | null;
+  model_name: string | null;
+  model_str: string | null;
+  streamed: boolean;
+  tokens_in: number;
+  tokens_out: number;
+  cached_tokens: number | null;
+  thinking_tokens: number | null;
+  detail: Record<string, unknown> | null;
+  cost: number;
+  latency_ms: number;
+  status: string;
+  error: string | null;
+  created_at: string;
+}
+
+export interface ManifestOut {
+  agent_version_id: string | null;
+  agent_version_number: number | null;
+  model_provider_id: string | null;
+  model_name: string | null;
+  plan_revision_id: string | null;
+  schedule_revision_id: string | null;
+  skill_revision_ids: Record<string, string> | string[];
+  retrieval_profile_revision_id: string | null;
+  knowledge_snapshot_ids: string[];
+  browser_profile_id: string | null;
+  artifact_base_revision_ids: string[];
+}
+
+export interface TimelineEvent {
+  id: string;
+  type: string;
+  at: string | null;
+  call_id: string | null;
+  sub_agent_id: string | null;
+  parent_id: string | null;
+  status: string | null;
+  data: Record<string, unknown>;
+  redacted: boolean;
+  truncated: boolean;
+  estimated_time: boolean;
 }
 
 export interface RunDetail {
@@ -731,8 +787,11 @@ export interface RunDetail {
     tools: number;
   };
   loaded_capabilities: string[];
+  manifest: ManifestOut | null;
   messages: MessageOut[];
   audit_records: AuditOut[];
+  model_calls: ModelCallOut[];
+  timeline: TimelineEvent[];
 }
 
 export interface SpendBreakdown {
@@ -751,6 +810,68 @@ export interface SpendSummary {
   total_tokens_out: number;
   by_agent: SpendBreakdown[];
   by_trigger: Record<string, number>;
+}
+
+export interface PlatformSpendRow {
+  agent_id?: string | null;
+  agent_name?: string | null;
+  provider_id?: string | null;
+  model_name?: string | null;
+  kind?: string;
+  call_count: number;
+  run_count: number;
+  total_cost: number;
+  tokens_in: number;
+  tokens_out: number;
+  thinking_tokens: number | null;
+  // v0.2 pricing coverage — optional for older backends
+  priced_calls?: number;
+  unpriced_calls?: number;
+  thinking_reported_calls?: number;
+}
+
+export interface PlatformSpendSummary {
+  scope: "platform";
+  since: string;
+  until: string | null;
+  total_cost: number;
+  total_calls: number;
+  total_runs: number;
+  total_tokens_in: number;
+  total_tokens_out: number;
+  thinking_tokens: number | null;
+  cached_tokens: number | null;
+  priced_calls?: number;
+  unpriced_calls?: number;
+  thinking_reported_calls?: number;
+  by_agent: PlatformSpendRow[];
+  by_provider: PlatformSpendRow[];
+  by_model: PlatformSpendRow[];
+  by_kind: PlatformSpendRow[];
+}
+
+export interface RunFilters {
+  agent_id?: string;
+  status?: string;
+  trigger?: string;
+  is_test?: boolean;
+  provider_id?: string;
+  model?: string;
+  purpose?: string;
+  kind?: string;
+  schedule_id?: string;
+  channel?: string;
+  capability?: string;
+  tool_status?: string;
+  browser_profile?: string;
+  artifact_format?: string;
+  retrieval_mode?: string;
+  retrieval_degraded?: boolean;
+  effect?: string;
+  since?: string;
+  until?: string;
+  limit?: number;
+  offset?: number;
 }
 
 export interface Notification {
