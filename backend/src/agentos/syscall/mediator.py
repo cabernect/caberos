@@ -112,6 +112,13 @@ class SyscallHandler:
         """
         from ..db import async_session_factory, retry_locked_transaction
 
+        # Snapshot the capability's declared effects at execution time —
+        # historical rows are never re-labelled from the registry.
+        if audit.effects is None:
+            cap = registry.get(audit.capability_name)
+            if cap is not None and cap.effects:
+                audit.effects = sorted(cap.effects)
+
         async with async_session_factory() as session:
 
             async def _persist() -> None:
@@ -238,6 +245,7 @@ class SyscallHandler:
                         session_id=session.id,
                         event_emitter=event_emitter,
                         approval_batch=approval_batch,
+                        sub_agent_id=sub_agent_id,
                     )
                     if not approval_result:
                         await _arrive(False)
@@ -283,6 +291,7 @@ class SyscallHandler:
                     session_id=session.id,
                     event_emitter=event_emitter,
                     approval_batch=approval_batch,
+                    sub_agent_id=sub_agent_id,
                 )
                 if not approval_result:
                     # Denied (or rejected by operator)
@@ -325,7 +334,13 @@ class SyscallHandler:
 
         # For run_subagent, inject the parent context so the sub-agent can
         # run through the same harness with the parent's model, workspace, etc.
-        extra_kwargs: dict[str, Any] = {}
+        # call_id/sub_agent_id correlation is available to every tool;
+        # capabilities that record provenance (artifacts, terminal, sources)
+        # read it from kwargs.
+        extra_kwargs: dict[str, Any] = {
+            "call_id": call.id,
+            "sub_agent_id": sub_agent_id,
+        }
         if call.name == "run_subagent":
             extra_kwargs["parent_config"] = agent_config
             extra_kwargs["_spawn_context"] = getattr(self, "_spawn_context", {})
@@ -413,6 +428,7 @@ class SyscallHandler:
                 run_id=run_id,
                 agent_id=agent_config.id,
                 sub_agent_id=sub_agent_id,
+                call_id=call.id,
                 capability_name=call.name,
                 subject_contact_id=subject_contact_id,
                 allowed=True,
@@ -454,6 +470,7 @@ class SyscallHandler:
                 run_id=run_id,
                 agent_id=agent_config.id,
                 sub_agent_id=sub_agent_id,
+                call_id=call.id,
                 capability_name=call.name,
                 subject_contact_id=subject_contact_id,
                 allowed=False,
@@ -568,6 +585,7 @@ class SyscallHandler:
                 run_id=run_id,
                 agent_id=agent_config.id,
                 sub_agent_id=sub_agent_id,
+                call_id=call.id,
                 capability_name=call.name,
                 subject_contact_id=subject_contact_id,
                 allowed=True,
@@ -607,6 +625,7 @@ class SyscallHandler:
                 run_id=run_id,
                 agent_id=agent_config.id,
                 sub_agent_id=sub_agent_id,
+                call_id=call.id,
                 capability_name=call.name,
                 subject_contact_id=subject_contact_id,
                 allowed=False,
@@ -642,6 +661,7 @@ class SyscallHandler:
             run_id=run_id,
             agent_id=agent_config.id,
             sub_agent_id=sub_agent_id,
+            call_id=call.id,
             capability_name=call.name,
             allowed=False,
             outcome="denied",
@@ -683,6 +703,7 @@ class SyscallHandler:
                 run_id=run_id,
                 agent_id=agent_config.id,
                 sub_agent_id=sub_agent_id,
+                call_id=call.id,
                 capability_name=call.name,
                 subject_contact_id=subject_contact_id,
                 allowed=False,
@@ -734,6 +755,7 @@ class SyscallHandler:
         session_id: str,
         event_emitter: Any = None,
         approval_batch: Any = None,
+        sub_agent_id: str | None = None,
     ) -> bool:
         """Create an ApprovalRequest, emit pending_approval, and block until decided.
 
@@ -745,6 +767,8 @@ class SyscallHandler:
         approval = ApprovalRequest(
             id=approval_id,
             run_id=run_id,
+            call_id=call.id,
+            sub_agent_id=sub_agent_id,
             capability_name=call.name,
             args=json.dumps(call.args),
             status="pending",
@@ -924,6 +948,8 @@ class SyscallHandler:
         elicitation = ElicitationRequest(
             id=elicitation_id,
             run_id=run_id,
+            call_id=call.id,
+            sub_agent_id=sub_agent_id,
             question=question,
             options=json.dumps(options) if options else None,
             status="pending",
@@ -1064,6 +1090,7 @@ class SyscallHandler:
             run_id=run_id,
             agent_id=agent_config.id,
             sub_agent_id=sub_agent_id,
+            call_id=call.id,
             capability_name=call.name,
             allowed=True,
             outcome="ok",

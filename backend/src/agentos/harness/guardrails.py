@@ -13,6 +13,11 @@ The harness logs warnings to the audit trail and emits them as SSE events.
 import re
 from dataclasses import dataclass, field
 
+# Patterns + helper live in agentos.redaction — imported under the private
+# names so existing tests/imports keep working.
+from ..redaction import SECRET_PATTERNS as _SECRET_PATTERNS  # noqa: F401
+from ..redaction import redact_secrets as _redact_secrets
+
 
 @dataclass
 class GuardrailResult:
@@ -26,71 +31,6 @@ class GuardrailResult:
 # ---------------------------------------------------------------------------
 # 1. Secret redaction
 # ---------------------------------------------------------------------------
-
-# Patterns for common secret formats. Each is (name, regex, group_to_redact).
-_SECRET_PATTERNS: list[tuple[str, re.Pattern, int]] = [
-    # OpenAI API keys: sk-proj-... or sk-... (40+ chars)
-    (
-        "OpenAI API key",
-        re.compile(r"(sk-proj-[A-Za-z0-9_\-]{20,}|sk-[A-Za-z0-9]{40,})"),
-        1,
-    ),
-    # Anthropic API keys: sk-ant-...
-    (
-        "Anthropic API key",
-        re.compile(r"(sk-ant-[A-Za-z0-9_\-]{40,})"),
-        1,
-    ),
-    # GitHub tokens: ghp_..., gho_..., ghs_..., ghu_...
-    (
-        "GitHub token",
-        re.compile(r"(gh[pousr]_[A-Za-z0-9]{36,})"),
-        1,
-    ),
-    # Google API keys: AIza...
-    (
-        "Google API key",
-        re.compile(r"(AIza[A-Za-z0-9_\-]{35})"),
-        1,
-    ),
-    # Generic Bearer tokens (in case the model echoes a full Authorization header)
-    (
-        "Bearer token",
-        re.compile(r"(Bearer\s+[A-Za-z0-9_\-\.=]{20,})"),
-        1,
-    ),
-    # Generic high-entropy strings labeled as keys/passwords/secrets
-    # Matches: api_key=..., password=..., secret=..., token=...
-    (
-        "Labeled secret",
-        re.compile(
-            r"""(?i)((?:api[_-]?key|password|passwd|secret|token|access[_-]?key)\s*[=:]\s*["']?[A-Za-z0-9_\-]{16,}["']?)"""
-        ),
-        1,
-    ),
-    # AWS access keys
-    (
-        "AWS access key",
-        re.compile(r"(AKIA[A-Z0-9]{16})"),
-        1,
-    ),
-]
-
-
-def _redact_secrets(content: str) -> tuple[str, list[str]]:
-    """Scan for secrets and redact them. Returns (redacted_content, descriptions)."""
-    redactions: list[str] = []
-    for name, pattern, group in _SECRET_PATTERNS:
-        matches = pattern.findall(content)
-        if matches:
-            redacted_count = len(matches)
-            # Sanitize: don't log the actual secret, just the name + count
-            redactions.append(f"{name} ({redacted_count} occurrence(s))")
-            content = pattern.sub(
-                lambda m: m.group(group).replace(m.group(group), "[REDACTED]"), content
-            )
-    return content, redactions
-
 
 # ---------------------------------------------------------------------------
 # 2. Prompt injection detection

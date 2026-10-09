@@ -142,6 +142,8 @@ async def doc_search(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
                     db.add(
                         RunSource(
                             run_id=run_id,
+                            call_id=kwargs.get("call_id"),
+                            sub_agent_id=kwargs.get("sub_agent_id"),
                             chunk_id=result["chunk_id"],
                             document_id=result["document_id"],
                             source_path=result["source_path"],

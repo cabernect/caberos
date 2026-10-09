@@ -17,7 +17,8 @@ import litellm
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models.knowledge_index import EmbeddingCall, EmbeddingResource
+from ..models.knowledge_index import EmbeddingResource
+from ..models.model_call import ModelCall
 from ..models.provider import Provider
 from ..secret_store import decrypt
 
@@ -81,25 +82,33 @@ def _record_call(
     latency_ms: int,
     status: str,
     error: str | None,
+    model_str: str,
 ) -> None:
-    """Ledger entry per provider call — best-effort accounting like
-    ModelCall: a bookkeeping failure must never break embedding work."""
+    """Ledger entry per provider call — best-effort accounting: a
+    bookkeeping failure must never break embedding work."""
     try:
         db.add(
-            EmbeddingCall(
-                resource_id=resource.id,
-                generation_id=generation_id,
+            ModelCall(
+                kind="embedding",
+                purpose="embedding",
                 run_id=run_id,
                 agent_id=agent_id,
                 provider_id=provider.id,
                 model_name=resource.model_name,
-                operation=operation,
-                chunk_count=chunk_count,
+                model_str=model_str,
+                streamed=False,
                 tokens_in=tokens_in,
+                tokens_out=0,
                 cost=cost,
                 latency_ms=latency_ms,
                 status=status,
                 error=(error[:2000] if error else None),
+                detail={
+                    "resource_id": resource.id,
+                    "generation_id": generation_id,
+                    "operation": operation,
+                    "chunk_count": chunk_count,
+                },
             )
         )
     except Exception:
@@ -119,8 +128,9 @@ async def embed_texts(
     agent_id: str | None = None,
 ) -> list[list[float]]:
     """Embed a batch of texts; raises EmbeddingUnavailable on any failure.
-    Every provider call is ledgered in ``embedding_calls`` (tokens, cost,
-    latency) — the spend record survives the caller's outcome."""
+    Every provider call is ledgered in ``model_calls`` (kind="embedding";
+    tokens, cost, latency) — the spend record survives the caller's
+    outcome."""
     if not texts:
         return []
     provider = await _provider_for(db, resource)
@@ -151,6 +161,7 @@ async def embed_texts(
                 latency_ms=int((time.monotonic() - started) * 1000),
                 status="error",
                 error=str(error),
+                model_str=kwargs["model"],
             )
             raise EmbeddingUnavailable(str(error)) from error
         usage = getattr(response, "usage", None)
@@ -173,6 +184,7 @@ async def embed_texts(
             latency_ms=int((time.monotonic() - started) * 1000),
             status="ok",
             error=None,
+            model_str=kwargs["model"],
         )
         vectors.extend([item["embedding"] for item in response.data])
     return vectors

@@ -12,7 +12,6 @@ from datetime import datetime
 from sqlalchemy import (
     Boolean,
     DateTime,
-    Float,
     ForeignKey,
     Index,
     Integer,
@@ -20,7 +19,6 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
-    func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -102,31 +100,3 @@ class ChunkEmbedding(Base, IdMixin):
     )
     vector: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     dims: Mapped[int] = mapped_column(Integer, nullable=False)
-
-
-class EmbeddingCall(Base, IdMixin):
-    """Ledger row per embedding API call — tokens, cost, latency, outcome.
-
-    Plain string refs (not FKs): the ledger must survive deletion of
-    generations, resources, or runs. ``operation`` distinguishes
-    validate | index | ingest | repair | query — generation-scoped spend
-    sums the index/ingest/repair rows, never query embeds.
-    """
-
-    __tablename__ = "embedding_calls"
-    __table_args__ = (Index("ix_embedding_calls_generation", "generation_id"),)
-
-    resource_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    generation_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    agent_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    provider_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    model_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    operation: Mapped[str] = mapped_column(String(20), nullable=False)
-    chunk_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    tokens_in: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    cost: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
-    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="ok")
-    error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

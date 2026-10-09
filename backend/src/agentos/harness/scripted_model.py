@@ -21,7 +21,10 @@ class ScriptedResponse:
     tokens_in: int = 0
     tokens_out: int = 0
     cached_tokens: int | None = None
+    thinking_tokens: int | None = None
     cost: float = 0.0
+    # "provider" | "litellm" | "unknown" | None — provenance of `cost`.
+    cost_source: str | None = None
 
 
 @dataclass

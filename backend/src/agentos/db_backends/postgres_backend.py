@@ -95,10 +95,74 @@ class PostgresBackend(DatabaseBackend):
             ("documents", "semantic_state", "VARCHAR(20) NOT NULL DEFAULT 'na'"),
             ("document_chunks", "kind", "VARCHAR(10) NOT NULL DEFAULT 'chunk'"),
             ("document_chunks", "parent_id", "VARCHAR(36)"),
+            # W10 unified model-call ledger.
+            ("model_calls", "kind", "VARCHAR(20) NOT NULL DEFAULT 'chat'"),
+            ("model_calls", "purpose", "VARCHAR(20) NOT NULL DEFAULT 'reasoning'"),
+            ("model_calls", "thinking_tokens", "INTEGER"),
+            ("model_calls", "detail", "JSONB"),
+            # W10 correlation columns.
+            ("approval_requests", "call_id", "VARCHAR(255)"),
+            ("approval_requests", "sub_agent_id", "VARCHAR(36)"),
+            ("elicitation_requests", "call_id", "VARCHAR(255)"),
+            ("elicitation_requests", "sub_agent_id", "VARCHAR(36)"),
+            ("terminal_sessions", "call_id", "VARCHAR(255)"),
+            ("terminal_sessions", "sub_agent_id", "VARCHAR(36)"),
+            ("artifact_revisions", "call_id", "VARCHAR(255)"),
+            ("artifact_revisions", "sub_agent_id", "VARCHAR(36)"),
+            ("run_sources", "call_id", "VARCHAR(255)"),
+            ("run_sources", "sub_agent_id", "VARCHAR(36)"),
+            ("audit_records", "call_id", "VARCHAR(255)"),
+            ("audit_records", "created_at", "TIMESTAMPTZ"),
+            ("audit_records", "effects", "JSONB"),
         ]
         for table, column, col_type in patches:
             if not await self.column_exists(conn, table, column):
                 await self.add_column(conn, table, column, col_type)
+
+        # W10 — run/agent are nullable so embedding calls without a run can
+        # land in the unified ledger (idempotent), and the run_id FK is
+        # dropped by its actual constraint name so orphan ledger rows
+        # survive. Custom-named constraints are handled; unrelated
+        # constraints are untouched.
+        await conn.execute(text("ALTER TABLE model_calls ALTER COLUMN run_id DROP NOT NULL"))
+        await conn.execute(text("ALTER TABLE model_calls ALTER COLUMN agent_id DROP NOT NULL"))
+        fk_rows = await conn.execute(
+            text(
+                "SELECT c.conname FROM pg_constraint AS c "
+                "JOIN pg_attribute AS a ON a.attrelid = c.conrelid "
+                "AND a.attnum = ANY(c.conkey) "
+                "WHERE c.conrelid = 'model_calls'::regclass "
+                "AND c.contype = 'f' AND a.attname = 'run_id'"
+            )
+        )
+        for (conname,) in fk_rows.fetchall():
+            quoted = conname.replace('"', '""')
+            await conn.execute(text(f'ALTER TABLE model_calls DROP CONSTRAINT "{quoted}"'))
+        # Embedding calls moved into the unified model_calls ledger.
+        await conn.execute(text("DROP TABLE IF EXISTS embedding_calls"))
+
+        # W10 ledger indexes — after the additive patches above.
+        for index_sql in (
+            "CREATE INDEX IF NOT EXISTS ix_model_calls_run_created "
+            "ON model_calls(run_id, created_at)",
+            "CREATE INDEX IF NOT EXISTS ix_model_calls_provider_model "
+            "ON model_calls(provider_id, model_name)",
+            "CREATE INDEX IF NOT EXISTS ix_model_calls_kind_created "
+            "ON model_calls(kind, created_at)",
+            "CREATE INDEX IF NOT EXISTS ix_audit_run_call_sub "
+            "ON audit_records(run_id, call_id, sub_agent_id)",
+            "CREATE INDEX IF NOT EXISTS ix_approval_run_call_sub "
+            "ON approval_requests(run_id, call_id, sub_agent_id)",
+            "CREATE INDEX IF NOT EXISTS ix_elicitation_run_call_sub "
+            "ON elicitation_requests(run_id, call_id, sub_agent_id)",
+            "CREATE INDEX IF NOT EXISTS ix_terminal_run_call_sub "
+            "ON terminal_sessions(run_id, call_id, sub_agent_id)",
+            "CREATE INDEX IF NOT EXISTS ix_run_sources_run_call_sub "
+            "ON run_sources(run_id, call_id, sub_agent_id)",
+            "CREATE INDEX IF NOT EXISTS ix_artifact_revisions_source_call "
+            "ON artifact_revisions(source_run_id, call_id, sub_agent_id)",
+        ):
+            await conn.execute(text(index_sql))
 
         # Migrate existing channels to auto_approve to preserve current behavior.
         await conn.execute(
@@ -172,8 +236,13 @@ class PostgresBackend(DatabaseBackend):
         column = self._identifier(column)
         if col_type not in {
             "TEXT",
+            "INTEGER",
             "INTEGER DEFAULT 0",
+            "TIMESTAMPTZ",
+            "JSONB",
             "VARCHAR(36)",
+            "VARCHAR(20) NOT NULL DEFAULT 'chat'",
+            "VARCHAR(20) NOT NULL DEFAULT 'reasoning'",
             "VARCHAR(30) NOT NULL DEFAULT 'paragraph'",
             "VARCHAR(50)",
             "VARCHAR(255)",

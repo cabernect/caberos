@@ -85,6 +85,8 @@ class TerminalRegistry:
         agent_id: str,
         session_id: str | None,
         run_id: str,
+        call_id: str | None = None,
+        sub_agent_id: str | None = None,
         db_lock: asyncio.Lock | None = None,
     ) -> dict[str, Any]:
         """Spawn a background process and return its terminal handle."""
@@ -141,6 +143,8 @@ class TerminalRegistry:
             agent_id=agent_id,
             session_id=session_id,
             run_id=run_id,
+            call_id=call_id,
+            sub_agent_id=sub_agent_id,
             workspace_path=workspace_path,
             process_group_id=pgid,
             status="running",

@@ -14,6 +14,7 @@ from typing import Any
 
 from ..capabilities.catalog import CapabilityRunCatalog
 from ..config_schema import AgentConfig
+from ..services.tool_status import tool_event_status
 from ..syscall.protocol import SyscallHandler, SyscallResult, ToolCall
 from .context import assemble_system_prompt, assemble_tool_schemas, build_message_history
 from .guardrails import apply_guardrails
@@ -29,6 +30,7 @@ class RunResult:
     tokens_in: int = 0
     tokens_out: int = 0
     cached_tokens: int | None = None
+    thinking_tokens: int | None = None
     total_cost: float = 0.0
     tool_calls_made: list[dict[str, Any]] = field(default_factory=list)
     status: str = "completed"  # completed, failed, limit_exceeded
@@ -583,6 +585,8 @@ class Harness:
             result.tokens_in += response.tokens_in
             result.tokens_out += response.tokens_out
             result.cached_tokens = response.cached_tokens
+            if response.thinking_tokens is not None:
+                result.thinking_tokens = (result.thinking_tokens or 0) + response.thinking_tokens
             result.total_cost += response.cost
 
             # Per-model-call accounting (v0.2 foundations)
@@ -598,7 +602,9 @@ class Harness:
                 tokens_in=response.tokens_in,
                 tokens_out=response.tokens_out,
                 cached_tokens=response.cached_tokens,
+                thinking_tokens=response.thinking_tokens,
                 cost=response.cost,
+                cost_source=response.cost_source,
             )
 
             # Step 9: Process tool calls
@@ -688,13 +694,6 @@ class Harness:
                     # Emit the outcome: complete, denied, failed, timeout,
                     # or interrupted — the caller sees *how* a call ended.
                     if event_emitter:
-                        status = {
-                            "ok": "complete",
-                            "denied": "denied",
-                            "error": "failed",
-                            "timeout": "timeout",
-                            "interrupted": "interrupted",
-                        }.get(syscall_result.status, "complete")
                         await self._emit(
                             event_emitter,
                             "tool_call",
@@ -702,8 +701,11 @@ class Harness:
                                 "id": call.id,
                                 "capability": call.name,
                                 "args": call.args,
-                                "status": status,
+                                "status": tool_event_status(syscall_result.status),
                                 "result": syscall_result.output,
+                                # denied_reason so the UI and the audit row
+                                # report the same failure/denial cause.
+                                "reason": syscall_result.denied_reason,
                                 "approval_batch_id": approval_batch.id if approval_batch else None,
                                 "approval_batch_size": approval_batch.size
                                 if approval_batch
@@ -901,7 +903,9 @@ class Harness:
         tokens_in: int = 0,
         tokens_out: int = 0,
         cached_tokens: int | None = None,
+        thinking_tokens: int | None = None,
         cost: float = 0.0,
+        cost_source: str | None = None,
         error: str | None = None,
     ) -> None:
         """Write one ModelCall row per model request (v0.2 foundations).
@@ -926,6 +930,8 @@ class Harness:
                 agent_id=agent_config.id,
                 sub_agent_id=sub_agent_id,
                 turn=turn,
+                kind="chat",
+                purpose="reasoning",
                 provider_id=agent_config.model.provider_id if agent_config.model else None,
                 model_name=agent_config.model.name if agent_config.model else None,
                 model_str=model_str or None,
@@ -933,10 +939,12 @@ class Harness:
                 tokens_in=tokens_in,
                 tokens_out=tokens_out,
                 cached_tokens=cached_tokens,
+                thinking_tokens=thinking_tokens,
                 cost=cost,
                 latency_ms=latency_ms,
                 status=status,
                 error=error[:2000] if error else None,
+                detail={"cost_source": cost_source} if cost_source is not None else None,
             )
             async with async_session_factory() as session:
 

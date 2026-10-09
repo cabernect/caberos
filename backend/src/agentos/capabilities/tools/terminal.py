@@ -50,6 +50,8 @@ async def terminal_run(
             agent_id=kwargs["agent_id"],
             session_id=kwargs.get("session_id"),
             run_id=kwargs["run_id"],
+            call_id=kwargs.get("call_id"),
+            sub_agent_id=kwargs.get("sub_agent_id"),
             db_lock=kwargs.get("db_lock"),
         )
     return await _run_sync(

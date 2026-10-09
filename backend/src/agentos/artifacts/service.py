@@ -61,6 +61,8 @@ async def create(
     source_run_id: str | None = None,
     source_message_id: str | None = None,
     source_plan_step_id: str | None = None,
+    call_id: str | None = None,
+    sub_agent_id: str | None = None,
     change_summary: str | None = None,
 ) -> tuple[Artifact, ArtifactRevision]:
     """Write `data` to `rel_path` and open tracking with revision 1."""
@@ -93,6 +95,8 @@ async def create(
         source_run_id=source_run_id,
         source_message_id=source_message_id,
         source_plan_step_id=source_plan_step_id,
+        call_id=call_id,
+        sub_agent_id=sub_agent_id,
         change_summary=change_summary or "created",
     )
     artifact.current_revision_id = revision.id
@@ -111,6 +115,8 @@ async def revise(
     source_run_id: str | None = None,
     source_message_id: str | None = None,
     source_plan_step_id: str | None = None,
+    call_id: str | None = None,
+    sub_agent_id: str | None = None,
     change_summary: str | None = None,
 ) -> ArtifactRevision:
     """Write `data` over the current file and store a new revision.
@@ -146,6 +152,8 @@ async def revise(
         source_run_id=source_run_id,
         source_message_id=source_message_id,
         source_plan_step_id=source_plan_step_id,
+        call_id=call_id,
+        sub_agent_id=sub_agent_id,
         change_summary=change_summary,
     )
     artifact.current_revision_id = revision.id
@@ -160,6 +168,10 @@ async def capture_external(
     *,
     workspace_path: str | Path,
     created_by: str | None = None,
+    source_run_id: str | None = None,
+    source_message_id: str | None = None,
+    call_id: str | None = None,
+    sub_agent_id: str | None = None,
     change_summary: str | None = None,
 ) -> ArtifactRevision:
     """Store the file as it exists on disk right now — resolves a conflict
@@ -179,6 +191,10 @@ async def capture_external(
         data,
         base_revision_id=artifact.current_revision_id,
         created_by=created_by,
+        source_run_id=source_run_id,
+        source_message_id=source_message_id,
+        call_id=call_id,
+        sub_agent_id=sub_agent_id,
         change_summary=change_summary or "external edit captured",
     )
     artifact.current_revision_id = revision.id
@@ -194,6 +210,10 @@ async def restore(
     workspace_path: str | Path,
     revision_id: str,
     created_by: str | None = None,
+    source_run_id: str | None = None,
+    source_message_id: str | None = None,
+    call_id: str | None = None,
+    sub_agent_id: str | None = None,
     change_summary: str | None = None,
 ) -> ArtifactRevision:
     """Write an old revision's bytes back to the workspace — as a NEW
@@ -214,6 +234,10 @@ async def restore(
         data,
         base_revision_id=artifact.current_revision_id,
         created_by=created_by,
+        source_run_id=source_run_id,
+        source_message_id=source_message_id,
+        call_id=call_id,
+        sub_agent_id=sub_agent_id,
         change_summary=change_summary or f"restored revision {target_rev.revision_number}",
     )
     artifact.current_revision_id = revision.id
@@ -251,6 +275,10 @@ async def adopt(
     workspace_path: str | Path,
     rel_path: str,
     created_by: str | None = None,
+    source_run_id: str | None = None,
+    source_message_id: str | None = None,
+    call_id: str | None = None,
+    sub_agent_id: str | None = None,
     change_summary: str | None = None,
 ) -> tuple[Artifact, ArtifactRevision]:
     """Start tracking a file that already exists in the workspace — its
@@ -278,6 +306,10 @@ async def adopt(
         data,
         base_revision_id=None,
         created_by=created_by,
+        source_run_id=source_run_id,
+        source_message_id=source_message_id,
+        call_id=call_id,
+        sub_agent_id=sub_agent_id,
         change_summary=change_summary or "adopted existing file",
     )
     artifact.current_revision_id = revision.id
@@ -308,6 +340,8 @@ async def create_structured(
     source_run_id: str | None = None,
     source_message_id: str | None = None,
     source_plan_step_id: str | None = None,
+    call_id: str | None = None,
+    sub_agent_id: str | None = None,
     change_summary: str | None = None,
 ) -> tuple[Artifact, ArtifactRevision]:
     """Build a deliverable from a structured spec (never raw XML) and track
@@ -329,6 +363,8 @@ async def create_structured(
         source_run_id=source_run_id,
         source_message_id=source_message_id,
         source_plan_step_id=source_plan_step_id,
+        call_id=call_id,
+        sub_agent_id=sub_agent_id,
         change_summary=change_summary,
     )
 
@@ -344,6 +380,8 @@ async def revise_structured(
     source_run_id: str | None = None,
     source_message_id: str | None = None,
     source_plan_step_id: str | None = None,
+    call_id: str | None = None,
+    sub_agent_id: str | None = None,
     change_summary: str | None = None,
 ) -> ArtifactRevision:
     """Apply structured ops (append/replace/set-cell) and store the result
@@ -370,6 +408,8 @@ async def revise_structured(
         source_run_id=source_run_id,
         source_message_id=source_message_id,
         source_plan_step_id=source_plan_step_id,
+        call_id=call_id,
+        sub_agent_id=sub_agent_id,
         change_summary=change_summary,
     )
 
@@ -437,6 +477,8 @@ async def export_pdf(
     created_by: str | None = None,
     source_run_id: str | None = None,
     source_message_id: str | None = None,
+    call_id: str | None = None,
+    sub_agent_id: str | None = None,
 ) -> dict:
     """Render the current revision to PDF.
 
@@ -532,6 +574,8 @@ async def export_pdf(
         created_by=created_by,
         source_run_id=source_run_id,
         source_message_id=source_message_id,
+        call_id=call_id,
+        sub_agent_id=sub_agent_id,
         change_summary=f"exported from {artifact.current_path}",
     )
     return {

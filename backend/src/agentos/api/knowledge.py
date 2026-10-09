@@ -32,7 +32,8 @@ from ..knowledge.ingest import delete_document, ingest_document, list_documents
 from ..knowledge.retrieval import retrieve
 from ..models.agent import Agent
 from ..models.document import Document, DocumentChunk
-from ..models.knowledge_index import EmbeddingCall, EmbeddingResource, IndexGeneration
+from ..models.knowledge_index import EmbeddingResource, IndexGeneration
+from ..models.model_call import ModelCall
 from ..models.operator import Operator, OperatorAuditLog
 from ..models.provider import Provider
 from ..sandbox.workspace import WorkspaceManager
@@ -489,18 +490,21 @@ _GENERATION_OPS = ("index", "ingest", "repair")
 async def _generation_spend_map(db: AsyncSession) -> dict[str, dict]:
     """Cost/tokens attributed to each generation's vector set — index,
     ingest, and repair calls only; query embeds are per-search spend."""
+    gen = ModelCall.detail["generation_id"].as_string()
+    op = ModelCall.detail["operation"].as_string()
     rows = (
         await db.execute(
             select(
-                EmbeddingCall.generation_id,
-                func.coalesce(func.sum(EmbeddingCall.cost), 0.0),
-                func.coalesce(func.sum(EmbeddingCall.tokens_in), 0),
+                gen,
+                func.coalesce(func.sum(ModelCall.cost), 0.0),
+                func.coalesce(func.sum(ModelCall.tokens_in), 0),
             )
             .where(
-                EmbeddingCall.generation_id.is_not(None),
-                EmbeddingCall.operation.in_(_GENERATION_OPS),
+                ModelCall.kind == "embedding",
+                gen.is_not(None),
+                op.in_(_GENERATION_OPS),
             )
-            .group_by(EmbeddingCall.generation_id)
+            .group_by(gen)
         )
     ).all()
     return {
@@ -555,10 +559,10 @@ async def index_overview(
     spend_totals = (
         await db.execute(
             select(
-                func.count(EmbeddingCall.id),
-                func.coalesce(func.sum(EmbeddingCall.tokens_in), 0),
-                func.coalesce(func.sum(EmbeddingCall.cost), 0.0),
-            )
+                func.count(ModelCall.id),
+                func.coalesce(func.sum(ModelCall.tokens_in), 0),
+                func.coalesce(func.sum(ModelCall.cost), 0.0),
+            ).where(ModelCall.kind == "embedding")
         )
     ).one()
     return {

@@ -664,7 +664,10 @@ async def test_mediated_artifact_roundtrip_with_provenance(db, workspace, artifa
         await db.execute(select(ArtifactRevision).where(ArtifactRevision.id == rev1))
     ).scalar_one()
     assert rev_row.source_run_id == "run-art"
-    assert rev_row.source_message_id == "call-1"
+    # W10: the tool call's correlation id lands on call_id — a call id is
+    # not a message id, so source_message_id stays empty.
+    assert rev_row.call_id == "call-1"
+    assert rev_row.source_message_id is None
 
     info = await handler.mediate(
         call=ToolCall(id="call-2", name="artifact_inspect", args={"artifact_id": art_id}),
@@ -834,3 +837,109 @@ async def test_create_structured_refuses_attachments_dir(db, workspace, artifact
             format="docx",
             spec={"blocks": [{"type": "paragraph", "text": "hi"}]},
         )
+
+
+async def test_mediated_restore_adopt_export_carry_provenance(db, workspace, artifact_storage):
+    """Regression: artifact_restore used to TypeError on the
+    source_message_id provenance key; adopt/export also drop run/call
+    without the threading. Every mediated writer must carry
+    run/call/subagent onto its revisions."""
+    from sqlalchemy import select
+
+    from agentos.models.artifact import ArtifactRevision
+    from agentos.syscall.mediator import SyscallHandler
+    from agentos.syscall.protocol import ToolCall
+
+    handler = SyscallHandler(db=db, workspace_path=workspace)
+    config = _agent_config(
+        [
+            "artifact_create",
+            "artifact_revise",
+            "artifact_restore",
+            "artifact_adopt",
+            "artifact_export_pdf",
+            "write_file",
+        ]
+    )
+    session = _session_stub()
+
+    created = await handler.mediate(
+        call=ToolCall(
+            id="call-c",
+            name="artifact_create",
+            args={
+                "path": "out.docx",
+                "format": "docx",
+                "spec": {"blocks": [{"type": "heading", "level": 1, "text": "Hi"}]},
+            },
+        ),
+        session=session,
+        agent_config=config,
+        run_id="run-prov",
+        sub_agent_id="sub-p",
+    )
+    art_id = created.output["artifact_id"]
+    rev1 = created.output["revision_id"]
+
+    revised = await handler.mediate(
+        call=ToolCall(
+            id="call-r",
+            name="artifact_revise",
+            args={
+                "artifact_id": art_id,
+                "base_revision_id": rev1,
+                "ops": [{"op": "append_blocks", "blocks": [{"type": "paragraph", "text": "b"}]}],
+            },
+        ),
+        session=session,
+        agent_config=config,
+        run_id="run-prov",
+        sub_agent_id="sub-p",
+    )
+    rev2 = revised.output["revision_id"]
+
+    restored = await handler.mediate(
+        call=ToolCall(
+            id="call-rest",
+            name="artifact_restore",
+            args={"artifact_id": art_id, "revision_id": rev1},
+        ),
+        session=session,
+        agent_config=config,
+        run_id="run-prov",
+        sub_agent_id="sub-p",
+    )
+    assert restored.allowed, restored
+    rev3 = restored.output["revision_id"]
+
+    # Adopt an existing workspace file.
+    import pathlib
+
+    (pathlib.Path(workspace) / "plain.txt").write_text("plain")
+    adopted = await handler.mediate(
+        call=ToolCall(
+            id="call-a",
+            name="artifact_adopt",
+            args={"path": "plain.txt"},
+        ),
+        session=session,
+        agent_config=config,
+        run_id="run-prov",
+    )
+    assert adopted.allowed
+    adopt_rev = adopted.output["revision_id"]
+
+    revs = {
+        r.id: r
+        for r in (
+            await db.execute(
+                select(ArtifactRevision).where(
+                    ArtifactRevision.id.in_([rev1, rev2, rev3, adopt_rev])
+                )
+            )
+        ).scalars()
+    }
+    assert revs[rev1].call_id == "call-c" and revs[rev1].sub_agent_id == "sub-p"
+    assert revs[rev2].call_id == "call-r" and revs[rev2].sub_agent_id == "sub-p"
+    assert revs[rev3].call_id == "call-rest" and revs[rev3].source_run_id == "run-prov"
+    assert revs[adopt_rev].call_id == "call-a" and revs[adopt_rev].source_run_id == "run-prov"

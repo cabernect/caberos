@@ -1,10 +1,12 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { GitBranch, ChevronRight, ArrowLeft, Clock, AlertCircle, Layers, MessageSquare, Shield } from "lucide-react";
+import { GitBranch, ChevronRight, ArrowLeft, Clock, AlertCircle, MessageSquare, Shield } from "lucide-react";
 import { DashboardSidebar, type NavKey } from "@/components/DashboardSidebar";
 import { PageHeader } from "@/components/PageHeader";
 import { api } from "@/lib/api";
-import type { Agent, RunSummary, RunDetail, AgentStat } from "@/lib/types";
+import type { Agent, RunSummary, RunDetail, RunFilters, AgentStat } from "@/lib/types";
+import { RunTimeline } from "@/components/RunTimeline";
+import { toolEventStatus } from "@/lib/toolStatus";
 
 export function Traces() {
   const { agentId, runId } = useParams();
@@ -18,10 +20,18 @@ export function Traces() {
   // Agent runs state
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [loadingRuns, setLoadingRuns] = useState(false);
+  const [runsError, setRunsError] = useState<string | null>(null);
+  // Draft controls — nothing queries until Apply.
+  const [draftFilters, setDraftFilters] = useState<RunFilters>({});
+  const [appliedFilters, setAppliedFilters] = useState<RunFilters>({});
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const runsSeq = useRef(0);
 
   // Run detail state
   const [runDetail, setRunDetail] = useState<RunDetail | null>(null);
   const [detailView, setDetailView] = useState<"timeline" | "messages">("timeline");
+  const [providerNames, setProviderNames] = useState<Record<string, string>>({});
+  const detailSeq = useRef(0);
 
   const fetchAgents = useCallback(async () => {
     try {
@@ -38,24 +48,37 @@ export function Traces() {
 
   const fetchRuns = useCallback(async () => {
     if (!agentId) return;
+    const seq = ++runsSeq.current;
     setLoadingRuns(true);
+    setRunsError(null);
     try {
-      const data = await api.listRuns({ agent_id: agentId, is_test: false, limit: 100 });
-      setRuns(data);
+      const data = await api.listRuns({
+        agent_id: agentId,   // from the selected agent — never widened by filters
+        is_test: false,
+        limit: 100,
+        offset: 0,
+        ...appliedFilters,
+      });
+      if (seq === runsSeq.current) setRuns(data);
     } catch {
-      setRuns([]);
+      if (seq === runsSeq.current) {
+        setRuns([]);
+        setRunsError("Couldn't load runs — check the filter values.");
+      }
     } finally {
-      setLoadingRuns(false);
+      if (seq === runsSeq.current) setLoadingRuns(false);
     }
-  }, [agentId]);
+  }, [agentId, appliedFilters]);
 
   const fetchRunDetail = useCallback(async () => {
     if (!runId) return;
+    const my = ++detailSeq.current;
+    setRunDetail(null); // clear the previous run before the fetch lands
     try {
       const data = await api.getRunDetail(runId);
-      setRunDetail(data);
+      if (my === detailSeq.current) setRunDetail(data);
     } catch {
-      setRunDetail(null);
+      if (my === detailSeq.current) setRunDetail(null);
     }
   }, [runId]);
 
@@ -71,6 +94,19 @@ export function Traces() {
   useEffect(() => {
     if (runId) fetchRunDetail();
   }, [runId, fetchRunDetail]);
+
+  // Provider display names for the trace — best-effort, failures keep
+  // the trace usable with raw ids.
+  useEffect(() => {
+    api
+      .listProviders()
+      .then((providers) => {
+        setProviderNames(
+          Object.fromEntries(providers.map((p) => [p.id, p.name])),
+        );
+      })
+      .catch(() => {});
+  }, []);
 
   const handleLogout = async () => {
     try {
@@ -146,11 +182,11 @@ export function Traces() {
         />
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto px-8 py-6">
+        <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-8">
           <div className="mx-auto max-w-6xl">
             {/* --- Agent List View --- */}
             {view === "agentList" && (
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 {agents.length === 0 ? (
                   <p className="col-span-3 py-8 text-center text-[13px] text-[var(--ink-3)]">No agents found</p>
                 ) : (
@@ -210,6 +246,59 @@ export function Traces() {
                   </div>
                 )}
 
+                {/* Filters — draft controls; nothing queries until Apply */}
+                <div className="mb-3 rounded-xl p-3" style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}>
+                  <div className="flex flex-wrap items-end gap-2">
+                    <FilterInput label="Provider" value={draftFilters.provider_id ?? ""} onChange={(v) => setDraftFilters({ ...draftFilters, provider_id: v || undefined })} />
+                    <FilterInput label="Model" value={draftFilters.model ?? ""} onChange={(v) => setDraftFilters({ ...draftFilters, model: v || undefined })} />
+                    <FilterInput label="Purpose" value={draftFilters.purpose ?? ""} onChange={(v) => setDraftFilters({ ...draftFilters, purpose: v || undefined })} />
+                    <FilterInput label="Kind" value={draftFilters.kind ?? ""} onChange={(v) => setDraftFilters({ ...draftFilters, kind: v || undefined })} />
+                    <FilterInput label="Status" value={draftFilters.status ?? ""} onChange={(v) => setDraftFilters({ ...draftFilters, status: v || undefined })} />
+                    <FilterInput label="Trigger" value={draftFilters.trigger ?? ""} onChange={(v) => setDraftFilters({ ...draftFilters, trigger: v || undefined })} />
+                    <button
+                      onClick={() => setAdvancedOpen(!advancedOpen)}
+                      className="rounded-[4px] px-2 py-1.5 text-[11px] text-[var(--ink-2)]"
+                      style={{ border: "1px solid var(--border)", background: "var(--white)", cursor: "pointer" }}
+                    >
+                      {advancedOpen ? "Fewer filters" : "More filters"}
+                    </button>
+                    <button
+                      onClick={() => setAppliedFilters({ ...draftFilters })}
+                      className="rounded-[4px] px-2.5 py-1.5 text-[11px] font-medium text-white"
+                      style={{ background: "var(--accent)", border: "none", cursor: "pointer" }}
+                    >
+                      Apply
+                    </button>
+                    <button
+                      onClick={() => { setDraftFilters({}); setAppliedFilters({}); }}
+                      className="rounded-[4px] px-2 py-1.5 text-[11px] text-[var(--ink-2)]"
+                      style={{ border: "1px solid var(--border)", background: "var(--white)", cursor: "pointer" }}
+                    >
+                      Reset
+                    </button>
+                  </div>
+                  {advancedOpen && (
+                    <div className="mt-2 flex flex-wrap items-end gap-2 border-t pt-2" style={{ borderColor: "var(--border)" }}>
+                      <FilterInput label="Schedule ID" value={draftFilters.schedule_id ?? ""} onChange={(v) => setDraftFilters({ ...draftFilters, schedule_id: v || undefined })} />
+                      <FilterInput label="Channel" value={draftFilters.channel ?? ""} onChange={(v) => setDraftFilters({ ...draftFilters, channel: v || undefined })} />
+                      <FilterInput label="Capability" value={draftFilters.capability ?? ""} onChange={(v) => setDraftFilters({ ...draftFilters, capability: v || undefined })} />
+                      <FilterSelect label="Tool status" value={draftFilters.tool_status ?? ""}
+                        options={["complete", "denied", "failed", "timeout", "interrupted", "pending_approval", "running"]}
+                        onChange={(v) => setDraftFilters({ ...draftFilters, tool_status: v || undefined })} />
+                      <FilterInput label="Effect" value={draftFilters.effect ?? ""} onChange={(v) => setDraftFilters({ ...draftFilters, effect: v || undefined })} />
+                      <FilterInput label="Browser profile (name or ID)" value={draftFilters.browser_profile ?? ""} onChange={(v) => setDraftFilters({ ...draftFilters, browser_profile: v || undefined })} />
+                      <FilterInput label="Artifact format" value={draftFilters.artifact_format ?? ""} onChange={(v) => setDraftFilters({ ...draftFilters, artifact_format: v || undefined })} />
+                      <FilterInput label="Retrieval mode" value={draftFilters.retrieval_mode ?? ""} onChange={(v) => setDraftFilters({ ...draftFilters, retrieval_mode: v || undefined })} />
+                      <FilterSelect label="Retrieval degraded" value={draftFilters.retrieval_degraded === undefined ? "" : String(draftFilters.retrieval_degraded)}
+                        options={["true", "false"]}
+                        onChange={(v) => setDraftFilters({ ...draftFilters, retrieval_degraded: v === "" ? undefined : v === "true" })} />
+                      <FilterInput label="Since (ISO)" value={draftFilters.since ?? ""} onChange={(v) => setDraftFilters({ ...draftFilters, since: v || undefined })} />
+                      <FilterInput label="Until (ISO)" value={draftFilters.until ?? ""} onChange={(v) => setDraftFilters({ ...draftFilters, until: v || undefined })} />
+                    </div>
+                  )}
+                </div>
+                {runsError && <p className="mb-2 text-[12px]" style={{ color: "#ef4444" }}>{runsError}</p>}
+
                 {/* Runs table */}
                 {loadingRuns ? (
                   <p className="py-8 text-center text-[13px] text-[var(--ink-3)]">Loading...</p>
@@ -261,6 +350,7 @@ export function Traces() {
             {/* --- Run Detail View --- */}
             {view === "runDetail" && runDetail && (
               <RunTraceView
+                providerNames={providerNames}
                 run={runDetail}
                 agentName={runDetail.agent_name || agentName(runDetail.agent_id)}
                 fmtCost={fmtCost}
@@ -283,6 +373,7 @@ export function Traces() {
 
 function RunTraceView({
   run,
+  providerNames,
   agentName,
   fmtCost,
   fmtDate,
@@ -293,6 +384,7 @@ function RunTraceView({
   onBack,
 }: {
   run: RunDetail;
+  providerNames: Record<string, string>;
   agentName: string;
   fmtCost: (c: number) => string;
   fmtDate: (d: string) => string;
@@ -318,8 +410,8 @@ function RunTraceView({
 
       {/* Run header */}
       <div className="mb-4 rounded-xl p-4" style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}>
-        <div className="flex items-start justify-between">
-          <div>
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+          <div className="min-w-0">
             <h3 className="text-[16px] font-semibold text-[var(--ink)]">
               {run.id.slice(0, 8)} · {agentName}
             </h3>
@@ -329,22 +421,22 @@ function RunTraceView({
               {run.trigger} · {fmtDate(run.started_at)}
             </p>
           </div>
-          <div className="grid grid-cols-4 gap-4 text-right text-[12px]">
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-left text-[12px] sm:grid-cols-4 xl:text-right">
             <div>
               <p className="text-[10px] uppercase text-[var(--ink-3)]">Cost</p>
-              <p className="font-semibold text-[var(--ink)]">{fmtCost(run.cost)}</p>
+              <p className="whitespace-nowrap font-semibold text-[var(--ink)]">{fmtCost(run.cost)}</p>
             </div>
             <div>
               <p className="text-[10px] uppercase text-[var(--ink-3)]">Tokens</p>
-              <p className="font-semibold text-[var(--ink)]">{run.tokens_in + run.tokens_out}</p>
+              <p className="whitespace-nowrap font-semibold text-[var(--ink)]">{run.tokens_in + run.tokens_out}</p>
             </div>
             <div>
               <p className="text-[10px] uppercase text-[var(--ink-3)]">In/Out</p>
-              <p className="font-semibold text-[var(--ink)]">{run.tokens_in}/{run.tokens_out}</p>
+              <p className="whitespace-nowrap font-semibold text-[var(--ink)]">{run.tokens_in}/{run.tokens_out}</p>
             </div>
             <div>
               <p className="text-[10px] uppercase text-[var(--ink-3)]">Latency</p>
-              <p className="font-semibold text-[var(--ink)]">{fmtLatency(run.latency_ms)}</p>
+              <p className="whitespace-nowrap font-semibold text-[var(--ink)]">{fmtLatency(run.latency_ms)}</p>
             </div>
           </div>
         </div>
@@ -354,88 +446,83 @@ function RunTraceView({
             <p className="text-[12px]" style={{ color: "#ef4444" }}>{run.error}</p>
           </div>
         )}
-        {(run.context_tokens > 0 || run.loaded_capabilities.length > 0) && (
-          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 border-t pt-3 text-[11px] text-[var(--ink-2)]" style={{ borderColor: "var(--border)" }}>
-            <span>Context: {run.context_tokens.toLocaleString()}{run.max_context_tokens > 0 ? ` / ${run.max_context_tokens.toLocaleString()}` : ""}</span>
-            <span>Tool schemas: {run.context_breakdown.tools.toLocaleString()} tokens</span>
-            <span>{run.loaded_capabilities.length} loaded on demand</span>
-            {run.loaded_capabilities.length > 0 && (
-              <span className="font-mono text-[var(--ink-3)]" title={run.loaded_capabilities.join(", ")}>
-                {run.loaded_capabilities.join(", ")}
-              </span>
+        {(run.manifest || run.context_tokens > 0 || run.loaded_capabilities.length > 0) && (
+          <details className="mt-3 border-t pt-2" style={{ borderColor: "var(--border)" }}>
+            <summary className="cursor-pointer text-[11px] font-medium text-[var(--ink-3)] select-none">
+              Context &amp; pinned configuration
+            </summary>
+            {(run.context_tokens > 0 || run.loaded_capabilities.length > 0) && (
+              <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-[var(--ink-2)]">
+                <span>Context: {run.context_tokens.toLocaleString()}{run.max_context_tokens > 0 ? ` / ${run.max_context_tokens.toLocaleString()}` : ""}</span>
+                <span>Tool schemas: {run.context_breakdown.tools.toLocaleString()} tokens</span>
+                <span>{run.loaded_capabilities.length} loaded on demand</span>
+                {run.loaded_capabilities.length > 0 && (
+                  <span className="font-mono text-[var(--ink-3)]" title={run.loaded_capabilities.join(", ")}>
+                    {run.loaded_capabilities.join(", ")}
+                  </span>
+                )}
+              </div>
             )}
-          </div>
+            {run.manifest && (
+            <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] text-[var(--ink-2)] md:grid-cols-3">
+              <span>Agent v{run.manifest.agent_version_number ?? "?"} ({(run.manifest.agent_version_id ?? "").slice(0, 8)})</span>
+              <span>Model: {run.manifest.model_provider_id}/{run.manifest.model_name}</span>
+              <span className="break-all">Schedule: {(run.manifest.schedule_revision_id ?? "—").slice(0, 12)}</span>
+              <span>Retrieval profile: {(run.manifest.retrieval_profile_revision_id ?? "—").slice(0, 12)}</span>
+              <span>Browser profile: {(run.manifest.browser_profile_id ?? "—").slice(0, 12)}</span>
+              <span className="col-span-2 md:col-span-3">
+                Skills:{" "}
+                {Array.isArray(run.manifest.skill_revision_ids)
+                  ? (run.manifest.skill_revision_ids.length
+                      ? run.manifest.skill_revision_ids.join(", ")
+                      : "—")
+                  : Object.entries(run.manifest.skill_revision_ids)
+                      .map(([n, r]) => `${n}@${String(r).slice(0, 8)}`)
+                      .join(", ") || "—"}
+              </span>
+              <span className="col-span-2 md:col-span-3">
+                Knowledge snapshots: {(run.manifest.knowledge_snapshot_ids ?? []).length} ·
+                Artifact bases: {(run.manifest.artifact_base_revision_ids ?? []).length}
+              </span>
+            </div>
+            )}
+            <p className="mt-1 text-[10px] text-[var(--ink-3)]">
+              Snapshot references only — ids link to stored revisions, not live objects.
+            </p>
+          </details>
         )}
       </div>
 
-      {/* Sub-tabs: Trace | Syscalls */}
+      {/* One consolidated bar: Timeline | Messages | Syscalls */}
       <div className="mb-4 flex gap-1" style={{ borderBottom: "1px solid var(--border)" }}>
-        <SubTab active={subTab === "trace"} onClick={() => setSubTab("trace")} icon={Layers} label="Trace" />
-        <SubTab active={subTab === "syscalls"} onClick={() => setSubTab("syscalls")} icon={Shield} label={`Syscalls (${run.audit_records.length})`} />
+        <SubTab
+          active={subTab === "trace" && view === "timeline"}
+          onClick={() => { setSubTab("trace"); onViewChange("timeline"); }}
+          icon={Clock} label="Timeline"
+        />
+        <SubTab
+          active={subTab === "trace" && view === "messages"}
+          onClick={() => { setSubTab("trace"); onViewChange("messages"); }}
+          icon={MessageSquare} label="Messages"
+        />
+        <SubTab
+          active={subTab === "syscalls"}
+          onClick={() => setSubTab("syscalls")}
+          icon={Shield} label={`Syscalls (${run.audit_records.length})`}
+        />
       </div>
 
-      {/* Trace sub-tab */}
+      {/* Trace view */}
       {subTab === "trace" && (
         <>
-          {/* View toggle */}
-          <div className="mb-3 flex gap-1">
-            <ViewToggle active={view === "timeline"} onClick={() => onViewChange("timeline")} icon={Clock} label="Timeline" />
-            <ViewToggle active={view === "messages"} onClick={() => onViewChange("messages")} icon={MessageSquare} label="Messages" />
-          </div>
-
-          {/* Timeline view */}
           {view === "timeline" && (
-            <div className="space-y-1">
-              {run.messages.map((m, i) => {
-                const isTool = m.role === "tool" || m.role === "tool_call";
-                const isThinking = m.role === "thinking";
-                const isUser = m.role === "user";
-                const isAssistant = m.role === "assistant";
-                const indent = isTool ? 32 : isThinking ? 16 : 0;
-                const color = isUser ? "#3b82f6" : isAssistant ? "#22c55e" : isThinking ? "#a855f7" : "#f59e0b";
-                const label = isUser ? "user" : isAssistant ? "assistant" : isThinking ? "thinking" : isTool ? "tool" : m.role;
-
-                return (
-                  <div key={m.id} className="relative">
-                    {/* Vertical line */}
-                    {i < run.messages.length - 1 && (
-                      <div
-                        className="absolute top-6 bottom-0 w-px"
-                        style={{ left: 12 + indent, background: "var(--border)" }}
-                      />
-                    )}
-                    <div
-                      className="relative flex items-start gap-3 rounded-[6px] border p-3"
-                      style={{
-                        borderColor: "var(--border)",
-                        background: "var(--white)",
-                        marginLeft: indent,
-                      }}
-                    >
-                      {/* Dot */}
-                      <div className="mt-0.5 h-2 w-2 flex-shrink-0 rounded-full" style={{ background: color }} />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <span
-                            className="rounded-[3px] px-1.5 py-0.5 text-[10px] font-medium"
-                            style={{ background: color, color: "white" }}
-                          >
-                            {label}
-                          </span>
-                          <span className="text-[10px] text-[var(--ink-3)]">{fmtDate(m.created_at)}</span>
-                          {m.subagent_id && (
-                            <span className="text-[10px] text-[var(--ink-3)]">sub: {m.subagent_id.slice(0, 8)}</span>
-                          )}
-                        </div>
-                        <p className="mt-1.5 whitespace-pre-wrap break-words text-[12px] text-[var(--ink)]">
-                          {m.content.length > 1000 ? m.content.slice(0, 1000) + "..." : m.content}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+            <RunTimeline
+              key={run.id}
+              events={run.timeline ?? []}
+              run={run}
+              providerNames={providerNames}
+              onViewMessages={() => onViewChange("messages")}
+            />
           )}
 
           {/* Messages view */}
@@ -481,8 +568,8 @@ function RunTraceView({
                 >
                   <div className="flex items-center justify-between">
                     <span className="font-mono text-[12px] font-medium text-[var(--ink)]">{a.capability_name}</span>
-                    <span className="text-[11px] font-medium" style={{ color: a.allowed ? "#22c55e" : "#ef4444" }}>
-                      {a.allowed ? "allowed" : "DENIED"}
+                    <span className="text-[11px] font-medium" style={{ color: a.outcome === "ok" ? "#22c55e" : "#ef4444" }}>
+                      {toolEventStatus(a.outcome).toUpperCase()}
                     </span>
                   </div>
                   {a.denied_reason && (
@@ -516,7 +603,7 @@ function RunTraceView({
   );
 }
 
-function SubTab({ active, onClick, icon: Icon, label }: { active: boolean; onClick: () => void; icon: typeof Layers; label: string }) {
+function SubTab({ active, onClick, icon: Icon, label }: { active: boolean; onClick: () => void; icon: typeof Clock; label: string }) {
   return (
     <button
       onClick={onClick}
@@ -534,20 +621,54 @@ function SubTab({ active, onClick, icon: Icon, label }: { active: boolean; onCli
   );
 }
 
-function ViewToggle({ active, onClick, icon: Icon, label }: { active: boolean; onClick: () => void; icon: typeof Clock; label: string }) {
+function FilterInput({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
   return (
-    <button
-      onClick={onClick}
-      className="flex items-center gap-1.5 rounded-[4px] px-2.5 py-1.5 text-[12px] font-medium transition"
-      style={{
-        background: active ? "var(--accent)" : "var(--surface)",
-        color: active ? "white" : "var(--ink-2)",
-        border: "1px solid var(--border)",
-        cursor: "pointer",
-      }}
-    >
-      <Icon className="h-3 w-3" />
-      {label}
-    </button>
+    <label className="flex flex-col gap-0.5">
+      <span className="text-[9px] uppercase tracking-wide text-[var(--ink-3)]">{label}</span>
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-32 max-w-full rounded-[4px] px-2 py-1 text-[11px] text-[var(--ink)]"
+        style={{ border: "1px solid var(--border)", background: "var(--white)" }}
+      />
+    </label>
+  );
+}
+
+
+function FilterSelect({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: string[];
+  onChange: (v: string) => void;
+}) {
+  return (
+    <label className="flex flex-col gap-0.5">
+      <span className="text-[9px] uppercase tracking-wide text-[var(--ink-3)]">{label}</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-32 max-w-full rounded-[4px] px-2 py-1 text-[11px] text-[var(--ink)]"
+        style={{ border: "1px solid var(--border)", background: "var(--white)" }}
+      >
+        <option value="">All</option>
+        {options.map((o) => (
+          <option key={o} value={o}>{o}</option>
+        ))}
+      </select>
+    </label>
   );
 }

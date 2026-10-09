@@ -26,11 +26,11 @@ from agentos.knowledge.retrieval import retrieve
 from agentos.models.document import Document, DocumentChunk
 from agentos.models.knowledge_index import (
     ChunkEmbedding,
-    EmbeddingCall,
     EmbeddingResource,
     IndexGeneration,
     RetrievalProfile,
 )
+from agentos.models.model_call import ModelCall
 from agentos.models.provider import Provider
 
 
@@ -815,19 +815,25 @@ async def test_embed_call_ledger_records_usage(db, monkeypatch):
     )
     await db.flush()
 
-    rows = (await db.execute(select(EmbeddingCall))).scalars().all()
+    rows = (await db.execute(select(ModelCall))).scalars().all()
     assert len(rows) == 1
     row = rows[0]
+    assert row.kind == "embedding"
+    assert row.purpose == "embedding"
     assert row.status == "ok"
-    assert row.operation == "index"
-    assert row.generation_id == "gen-1"
+    assert row.detail == {
+        "resource_id": resource.id,
+        "generation_id": "gen-1",
+        "operation": "index",
+        "chunk_count": 2,
+    }
     assert row.run_id == "run-1"
     assert row.agent_id == "agent-1"
-    assert row.resource_id == resource.id
     assert row.provider_id == provider.id
     assert row.model_name == "embed-test"
-    assert row.chunk_count == 2
+    assert row.model_str == "ollama/embed-test"
     assert row.tokens_in > 0
+    assert row.tokens_out == 0
     assert row.latency_ms >= 0
     assert row.cost >= 0.0
 
@@ -841,11 +847,11 @@ async def test_embed_call_ledger_records_failure(db, monkeypatch):
         await embed_texts(db, resource, ["x"], operation="repair")
     await db.flush()
 
-    row = (await db.execute(select(EmbeddingCall))).scalar_one()
+    row = (await db.execute(select(ModelCall))).scalar_one()
     assert row.status == "error"
     assert "provider boom" in (row.error or "")
     assert row.tokens_in == 0
-    assert row.operation == "repair"
+    assert row.detail["operation"] == "repair"
 
 
 async def test_generation_spend_excludes_query_calls(db, monkeypatch):
@@ -888,8 +894,8 @@ async def test_query_embed_in_retrieve_is_ledgered(db, monkeypatch):
 
     await retrieve(db, "anything", agent_id="agent-x", run_id="run-y")
 
-    row = (await db.execute(select(EmbeddingCall))).scalar_one()
-    assert row.operation == "query"
+    row = (await db.execute(select(ModelCall))).scalar_one()
+    assert row.detail["operation"] == "query"
     assert row.run_id == "run-y"
     assert row.agent_id == "agent-x"
-    assert row.generation_id == generation.id
+    assert row.detail["generation_id"] == generation.id

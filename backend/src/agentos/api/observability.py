@@ -13,7 +13,7 @@ import asyncio
 import json
 import logging
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -29,7 +29,16 @@ from ..models.model_call import ModelCall
 from ..models.operator import OperatorAuditLog
 from ..models.provider import Provider
 from ..models.run import Message, Run
+from ..redaction import (
+    project_args,
+    project_result,
+    redact_secrets,
+    redact_text,
+)
 from ..sandbox import probe as sandbox_probe
+from ..services.observability_filters import filter_runs
+from ..services.observability_spend import platform_spend
+from ..services.observability_timeline import build_run_timeline
 
 log = logging.getLogger(__name__)
 
@@ -77,6 +86,8 @@ class AuditOut(BaseModel):
     id: str
     run_id: str
     agent_id: str
+    sub_agent_id: str | None = None
+    call_id: str | None = None
     capability_name: str
     allowed: bool
     outcome: str = "ok"
@@ -85,15 +96,32 @@ class AuditOut(BaseModel):
     latency_ms: int
     args: str
     result: str | None = None
+    effects: list[str] | None = None
     created_at: datetime | None = None
+
+
+class TimelineEvent(BaseModel):
+    id: str
+    type: str
+    at: datetime | None = None
+    call_id: str | None = None
+    sub_agent_id: str | None = None
+    parent_id: str | None = None
+    status: str | None = None
+    data: dict = {}
+    redacted: bool = False
+    truncated: bool = False
+    estimated_time: bool = False
 
 
 class ModelCallOut(BaseModel):
     id: str
-    run_id: str
-    agent_id: str
+    run_id: str | None = None
+    agent_id: str | None = None
     sub_agent_id: str | None = None
     turn: int
+    kind: str = "chat"
+    purpose: str = "reasoning"
     provider_id: str | None = None
     model_name: str | None = None
     model_str: str | None = None
@@ -101,6 +129,8 @@ class ModelCallOut(BaseModel):
     tokens_in: int
     tokens_out: int
     cached_tokens: int | None = None
+    thinking_tokens: int | None = None
+    detail: dict | None = None
     cost: float
     latency_ms: int
     status: str
@@ -146,6 +176,7 @@ class RunDetail(BaseModel):
     messages: list[MessageOut]
     audit_records: list[AuditOut]
     model_calls: list[ModelCallOut] = []
+    timeline: list[TimelineEvent] = []
 
 
 class SpendBreakdown(BaseModel):
@@ -196,7 +227,150 @@ class HealthStatus(BaseModel):
     timestamp: datetime
 
 
+def _dump_payload(value) -> str | None:
+    """Projected payloads serialize as JSON text (matching the column's
+    existing string shape); strings pass through already-bounded."""
+    if value is None:
+        return None
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, default=str)
+    return str(value)
+
+
+def _redact_str(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return redact_secrets(value)[0]
+
+
+def _safe_manifest_map(raw) -> dict | list:
+    """skill_revision_ids is a name→revision pin map — keep the mapping;
+    malformed content collapses to {}."""
+    parsed = _decode_json(raw, {})
+    if not isinstance(parsed, dict):
+        return {}
+    return {str(k)[:255]: str(v)[:255] for k, v in list(parsed.items())[:50] if isinstance(v, str)}
+
+
+def _safe_manifest_list(raw) -> list:
+    parsed = _decode_json(raw, [])
+    if not isinstance(parsed, list):
+        return []
+    return [
+        redact_secrets(str(v))[0][:255] for v in parsed[:50] if isinstance(v, (str, int, float))
+    ]
+
+
+_CALL_DETAIL_KEYS = (
+    "resource_id",
+    "generation_id",
+    "operation",
+    "chunk_count",
+    "cost_source",
+)
+
+
+def _safe_call_detail(detail) -> dict | None:
+    if not isinstance(detail, dict):
+        return None
+    return {k: redact_secrets(str(detail[k]))[0][:255] for k in _CALL_DETAIL_KEYS if k in detail}
+
+
+def _audit_out(a: AuditRecord) -> AuditOut:
+    """Flat-list audit rows get the same projection as timeline events —
+    the legacy fields can't be a redaction bypass."""
+    args, _red, _trunc = project_args(a.capability_name, a.args)
+    result, _red, _trunc = project_result(a.capability_name, a.result)
+    denied_reason, _, _ = redact_text(a.denied_reason, 500)
+    return AuditOut(
+        id=a.id,
+        run_id=a.run_id,
+        agent_id=a.agent_id,
+        sub_agent_id=a.sub_agent_id,
+        call_id=a.call_id,
+        capability_name=a.capability_name,
+        allowed=a.allowed,
+        outcome=a.outcome,
+        denied_reason=denied_reason,
+        cost=a.cost,
+        latency_ms=a.latency_ms,
+        args=_dump_payload(args) or "{}",
+        result=_dump_payload(result),
+        effects=a.effects,
+        created_at=a.created_at,
+    )
+
+
+# tool_call message payloads keep only these fields, ever.
+_TOOL_CALL_KEYS = {
+    "id",
+    "capability",
+    "args",
+    "status",
+    "result",
+    "reason",
+    "approval_id",
+    "approval_batch_id",
+    "approval_batch_size",
+    "subagent_id",
+}
+_TOOL_CALL_SCALAR = {
+    "id",
+    "capability",
+    "status",
+    "reason",
+    "subagent_id",
+    "approval_id",
+    "approval_batch_id",
+}
+_TOOL_CALL_INT = {"approval_batch_size"}
+
+
+def _message_content(m: Message) -> str:
+    """Read-boundary sanitization for legacy message rows.
+
+    tool_call messages carry JSON payloads → strict allowlist projection
+    (a stray field can't bypass the capability projectors). Ordinary text
+    (user/assistant/thinking) gets secret regex redaction only — content
+    is never wholesale-dropped. ``tool`` role bodies are raw tool output
+    with no capability linkage, so they fail closed to a placeholder.
+    Stored rows are never mutated.
+    """
+    if m.role == "tool_call":
+        try:
+            payload = json.loads(m.content)
+        except (ValueError, TypeError):
+            payload = None
+        if not isinstance(payload, dict):
+            return json.dumps({"status": "unavailable"})
+        capability = payload.get("capability", "")
+        if not isinstance(capability, str):
+            capability = ""
+        args, _r, _t = project_args(capability, payload.get("args"))
+        result, _r, _t = project_result(capability, payload.get("result"))
+        projected: dict = {"args": args, "result": result}
+        for key in _TOOL_CALL_SCALAR:
+            value = payload.get(key)
+            if isinstance(value, str):
+                projected[key] = redact_secrets(value)[0]
+        for key in _TOOL_CALL_INT:
+            value = payload.get(key)
+            if isinstance(value, int):
+                projected[key] = value
+        return json.dumps(projected, default=str)
+    if m.role == "tool":
+        return "Tool result omitted from trace; inspect its linked syscall summary."
+    return redact_secrets(m.content)[0]
+
+
 # --- Routes ---
+
+
+def _utc(value: datetime | None) -> datetime | None:
+    """Naive time params are interpreted as UTC."""
+    if value is not None and value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value
 
 
 @router.get("/runs")
@@ -205,17 +379,39 @@ async def list_runs(
     status: str | None = Query(None),
     trigger: str | None = Query(None),
     is_test: bool | None = Query(None),
-    limit: int = Query(50, le=200),
+    provider_id: str | None = Query(None),
+    model: str | None = Query(None),
+    purpose: str | None = Query(None),
+    kind: str | None = Query(None),
+    schedule_id: str | None = Query(None),
+    channel: str | None = Query(None),
+    capability: str | None = Query(None),
+    tool_status: str | None = Query(None),
+    browser_profile: str | None = Query(None),
+    artifact_format: str | None = Query(None),
+    retrieval_mode: str | None = Query(None),
+    retrieval_degraded: bool | None = Query(None),
+    effect: str | None = Query(None),
+    since: datetime | None = Query(None),
+    until: datetime | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
     _op=Depends(require_operator),
 ) -> list[RunSummary]:
     """List runs with optional filters."""
+    since = _utc(since)
+    until = _utc(until)
+    if since is not None and until is not None and since >= until:
+        raise HTTPException(422, "since must be earlier than until")
+
     stmt = select(Run).order_by(Run.started_at.desc()).limit(limit).offset(offset)
     if agent_id:
         stmt = stmt.where(Run.agent_id == agent_id)
-    if status:
+    if status is not None:
         statuses = [s.strip() for s in status.split(",") if s.strip()]
+        if not statuses:
+            raise HTTPException(422, "status must name at least one value")
         stmt = stmt.where(
             Run.status.in_(statuses) if len(statuses) > 1 else Run.status == statuses[0]
         )
@@ -223,6 +419,26 @@ async def list_runs(
         stmt = stmt.where(Run.trigger == trigger)
     if is_test is not None:
         stmt = stmt.where(Run.is_test == is_test)
+
+    stmt = filter_runs(
+        stmt,
+        db,
+        provider_id=provider_id,
+        model=model,
+        purpose=purpose,
+        kind=kind,
+        schedule_id=schedule_id,
+        channel=channel,
+        capability=capability,
+        tool_status=tool_status,
+        browser_profile=browser_profile,
+        artifact_format=artifact_format,
+        retrieval_mode=retrieval_mode,
+        retrieval_degraded=retrieval_degraded,
+        effect=effect,
+        since=since,
+        until=until,
+    )
 
     result = await db.execute(stmt)
     runs = result.scalars().all()
@@ -280,7 +496,7 @@ async def get_run_detail(
             id=m.id,
             run_id=m.run_id,
             role=m.role,
-            content=m.content,
+            content=_message_content(m),
             seq=m.seq,
             created_at=m.created_at,
             subagent_id=m.subagent_id,
@@ -292,22 +508,7 @@ async def get_run_detail(
     audit_result = await db.execute(
         select(AuditRecord).where(AuditRecord.run_id == run_id).order_by(AuditRecord.id)
     )
-    audit_records = [
-        AuditOut(
-            id=a.id,
-            run_id=a.run_id,
-            agent_id=a.agent_id,
-            capability_name=a.capability_name,
-            allowed=a.allowed,
-            outcome=a.outcome,
-            denied_reason=a.denied_reason,
-            cost=a.cost,
-            latency_ms=a.latency_ms,
-            args=a.args,
-            result=a.result,
-        )
-        for a in audit_result.scalars().all()
-    ]
+    audit_records = [_audit_out(a) for a in audit_result.scalars().all()]
 
     # Execution manifest (immutable provenance captured at run start)
     manifest_result = await db.execute(
@@ -319,14 +520,14 @@ async def get_run_detail(
             agent_version_id=manifest_row.agent_version_id,
             agent_version_number=manifest_row.agent_version_number,
             model_provider_id=manifest_row.model_provider_id,
-            model_name=manifest_row.model_name,
+            model_name=_redact_str(manifest_row.model_name),
             plan_revision_id=manifest_row.plan_revision_id,
             schedule_revision_id=manifest_row.schedule_revision_id,
-            skill_revision_ids=_decode_json(manifest_row.skill_revision_ids, []),
+            skill_revision_ids=_safe_manifest_map(manifest_row.skill_revision_ids),
             retrieval_profile_revision_id=manifest_row.retrieval_profile_revision_id,
-            knowledge_snapshot_ids=_decode_json(manifest_row.knowledge_snapshot_ids, []),
+            knowledge_snapshot_ids=_safe_manifest_list(manifest_row.knowledge_snapshot_ids),
             browser_profile_id=manifest_row.browser_profile_id,
-            artifact_base_revision_ids=_decode_json(manifest_row.artifact_base_revision_ids, []),
+            artifact_base_revision_ids=_safe_manifest_list(manifest_row.artifact_base_revision_ids),
         )
         if manifest_row is not None
         else None
@@ -343,28 +544,38 @@ async def get_run_detail(
             agent_id=m.agent_id,
             sub_agent_id=m.sub_agent_id,
             turn=m.turn,
+            kind=m.kind,
+            purpose=m.purpose,
             provider_id=m.provider_id,
-            model_name=m.model_name,
-            model_str=m.model_str,
+            model_name=_redact_str(m.model_name),
+            model_str=_redact_str(m.model_str),
             streamed=m.streamed,
             tokens_in=m.tokens_in,
             tokens_out=m.tokens_out,
             cached_tokens=m.cached_tokens,
+            thinking_tokens=m.thinking_tokens,
+            detail=_safe_call_detail(m.detail),
             cost=m.cost,
             latency_ms=m.latency_ms,
             status=m.status,
-            error=m.error,
+            error=_redact_str(m.error),
             created_at=m.created_at,
         )
         for m in model_call_result.scalars().all()
     ]
 
-    context_breakdown = _decode_json(run.context_breakdown, {})
-    if not isinstance(context_breakdown, dict):
-        context_breakdown = {}
-    loaded_capabilities = _decode_json(run.loaded_capabilities, [])
-    if not isinstance(loaded_capabilities, list):
-        loaded_capabilities = []
+    timeline = await build_run_timeline(db, run)
+
+    raw_breakdown = _decode_json(run.context_breakdown, {})
+    context_breakdown = (
+        {str(k): v for k, v in raw_breakdown.items() if isinstance(v, (int, float))}
+        if isinstance(raw_breakdown, dict)
+        else {}
+    )
+    raw_caps = _decode_json(run.loaded_capabilities, [])
+    loaded_capabilities = (
+        [str(c)[:255] for c in raw_caps if isinstance(c, str)] if isinstance(raw_caps, list) else []
+    )
 
     return RunDetail(
         id=run.id,
@@ -380,7 +591,7 @@ async def get_run_detail(
         is_test=run.is_test,
         started_at=run.started_at,
         completed_at=run.completed_at,
-        error=run.error,
+        error=_redact_str(run.error),
         context_tokens=run.context_tokens,
         max_context_tokens=run.max_context_tokens,
         compacted=run.compacted,
@@ -390,6 +601,7 @@ async def get_run_detail(
         messages=messages,
         audit_records=audit_records,
         model_calls=model_calls,
+        timeline=[TimelineEvent(**e) for e in timeline],
     )
 
 
@@ -399,12 +611,24 @@ async def list_audit(
     capability_name: str | None = Query(None),
     allowed: bool | None = Query(None),
     run_id: str | None = Query(None),
-    limit: int = Query(50, le=200),
+    outcome: str | None = Query(None),
+    call_id: str | None = Query(None),
+    sub_agent_id: str | None = Query(None),
+    since: datetime | None = Query(None),
+    until: datetime | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
     _op=Depends(require_operator),
 ) -> list[AuditOut]:
-    """List audit/syscall records with filters."""
+    """List audit/syscall records with filters.
+
+    since/until match on the W10 `created_at` column — legacy rows carry
+    NULL and therefore fall outside any time range."""
+    since = _utc(since)
+    until = _utc(until)
+    if since is not None and until is not None and since >= until:
+        raise HTTPException(422, "since must be earlier than until")
     stmt = select(AuditRecord).order_by(AuditRecord.id.desc()).limit(limit).offset(offset)
     if agent_id:
         stmt = stmt.where(AuditRecord.agent_id == agent_id)
@@ -414,37 +638,57 @@ async def list_audit(
         stmt = stmt.where(AuditRecord.allowed == allowed)
     if run_id:
         stmt = stmt.where(AuditRecord.run_id == run_id)
+    if outcome:
+        stmt = stmt.where(AuditRecord.outcome == outcome)
+    if call_id:
+        stmt = stmt.where(AuditRecord.call_id == call_id)
+    if sub_agent_id:
+        stmt = stmt.where(AuditRecord.sub_agent_id == sub_agent_id)
+    if since is not None:
+        stmt = stmt.where(AuditRecord.created_at >= since)
+    if until is not None:
+        stmt = stmt.where(AuditRecord.created_at < until)
 
     result = await db.execute(stmt)
-    return [
-        AuditOut(
-            id=a.id,
-            run_id=a.run_id,
-            agent_id=a.agent_id,
-            capability_name=a.capability_name,
-            allowed=a.allowed,
-            outcome=a.outcome,
-            denied_reason=a.denied_reason,
-            cost=a.cost,
-            latency_ms=a.latency_ms,
-            args=a.args,
-            result=a.result,
-        )
-        for a in result.scalars().all()
-    ]
+    return [_audit_out(a) for a in result.scalars().all()]
 
 
 @router.get("/spend")
 async def get_spend(
     agent_id: str | None = Query(None),
     days: int = Query(1, ge=1, le=365),
+    scope: Literal["agent", "platform"] = Query("agent"),
+    provider_id: str | None = Query(None),
+    model: str | None = Query(None),
+    purpose: str | None = Query(None),
+    kind: str | None = Query(None),
+    until: datetime | None = Query(None),
     db: AsyncSession = Depends(get_db),
     _op=Depends(require_operator),
-) -> SpendSummary:
-    """Spend summary — total, by agent, by trigger. Excludes test runs."""
+):
+    """Spend summary — `scope=agent` keeps the historic Run-totals shape;
+    `scope=platform` reads the model_calls ledger directly."""
     from datetime import timedelta
 
+    if scope == "agent" and any(v is not None for v in (provider_id, model, purpose, kind, until)):
+        raise HTTPException(422, "provider/model/purpose/kind/until filters require scope=platform")
+
     since = datetime.now(UTC) - timedelta(days=days)
+
+    if until is not None and _utc(until) <= since:
+        raise HTTPException(422, "until must be later than the since window start")
+
+    if scope == "platform":
+        return await platform_spend(
+            db,
+            since=since,
+            until=_utc(until),
+            agent_id=agent_id,
+            provider_id=provider_id,
+            model=model,
+            purpose=purpose,
+            kind=kind,
+        )
 
     base = select(Run).where(Run.is_test == False, Run.started_at >= since)  # noqa: E712
     if agent_id:
