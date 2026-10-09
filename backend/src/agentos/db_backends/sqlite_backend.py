@@ -48,6 +48,7 @@ class SQLiteBackend(DatabaseBackend):
 
     async def init_schema(self, conn: Any) -> None:
         await self._migrate_legacy_documents(conn)
+        await self._migrate_model_calls(conn)
 
         from ..models import (  # noqa: F401
             agent,
@@ -108,6 +109,66 @@ class SQLiteBackend(DatabaseBackend):
         await conn.execute(text("DROP TABLE documents_legacy"))
         await self._repair_document_chunk_foreign_key(conn)
 
+    async def _migrate_model_calls(self, conn: Any) -> None:
+        """Rebuild model_calls when run_id/agent_id are NOT NULL or when a
+        foreign key on run_id still exists.
+
+        The unified ledger (v0.2 observability) makes both nullable so
+        embedding calls without a run/agent can land, and run_id is a plain
+        string reference — DB-enforced FK integrity is intentionally given
+        up so ledger rows survive run deletion and preserve orphan
+        historical calls (conversation deletion still deletes them
+        explicitly at the application layer). SQLite can't relax NOT NULL
+        or drop a FK in place, so rebuild: rename → recreate → copy common
+        columns → drop legacy. aiosqlite's legacy mode doesn't wrap DDL in
+        the ambient transaction, so the whole rebuild runs inside an
+        explicit SAVEPOINT — any failure rolls back to the original table.
+        """
+        result = await conn.execute(text("PRAGMA table_info(model_calls)"))
+        rows = result.fetchall()
+        if not rows:
+            return
+        notnull = {row[1] for row in rows if row[3]}
+        fk_result = await conn.execute(text("PRAGMA foreign_key_list(model_calls)"))
+        # PRAGMA rows: (id, seq, table, from, to, ...) — index 3 is the
+        # local column the constraint is defined on.
+        run_fk = any(row[3] == "run_id" for row in fk_result.fetchall())
+        if "run_id" not in notnull and "agent_id" not in notnull and not run_fk:
+            return
+
+        from ..models.model_call import ModelCall
+
+        new_cols = {c.name for c in ModelCall.__table__.columns}
+        common = [row[1] for row in rows if row[1] in new_cols]
+
+        await conn.execute(text("SAVEPOINT model_calls_rebuild"))
+        try:
+            # Index names are global in SQLite and ride along on the rename —
+            # drop them by their inspected names so the new table's indexes
+            # can't collide.
+            idx_result = await conn.execute(
+                text(
+                    "SELECT name FROM sqlite_master WHERE type='index' "
+                    "AND tbl_name='model_calls' AND name NOT LIKE 'sqlite_%'"
+                )
+            )
+            index_names = [row[0] for row in idx_result.fetchall()]
+            await conn.execute(text("ALTER TABLE model_calls RENAME TO model_calls_legacy"))
+            for index_name in index_names:
+                quoted = index_name.replace('"', '""')
+                await conn.execute(text(f'DROP INDEX IF EXISTS "{quoted}"'))
+            await conn.run_sync(ModelCall.__table__.create)
+            cols = ", ".join(f'"{c.replace(chr(34), chr(34) * 2)}"' for c in common)
+            await conn.execute(
+                text(f"INSERT INTO model_calls ({cols}) SELECT {cols} FROM model_calls_legacy")
+            )
+            await conn.execute(text("DROP TABLE model_calls_legacy"))
+        except Exception:
+            await conn.execute(text("ROLLBACK TO SAVEPOINT model_calls_rebuild"))
+            await conn.execute(text("RELEASE SAVEPOINT model_calls_rebuild"))
+            raise
+        await conn.execute(text("RELEASE SAVEPOINT model_calls_rebuild"))
+
     async def _repair_document_chunk_foreign_key(self, conn: Any) -> None:
         """Restore chunk foreign keys after SQLite rewrites them during table renames."""
         result = await conn.execute(text("PRAGMA foreign_key_list(document_chunks)"))
@@ -164,10 +225,61 @@ class SQLiteBackend(DatabaseBackend):
             ("notifications", "entity_type", "VARCHAR(50)"),
             ("notifications", "agent_id", "VARCHAR(255)"),
             ("notifications", "agent_name", "VARCHAR(255)"),
+            # W10 unified model-call ledger — for tables created between the
+            # nullable relaxation and these fields (the rebuild above already
+            # covers older schemas).
+            ("model_calls", "kind", "VARCHAR(20) NOT NULL DEFAULT 'chat'"),
+            ("model_calls", "purpose", "VARCHAR(20) NOT NULL DEFAULT 'reasoning'"),
+            ("model_calls", "thinking_tokens", "INTEGER"),
+            ("model_calls", "detail", "JSON"),
+            # W10 correlation — call_id links tool events to their domain
+            # rows; sub_agent_id scopes them. NULL on legacy rows.
+            ("approval_requests", "call_id", "VARCHAR(255)"),
+            ("approval_requests", "sub_agent_id", "VARCHAR(36)"),
+            ("elicitation_requests", "call_id", "VARCHAR(255)"),
+            ("elicitation_requests", "sub_agent_id", "VARCHAR(36)"),
+            ("terminal_sessions", "call_id", "VARCHAR(255)"),
+            ("terminal_sessions", "sub_agent_id", "VARCHAR(36)"),
+            ("artifact_revisions", "call_id", "VARCHAR(255)"),
+            ("artifact_revisions", "sub_agent_id", "VARCHAR(36)"),
+            ("run_sources", "call_id", "VARCHAR(255)"),
+            ("run_sources", "sub_agent_id", "VARCHAR(36)"),
+            ("audit_records", "call_id", "VARCHAR(255)"),
+            # Legacy rows keep NULL — observed time is never fabricated.
+            ("audit_records", "created_at", "DATETIME"),
+            # Execution-time effects snapshot (capability registry).
+            ("audit_records", "effects", "JSON"),
         ]
         for table, column, col_type in patches:
             if not await self.column_exists(conn, table, column):
                 await self.add_column(conn, table, column, col_type)
+
+        # Embedding calls moved into the unified model_calls ledger (W10).
+        await conn.execute(text("DROP TABLE IF EXISTS embedding_calls"))
+
+        # W10 ledger indexes — after the additive patches above.
+        for index_sql in (
+            "CREATE INDEX IF NOT EXISTS ix_model_calls_run_created "
+            "ON model_calls(run_id, created_at)",
+            "CREATE INDEX IF NOT EXISTS ix_model_calls_provider_model "
+            "ON model_calls(provider_id, model_name)",
+            "CREATE INDEX IF NOT EXISTS ix_model_calls_kind_created "
+            "ON model_calls(kind, created_at)",
+            # W10 correlation indexes — after the additive columns above.
+            "CREATE INDEX IF NOT EXISTS ix_audit_run_call_sub "
+            "ON audit_records(run_id, call_id, sub_agent_id)",
+            "CREATE INDEX IF NOT EXISTS ix_approval_run_call_sub "
+            "ON approval_requests(run_id, call_id, sub_agent_id)",
+            "CREATE INDEX IF NOT EXISTS ix_elicitation_run_call_sub "
+            "ON elicitation_requests(run_id, call_id, sub_agent_id)",
+            "CREATE INDEX IF NOT EXISTS ix_terminal_run_call_sub "
+            "ON terminal_sessions(run_id, call_id, sub_agent_id)",
+            "CREATE INDEX IF NOT EXISTS ix_run_sources_run_call_sub "
+            "ON run_sources(run_id, call_id, sub_agent_id)",
+            "CREATE INDEX IF NOT EXISTS ix_artifact_revisions_source_call "
+            "ON artifact_revisions(source_run_id, call_id, sub_agent_id)",
+        ):
+            await conn.execute(text(index_sql))
 
         # ALTER TABLE can't add UNIQUE — the index enforces event_id
         # idempotency for INSERT-or-ignore dedup (W9).
@@ -331,8 +443,13 @@ class SQLiteBackend(DatabaseBackend):
         column = self._identifier(column)
         if col_type not in {
             "TEXT",
+            "INTEGER",
             "INTEGER DEFAULT 0",
+            "DATETIME",
+            "JSON",
             "VARCHAR(36)",
+            "VARCHAR(20) NOT NULL DEFAULT 'chat'",
+            "VARCHAR(20) NOT NULL DEFAULT 'reasoning'",
             "VARCHAR(20) DEFAULT 'ok'",
             "VARCHAR(30) NOT NULL DEFAULT 'paragraph'",
             "VARCHAR(50)",

@@ -22,6 +22,7 @@ from ..config_schema import ModelConfig
 from ..models.provider import Provider
 from ..providers.litellm_transport import LiteLLMTransport
 from ..secret_store import decrypt
+from ..services.model_ledger import response_cost
 from .scripted_model import ScriptedResponse
 
 # Auto-inject summary="detailed" when reasoning_effort is set but no explicit
@@ -290,8 +291,35 @@ class LiteLLMAdapter:
                         content += cls._response_attr(block, "text", "") or ""
         return content, thinking, tool_calls
 
+    @staticmethod
+    def _reasoning_tokens(usage: Any) -> int | None:
+        """Provider-reported reasoning/thinking output tokens.
+
+        `completion_tokens_details.reasoning_tokens` (chat) or
+        `output_tokens_details.reasoning_tokens` (responses) or a top-level
+        `reasoning_tokens`, across dicts and attr-objects alike. These are
+        already counted inside tokens_out. None stays None; an explicit 0
+        stays 0.
+        """
+        if usage is None:
+            return None
+
+        def get(value: Any, name: str) -> Any:
+            if value is None:
+                return None
+            if isinstance(value, dict):
+                return value.get(name)
+            return getattr(value, name, None)
+
+        for detail_name in ("completion_tokens_details", "output_tokens_details"):
+            reported = get(get(usage, detail_name), "reasoning_tokens")
+            if reported is not None:
+                return int(reported)
+        reported = get(usage, "reasoning_tokens")
+        return int(reported) if reported is not None else None
+
     @classmethod
-    def _response_usage(cls, response: Any) -> tuple[int, int, int | None]:
+    def _response_usage(cls, response: Any) -> tuple[int, int, int | None, int | None]:
         usage = cls._response_attr(response, "usage")
         details = cls._response_attr(usage, "input_tokens_details")
         cached = cls._response_attr(details, "cached_tokens")
@@ -301,6 +329,7 @@ class LiteLLMAdapter:
             int(cls._response_attr(usage, "input_tokens", 0) or 0),
             int(cls._response_attr(usage, "output_tokens", 0) or 0),
             int(cached) if cached is not None else None,
+            cls._reasoning_tokens(usage),
         )
 
     async def _complete_responses(
@@ -337,7 +366,8 @@ class LiteLLMAdapter:
             self.transport.responses(**kwargs), timeout=settings.model_request_timeout
         )
         content, thinking, tool_calls = self._parse_response_output(response)
-        tokens_in, tokens_out, cached_tokens = self._response_usage(response)
+        tokens_in, tokens_out, cached_tokens, thinking_tokens = self._response_usage(response)
+        cost, cost_source = response_cost(response, model_str)
         return ScriptedResponse(
             tool_calls=self._restore_tool_names(tool_calls, restore_map),
             content=content,
@@ -345,7 +375,9 @@ class LiteLLMAdapter:
             tokens_in=tokens_in,
             tokens_out=tokens_out,
             cached_tokens=cached_tokens,
-            cost=float(getattr(response, "cost", 0.0) or 0.0),
+            thinking_tokens=thinking_tokens,
+            cost=cost,
+            cost_source=cost_source,
         )
 
     async def _complete_responses_stream(
@@ -386,6 +418,8 @@ class LiteLLMAdapter:
         tool_calls: dict[str, dict[str, Any]] = {}
         tokens_in = tokens_out = 0
         cached_tokens: int | None = None
+        thinking_tokens: int | None = None
+        completed_response: Any = None
         async for event in stream:
             event_type = self._response_attr(event, "type", "")
             if event_type == "response.output_text.delta":
@@ -420,8 +454,10 @@ class LiteLLMAdapter:
                         event, "arguments", tool_calls[key]["args"]
                     )
             elif event_type == "response.completed":
-                response = self._response_attr(event, "response")
-                tokens_in, tokens_out, cached_tokens = self._response_usage(response)
+                completed_response = self._response_attr(event, "response")
+                tokens_in, tokens_out, cached_tokens, thinking_tokens = self._response_usage(
+                    completed_response
+                )
 
         parsed_tools = []
         for call in tool_calls.values():
@@ -431,16 +467,25 @@ class LiteLLMAdapter:
                 args = {}
             parsed_tools.append({"id": call["id"], "name": call["name"], "args": args})
         parsed_tools = self._restore_tool_names(parsed_tools, restore_map)
+        cost, cost_source = (
+            response_cost(completed_response, model_str)
+            if completed_response is not None
+            else (0.0, "unknown")
+        )
         yield (
             "done",
             ScriptedResponse(
                 tool_calls=parsed_tools,
                 content=full_content,
                 thinking=full_thinking,
-                tokens_in=tokens_in or sum(len(str(m.get("content", ""))) for m in messages) // 4,
-                tokens_out=tokens_out or (len(full_content) + len(full_thinking)) // 4,
+                # Reported usage wins — an explicit provider zero stays 0,
+                # no char-estimate fallback.
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
                 cached_tokens=cached_tokens,
-                cost=0.0,
+                thinking_tokens=thinking_tokens,
+                cost=cost,
+                cost_source=cost_source,
             ),
         )
 
@@ -580,12 +625,15 @@ class LiteLLMAdapter:
         tokens_in = usage.prompt_tokens if usage else 0
         tokens_out = usage.completion_tokens if usage else 0
         cached_tokens = self._cached_tokens(usage)
+        thinking_tokens = self._reasoning_tokens(usage)
 
         # LiteLLM provides cost via response.cost, but it's not always set
         cost = 0.0
+        cost_source: str | None = None
         try:
             if hasattr(response, "cost") and response.cost:
                 cost = float(response.cost)
+                cost_source = "provider"
         except (TypeError, ValueError):
             cost = 0.0
         if cost == 0.0 and tokens_in > 0:
@@ -596,6 +644,7 @@ class LiteLLMAdapter:
                     completion_tokens=tokens_out,
                 )
                 cost = prompt_cost + completion_cost
+                cost_source = "litellm"
             except Exception:
                 pass
 
@@ -608,7 +657,9 @@ class LiteLLMAdapter:
             tokens_in=tokens_in,
             tokens_out=tokens_out,
             cached_tokens=cached_tokens,
+            thinking_tokens=thinking_tokens,
             cost=cost,
+            cost_source=cost_source,
         )
 
     async def complete_stream(
@@ -703,6 +754,7 @@ class LiteLLMAdapter:
         tokens_in = 0
         tokens_out = 0
         cached_tokens: int | None = None
+        thinking_tokens: int | None = None
         cost = 0.0
 
         stream_iterator = aiter(stream)
@@ -724,6 +776,7 @@ class LiteLLMAdapter:
                     tokens_in = chunk.usage.prompt_tokens or 0
                     tokens_out = chunk.usage.completion_tokens or 0
                     cached_tokens = self._cached_tokens(chunk.usage)
+                    thinking_tokens = self._reasoning_tokens(chunk.usage)
                 continue
 
             delta = chunk.choices[0].delta
@@ -810,6 +863,7 @@ class LiteLLMAdapter:
             tokens_in=tokens_in,
             tokens_out=tokens_out,
             cached_tokens=cached_tokens,
+            thinking_tokens=thinking_tokens,
             cost=cost,
         )
         yield ("done", final)

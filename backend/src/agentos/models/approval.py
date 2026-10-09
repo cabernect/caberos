@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, Index, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import Base, IdMixin
@@ -10,8 +10,12 @@ from .base import Base, IdMixin
 
 class ApprovalRequest(Base, IdMixin):
     __tablename__ = "approval_requests"
+    __table_args__ = (Index("ix_approval_run_call_sub", "run_id", "call_id", "sub_agent_id"),)
 
     run_id: Mapped[str] = mapped_column(String(36), ForeignKey("runs.id"), nullable=False)
+    # Correlation (W10): tool call that raised the approval + sub-agent scope.
+    call_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    sub_agent_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     capability_name: Mapped[str] = mapped_column(String(255), nullable=False)
     args: Mapped[str] = mapped_column(Text, default="{}")  # JSON
     status: Mapped[str] = mapped_column(

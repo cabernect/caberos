@@ -1,10 +1,14 @@
 """Model discovery and validation backed by LiteLLM/provider APIs."""
 
+import logging
+import time
 from typing import Any
 
 import litellm
 
 from ..ssl_utils import SSL_CERT_PATH as _SSL_CERT
+
+logger = logging.getLogger(__name__)
 
 _DEFAULT_BASE_URLS: dict[str, str] = {
     "deepseek": "https://api.deepseek.com/v1",
@@ -205,37 +209,104 @@ class LiteLLMModelCatalog:
         Follows the adapter's endpoint routing — api.openai.com models
         validate on /v1/responses (chat completions rejects reasoning
         models like gpt-6-luna, and 'max_tokens' isn't accepted there).
+        Every probe is recorded on the model-call ledger (kind='probe').
         """
         provider = await self.adapter._load_provider(provider_id)
         model_str, api_base = self.adapter._route_model(provider, model_name)
+        family = self.adapter._model_family(provider, model_name)
+        started = time.perf_counter()
+        raw = None
+        error: BaseException | None = None
+        try:
+            if family == "responses":
+                kwargs: dict[str, Any] = {
+                    "model": model_str,
+                    "input": [{"role": "user", "content": "Hi"}],
+                    "max_output_tokens": 16,
+                }
+                if provider["api_key"]:
+                    kwargs["api_key"] = provider["api_key"]
+                if api_base or provider["base_url"]:
+                    kwargs["api_base"] = api_base or provider["base_url"]
+                kwargs.update(provider["extra_params"])
+                raw = await self.adapter.transport.responses(**kwargs)
+                return True
 
-        if self.adapter._model_family(provider, model_name) == "responses":
-            kwargs: dict[str, Any] = {
+            kwargs = {
                 "model": model_str,
-                "input": [{"role": "user", "content": "Hi"}],
-                "max_output_tokens": 16,
+                "messages": [{"role": "user", "content": "Hi"}],
+                "max_tokens": 1,
             }
             if provider["api_key"]:
                 kwargs["api_key"] = provider["api_key"]
             if api_base or provider["base_url"]:
                 kwargs["api_base"] = api_base or provider["base_url"]
             kwargs.update(provider["extra_params"])
-            await self.adapter.transport.responses(**kwargs)
+
+            raw = await self.adapter.transport.completion(**kwargs)
             return True
+        except BaseException as exc:
+            error = exc
+            raise
+        finally:
+            await self._record_probe(
+                provider_id, model_name, model_str, family, raw, error, started
+            )
 
-        kwargs = {
-            "model": model_str,
-            "messages": [{"role": "user", "content": "Hi"}],
-            "max_tokens": 1,
-        }
-        if provider["api_key"]:
-            kwargs["api_key"] = provider["api_key"]
-        if api_base or provider["base_url"]:
-            kwargs["api_base"] = api_base or provider["base_url"]
-        kwargs.update(provider["extra_params"])
+    async def _record_probe(
+        self,
+        provider_id: str,
+        model_name: str,
+        model_str: str,
+        family: str,
+        raw: Any,
+        error: BaseException | None,
+        started: float,
+    ) -> None:
+        """File the probe on the ledger — never blocks or fails validate."""
+        try:
+            from ..harness.litellm_adapter import LiteLLMAdapter
+            from ..harness.scripted_model import ScriptedResponse
+            from ..services.model_ledger import record_system_call, response_cost
 
-        await self.adapter.transport.completion(**kwargs)
-        return True
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            response = None
+            cost_source = "unknown"
+            if raw is not None:
+                if family == "responses":
+                    tin, tout, cached, thinking = LiteLLMAdapter._response_usage(raw)
+                else:
+                    usage = getattr(raw, "usage", None) or (
+                        raw.get("usage") if isinstance(raw, dict) else None
+                    )
+                    get = lambda k: (  # noqa: E731
+                        usage.get(k) if isinstance(usage, dict) else getattr(usage, k, None)
+                    )
+                    tin = get("prompt_tokens") or 0
+                    tout = get("completion_tokens") or 0
+                    cached = LiteLLMAdapter._cached_tokens(usage)
+                    thinking = LiteLLMAdapter._reasoning_tokens(usage)
+                cost, cost_source = response_cost(raw, model_str)
+                response = ScriptedResponse(
+                    tokens_in=tin,
+                    tokens_out=tout,
+                    cached_tokens=cached,
+                    thinking_tokens=thinking,
+                    cost=cost,
+                )
+            await record_system_call(
+                kind="probe",
+                purpose="reasoning",
+                provider_id=provider_id,
+                model_name=model_name,
+                model_str=model_str,
+                response=response,
+                error=error,
+                latency_ms=latency_ms,
+                detail={"operation": "validate", "cost_source": cost_source},
+            )
+        except Exception:
+            logger.debug("probe ledger write failed", exc_info=True)
 
     async def discover_models(self, provider_id: str) -> list[dict[str, Any]]:
         """Discover models live first, then fall back to LiteLLM's catalog."""

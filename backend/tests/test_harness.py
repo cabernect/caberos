@@ -316,6 +316,228 @@ def test_litellm_cached_token_usage_is_extracted():
     assert LiteLLMAdapter._cached_tokens(anthropic_usage) == 275
 
 
+def test_litellm_reasoning_tokens_extraction():
+    """Object or dict usage; value, explicit 0, and missing-as-None."""
+    # Chat completions shape (attr objects).
+    assert (
+        LiteLLMAdapter._reasoning_tokens(
+            SimpleNamespace(completion_tokens_details=SimpleNamespace(reasoning_tokens=42))
+        )
+        == 42
+    )
+    # Responses API shape (dicts).
+    assert LiteLLMAdapter._reasoning_tokens({"output_tokens_details": {"reasoning_tokens": 7}}) == 7
+    # Top-level fallback.
+    assert LiteLLMAdapter._reasoning_tokens(SimpleNamespace(reasoning_tokens=5)) == 5
+    assert LiteLLMAdapter._reasoning_tokens({"reasoning_tokens": 3}) == 3
+    # Explicit 0 is preserved, not collapsed to None.
+    assert (
+        LiteLLMAdapter._reasoning_tokens(
+            SimpleNamespace(completion_tokens_details=SimpleNamespace(reasoning_tokens=0))
+        )
+        == 0
+    )
+    # Missing entirely → None.
+    assert LiteLLMAdapter._reasoning_tokens(SimpleNamespace(prompt_tokens=3)) is None
+    assert LiteLLMAdapter._reasoning_tokens({}) is None
+    assert LiteLLMAdapter._reasoning_tokens(None) is None
+
+
+class _FakeTransport:
+    """Minimal LiteLLMTransport stand-in — returns canned responses/streams."""
+
+    def __init__(self, completion=None, responses=None):
+        self._completion = completion
+        self._responses = responses
+
+    async def completion(self, **_kwargs):
+        result = self._completion() if callable(self._completion) else self._completion
+        return result
+
+    async def responses(self, **_kwargs):
+        result = self._responses() if callable(self._responses) else self._responses
+        return result
+
+
+def _chat_response(reasoning):
+    return SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content="hi", tool_calls=None),
+            )
+        ],
+        usage=SimpleNamespace(
+            prompt_tokens=10,
+            completion_tokens=5,
+            completion_tokens_details=SimpleNamespace(reasoning_tokens=reasoning),
+        ),
+        cost=0.0,
+    )
+
+
+def _chat_stream(reasoning):
+    async def gen():
+        yield SimpleNamespace(
+            choices=[SimpleNamespace(delta=SimpleNamespace(content="hi", tool_calls=None))],
+            usage=None,
+        )
+        yield SimpleNamespace(
+            choices=[],
+            usage=SimpleNamespace(
+                prompt_tokens=10,
+                completion_tokens=5,
+                completion_tokens_details={"reasoning_tokens": reasoning},
+            ),
+        )
+
+    return gen()
+
+
+def _responses_response(reasoning):
+    return SimpleNamespace(
+        output=[
+            SimpleNamespace(
+                type="message",
+                content=[SimpleNamespace(type="output_text", text="hi")],
+            )
+        ],
+        usage=SimpleNamespace(
+            input_tokens=10,
+            output_tokens=5,
+            output_tokens_details=SimpleNamespace(reasoning_tokens=reasoning),
+        ),
+        cost=0.0,
+    )
+
+
+def _responses_stream(reasoning):
+    async def gen():
+        yield SimpleNamespace(type="response.output_text.delta", delta="hi")
+        yield SimpleNamespace(
+            type="response.completed",
+            response=SimpleNamespace(
+                usage={
+                    "input_tokens": 10,
+                    "output_tokens": 5,
+                    "output_tokens_details": {"reasoning_tokens": reasoning},
+                }
+            ),
+        )
+
+    return gen()
+
+
+_CHAT_PROVIDER = {
+    "type": "openai",
+    "base_url": "http://localhost:9/compat",
+    "api_key": "k",
+    "org_id": None,
+    "extra_params": {},
+}
+_RESPONSES_PROVIDER = {
+    "type": "openai",
+    "base_url": None,
+    "api_key": "k",
+    "org_id": None,
+    "extra_params": {},
+}
+
+
+@pytest.mark.asyncio
+async def test_chat_complete_extracts_reasoning_tokens(monkeypatch):
+    adapter = LiteLLMAdapter(db=None, transport=_FakeTransport(completion=_chat_response(17)))
+
+    async def load_provider(_id):
+        return _CHAT_PROVIDER
+
+    monkeypatch.setattr(adapter, "_load_provider", load_provider)
+    result = await adapter.complete(
+        agent_model=ModelConfig(provider_id="p", name="m"),
+        messages=[{"role": "user", "content": "hi"}],
+    )
+    assert result.thinking_tokens == 17
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_extracts_reasoning_tokens(monkeypatch):
+    adapter = LiteLLMAdapter(db=None, transport=_FakeTransport(completion=lambda: _chat_stream(0)))
+
+    async def load_provider(_id):
+        return _CHAT_PROVIDER
+
+    monkeypatch.setattr(adapter, "_load_provider", load_provider)
+    final = None
+    async for kind, payload in adapter.complete_stream(
+        agent_model=ModelConfig(provider_id="p", name="m"),
+        messages=[{"role": "user", "content": "hi"}],
+    ):
+        if kind == "done":
+            final = payload
+    assert final is not None
+    # Explicit 0 from the usage chunk is preserved, not reported as missing.
+    assert final.thinking_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_responses_complete_extracts_reasoning_tokens(monkeypatch):
+    adapter = LiteLLMAdapter(db=None, transport=_FakeTransport(responses=_responses_response(9)))
+
+    async def load_provider(_id):
+        return _RESPONSES_PROVIDER
+
+    monkeypatch.setattr(adapter, "_load_provider", load_provider)
+    result = await adapter.complete(
+        agent_model=ModelConfig(provider_id="p", name="m"),
+        messages=[{"role": "user", "content": "hi"}],
+    )
+    assert result.thinking_tokens == 9
+
+
+@pytest.mark.asyncio
+async def test_responses_stream_extracts_reasoning_tokens(monkeypatch):
+    adapter = LiteLLMAdapter(
+        db=None, transport=_FakeTransport(responses=lambda: _responses_stream(23))
+    )
+
+    async def load_provider(_id):
+        return _RESPONSES_PROVIDER
+
+    monkeypatch.setattr(adapter, "_load_provider", load_provider)
+    final = None
+    async for kind, payload in adapter.complete_stream(
+        agent_model=ModelConfig(provider_id="p", name="m"),
+        messages=[{"role": "user", "content": "hi"}],
+    ):
+        if kind == "done":
+            final = payload
+    assert final is not None
+    assert final.thinking_tokens == 23
+
+
+@pytest.mark.asyncio
+async def test_missing_reasoning_tokens_stays_none(monkeypatch):
+    adapter = LiteLLMAdapter(
+        db=None,
+        transport=_FakeTransport(
+            completion=SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="hi", tool_calls=None))],
+                usage=SimpleNamespace(prompt_tokens=10, completion_tokens=5),
+                cost=0.0,
+            )
+        ),
+    )
+
+    async def load_provider(_id):
+        return _CHAT_PROVIDER
+
+    monkeypatch.setattr(adapter, "_load_provider", load_provider)
+    result = await adapter.complete(
+        agent_model=ModelConfig(provider_id="p", name="m"),
+        messages=[{"role": "user", "content": "hi"}],
+    )
+    assert result.thinking_tokens is None
+
+
 @pytest.mark.asyncio
 async def test_harness_preserves_cached_token_usage(db, workspace):
     config = AgentConfig(
@@ -378,7 +600,9 @@ async def test_harness_records_each_model_call(db, workspace):
                 tokens_in=10,
                 tokens_out=5,
             ),
-            ScriptedResponse(tool_calls=[], content="done", tokens_in=20, tokens_out=8),
+            ScriptedResponse(
+                tool_calls=[], content="done", tokens_in=20, tokens_out=8, thinking_tokens=4
+            ),
         ]
     )
 
@@ -390,6 +614,7 @@ async def test_harness_records_each_model_call(db, workspace):
         run_id="r-mc",
     )
     assert result.status == "completed"
+    assert result.thinking_tokens == 4
 
     rows = (await db.execute(select(ModelCall).where(ModelCall.run_id == "r-mc"))).scalars().all()
     assert len(rows) == 2
@@ -398,6 +623,10 @@ async def test_harness_records_each_model_call(db, workspace):
     assert rows[0].tokens_in == 10
     assert rows[1].tokens_in == 20
     assert all(r.provider_id == "test-provider" for r in rows)
+    assert all(r.kind == "chat" for r in rows)
+    assert all(r.purpose == "reasoning" for r in rows)
+    assert rows[0].thinking_tokens is None
+    assert rows[1].thinking_tokens == 4
 
 
 @pytest.mark.asyncio
@@ -1142,3 +1371,124 @@ def test_is_context_overflow_patterns():
     assert _is_context_overflow(ContextWindowExceededError("litellm style"))
     assert not _is_context_overflow(Exception("rate limit exceeded"))
     assert not _is_context_overflow(TimeoutError("idle"))
+
+
+@pytest.mark.asyncio
+async def test_responses_cost_recipe_nonstream(monkeypatch):
+    """litellm.completion_cost fixed 0.25 → litellm source; reported usage
+    zeros are honored (no char-estimate fallback), reasoning preserved."""
+    adapter = LiteLLMAdapter(
+        db=None,
+        transport=_FakeTransport(
+            responses=SimpleNamespace(
+                output=[
+                    SimpleNamespace(
+                        type="message",
+                        content=[SimpleNamespace(type="output_text", text="hi")],
+                    )
+                ],
+                usage=SimpleNamespace(
+                    input_tokens=0,
+                    output_tokens=0,
+                    output_tokens_details=SimpleNamespace(reasoning_tokens=0),
+                ),
+                cost=None,
+                _hidden_params={},
+            )
+        ),
+    )
+
+    async def load_provider(_id):
+        return _RESPONSES_PROVIDER
+
+    monkeypatch.setattr(adapter, "_load_provider", load_provider)
+    import litellm as _litellm
+
+    monkeypatch.setattr(_litellm, "completion_cost", lambda **_: 0.25)
+    result = await adapter.complete(
+        agent_model=ModelConfig(provider_id="p", name="m"),
+        messages=[{"role": "user", "content": "hi"}],
+    )
+    assert result.cost == pytest.approx(0.25)
+    assert result.cost_source == "litellm"
+    assert result.tokens_in == 0 and result.tokens_out == 0
+    assert result.thinking_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_responses_cost_recipe_stream_and_provider_precedence(monkeypatch):
+    """Stream path: cost comes from the final completed response object;
+    provider-reported cost (explicit 0) beats the litellm recipe."""
+
+    async def gen():
+        yield SimpleNamespace(type="response.output_text.delta", delta="hi")
+        yield SimpleNamespace(
+            type="response.completed",
+            response=SimpleNamespace(
+                usage={"input_tokens": 0, "output_tokens": 0},
+                cost=0.0,
+            ),
+        )
+
+    adapter = LiteLLMAdapter(db=None, transport=_FakeTransport(responses=lambda: gen()))
+
+    async def load_provider(_id):
+        return _RESPONSES_PROVIDER
+
+    monkeypatch.setattr(adapter, "_load_provider", load_provider)
+    import litellm as _litellm
+
+    monkeypatch.setattr(_litellm, "completion_cost", lambda **_: 0.25)
+    final = None
+    async for kind, payload in adapter.complete_stream(
+        agent_model=ModelConfig(provider_id="p", name="m"),
+        messages=[{"role": "user", "content": "hi"}],
+    ):
+        if kind == "done":
+            final = payload
+    assert final.cost == 0.0
+    assert final.cost_source == "provider"  # explicit provider 0 wins
+    assert final.tokens_out == 0
+    assert final.thinking_tokens is None
+
+
+@pytest.mark.asyncio
+async def test_responses_stream_no_completed_event_unknown_cost(monkeypatch):
+    async def gen():
+        yield SimpleNamespace(type="response.output_text.delta", delta="hi")
+        # stream ends without response.completed
+
+    adapter = LiteLLMAdapter(db=None, transport=_FakeTransport(responses=lambda: gen()))
+
+    async def load_provider(_id):
+        return _RESPONSES_PROVIDER
+
+    monkeypatch.setattr(adapter, "_load_provider", load_provider)
+    final = None
+    async for kind, payload in adapter.complete_stream(
+        agent_model=ModelConfig(provider_id="p", name="m"),
+        messages=[{"role": "user", "content": "hi"}],
+    ):
+        if kind == "done":
+            final = payload
+    assert final.cost == 0.0
+    assert final.cost_source == "unknown"
+
+
+def test_response_cost_rejects_nonfinite(monkeypatch):
+    """NaN/inf/negative are not costs — they fall through to unknown."""
+    import litellm as _litellm
+
+    from agentos.services.model_ledger import response_cost
+
+    monkeypatch.setattr(
+        _litellm, "completion_cost", lambda **_: (_ for _ in ()).throw(Exception("no price"))
+    )
+    for bad in (float("nan"), float("inf"), -0.5, "garbage"):
+        cost, source = response_cost({"cost": bad}, "m")
+        assert cost == 0.0 and source == "unknown"
+    # explicit 0 is a real cost
+    assert response_cost({"cost": 0.0}, "m") == (0.0, "provider")
+    # completion_cost returning None → unknown, not litellm-0
+    monkeypatch.setattr(_litellm, "completion_cost", lambda **_: None)
+    assert response_cost({}, "m") == (0.0, "unknown")

@@ -104,11 +104,47 @@ async def auto_extract_memory(
         )
 
         adapter = await ProviderRegistry(db).for_model(agent_config.model.provider_id)
-        response = await adapter.complete(
-            agent_model=agent_config.model,
-            messages=[{"role": "user", "content": prompt}],
-            tools=None,
-        )
+        import time as _time
+
+        from ..services.model_ledger import record_system_call
+
+        model_str = None
+        try:
+            provider_row = await adapter._load_provider(agent_config.model.provider_id)
+            model_str, _ = adapter._route_model(provider_row, agent_config.model.name)
+        except Exception:
+            pass
+        started = _time.perf_counter()
+        try:
+            response = await adapter.complete(
+                agent_model=agent_config.model,
+                messages=[{"role": "user", "content": prompt}],
+                tools=None,
+            )
+            await record_system_call(
+                kind="extract",
+                provider_id=agent_config.model.provider_id,
+                model_name=agent_config.model.name,
+                model_str=model_str,
+                agent_id=agent_id,
+                run_id=run_id,
+                response=response,
+                latency_ms=int((_time.perf_counter() - started) * 1000),
+                detail={"operation": "memory_extract"},
+            )
+        except BaseException as exc:
+            await record_system_call(
+                kind="extract",
+                provider_id=agent_config.model.provider_id,
+                model_name=agent_config.model.name,
+                model_str=model_str,
+                agent_id=agent_id,
+                run_id=run_id,
+                error=exc,
+                latency_ms=int((_time.perf_counter() - started) * 1000),
+                detail={"operation": "memory_extract"},
+            )
+            raise
         await db.commit()
 
         result = response.content.strip()

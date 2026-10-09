@@ -5,7 +5,7 @@ revision bytes. Follows the shared revision convention (models/revision.py):
 edits create revisions, restore creates a new revision, archive tombstones.
 """
 
-from sqlalchemy import ForeignKey, Integer, String
+from sqlalchemy import ForeignKey, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import Base, IdMixin, TimestampMixin
@@ -36,6 +36,14 @@ class ArtifactRevision(Base, IdMixin, RevisionMixin):
     """
 
     __tablename__ = "artifact_revisions"
+    __table_args__ = (
+        Index(
+            "ix_artifact_revisions_source_call",
+            "source_run_id",
+            "call_id",
+            "sub_agent_id",
+        ),
+    )
 
     artifact_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("artifacts.id"), nullable=False, index=True
@@ -47,3 +55,6 @@ class ArtifactRevision(Base, IdMixin, RevisionMixin):
     source_message_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     source_plan_step_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     base_revision_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # Correlation (W10): the artifact_* tool call that produced the revision.
+    call_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    sub_agent_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
