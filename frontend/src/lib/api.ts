@@ -725,16 +725,25 @@ export const api = {
       method: "POST",
     }),
   // W9 — delivery state, prefs, frontend-driven emits
-  reportDelivery: (notificationId: string, adapter: string, state: string, error?: string) =>
-    request<{ recorded: boolean }>(`/api/notifications/${notificationId}/delivery`, {
-      method: "POST",
-      body: JSON.stringify({ adapter, state, error: error ?? null }),
-    }),
-  failedDeliveries: () =>
-    request<{ notification: Notification; adapter: string; attempts: number }[]>(
-      "/api/notifications/deliveries/failed",
+  reportDelivery: (
+    notificationId: string,
+    adapter: string,
+    state: string,
+    error?: string,
+  ) =>
+    request<{ recorded: boolean }>(
+      `/api/notifications/${notificationId}/delivery`,
+      {
+        method: "POST",
+        body: JSON.stringify({ adapter, state, error: error ?? null }),
+      },
     ),
-  getNotificationPrefs: () => request<NotificationPrefs>("/api/notifications/prefs"),
+  failedDeliveries: () =>
+    request<
+      { notification: Notification; adapter: string; attempts: number }[]
+    >("/api/notifications/deliveries/failed"),
+  getNotificationPrefs: () =>
+    request<NotificationPrefs>("/api/notifications/prefs"),
   putNotificationPrefs: (prefs: NotificationPrefsPatch) =>
     request<NotificationPrefs>("/api/notifications/prefs", {
       method: "PUT",
@@ -754,9 +763,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify(data),
     }),
-  // W9 — SSE fan-out; one event per committed notification row
+  // W9 — SSE fan-out; one event per committed notification row.
+  // `onConnected` fires once the hello frame arrives (stream is truly
+  // healthy — not merely the fetch starting); `onInboxChanged` fires for
+  // server-side invalidation markers (read-state changes).
   streamNotifications: async function* (
     signal?: AbortSignal,
+    onConnected?: () => void,
+    onInboxChanged?: () => void,
   ): AsyncGenerator<Notification> {
     const base = await baseReady;
     const resp = await fetch(`${base}/api/notifications/stream`, {
@@ -769,28 +783,46 @@ export const api = {
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      let idx;
-      while ((idx = buffer.indexOf("\n\n")) !== -1) {
-        const raw = buffer.slice(0, idx);
-        buffer = buffer.slice(idx + 2);
-        let data = "";
-        for (const line of raw.split("\n")) {
-          if (line.startsWith("data: ")) data += line.slice(6);
-        }
-        if (!data) continue;
-        try {
-          const payload = JSON.parse(data);
-          if (payload?.type === "notification" && payload.notification) {
+    let helloSeen = false; // hello fires once per stream attempt
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let match: RegExpMatchArray | null;
+        // Frames are blank-line separated; tolerate CRLF as well as LF.
+        while ((match = buffer.match(/\r?\n\r?\n/)) !== null) {
+          const raw = buffer.slice(0, match.index);
+          buffer = buffer.slice(match.index! + match[0].length);
+          let data = "";
+          for (const line of raw.split(/\r?\n/)) {
+            if (line.startsWith("data: ")) data += line.slice(6);
+          }
+          if (!data) continue; // keepalive / comments — ignore
+          let payload: any;
+          try {
+            payload = JSON.parse(data);
+          } catch {
+            continue; // malformed frame — skip
+          }
+          // Callbacks outside the parse catch — a throwing handler must
+          // not be swallowed as bad JSON.
+          if (payload?.type === "hello") {
+            if (!helloSeen) {
+              helloSeen = true;
+              onConnected?.();
+            }
+          } else if (payload?.type === "inbox_changed") {
+            onInboxChanged?.();
+          } else if (payload?.type === "notification" && payload.notification) {
             yield payload.notification as Notification;
           }
-        } catch {
-          // keepalive / malformed frame — skip
         }
       }
+    } finally {
+      // Always release the socket — aborts and EOF must not leak it.
+      Promise.resolve(reader.cancel() ?? undefined).catch(() => {});
+      reader.releaseLock();
     }
   },
 

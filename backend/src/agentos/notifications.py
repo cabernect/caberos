@@ -44,8 +44,15 @@ def broadcast(payload: dict) -> None:
         try:
             q.put_nowait(payload)
         except asyncio.QueueFull:
-            # Slow consumer — drop rather than block emitters.
-            pass
+            # A full queue drops payloads forever — without a reconcile
+            # marker the client would miss those events permanently.
+            # Evict one slot and post a bounded 'inbox_changed' invalidation
+            # so the consumer refetches instead of trusting a stale list.
+            try:
+                q.get_nowait()
+                q.put_nowait({"type": "inbox_changed"})
+            except Exception:
+                pass
 
 
 def notification_payload(item: Notification) -> dict:
@@ -66,14 +73,13 @@ def notification_payload(item: Notification) -> dict:
     }
 
 
-def _emit_after_commit(db: AsyncSession, item: Notification) -> None:
-    """Broadcast once the caller's transaction actually commits.
+def _emit_after_commit_payload(db: AsyncSession, payload: dict) -> None:
+    """Broadcast a raw payload once the caller's transaction commits.
 
     A rollback must disarm the listener too — otherwise it survives and
-    fires on the session's *next* commit, broadcasting a row that was
+    fires on the session's *next* commit, broadcasting a change that was
     never persisted.
     """
-    payload = notification_payload(item)
     target = db.sync_session
 
     def _emit(_session) -> None:
@@ -85,6 +91,17 @@ def _emit_after_commit(db: AsyncSession, item: Notification) -> None:
 
     event.listen(target, "after_commit", _emit, once=True)
     event.listen(target, "after_rollback", _drop, once=True)
+
+
+def _emit_after_commit(db: AsyncSession, item: Notification) -> None:
+    _emit_after_commit_payload(db, notification_payload(item))
+
+
+def notify_inbox_changed(db: AsyncSession) -> None:
+    """Post an ``inbox_changed`` invalidation after the caller's commit —
+    read-state mutations carry no notification payload, so subscribers get
+    a typed marker instead and refetch the inbox."""
+    _emit_after_commit_payload(db, {"type": "inbox_changed"})
 
 
 async def create_notification(

@@ -21,8 +21,10 @@ import { api } from "./api";
 import type { Notification } from "./types";
 import {
   anyPeerVisible,
+  broadcastInboxChanged,
   broadcastNotification,
   isLeader,
+  onInboxChanged,
   onLeaderChange,
   onNotification,
   onPrefsChanged,
@@ -50,13 +52,39 @@ let toasts: Notification[] = [];
 const listeners = new Set<Listener>();
 let seenIds = new Set<string>();
 let baselineDone = false;
-let intervalId: ReturnType<typeof setInterval> | null = null;
 let refCount = 0;
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
 
 let sseAbort: AbortController | null = null;
 let sseRunning = false;
+let sseHealthy = false; // HELLO seen on the current attempt
+// Transport epoch — every SSE attempt, callback, retry and finalizer
+// must re-check it. Without it, a demoted→promoted cycle re-arms an old
+// loop's backoff into a second stream and a stale late-hello can kill a
+// new owner's fallback.
+let transportEpoch = 0;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let reconnectResolve: (() => void) | null = null;
+// In-flight snapshot ownership — a stopped/remounted store must never
+// wait on or be clobbered by a previous epoch's request.
+let activeRequest: { gen: number; ctrl: AbortController } | null = null;
+// IDs delivered by SSE while a snapshot was in flight — the response
+// predates them, so they're merged forward instead of overwritten.
+let livePending = new Set<string>();
 let leader = false;
+// Lifecycle flag — an interval-id guard can't represent "the stream is
+// healthy, no timer is running", and a second hook would double-start.
+let running = false;
+// Epoch — increments on start/stop so stale async results can't write
+// into a restarted store.
+let generation = 0;
+// Fallback poll — sequential setTimeout chain (never setInterval).
+let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+// Coalesced dirty pass — at most ONE extra snapshot when invalidations
+// arrive while a fetch is in flight.
+let dirtyAgain = false;
+// First-snapshot gate for the page's loading UI.
+let loading = true;
 // Unread items this tab processed as a follower — a follower can't report
 // deliveries, so seenIds alone would suppress the leader-side pass forever
 // if the tab is later promoted (B38). On promotion each deferred id is
@@ -65,6 +93,7 @@ const deferredReports = new Set<string>();
 let unsubLeader: (() => void) | null = null;
 let unsubNotif: (() => void) | null = null;
 let unsubPrefs: (() => void) | null = null;
+let unsubInboxChanged: (() => void) | null = null;
 
 // Router navigation for OS-notification clicks — registered by a mounted
 // component (NotificationToasts) since the store lives outside React.
@@ -83,12 +112,35 @@ function emit() {
   for (const cb of listeners) cb();
 }
 
-function report(n: Notification, adapter: string, state: string, error?: string) {
+/** Every SSE callback/timer/frame checks this — a demoted, aborted or
+ *  replaced attempt can never poke the new transport. */
+function validTransport(gen: number, epoch: number): boolean {
+  return sseRunning && current(gen) && leader && epoch === transportEpoch;
+}
+
+function cancelReconnect() {
+  if (reconnectTimer !== null) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  reconnectResolve?.();
+  reconnectResolve = null;
+}
+
+function report(
+  n: Notification,
+  adapter: string,
+  state: string,
+  error?: string,
+) {
   api.reportDelivery(n.id, adapter, state, error).catch(() => {});
 }
 
 function markRead(n: Notification) {
-  api.markNotificationRead(n.id).catch(() => {});
+  api
+    .markNotificationRead(n.id)
+    .then(() => broadcastInboxChanged()) // peers sync read-state too
+    .catch(() => {});
   deferredReports.delete(n.id); // read rows never need pings or reports
   const row = notifications.find((x) => x.id === n.id);
   if (row) row.read = true;
@@ -106,7 +158,11 @@ function showToast(n: Notification) {
 /** Leader-side toast accounting: a toast "delivered" if any visible tab
  *  rendered it, "suppressed" if none could. Disabled prefs → no row. */
 function reportToastAggregate(n: Notification) {
-  report(n, "toast", selfTabVisible() || anyPeerVisible() ? "delivered" : "suppressed");
+  report(
+    n,
+    "toast",
+    selfTabVisible() || anyPeerVisible() ? "delivered" : "suppressed",
+  );
 }
 
 async function fireOsAdapter(n: Notification) {
@@ -126,6 +182,7 @@ const HITL_TYPES = new Set(["approval_required", "elicitation_required"]);
 function process(n: Notification, reportsOnly = false) {
   if (seenIds.has(n.id)) return;
   seenIds.add(n.id);
+  if (activeRequest) livePending.add(n.id); // response predates this row
   notifications = [n, ...notifications.filter((x) => x.id !== n.id)];
   if (!leader && !n.read) deferredReports.add(n.id);
   else deferredReports.delete(n.id);
@@ -145,7 +202,14 @@ function process(n: Notification, reportsOnly = false) {
   const quiet =
     !n.read && inQuietHours() && !HITL_TYPES.has(n.notification_type);
 
-  if (!n.read && toastWanted && !focused && !quiet && selfTabVisible() && !reportsOnly) {
+  if (
+    !n.read &&
+    toastWanted &&
+    !focused &&
+    !quiet &&
+    selfTabVisible() &&
+    !reportsOnly
+  ) {
     showToast(n);
   }
   if (leader && !n.read) {
@@ -184,74 +248,152 @@ function osSurface(): "browser" | "system" {
   return osAdapter();
 }
 
-// Serialize the poll: setInterval fires regardless of the previous tick,
-// so an unbounded fetch stacks one socket per 5 s until the per-origin
-// connection pool is gone (ERR_INSUFFICIENT_RESOURCES on every request,
-// page loads freeze — B37). The fetch is also bounded — a hung request
-// would hold its slot forever.
-let pollInFlight = false;
-async function poll() {
-  if (pollInFlight) return;
-  pollInFlight = true;
+// Serialize every snapshot — an unbounded fetch would stack one socket
+// per tick until the per-origin connection pool is gone
+// (ERR_INSUFFICIENT_RESOURCES — B37). The fetch itself is also bounded.
+function current(gen: number): boolean {
+  return running && gen === generation;
+}
+
+async function fetchSnapshot(gen: number) {
+  if (activeRequest?.gen === gen) {
+    // An invalidation landed while a fetch was in flight — one coalesced
+    // follow-up pass captures what the in-flight response can't see.
+    dirtyAgain = true;
+    return;
+  }
+  // A previous generation's hung request never blocks a remount.
+  activeRequest?.ctrl.abort();
+  const req = { gen, ctrl: new AbortController() };
+  activeRequest = req;
   try {
-    const list = await api.listNotifications(false, AbortSignal.timeout(15_000));
+    const signal = AbortSignal.any
+      ? AbortSignal.any([req.ctrl.signal, AbortSignal.timeout(15_000)])
+      : AbortSignal.timeout(15_000);
+    const list = await api.listNotifications(false, signal);
+    if (!current(gen) || activeRequest !== req) return; // stale response
+    // Rows delivered live while this request flew are never clobbered
+    // by a snapshot that predates them.
+    const live = notifications.filter(
+      (x) => livePending.has(x.id) && !list.some((l) => l.id === x.id),
+    );
     if (!baselineDone) {
       // First fetch is the baseline — existing rows don't re-deliver.
       for (const n of list) seenIds.add(n.id);
       baselineDone = true;
-      notifications = list;
+      notifications = [...live, ...list];
+      loading = false;
     } else {
-      notifications = list;
-      for (const n of list) {
-        if (!n.read && !seenIds.has(n.id)) process(n); // SSE-gap fallback
+      notifications = [...live, ...list];
+      for (const n of notifications) {
+        if (!n.read && !seenIds.has(n.id)) {
+          process(n); // SSE-gap fallback
+          // Followers must get the fresh frame as if the stream lived —
+          // an invalidation alone would leave their ping undelivered.
+          if (leader) broadcastNotification(n);
+        }
       }
+      livePending.clear();
+      loading = false;
+      // A completed leader-side catch-up/fallback pass is the one truth
+      // followers need — share it so they refresh once, without their own
+      // backend traffic.
+      if (leader) broadcastInboxChanged();
     }
     emit();
   } catch {
-    // Network hiccup/timeout — keep polling.
+    if (current(gen) && activeRequest === req) {
+      loading = false;
+      emit();
+    }
+    // Network hiccup/timeout — the fallback timer keeps retrying.
   } finally {
-    pollInFlight = false;
+    if (activeRequest === req) {
+      activeRequest = null;
+      if (dirtyAgain) {
+        dirtyAgain = false;
+        if (current(gen)) void fetchSnapshot(gen);
+      }
+    }
   }
 }
 
-async function sseLoop() {
-  while (sseRunning) {
+/** Sequential fallback — only runs while the leader's stream isn't
+ *  HELLO-healthy; cancelled the moment a HELLO arrives. Followers never
+ *  run it (the leader's catch-up broadcast covers them). */
+function scheduleFallback(gen: number) {
+  if (fallbackTimer !== null || !leader || sseHealthy) return;
+  fallbackTimer = setTimeout(() => {
+    fallbackTimer = null;
+    if (!current(gen) || !leader || sseHealthy) return;
+    void fetchSnapshot(gen).finally(() => {
+      if (current(gen) && leader && !sseHealthy) scheduleFallback(gen);
+    });
+  }, POLL_MS);
+}
+
+function cancelFallback() {
+  if (fallbackTimer !== null) {
+    clearTimeout(fallbackTimer);
+    fallbackTimer = null;
+  }
+}
+
+async function sseLoop(gen: number) {
+  while (sseRunning && current(gen) && leader) {
+    const epoch = ++transportEpoch;
+    const ctrl = new AbortController();
+    sseAbort = ctrl;
+    sseHealthy = false;
+    let helloSeen = false;
     try {
-      sseAbort = new AbortController();
-      for await (const n of api.streamNotifications(sseAbort.signal)) {
-        if (!sseRunning) break;
+      for await (const n of api.streamNotifications(
+        ctrl.signal,
+        () => {
+          if (!validTransport(gen, epoch) || helloSeen) return;
+          helloSeen = true;
+          sseHealthy = true;
+          cancelFallback();
+          void fetchSnapshot(gen);
+        },
+        () => {
+          if (!validTransport(gen, epoch)) return;
+          void fetchSnapshot(gen);
+        },
+      )) {
+        if (!validTransport(gen, epoch)) break;
         process(n);
-        broadcastNotification(n); // followers get it via channel — no per-tab SSE
+        broadcastNotification(n); // followers get it — no per-tab SSE
         emit();
       }
     } catch {
-      // Stream dropped — poll covers the gap; retry shortly.
+      // Stream dropped — fallback covers the gap; retry shortly.
     }
-    if (sseRunning) {
-      await new Promise((r) => setTimeout(r, SSE_RECONNECT_MS));
-      void retryFailedDeliveries();
-    }
+    if (!validTransport(gen, epoch)) return; // aborted/demoted/replaced
+    sseHealthy = false;
+    scheduleFallback(gen);
+    // Tracked, cancellable backoff — demotion must not leave a sleeping
+    // timer that resurrects a second stream.
+    await new Promise<void>((r) => {
+      reconnectResolve = r;
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        reconnectResolve = null;
+        r();
+      }, SSE_RECONNECT_MS);
+    });
+    if (!validTransport(gen, epoch)) return;
+    reconnectResolve = null;
+    void retryFailedDeliveries();
   }
 }
 
-/** Only the leader holds the SSE socket — every open tab holding its own
- *  stream exhausts the browser's 6-connections-per-origin budget fast
- *  (SSE + run streams + HMR socket add up), freezing all page loads. */
-function startSse() {
-  if (sseRunning) return;
-  sseRunning = true;
-  void sseLoop();
-}
-
-function stopSse() {
-  sseRunning = false;
-  sseAbort?.abort();
-  sseAbort = null;
-}
-
 function start() {
-  if (intervalId !== null) return;
+  if (running) return;
+  running = true;
+  const gen = ++generation;
   baselineDone = false;
+  loading = true;
   seenIds = new Set();
   startCrossTab();
   leader = isLeader();
@@ -259,19 +401,17 @@ function start() {
     process(n);
     emit();
   });
-  // A peer tab that saved prefs broadcasts a nudge — re-fetch so this
-  // tab's suppression matrix (quiet hours, overrides) matches (B36).
+  unsubInboxChanged = onInboxChanged(() => {
+    // Leader catch-up gossiped — followers fetch once, never re-broadcast.
+    if (current(gen)) void fetchSnapshot(gen);
+  });
   unsubPrefs = onPrefsChanged(() => {
     void loadNotificationPrefs();
   });
   unsubLeader = onLeaderChange((v) => {
     leader = v;
     if (v) {
-      startSse();
-      // Items poll-seen while this tab was a follower never got delivery
-      // reports (seenIds suppressed re-processing — B38). Replay the
-      // leader-side pass for anything still unread; toasts aren't re-shown
-      // here because this tab already rendered them.
+      startSseFor(gen);
       for (const id of [...deferredReports]) {
         deferredReports.delete(id);
         const n = notifications.find((x) => x.id === id);
@@ -279,35 +419,63 @@ function start() {
         seenIds.delete(id);
         process(n, /* reportsOnly */ true);
       }
-      void retryFailedDeliveries(); // new leader picks up the backlog
+      void retryFailedDeliveries();
+      scheduleFallback(gen);
     } else {
-      stopSse(); // hand the socket to the new leader
+      stopSse(); // epoch bump + abort + cancel — the old loop can't rise
+      cancelFallback(); // followers don't poll — the new leader owns it
     }
   });
   void loadNotificationPrefs().then(() => {
-    void poll();
-    intervalId = setInterval(poll, POLL_MS);
-    if (leader) startSse();
-    void retryFailedDeliveries();
+    if (!current(gen)) return;
+    void fetchSnapshot(gen);
+    if (leader) {
+      startSseFor(gen);
+      scheduleFallback(gen); // runs until the HELLO cancels it
+      void retryFailedDeliveries();
+    }
   });
 }
 
+function startSseFor(gen: number) {
+  if (sseRunning) return;
+  sseRunning = true;
+  void sseLoop(gen);
+}
+
+function stopSse() {
+  sseRunning = false;
+  sseHealthy = false;
+  transportEpoch++; // kills every in-flight attempt's callbacks
+  cancelReconnect();
+  sseAbort?.abort();
+  sseAbort = null;
+}
+
 function stop() {
+  running = false;
+  generation++;
   stopSse();
+  cancelFallback();
+  activeRequest?.ctrl.abort();
+  activeRequest = null;
+  livePending = new Set();
+  dirtyAgain = false;
   unsubLeader?.();
   unsubLeader = null;
   unsubNotif?.();
   unsubNotif = null;
   unsubPrefs?.();
   unsubPrefs = null;
-  if (intervalId !== null) clearInterval(intervalId);
-  intervalId = null;
+  unsubInboxChanged?.();
+  unsubInboxChanged = null;
   for (const timer of timers.values()) clearTimeout(timer);
   timers.clear();
   toasts = [];
   seenIds = new Set();
   deferredReports.clear();
   baselineDone = false;
+  loading = false;
   stopCrossTab();
 }
 
@@ -338,10 +506,19 @@ function subscribe(cb: Listener): () => void {
  * event). `delayMs` lets the backend commit first.
  */
 export function refreshNotifications(delayMs = 0) {
+  if (!running) return;
+  broadcastInboxChanged();
+  const gen = generation;
   if (delayMs > 0) {
-    setTimeout(() => void poll(), delayMs);
+    const t = setTimeout(() => {
+      timers.delete("__refresh");
+      if (current(gen)) void fetchSnapshot(gen);
+    }, delayMs);
+    const prev = timers.get("__refresh");
+    if (prev) clearTimeout(prev);
+    timers.set("__refresh", t);
   } else {
-    void poll();
+    void fetchSnapshot(gen);
   }
 }
 
@@ -351,6 +528,13 @@ export function useNotifications(): Notification[] {
 
 export function useNotificationToasts(): Notification[] {
   return useSyncExternalStore(subscribe, () => toasts);
+}
+
+/** True until the first inbox snapshot resolves (success or failure) —
+ *  shared with the store's refcount, so every consumer sees the same
+ *  loading epoch. */
+export function useNotificationsLoading(): boolean {
+  return useSyncExternalStore(subscribe, () => loading);
 }
 
 // A second live instance doubles every timer/socket above — whether from
