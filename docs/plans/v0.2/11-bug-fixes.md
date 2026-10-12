@@ -1,14 +1,138 @@
-# v0.2 Bug Fixes and Hardening (W11)
+# v0.2 Runtime Readiness (W11)
+
+**Scope:** model catalog and pricing, confirmed bug fixes, and app-managed
+optional dependencies in one workstream. The filename is retained so existing
+bug references keep working. Former W12 is now the dependency track of W11.
+**Branch:** `feat/v0.2.0-runtime-readiness`, based on merged W10 (`468310d`).
+**Status:** implementation in progress — Track A model catalog + execution accounting slice is implemented and gate-tested; dependency track and remaining items are pending. See [test results](test_result/11-runtime-readiness-test-results.md).
+**Test plan:** [W11 acceptance](test_plan/11-runtime-readiness-test-plan.md).
 
 ## Outcome
 
-Known defects found during W3 development are fixed or honestly bounded, with
-regression tests. This ticket is a living list — append newly found bugs rather
-than filing ad-hoc.
+Users can choose models with honest metadata and pricing, make optional
+capabilities ready through explicit dependency installation, and use the
+application without the remaining confirmed defects. Each track has its own
+acceptance gate; one passing track does not conceal failures in another.
+
+This plan also retains the living defect inventory below. Audit it before
+implementation: historical FIXED entries are regression checks, not new work.
+Release signing, updater verification, security/release workflows, and final
+release hardening stay in the separate last workstream. General frontend
+rework remains post-v0.2 and is not pulled into this scope.
 
 ## Dependencies
 
 - 08b MCP OAuth machinery (already built — discovery, DCR, PKCE, token persistence)
+- Merged W10 ledger, correlation, read-boundary redaction, and spend coverage.
+- W2/W3/W4 artifact, preview, and existing managed-browser integration.
+
+## Track A - Model Catalog And Pricing
+
+### Identity And Resolution
+
+- A configured model offering is `(provider_id, exact request model_id)`.
+  Do not merge proxy/direct-provider offerings by similar names.
+- Persist resolved metadata and per-field source, confirmation time, and
+  freshness. Keep identity fields scalar; field-level provenance can be a
+  companion map while existing model-list clients retain their scalar fields.
+- Capabilities/limits prefer explicit user overrides, then applicable provider
+  evidence, then applicable catalog metadata. Defaults/inference are labelled
+  assumed, never verified facts.
+- Availability is available/unavailable/unknown. A failed or incomplete
+  discovery is not evidence that every previously discovered model vanished.
+  An operator may configure a custom model without claiming provider-confirmed
+  availability.
+- Keep input capacity, total context window, and output capacity distinct.
+  Unknown model limits must not silently become a verified 200K limit. Runtime
+  context budgets are an explicit policy, not an invented model property.
+- Picker/settings and runtime vision/compaction resolution use the same catalog
+  module. Remove independent fuzzy-name assumptions as sources of truth.
+
+### Refresh
+
+- `get` and `list` read local resolved records. Network refresh and validation
+  probes are separate operations; a metadata read never starts a paid call.
+- Load persisted data immediately; refresh asynchronously with deduplicated
+  jobs. Preserve last-known data and expose stale/error states during outages.
+- Catalog snapshot refresh: once per 24 hours while running, plus one deduplicated overdue refresh after startup; provider discovery TTL remains 15 minutes. Manual refresh and relevant provider-configuration changes invalidate affected records. Expiry marks freshness, not unavailability.
+- Remote metadata refresh follows configured egress consent. Never forward
+  provider credentials or private aliases to unrelated catalog sources.
+- Use configured-provider discovery and models.dev catalog records. LiteLLM is execution-only: do not use its static model list, capability/limit helpers, online cost map, `completion_cost`, or `cost_per_token` as CaberOS catalog/accounting fallbacks. OpenRouter discovery remains only for configured OpenRouter offerings, not a universal oracle.
+
+### Local Catalog Snapshot
+
+Ship a validated models.dev JSON snapshot with MIT attribution for immediate offline operation. Keep the bundled snapshot read-only; store refreshed snapshots under application data. Refresh through a bounded HTTPS fetch with proper CA verification, validate the internal projection, and atomically activate only a successful snapshot. Retain the last-known-good snapshot on any failure. Picker/runtime/accounting reads are local, and the refresh never blocks model execution.
+
+Retain source identity, fetched time, upstream model metadata dates, content/revision identity, and historical rate versions. Show last successful refresh, staleness/errors, and a Refresh now action. Keep user overrides separate so updates cannot erase them. Unknown offerings or unsupported pricing stay unknown rather than falling back to a guessed LiteLLM entry.
+
+Disable LiteLLM remote cost-map loading before its first import using `LITELLM_LOCAL_MODEL_COST_MAP=True`; any bundled map needed internally by the execution SDK is not CaberOS catalog or pricing authority. Do not feed models.dev JSON directly into LiteLLM: the formats differ. Do not disable TLS certificate verification.
+
+### Usage And Cost
+
+- Keep `ModelCall` as the per-request usage receipt, including runless calls.
+  Do not introduce a parallel run-only usage ledger.
+- Preserve provider-reported monetary amounts. Distinguish reported amounts,
+  catalog estimates, user-rate estimates, and unresolved cost; generated
+  LiteLLM metadata must not masquerade as a verified provider invoice.
+- CaberOS computes estimates from stored usage and applicable versioned models.dev/user rates. Preserve genuine provider-reported monetary amounts; never treat LiteLLM-generated cost metadata as reported billing. Daily catalog refresh does not silently reprice existing assessments.
+- Consolidate Responses and Chat Completions cost handling. Reported zero is
+  valid; invalid/nonfinite amounts are not. Missing usage stays distinguishable
+  from reported zero.
+- Estimates use a versioned rate snapshot, currency, billing dimensions,
+  calculation version, observation time, calculation time, and effective dates
+  where known. Use exact decimal arithmetic.
+- Pricing recipes explicitly handle applicable tiers and cache read/write usage.
+  Do not double-count cached input or reasoning already included in other usage.
+  Unsupported rates or missing required counters leave estimates unresolved.
+- Backfill is an operator-requested preview/apply operation for unresolved calls.
+  Updates are atomic/idempotent and never replace an existing reported amount.
+  A later rate without historical applicability yields a labelled retrospective
+  estimate, not recovered historical billing.
+- Existing receipt IDs, recorded amounts, and usage survive migration unchanged.
+  Do not rewrite historical zeroes into invented charges.
+
+## Track B - Dependency Readiness
+
+Detailed requirements live in [the dependency track](12-dependencies.md).
+
+- App-managed installation is the default where a verified distribution exists;
+  fixed subprocess recipes are an implementation option, not an agent shell.
+- Keep operator UX in global Settings -> General (Optional Tools & Runtimes):
+  detect, inspect source/version/location, consent, install progress, cancel,
+  re-check, decline, and actionable failures.
+- Reuse the managed Chrome installer. Private Node/npm installation is offered
+  only after verifying the exact official artifact recipe, either through an
+  approved JavaScript MCP setup or an explicit General-settings install — never
+  on startup automatically.
+- Git MCP setup prepares supported missing prerequisites through one approved app-managed plan; manual Git installation is not the default user journey. General settings also permits explicit proactive installation of supported optional tools.
+- Initial end-user scope is Chromium, LibreOffice, and conditional MCP runtimes/tools (Node/npm, uv/uvx, Git). FFmpeg/transcoding and Tesseract/OCR are deferred until product features consume them. A local model server is provider-specific configuration, not an automatic dependency download.
+- Runtime callers obtain paths from the dependency module. Never silently modify
+  global PATH, system installations, personal browser profiles, or agent authority.
+- No automatic downloads or privilege escalation at startup or on an agent's
+  suggestion; installation requires explicit operator approval.
+
+## Track C - Confirmed Defects
+
+- Establish a failing regression before each fix; preserve existing FIXED cases.
+- B3's remaining pricing/catalog work belongs to Track A, not a competing
+  LiteLLM global-map patch.
+- Confirm outstanding OAuth/lifecycle/UI defects against the merged tree before
+  claiming their historical root causes still apply.
+- Installer/catalog failures are included in this track's regression discipline,
+  not an excuse to expand into general refactoring or release packaging.
+
+## Implementation Order And Completion
+
+1. Audit the existing defect list and verify supported artifact recipes/platforms.
+2. Catalog persistence, resolution, and overrides; route existing consumers through it.
+3. Shared usage/cost normalization, versioned rates, and explicit backfill.
+4. Dependency registry, managed installer jobs, executable-path integration.
+5. Settings/picker presentation, remaining confirmed defects, and integration QA.
+
+Use one branch with logical dependency-ordered commits. All three acceptance
+tracks must pass before closeout. Test without live downloads/providers by
+default; real installer tests require explicit permission and isolated app data.
+Do not commit or push without operator approval.
 
 ## Bugs
 
@@ -54,6 +178,11 @@ resume anything) survives every restart as a zombie.
   remain; the stale row itself was reconciled manually first.
 
 ### B3 — Run cost always `$0.000000` despite recorded tokens
+
+**Current ownership:** Track A. W10 already distinguishes unknown pricing from
+recorded zero in Platform spend; catalog resolution and transport consistency
+remain. The historical proposal below is background, not authorization to guess
+prices from aliases or mutate LiteLLM's global pricing map.
 
 **Symptom:** Traces → agent detail shows every run at `$0.000000` while
 the Tokens column has real values (e.g. 12059, 12563). Spend totals and

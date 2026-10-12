@@ -278,6 +278,20 @@ Tickets **01–09 implemented**: smoke slice, real-model chat + SSE streaming, f
 
 ## Build & test commands
 
+**Next: W11 Runtime Readiness** (`feat/v0.2.0-runtime-readiness`) combines model
+catalog/pricing, confirmed bug fixes, and former W12 optional dependencies.
+The approved installer direction is app-managed/private by default, fixed
+subprocess recipes where useful, and guided system installation where a managed
+recipe is not verified. No automatic downloads or privilege escalation. See
+`docs/plans/v0.2/11-bug-fixes.md`, `12-dependencies.md`, and the W11 test plan.
+The implementation checkpoint includes local model offerings, frozen pricing
+receipts, dependency readiness, approved managed-install jobs, and SSE-first
+notifications. Backfill, combined Git MCP preparation, and real installer
+verification remain pending; see the W11 test-results document.
+Initial dependency scope follows implemented end-user features; FFmpeg/OCR remain deferred, and local MCP runtimes are conditional rather than app prerequisites.
+Optional Tools & Runtimes belongs in global Settings -> General (not agent General settings). Git MCP preparation is app-managed after explicit consent; optional does not mean nontechnical users must install Git manually.
+Catalog/accounting authority is the bundled/local models.dev snapshot with a daily validated refresh; LiteLLM is model execution only, not a metadata/pricing fallback. Catalog refresh is enabled by default and respects explicit opt-outs; the internal catalog has no maintenance card in General settings.
+
 ```bash
 # Backend tests (from repo root)
 cd backend && uv run pytest -v

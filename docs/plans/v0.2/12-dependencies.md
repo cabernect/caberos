@@ -1,9 +1,15 @@
-# v0.2 Optional Dependencies (W12)
+# v0.2 Dependency Readiness (W11 Track B, Former W12)
+
+This is a detailed track of [W11 Runtime Readiness](11-bug-fixes.md), not a
+separate workstream. The operator approved app-managed installation as the
+default, with fixed subprocess recipes and guided system installation as
+fallbacks. No binaries have been downloaded or verified by this specification.
 
 ## Outcome
 
-Optional system dependencies are user-managed from a **Dependencies** tab in
-global settings: detected, installed, and re-checked on demand. Features that
+Optional dependencies are operator-managed from an **Optional Tools & Runtimes**
+section in global Settings -> General: detected, installed, and re-checked on
+demand. Features that
 need a missing dep degrade honestly — they say what they need and offer an
 install path — instead of failing silently or pretending.
 
@@ -19,28 +25,42 @@ CaberOS stays installable and useful with zero optional deps. Every dep is
 opt-in: the user clicks Install, or declines and accepts the documented
 limitation. No auto-installs, no surprise network fetches.
 
+## End-User Scope
+
+The packaged desktop app includes its Python gateway, application libraries, SQLite, and compiled frontend. Node, Python, uv, Rust, Homebrew, and a database server are not general prerequisites for using it. Development/build prerequisites are not dependency-manager requirements.
+
+Local MCP servers may require their own Node/npm or uv/Python environment and additional tools. Determine requirements from the selected server; a missing local runtime must not block remote HTTP MCP servers or unrelated capabilities. Do not infer the runtime required by arbitrary custom servers without explicit configuration.
+
+A local model server such as Ollama is conditional on provider choice, not a baseline installation. Show its connection/configuration health with the provider; do not silently install a model server or download model weights.
+
+Desktop sandbox readiness remains in Health: macOS uses built-in Seatbelt; supported Windows installations bundle experimental MXC with explicit first-use setup. Linux/Docker deployment requirements are separate from packaged-desktop optional installations. Host MCP runtime availability does not imply accessibility inside the Windows shell sandbox; never widen sandbox permissions just to expose a managed runtime.
+
+FFmpeg/transcoding and Tesseract/OCR are deferred: neither feature currently consumes those binaries. Do not show actionable install prompts or claim installing them enables these features. Revisit recipes only when the corresponding capability is implemented.
+
 ## Known optional deps
 
 | Dep | Unlocks | Without it |
 |---|---|---|
-| LibreOffice (`soffice`) | Layout-faithful DOCX/PPTX/XLSX→PDF export; rendered Office previews | reportlab fallback for docx/xlsx; `renderer_unavailable` for pptx; element-based previews |
-| Chromium (managed profile) | W4 browser automation; positioned-HTML slide render (W4 path) | Browser features off; pptx→pdf stays unavailable |
-| Node.js / npx | MCP stdio servers (`npx`-based) | stdio MCP servers can't launch; resolver already handles PATH |
-| ffmpeg | Media thumbnails, transcoding for audio/video previews | Media previews limited to native playback/metadata |
-| tesseract | OCR for image-based PDFs in `read_file`/previews | image PDFs honestly report "no extractable text" |
+| Chromium (managed profile) | W4 browser automation | Browser automation features are unavailable until a configured or private install exists |
+| LibreOffice (`soffice`) | Layout-faithful DOCX/PPTX/XLSX-to-PDF export | reportlab fallback for DOCX/XLSX; `renderer_unavailable` for PPTX; Office element previews still work without it |
+| Node.js/npm/npx | Selected JavaScript stdio MCP servers | Only those MCP servers can't launch; resolver already handles PATH |
+| uv/uvx | Selected Python stdio MCP servers | Only those MCP servers unavailable; a separate MCP Python environment may need to exist or be provisioned — the bundled gateway is not their interpreter |
+| Git | Git MCP servers and Git-based agent/workspace workflows | Git-dependent integrations/workflows are unavailable; unrelated app features still work |
 
-## Dependencies tab (global settings)
+## Optional Tools & Runtimes (Global Settings -> General)
 
 ```text
-Settings → Dependencies
+Settings → General → Optional Tools & Runtimes
   ┌─────────────────────────────────────────────┐
   │ LibreOffice        installed · 25.2   [✓]   │
   │ Chromium           not installed      [Install] │
   │ Node.js            detected · v22     [✓]   │
-  │ ffmpeg             not installed      [Install] │
-  │ tesseract          declined           [Install] │
+  │ uv/uvx             not installed      [Set up] │
+  │ Git                declined           [Install] │
   └─────────────────────────────────────────────┘
 ```
+
+Install starts an approved managed recipe; Set up opens guided instructions when no verified managed recipe is available.
 
 Per dep: status (`installed` + version / `not installed` / `declined` /
 `installing` + progress), what it unlocks, Install / Re-check / Dismiss.
@@ -54,21 +74,81 @@ paths (e.g. `/Applications/LibreOffice.app`, platform package locations) +
 version probe (`soffice --version`, `node --version`). `_find_soffice` in
 `artifacts/service.py` generalizes into this registry — one source of truth.
 
-## Install
+## Installation Policy
 
-Per-dep installer strategy per platform: macOS `brew --cask`, Linux package
-manager hints, or a direct download link when no package manager applies.
-Install runs through the sandbox/terminal machinery with user-visible progress;
-approval applies. Docker image installs are build-time, not runtime (W10).
+| Dependency | Initial strategy |
+|---|---|
+| Chromium | Reuse the existing private managed Chrome runtime |
+| Node.js/npm/npx | Detect compatible system installation; offer private managed runtime on verified platforms through General settings or approved JavaScript MCP setup; never auto-install on startup |
+| LibreOffice | Detection plus guided vendor/system installation initially |
+| uv/uvx | Detection plus guided installation only when a chosen Python MCP server requires it; managed recipes are a future verified extension |
+| Git | Detect compatible Git; CaberOS-managed setup on verified platforms, available directly in General or as a prerequisite of an approved Git MCP setup; not a manual-install requirement for nontechnical users |
+
+Detection order: explicit configured override, compatible system installation,
+then a compatible app-managed installation. Never download simply because a
+preferred source is absent. Report detected-but-incompatible separately from ready.
+
+### Guided Integration Setup
+
+Optional does not mean the operator must install tools manually. A Git MCP setup should present one CaberOS-owned preparation plan: the declared server package, Git, the MCP launcher/runtime, and any required Python environment. After explicit approval, fixed recipes prepare supported missing requirements, validate them, and configure the integration. Existing compatible installations are reused. Approving setup does not approve subsequent repository writes or expand agent capabilities.
+
+Global General settings lists supported optional tools even when no integration currently needs them, so an operator can proactively install Git. An agent/workflow may request preparation, but downloads begin only after operator approval of the same trusted installation plan. No LLM-generated shell commands, arbitrary package/URL guesses, or implicit package downloads during probing.
+
+When a platform lacks a verified recipe, show that setup is unsupported/unavailable with an optional expert workaround; do not label manual Git installation as the standard user journey. App-managed host Git availability is separate from availability inside the Windows shell sandbox, whose current restrictions remain unchanged.
+
+### Managed Installer Contract
+
+- Recipes are fixed, versioned, dependency/platform-specific inputs. The request
+  selects a dependency/recipe; it cannot supply arbitrary commands, URLs, or paths.
+- Before consent, show version, publisher/source, approximate size where known,
+  private destination, verification method, and what functionality it unlocks.
+- Store managed versions under app-controlled data, outside agent workspaces.
+  Stage into a new directory, verify, smoke-test, then atomically activate.
+- Retain the previous working version on failure/cancellation. Serialize competing
+  installs for a dependency and make retried requests idempotent.
+- Expose queued/downloading/extracting/verifying/activating/completed/failed/
+  cancelled/interrupted job states, byte progress where available, and bounded logs.
+  Persist enough job identity/state to mark unfinished jobs interrupted on restart.
+- Enforce timeouts, download/extraction size limits, archive path containment,
+  redirect/source restrictions, and platform/architecture checks.
+- Use trusted publisher signatures or published checksums where available.
+  A locally computed SHA-256 is only a fingerprint. Expose the actual verification
+  level; do not claim authenticated publisher verification from a local hash.
+- Fixed subprocess recipes use argument arrays, not shell interpolation; cancel
+  and timeout terminate the associated process tree. They are operator-controlled
+  installer jobs, not the agent's arbitrary terminal capability.
+- No `sudo`, package-manager bootstrapping, global PATH edits, or overwriting system
+  binaries automatically. System-changing fallbacks need separate explicit consent;
+  if elevated privileges are required, provide instructions for the operator.
+- Startup performs no automatic installation. An agent/workflow request creates
+  no implicit consent; its preparation plan waits for explicit operator approval.
+- Decline persists. Failures are actionable and never reported as ready.
+- Repair/update uses the same verified installation lifecycle. Removing managed
+  versions affects only CaberOS-owned files, requires explicit confirmation, and
+  must not remove a version still in use.
+
+### Executable Resolution And Feature Gating
+
+One dependency module owns detection and resolved executable paths. MCP subprocess
+environments receive the selected Node/npm paths locally; do not modify global PATH.
+Browser/artifact/preview callers use the same resolution interface and re-check
+after an installation or explicit configuration change.
+
+Feature checks cover installed software and implemented capability separately:
+detecting a supporting tool does not imply the consuming feature was implemented.
+Supporting resources such as language data or companion libraries are part of
+readiness where a verified recipe requires them.
+
+Docker uses explicit build-time provisioned dependencies; runtime self-installation
+and new desktop platform support are not implied by this workstream.
 
 ## Feature gating
 
 Features query the dep registry, not bespoke `which()` calls:
 
 - `artifact_export_pdf` on pptx → `renderer_unavailable` + `missing_dep:
-  libreoffice` + hint pointing at the Dependencies tab.
-- Image-PDF `read_file` → existing honest note gains "install tesseract to
-  OCR" when absent.
+  libreoffice` + hint pointing at General -> Optional Tools & Runtimes.
+- Image-only PDFs retain the current no-extractable-text limitation; do not offer Tesseract as a working remedy until an OCR implementation exists.
 - First-hit prompt: when a feature hits a missing dep, surface it once
   (notification or inline affordance); decline persists.
 

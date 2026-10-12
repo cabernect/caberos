@@ -1,0 +1,215 @@
+# W11 Runtime Readiness — Test Results
+
+**Scope of this report:** Track A — model catalog foundation, execution
+accounting glue, and receipt read projection. This is a *slice* result, not
+whole-W11 completion: dependency installation, remaining catalog/accounting
+acceptance items, and the remaining defect inventory are still pending.
+
+## Verified slice
+
+| Area | Evidence | Result |
+|---|---|---|
+| Catalog store/discovery/offering reads/revisions | `backend/tests/test_catalog.py`, `test_catalog_policy.py`, `test_model_catalog.py` | green — included in the combined gate below (no standalone count claimed) |
+| Execution accounting glue — capture-before-RPC, frozen receipts, canonical usage (chat complete/stream, responses complete/stream, embeddings, compaction summary, provider probe) | `backend/tests/test_call_accounting_glue.py` (14 tests) + `test_system_accounting.py`, `test_harness.py`, `test_compaction.py` | green |
+| Receipt read projection — `services/accounting_projection.project_call_detail` whitelists `cost_assessment`/`rate_authority` for run-detail `model_calls[].detail` and timeline `model_call` events | `tests/test_observability_timeline.py::test_receipt_projection_whitelist_run_detail_and_timeline` + `test_observability*.py` | green; canary never leaks at either seam |
+| Combined backend gate | `.scratch/w11/final-slice-gate2.log` | **217 passed** (call_accounting, cost_assessment, usage_receipts, catalog, catalog_policy, model_catalog, harness, system_accounting, compaction, platform_spend, providers, observability ×3, glue) |
+| Backend static checks | Ruff check and format check | clean; 258 files already formatted |
+| Frontend catalog UX | `ModelCatalog/ModelCatalogCard/SettingsOverlay/api` focused Vitest + build + lint | 31/31 green; isolated-stack browser QA at 375/1440 light+dark, no overflow, 0 console errors (`.scratch/w11/ui/catalog-375-card-v3.png`, `catalog-1440-dark-v3.png`) |
+
+## Known limitations
+
+- **Receipt safety:** run-detail and timeline expose projected rate provenance
+  and nullable usage counters. Only model-call events use the scoped sanitizer
+  allowance; nested credentials and unapproved fields remain redacted.
+- **Tier basis (not implemented in this slice):** context-tier assessment requires
+  `context_tier_basis == "aggregate_input"`; unsupported bases, audio
+  billing, and nonstandard cache lifetimes assess as `unknown` rather than
+  guessed.
+- **Unknown budget policy:** unresolvable input budgets allocate the
+  documented `32768` fallback; known context/output conflicts raise
+  `ValueError` (422 on the manual API) instead of silently allocating.
+
+## Verified slice (continued)
+
+| Area | Evidence | Result |
+|---|---|---|
+| Dependency readiness — status/resolve for nodejs/uv/git/libreoffice/chromium; override→system→managed order; strict managed-pointer validation; bounded health probes; macOS git-shim guard; Windows cli.js wrapper policy | `backend/tests/test_dependencies.py` | **27 passed** — `.scratch/w11/dependency-readiness-tests.log` |
+| Operator API `GET /api/dependencies` + `POST /recheck` (operator-only, 401 unauth) + General "Optional Tools & Runtimes" card | `tests/test_dependencies.py::test_dependencies_api_*`; `frontend/src/components/OptionalToolsAndRuntimes.test.tsx` | 6 component tests green; build+lint clean; 375/1440 browser QA, 0 console errors (`.scratch/w11/ui/deps-{375-actual-light,1440-actual-dark}.png (theme-verified; see deps-theme-evidence.json)`) |
+
+## Test cleanup — retired catalog card + focused coverage (W11 follow-up)
+
+- `ProvidersSettings.tsx`: the unmounted `ModelCatalogSettings` function is deleted
+  (General already carried no card); `ModelCatalogCard.test.tsx` (11 tests) retired
+  with it — the General page test (2) still proves the card is gone.
+- `test_catalog.py`: `TestIdentity` helpers + the two `resolve_fields` unit tests
+  removed; their unique assertions moved into `test_catalog_policy.py`
+  (proxy/custom mapping, catalog-model-only-≠-mapping, explicit alias, vision/think
+  override wins + per-authority provenance, input-limit catalog field, unknown
+  provenance) — `test_model_catalog.py`'s projection cases kept (different public
+  contract).
+- `notificationStore.test.ts`: the fallback test rewritten — attempt 1 HELLO→EOF,
+  attempt 2 held pending; fallback ticks exactly once per 5 s while unhealthy,
+  then HELLO lands → one catch-up → silence; proves the poll only runs between
+  disconnect and HELLO.
+- Counts: backend catalog/model-catalog/policy **35**; frontend (ModelCatalog +
+  General + store + api) **45**. Logs: `.scratch/w11/test-cleanup-{backend,frontend,build,lint}.log`.
+- Mutant negative control: the lead's FIXED standalone config disables the
+  store's fallback via a vitest-only transform — running the rewritten test
+  under it fails `expected 2 to be 3` (the fallback GET never fires → the
+  test genuinely exercises the poll; `.scratch/w11/test-cleanup-new-mutant-fixed.log`).
+  The earlier config draft failed at load (Tailwind plugin interop) — no
+  old-test-pass proof exists; the lead's fix is what produced this evidence.
+  Normal config: green.
+- General UI verified read-only: no catalog heading/refresh control; Optional
+  Tools intact; identical layout to the accepted screenshots.
+- Recovery incident: during this cleanup an accidental `git checkout` reverted
+  ~370 lines of uncommitted W11 edits on `ProvidersSettings.tsx`. Recovery was
+  mechanical from frozen artifacts (`.scratch/w11/ProvidersSettings.earlier-w11.diff`
+  + `ProvidersSettings.original-guards.patch` + frozen tool-history rows): the
+  ModelsTab `mounted` ref/guards, ProviderCard `discoveryLifecycle`/generation
+  guards, and OptionalTools mount are restored — the EXACT pre-clobber byte
+  image is unavailable, so the file is restored-to-known-hunks, NOT
+  byte-identical. `ProvidersSettings.pre-cleanup.tsx` is the earlier
+  intermediate state, not a true snapshot.
+
+## Unused catalog UI cleanup (W11 follow-up)
+
+- Retired the orphaned maintenance helpers — `api.ts`: `getModelCatalogStatus`,
+  `setModelCatalogAutoRefresh`, `refreshModelCatalog` + `ModelCatalogStatus`
+  import; `types.ts`: the `ModelCatalogStatus` DTO. Backend
+  `/api/settings/model-catalog*` stays public/operator (daily worker, offline
+  pinned snapshot, honest state); only the dead client-side card surface went.
+- `ProvidersSettings.general.test.tsx`: removed the 3 dead-method mocks + the
+  tautological "endpoints never called" test; added a
+  `queryByLabelText(/refresh catalog/i)` null assert to the existing UI test.
+- Recovered `ProvidersSettings.tsx` frozen first:
+  `.scratch/w11/ProvidersSettings.recovered-before-orphan-cleanup.tsx`.
+- Final counts: **44 frontend tests** (4 files); the label assertion is
+  consolidated into the existing General UI test rather than a separate case.
+  Backend **35** remains unchanged. Final frontend log:
+  `.scratch/w11/catalog-orphan-cleanup-final-frontend.log`; build/lint:
+  `.scratch/w11/catalog-orphan-cleanup-{build,lint}.log`.
+
+## Dependency job monitor + MCP stale-runtime guard (W11 follow-up)
+
+- `OptionalToolsAndRuntimes.tsx` + `api.ts`: install-job monitor now runs **one**
+  jobs snapshot on mount/revision and polls at 2 s **only while active jobs exist** —
+  an idle card holds zero timers; a failed GET retries at 4 s only when known-active
+  jobs remain; explicit Re-check re-runs readiness + one jobs snapshot; `onStarted`
+  (non-terminal) restarts the monitor. `listDependencyJobs` accepts an `AbortSignal`.
+- `mcp/client.py`: a stale cached runtime pointer (operator removed the managed
+  install after the health check) is detected post-warm — one forced `status(force=True)`
+  re-check; the ready-guard now requires a **current, executable** verified file, so
+  a removed managed runtime fails actionably instead of silently falling back to a
+  legacy/incompatible system binary.
+- Final polish: per-request `AbortController` + 15 s release on jobs GETs (timeout
+  → error + 4 s retry only while active); integrated card+dialog flow test (install
+  wakes monitor → queued → terminal → stops); MCP companion sweep — ANY stale
+  cached runtime (removed git while uvx valid) → one forced re-check, env drops
+  the dead dir; ready-guard moved before the resolver.
+- Tests: backend `test_dependencies` 27 + `test_mcp_stdio_resolver` 17 + `test_mcp` 32
+  = **76** (3 stale-path connect tests, red on pre-fix); frontend card/dialog/General
+  = **24** (5 new monitor tests; idle-failure spec updated to explicit Re-check).
+- RED proof: `.scratch/w11/dependency-poll-{red,mcp-red}.log`; gates:
+  `.scratch/w11/dependency-poll-{backend,frontend,build,lint}.log`.
+- Limitations: no managed "Uninstall" UI exists — removal is per-user and the
+  readiness card shows last-checked status until Re-check/reopen; readiness is
+  a snapshot, not a watcher; TOCTOU between guard and SDK is best-effort.
+
+## Full pre-commit gate (2026-10-12)
+
+- Backend: **1106 passed, 0 failed**; Ruff check passes and Ruff format check
+  reports 263 files formatted. Evidence: `.scratch/w11/full-final-backend.log`
+  and `full-final-backend-ruff-{check,format}.log`.
+- Frontend: **156 passed across 24 files**; lint has no errors and the production
+  build passes. Nonfatal hook/generator lint warnings and dependency deprecation
+  warnings remain. Evidence: `.scratch/w11/full-final-frontend{,-lint,-build}.log`.
+- The first full backend run found three failures. The existing embedding-ledger
+  assertion expected only the old detail fields; it now checks those fields,
+  exact normalized usage, unknown monetary assessment, and captured authority.
+  Missing pricing remains `amount: null`, not a claim of free execution.
+- Two live-browser tests timed out under an artificial temporary `HOME`.
+  A control that previously passed also reproduced the timeout. Changing only
+  `HOME` to the normal macOS home made all three browser tests pass; proxies,
+  temporary app-data roots, and temporary Chrome profiles stayed unchanged.
+  This proves the environment trigger, not a particular Chrome internals cause.
+  Evidence: `.scratch/w11/browser-{control,normal-home}-comparison.log`.
+- Final commands: backend `uv run --frozen --no-sync pytest -v --tb=short`,
+  `uv run --frozen --no-sync ruff check src/ tests/`, and
+  `uv run --frozen --no-sync ruff format --check src/ tests/`; frontend
+  `npm run test`, `npm run lint`, and `npm run build`.
+- Mutable `AGENTOS_*` roots point at disposable data, with local-only test
+  servers and dead external proxies. No browser tests were skipped, no production
+  browser code was changed for these failures, and no real binaries were installed.
+  The temporary diagnostic plugin was removed; raw logs remain gitignored.
+- This is an implementation checkpoint, not W11 closeout. Existing pending work
+  remains. Review follow-ups include provider deselection during model loading,
+  alignment of install-plan TypeScript fields with the public backend response,
+  and explicit handling of invalid input-budget configuration in the harness.
+
+## Model catalog — internal daily refresh (W11 follow-up)
+
+- `pages/ProvidersSettings.tsx`: the General tab's `<ModelCatalogSettings/>` mount
+  is removed — the catalog card, refresh button, and status/status-poll traffic
+  are gone from the user-facing Settings screen. The exported component remains
+  for now (unmounted).
+- `backend/config.py`: `model_catalog_auto_refresh` defaults to **True** (lead-authored) —
+  the catalog refreshes internally on the existing daily loop; `AGENTOS_MODEL_CATALOG_AUTO_REFRESH`
+  or the persisted `app-settings.json` opt-out still wins (operator's saved `false` honoured).
+- Tests: backend `test_catalog.py` 29 + `test_config.py` 18 = **47** (toggle fixture
+  restores prior value; new default/env-opt-out/persisted/pin-priority tests);
+  frontend General page test **2** + catalog card/component legacy 37 = **39**.
+- Logs: `.scratch/w11/catalog-internal-{backend,frontend,build,lint}.log`;
+  QA artifact `.scratch/w11/catalog-internal-qa.json` + screenshots
+  `.scratch/w11/ui/general-no-catalog-{375-light,1440-dark}.png` — zero catalog
+  status/refresh requests on General load.
+- Limitations: real backend on :8081 not restarted (lead owns); the `ModelCatalogSettings`
+  component stays in the bundle (dead path, tree-shaken candidates aside);
+  Optional Tools' 2 s job poll is unchanged out-of-scope behavior.
+
+## Notification polling — SSE-first (W9 follow-up fix)
+
+- Backend `notifications.py` + `api/notifications.py`: `notify_inbox_changed()` posts a
+  typed `inbox_changed` frame after commit on REST read/read-all (SQL unchanged);
+  queue overflow posts a bounded invalidation marker instead of silently dropping.
+- Frontend `api.ts`, `notificationStore.ts`, `crossTab.ts`, `pages/Notifications.tsx`:
+  `streamNotifications(signal, onConnected, onInboxChanged)`; transport-epoch-guarded
+  SSE loop + owned/abortable snapshot requests; sequential `setTimeout` fallback (5 s,
+  15 s-bounded fetch) runs only while the leader stream is not HELLO-healthy;
+  followers never poll; live rows merge into in-flight snapshots (no lost rows);
+  the page uses `useNotifications()`/`useNotificationsLoading()` with no local timer.
+- Tests: backend `test_notifications.py` **21**; frontend narrow **51**
+  (store 23, api 9, page 3, prefs+focus 16).
+- Logs: `.scratch/w11/notifications-sse-{backend,final-frontend,final-build,final-lint}.log`
+  + raw network `.scratch/w11/notifications-sse-network.json` (isolated :15173/:18081,
+  temp QA DB only; one real emit ever fired, on that QA DB).
+- Limitations: leader crash/reconnect and cross-tab read sync are unit-covered,
+  not live-verified; real backend on :8081 not restarted (lead owns).
+
+## Managed installer slice
+
+| Area | Evidence | Result |
+|---|---|---|
+| Installer engine `runtime_installer.py` — frozen plans, consent-gated jobs, bounded download + SHA-256 trust gate, safe tar.gz/zip extraction (traversal/device/symlink-escape/case-collision rejection), health-before-pointer, atomic activation, crash reconcile, cancel, per-dep locking | `backend/tests/test_runtime_installer.py` | **35 passed** |
+| Operator API — `POST /plan`, `POST /install`, `GET /jobs`, `GET|POST /jobs/{id}[,cancel]` (owner-scoped, extra-forbid) | same file | API seams green; unauth 401 verified |
+| MCP stdio wiring — registry-verified paths, `child_environment`, Windows cli.js wrappers, actionable missing-runtime error, remote untouched | `tests/test_mcp_stdio_resolver.py` | **44 passed** (incl. `test_mcp.py`) |
+| Install dialog + card — consent gate, sequential polling, cancel, install buttons on installable rows only | `OptionalToolsAndRuntimes.test.tsx` + `RuntimeInstallDialog.test.tsx` | **16 passed** (9 dialog + 7 card); build+lint+prettier clean |
+
+| Browser QA — mocked plan→consent→install→progress→cancel→terminal via intercepted REST | `.scratch/w11/ui/install-modal-375-preview-light.png`, `install-modal-1440-progress-dark.png` | verified, 0 console errors |
+| Browser QA (isolated 18081/15173) — card renders, jobs list 200, 0 console errors, no overflow | live reload | verified |
+
+Log: `.scratch/w11/installer-backend-tests.log`. **No real downloads or installs were performed** — all publisher/archive/health I/O is injected fixtures.
+
+## Pending tracks (not covered here)
+
+- Dependency runtime installation for the approved recipes
+  (`12-dependencies`) — recipe metadata is lead-authored and fixed;
+  readiness/detection shipped here, but install path is
+  implemented and consent-gated behind publisher checksums; **no real
+  downloads/installs were exercised in QA** (all fixtures/mocks).
+- Observability spend/metrics beyond the priced-source enum
+  (`models_dev`/`user_rate`/`provider_rate`), whose 6 golden tests pass —
+  no new metrics queries are planned in this slice.
+- Track A still needs operator-requested backfill preview/apply and verified
+  production tier-basis wiring; unsupported tier semantics remain unknown.
+- Remaining defect-inventory items in `11-bug-fixes.md`.
