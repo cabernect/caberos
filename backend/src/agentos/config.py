@@ -90,6 +90,9 @@ class Settings(BaseSettings):
     # Set via AGENTOS_BROWSER_BINARY in .env or the env, or persisted via
     # PUT /api/settings/browser (env wins over the persisted value).
     browser_binary: str = ""
+    # Explicit runtime binary overrides — env-only for now
+    # (AGENTOS_RUNTIME_BINARY_OVERRIDES as a JSON dict of command→path).
+    runtime_binary_overrides: dict[str, str] = {}
 
     @property
     def db_url(self) -> str:

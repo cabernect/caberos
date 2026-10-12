@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import platform
 from contextlib import AsyncExitStack
 from typing import Any
 
@@ -39,6 +40,28 @@ _RUNTIME_DIRS = [
     "/usr/local/bin",
     os.path.expanduser("~/.local/bin"),
 ]
+
+
+_KNOWN_RUNTIME_COMMANDS = {"node", "npm", "npx", "uv", "uvx", "git"}
+
+# Windows wraps npm/npx as .cmd shims — a bare `npx` name never resolves
+# on that platform, so try executable suffixes too.
+_WINDOWS_EXTS = (".exe", ".cmd", ".bat")
+
+
+def _candidate_names(command: str) -> list[str]:
+    if platform.system() == "Windows":
+        return [command, *(command + e for e in _WINDOWS_EXTS)]
+    return [command]
+
+
+def _registry_or_none():
+    try:
+        from ..dependencies import get_dependency_registry
+
+        return get_dependency_registry()
+    except Exception:
+        return None
 
 
 def _resolve_stdio_command(
@@ -65,31 +88,45 @@ def _resolve_stdio_command(
     if os.path.isabs(command):
         return command, env
 
-    # Get the PATH the subprocess would see
-    path = env.get("PATH") or os.environ.get("PATH", "")
-    path_dirs = [d for d in path.split(os.pathsep) if d]
+    # Caller-provided env PATH takes precedence over everything — an
+    # explicit override is the operator's choice.
+    caller_path = (env or {}).get("PATH")
+    registry = _registry_or_none()
+    base_path = caller_path if caller_path else os.environ.get("PATH", "")
+    if caller_path:
+        for d in [x for x in caller_path.split(os.pathsep) if x]:
+            for name in _candidate_names(command):
+                candidate = os.path.join(d, name)
+                if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                    env["PATH"] = caller_path
+                    return candidate, env
 
-    # Build the full search path: existing PATH + fallback dirs
-    search_dirs = list(path_dirs)
+    # Health-verified managed/system installs beat a stale default PATH —
+    # Node 20 in the global PATH must not shadow a managed Node 24.
+    if registry is not None and not os.path.isabs(command):
+        verified = registry.resolve(command)
+        if verified and os.path.isfile(verified):
+            env["PATH"] = registry.child_environment({"PATH": base_path})["PATH"]
+            return verified, env
+
+    # Legacy fallback: process PATH + well-known dirs + custom runtime path.
     custom_path = os.environ.get("CABEROS_MCP_RUNTIME_PATH")
-    fallback = list(_RUNTIME_DIRS)
-    if custom_path:
-        fallback.append(custom_path)
-    search_dirs.extend(d for d in fallback if d not in search_dirs)
-
-    # Search for the command
+    search_dirs = [d for d in base_path.split(os.pathsep) if d]
+    for d in [*_RUNTIME_DIRS, *([custom_path] if custom_path else [])]:
+        if d not in search_dirs:
+            search_dirs.append(d)
     for d in search_dirs:
-        candidate = os.path.join(d, command)
-        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-            # Found — prepend the resolved directory to the subprocess's
-            # PATH so shebang chains (npx → node) resolve
-            env["PATH"] = d + os.pathsep + path
-            return candidate, env
+        for name in _candidate_names(command):
+            candidate = os.path.join(d, name)
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                env["PATH"] = d + os.pathsep + base_path
+                return candidate, env
 
     raise RuntimeError(
         f"MCP stdio command '{command}' not found. "
         f"Searched: {', '.join(search_dirs)}. "
-        "Install the runtime or set CABEROS_MCP_RUNTIME_PATH."
+        "Prepare the required runtime in Settings → General "
+        "(Optional Tools & Runtimes) or set CABEROS_MCP_RUNTIME_PATH."
     )
 
 
@@ -167,6 +204,39 @@ class McpClient:
             self._conn_task = None
             raise self._connect_error
 
+    @staticmethod
+    def _windows_wrapper_argv(
+        command: str, resolved: str, args: list[str], registry
+    ) -> tuple[str, list[str]]:
+        """Fixed launch argv for .cmd/.bat npm/npx wrappers — co-installed
+        node.exe + the package's own cli.js inside the same install. Never
+        a native .cmd execution. Raises rather than guessing."""
+        from pathlib import Path as _P
+
+        wrapper = _P(resolved).resolve()
+        wrapper_dir = wrapper.parent
+        script = (wrapper_dir / "node_modules" / "npm" / "bin" / f"{command}-cli.js").resolve()
+        # Prefer the node.exe co-installed beside the wrapper — the
+        # operator's explicit selection stays authoritative.
+        co = _P(wrapper_dir / "node.exe")
+        coinstalled = co if co.is_file() else None
+        node = registry.resolve("node") if registry is not None else None
+        node_real = coinstalled or (_P(node).resolve() if node else None)
+        # node must live beside the wrapper — a node from another
+        # install (or a missing script) fails honestly, never silently.
+        if (
+            node_real is None
+            or node_real.parent != wrapper_dir
+            or not script.is_file()
+            or not script.is_relative_to(wrapper_dir)
+        ):
+            raise RuntimeError(
+                f"Cannot launch '{command}' safely — the package's "
+                f"{command}-cli.js is missing or outside the selected "
+                "installation. Prepare the runtime in Settings → General."
+            )
+        return str(node_real), [str(script), *args]
+
     async def _connection_loop(self) -> None:
         """Background task that owns the MCP connection lifecycle.
 
@@ -191,10 +261,79 @@ class McpClient:
                 if not self.command:
                     raise ValueError("stdio transport requires a command")
 
+                # Warm the readiness cache so resolve() can see verified
+                # managed installs — only for known bare commands.
+                registry = _registry_or_none()
+                args = list(self.args)
+                known_bare = (
+                    not os.path.isabs(self.command) and self.command in _KNOWN_RUNTIME_COMMANDS
+                )
+                if registry is not None and known_bare:
+                    try:
+                        await registry.status()
+                    except Exception:
+                        pass
+                    # A cached pointer can outlive its install — ANY
+                    # companion runtime (git helpers, uv siblings, node
+                    # internals) removed after the health check is stale
+                    # too. ONE forced re-check repairs the whole set.
+                    _stale = any(
+                        p and (not os.path.isfile(p) or not os.access(p, os.X_OK))
+                        for p in (registry.resolve(c) for c in _KNOWN_RUNTIME_COMMANDS)
+                    )
+                    if _stale:
+                        registry.clear_cache()
+                        try:
+                            await registry.status(force=True)
+                        except Exception:
+                            pass
+
+                # Ready-guard BEFORE the resolver — a stale legacy
+                # selection must never reach the SDK: a known bare
+                # runtime without a current, executable verified install
+                # and no explicit caller PATH reports actionably.
+                if registry is not None and known_bare and not (self.env or {}).get("PATH"):
+                    _ready = registry.resolve(self.command)
+                    if not (_ready and os.path.isfile(_ready) and os.access(_ready, os.X_OK)):
+                        raise RuntimeError(
+                            f"MCP stdio command '{self.command}' has no verified "
+                            "installation. Prepare it in Settings → General "
+                            "(Optional Tools & Runtimes)."
+                        )
+
                 resolved_command, resolved_env = _resolve_stdio_command(self.command, self.env)
+
+                # Merge ALL verified runtime dirs into the child env — the
+                # caller's explicit dirs win, verified dirs follow so
+                # companion tools (git helpers, npm internals, uv siblings)
+                # resolve without touching the global PATH.
+                if registry is not None and known_bare:
+                    merged = registry.child_environment(resolved_env)
+                    caller_path = (self.env or {}).get("PATH")
+                    if caller_path:
+                        # Explicit caller dirs first, verified dirs after —
+                        # the operator's selection wins, companions follow.
+                        extras = [
+                            d
+                            for d in merged["PATH"].split(os.pathsep)
+                            if d and d not in caller_path.split(os.pathsep)
+                        ]
+                        merged["PATH"] = os.pathsep.join([caller_path, *extras])
+                    resolved_env.update(merged)
+
+                # Windows npm/npx .cmd wrappers can't spawn natively —
+                # invoke the co-installed node.exe + the package's own
+                # cli.js with the original args. Never a shell/COMSPEC.
+                if self.command in ("npm", "npx") and resolved_command.lower().endswith(
+                    (".cmd", ".bat")
+                ):
+                    resolved_command, args = self._windows_wrapper_argv(
+                        self.command, resolved_command, args, registry
+                    )
+
                 params = StdioServerParameters(
                     command=resolved_command,
-                    args=self.args,
+                    args=args,
                     env=resolved_env if resolved_env else None,
                 )
                 read, write = await self._exit_stack.enter_async_context(stdio_client(params))

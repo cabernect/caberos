@@ -1,0 +1,134 @@
+{
+  "schema_version": 1,
+  "reviewed_at": "2026-10-09",
+  "verification_note": "Publisher-hosted SHA-256 metadata, not a digital signature. Runtime readiness requires a successful local health check after operator-approved installation.",
+  "recipes": {
+    "nodejs": {
+      "version": "24.21.0",
+      "publisher": "Node.js release team",
+      "license": "MIT; bundled component notices remain in the archive",
+      "metadata_url": "https://nodejs.org/dist/v24.21.0/SHASUMS256.txt",
+      "verification": "publisher_checksum",
+      "health_versions": {"node": "24.21.0", "npm": "11.19.0", "npx": "11.19.0"},
+      "platforms": {
+        "darwin-arm64": {
+          "url": "https://nodejs.org/dist/v24.21.0/node-v24.21.0-darwin-arm64.tar.gz",
+          "sha256": "bed7eea5325e1108f32ce5228ddd6a5f0f08a499ee42aa7442aea583702f6057",
+          "archive_format": "tar.gz",
+          "roots": ["node-v24.21.0-darwin-arm64"],
+          "executables": {"node": "bin/node", "npm": "bin/npm", "npx": "bin/npx"},
+          "download_bytes": null
+        },
+        "darwin-x64": {
+          "url": "https://nodejs.org/dist/v24.21.0/node-v24.21.0-darwin-x64.tar.gz",
+          "sha256": "1462cb3b3046b815cf8ea436d3da450ec1a9f11dac7e5a46b0ada5305d7e8097",
+          "archive_format": "tar.gz",
+          "roots": ["node-v24.21.0-darwin-x64"],
+          "executables": {"node": "bin/node", "npm": "bin/npm", "npx": "bin/npx"},
+          "download_bytes": null
+        },
+        "windows-arm64": {
+          "url": "https://nodejs.org/dist/v24.21.0/node-v24.21.0-win-arm64.zip",
+          "sha256": "8779b1bde1d39f8d420e3b57aa657b39891af434d3de44a919044cec06785921",
+          "archive_format": "zip",
+          "roots": ["node-v24.21.0-win-arm64"],
+          "executables": {"node": "node.exe", "npm": "npm.cmd", "npx": "npx.cmd"},
+          "download_bytes": null
+        },
+        "windows-x64": {
+          "url": "https://nodejs.org/dist/v24.21.0/node-v24.21.0-win-x64.zip",
+          "sha256": "158f7685b44de51f6c0df1d153526cbcd3e1bc739a8dfc607721cef75de9e541",
+          "archive_format": "zip",
+          "roots": ["node-v24.21.0-win-x64"],
+          "executables": {"node": "node.exe", "npm": "npm.cmd", "npx": "npx.cmd"},
+          "download_bytes": null
+        }
+      }
+    },
+    "uv": {
+      "version": "0.12.24",
+      "publisher": "Astral",
+      "license": "MIT OR Apache-2.0",
+      "metadata_url": "https://github.com/astral-sh/uv/releases/download/0.12.24/dist-manifest.json",
+      "verification": "publisher_checksum",
+      "health_versions": {"uv": "0.12.24", "uvx": "0.12.24"},
+      "platforms": {
+        "darwin-arm64": {
+          "url": "https://github.com/astral-sh/uv/releases/download/0.12.24/uv-aarch64-apple-darwin.tar.gz",
+          "sha256": "0c4346de7abdb49495b393b9ec809fe387aa43e586be20fecb972216c1e71732",
+          "archive_format": "tar.gz",
+          "roots": [".", "uv-aarch64-apple-darwin"],
+          "executables": {"uv": "uv", "uvx": "uvx"},
+          "download_bytes": 14650202
+        },
+        "darwin-x64": {
+          "url": "https://github.com/astral-sh/uv/releases/download/0.12.24/uv-x86_64-apple-darwin.tar.gz",
+          "sha256": "4fa82e37cb94767661f532b001e470b67a186c7260e305bd84ddb78fd545c0b6",
+          "archive_format": "tar.gz",
+          "roots": [".", "uv-x86_64-apple-darwin"],
+          "executables": {"uv": "uv", "uvx": "uvx"},
+          "download_bytes": 18120254
+        },
+        "windows-arm64": {
+          "url": "https://github.com/astral-sh/uv/releases/download/0.12.24/uv-aarch64-pc-windows-msvc.zip",
+          "sha256": "4b783bda5cc44bbae0651a837223873a7acee31152381aef5fc86ef6bef25997",
+          "archive_format": "zip",
+          "roots": [".", "uv-aarch64-pc-windows-msvc"],
+          "executables": {"uv": "uv.exe", "uvx": "uvx.exe"},
+          "download_bytes": 16217146
+        },
+        "windows-x64": {
+          "url": "https://github.com/astral-sh/uv/releases/download/0.12.24/uv-x86_64-pc-windows-msvc.zip",
+          "sha256": "7c38608c8a18ee137d748a1773053b07ec8f3a30fab49aebaa6f4e4efeceb019",
+          "archive_format": "zip",
+          "roots": [".", "uv-x86_64-pc-windows-msvc"],
+          "executables": {"uv": "uv.exe", "uvx": "uvx.exe"},
+          "download_bytes": 15685515
+        }
+      }
+    },
+    "git": {
+      "version": "2.53.0",
+      "distribution_revision": "v2.53.0-4",
+      "publisher": "GitHub Desktop maintainers (Dugite Native distribution)",
+      "license": "GPL-2.0; bundled component notices remain in the archive",
+      "metadata_url": "https://api.github.com/repos/desktop/dugite-native/releases/tags/v2.53.0-4",
+      "verification": "publisher_release_digest",
+      "health_versions": {"git": "2.53.0"},
+      "platforms": {
+        "darwin-arm64": {
+          "url": "https://github.com/desktop/dugite-native/releases/download/v2.53.0-4/dugite-native-v2.53.0-4098283-macOS-arm64.tar.gz",
+          "sha256": "f9dc64635a5b62fbd7ad95db73268bbb8912255ac516d65d37bf7af22fcb8ffe",
+          "archive_format": "tar.gz",
+          "roots": ["."],
+          "executables": {"git": "bin/git"},
+          "download_bytes": 62348987
+        },
+        "darwin-x64": {
+          "url": "https://github.com/desktop/dugite-native/releases/download/v2.53.0-4/dugite-native-v2.53.0-4098283-macOS-x64.tar.gz",
+          "sha256": "ae6686718aa34f4140424db16b92a47dcffd6d1f312eb8b5f3b267f7404e2680",
+          "archive_format": "tar.gz",
+          "roots": ["."],
+          "executables": {"git": "bin/git"},
+          "download_bytes": 66136060
+        },
+        "windows-arm64": {
+          "url": "https://github.com/desktop/dugite-native/releases/download/v2.53.0-4/dugite-native-v2.53.0-4098283-windows-arm64.tar.gz",
+          "sha256": "1abbeb3a2ce06e9b80e75bb888dce959b6c73bdb11ccc670a01a71d64f4422a5",
+          "archive_format": "tar.gz",
+          "roots": ["."],
+          "executables": {"git": "cmd/git.exe"},
+          "download_bytes": 45084825
+        },
+        "windows-x64": {
+          "url": "https://github.com/desktop/dugite-native/releases/download/v2.53.0-4/dugite-native-v2.53.0-4098283-windows-x64.tar.gz",
+          "sha256": "7b76bc5c32c0d7c5984efdc2a8a32697cf1e8a43bc55176fbf9869c0ee995130",
+          "archive_format": "tar.gz",
+          "roots": ["."],
+          "executables": {"git": "cmd/git.exe"},
+          "download_bytes": 47119821
+        }
+      }
+    }
+  }
+}

@@ -30,6 +30,7 @@ from .api import (  # noqa: E402
     channels,
     chat,
     data,
+    dependencies,
     elicitation,
     knowledge,
     mcp,
@@ -379,6 +380,10 @@ async def lifespan(app: FastAPI):
     from .terminal.registry import terminal_registry
 
     await terminal_registry.shutdown_all()
+    from .runtime_installer import _INSTALLER
+
+    if _INSTALLER is not None:
+        await _INSTALLER.shutdown()
 
     from .browser.registry import browser_registry
 
@@ -470,6 +475,7 @@ app.include_router(observability.router)
 app.include_router(settings.router)
 app.include_router(data.router)
 app.include_router(browser.router)
+app.include_router(dependencies.router)
 
 
 @app.get("/health")

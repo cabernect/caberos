@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "managed_dependencies": ["nodejs", "uv", "git"],
+  "download_hosts": [
+    "nodejs.org",
+    "github.com",
+    "release-assets.githubusercontent.com",
+    "objects.githubusercontent.com"
+  ],
+  "https_only": true,
+  "max_redirects": 3,
+  "max_download_bytes": 268435456,
+  "download_deadline_seconds": 300,
+  "connect_timeout_seconds": 15,
+  "read_timeout_seconds": 30,
+  "max_archive_members": 50000,
+  "max_extracted_bytes": 2147483648,
+  "max_member_bytes": 536870912,
+  "max_link_depth": 40,
+  "io_chunk_bytes": 1048576,
+  "plan_ttl_seconds": 900,
+  "max_plan_dependencies": 3,
+  "max_job_file_bytes": 65536,
+  "health_command_timeout_seconds": 3,
+  "max_health_output_bytes": 8192,
+  "progress_write_interval_seconds": 1,
+  "max_job_log_entries": 40,
+  "max_job_log_entry_characters": 255
+}
