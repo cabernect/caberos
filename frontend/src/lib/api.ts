@@ -20,7 +20,7 @@ import type {
   McpServerInfo,
   McpToolInfo,
   Message,
-  ModelInfo,
+  ProviderModelsResponse,
   Notification,
   NotificationPrefs,
   NotificationPrefsPatch,
@@ -29,6 +29,7 @@ import type {
   PreviewPayload,
   Provider,
   RunDetail,
+  RuntimeDependency,
   RunFilters,
   RunSummary,
   Schedule,
@@ -50,6 +51,8 @@ import type {
   KnowledgeResult,
   KnowledgeScope,
   WorkspaceEntry,
+  InstallJob,
+  InstallPlan,
 } from "./types";
 
 // Preview source selector shared by the workspace/preview|raw|pdf-page
@@ -833,9 +836,11 @@ export const api = {
   deleteProvider: (id: string) =>
     request<{ status: string }>(`/api/providers/${id}`, { method: "DELETE" }),
   listModels: (id: string) =>
-    request<{ discovery: string; models: ModelInfo[] }>(
-      `/api/providers/${id}/models`,
-    ),
+    request<ProviderModelsResponse>(`/api/providers/${id}/models`),
+  refreshProviderModels: (id: string) =>
+    request<{ scheduled: boolean }>(`/api/providers/${id}/models/refresh`, {
+      method: "POST",
+    }),
   addCustomModel: (id: string, modelName: string) =>
     request<{ custom_models: string[] }>(`/api/providers/${id}/models`, {
       method: "POST",
@@ -1234,10 +1239,23 @@ export const api = {
   listRuns: (params?: RunFilters) => {
     const qs = new URLSearchParams();
     const keys: (keyof RunFilters)[] = [
-      "agent_id", "status", "trigger", "provider_id", "model", "purpose",
-      "kind", "schedule_id", "channel", "capability", "tool_status",
-      "browser_profile", "artifact_format", "retrieval_mode", "effect",
-      "since", "until",
+      "agent_id",
+      "status",
+      "trigger",
+      "provider_id",
+      "model",
+      "purpose",
+      "kind",
+      "schedule_id",
+      "channel",
+      "capability",
+      "tool_status",
+      "browser_profile",
+      "artifact_format",
+      "retrieval_mode",
+      "effect",
+      "since",
+      "until",
     ];
     for (const key of keys) {
       const v = params?.[key];
@@ -1288,15 +1306,17 @@ export const api = {
     if (agentId) qs.set("agent_id", agentId);
     return request<SpendSummary>(`/api/spend?${qs.toString()}`);
   },
-  getPlatformSpend: (params: {
-    days?: number;
-    agent_id?: string;
-    provider_id?: string;
-    model?: string;
-    purpose?: string;
-    kind?: string;
-    until?: string;
-  } = {}) => {
+  getPlatformSpend: (
+    params: {
+      days?: number;
+      agent_id?: string;
+      provider_id?: string;
+      model?: string;
+      purpose?: string;
+      kind?: string;
+      until?: string;
+    } = {},
+  ) => {
     const qs = new URLSearchParams({ scope: "platform" });
     if (params.days !== undefined) qs.set("days", String(params.days));
     if (params.agent_id) qs.set("agent_id", params.agent_id);
@@ -1379,6 +1399,33 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ yolo_mode: enabled }),
     }),
+
+  // Optional tools & runtimes (W11) — readiness reads only.
+  getDependencies: () =>
+    request<{ dependencies: RuntimeDependency[] }>("/api/dependencies"),
+  createDependencyPlan: (dependencyIds: string[]) =>
+    request<InstallPlan>(`/api/dependencies/plan`, {
+      method: "POST",
+      body: JSON.stringify({ dependency_ids: dependencyIds }),
+    }),
+  startDependencyInstall: (planId: string, consent: boolean) =>
+    request<InstallJob>(`/api/dependencies/install`, {
+      method: "POST",
+      body: JSON.stringify({ plan_id: planId, consent }),
+    }),
+  getDependencyJob: (jobId: string) =>
+    request<InstallJob>(`/api/dependencies/jobs/${jobId}`),
+  cancelDependencyJob: (jobId: string) =>
+    request<InstallJob>(`/api/dependencies/jobs/${jobId}/cancel`, {
+      method: "POST",
+    }),
+  listDependencyJobs: (signal?: AbortSignal) =>
+    request<{ jobs: InstallJob[] }>(`/api/dependencies/jobs`, { signal }),
+  recheckDependencies: () =>
+    request<{ dependencies: RuntimeDependency[] }>(
+      "/api/dependencies/recheck",
+      { method: "POST" },
+    ),
 };
 
 /** PreviewBackend implementations — one per content root. */
