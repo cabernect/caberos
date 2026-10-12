@@ -11,6 +11,7 @@ the model's context window budget.
 """
 
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -72,95 +73,33 @@ def count_tool_tokens(tools: list[dict[str, Any]], model: str = "gpt-4o") -> int
         return 0
 
 
-def get_model_max_tokens(model_str: str, override: int | None = None) -> int:
-    """Get the max input tokens for a model.
+def get_model_max_tokens(
+    model_str: str,
+    override: int | None = None,
+    *,
+    resolved_model: dict | None = None,
+    model_override: int | None = None,
+    output_tokens: int | None = None,
+) -> int:
+    """Resolved input budget via the catalog authority — never an SDK
+    registry, fuzzy name match, or a 200K default. ``model_str`` is a
+    routing/tokenizer name only, not a capability identity.
 
-    Resolution order:
-      1. Explicit override from agent config (max_context_tokens)
-      2. litellm's registry (exact match on model_str)
-      3. Fuzzy match — strip provider prefix and try known model families
-      4. Default (200K) — modern models typically have ≥200K context
-
-    Results are cached per model_str.
+    Args:
+        model_str: kept for signature compatibility — not consulted.
+        override: run-level input ceiling (limits.max_context_tokens).
+        resolved_model: resolved offering fields (limits with provenance).
+        model_override: explicit model-declared budget (wins over catalog).
+        output_tokens: output reserve.
     """
-    cache_key = f"{model_str}:{override or 'auto'}"
-    if cache_key in _token_cache:
-        return _token_cache[cache_key]
+    from ..providers.catalog_policy import resolve_input_budget
 
-    # 1. Explicit override
-    if override and override > 0:
-        _token_cache[cache_key] = override
-        return override
-
-    # 2. litellm registry — exact match
-    try:
-        import litellm
-
-        info = litellm.get_model_info(model_str)
-        max_tokens = info.get("max_input_tokens")
-        if max_tokens:
-            _token_cache[cache_key] = max_tokens
-            return max_tokens
-    except Exception:
-        pass
-
-    # 3. Fuzzy match — try to find a close match in litellm's registry
-    try:
-        import litellm
-
-        bare = model_str.split("/", 1)[-1] if "/" in model_str else model_str
-
-        # 3a. Try common provider prefixes with the bare name
-        for prefix in ("openai/", "anthropic/", "google/", "meta/", "mistral/", "deepseek/"):
-            try:
-                info = litellm.get_model_info(f"{prefix}{bare}")
-                max_tokens = info.get("max_input_tokens")
-                if max_tokens:
-                    _token_cache[cache_key] = max_tokens
-                    return max_tokens
-            except Exception:
-                continue
-
-        # 3b. Progressive suffix stripping — handle variant names like
-        # "deepseek-v4-flash-free" → "deepseek-v4-flash" → match
-        # "gpt-4o-2024-08-06-preview" → "gpt-4o" → match
-        parts = bare.split("-")
-        for i in range(len(parts) - 1, 0, -1):
-            candidate = "-".join(parts[:i])
-            # Try bare and with common prefixes
-            for name in [candidate, f"deepseek/{candidate}", f"openai/{candidate}"]:
-                try:
-                    info = litellm.get_model_info(name)
-                    max_tokens = info.get("max_input_tokens")
-                    if max_tokens:
-                        _token_cache[cache_key] = max_tokens
-                        return max_tokens
-                except Exception:
-                    continue
-
-        # 3c. Substring match against registry keys
-        # e.g. "big-pickle" won't match, but "deepseek-v4-flash-free" contains
-        # "deepseek-v4-flash" which is in the registry
-        lower = bare.lower()
-        # Sort by key length descending so we match the most specific entry first
-        sorted_keys = sorted(litellm.model_cost.keys(), key=len, reverse=True)
-        for key in sorted_keys:
-            key_lower = key.lower()
-            # Check if the bare name contains a known model name as a substring
-            # or vice versa
-            key_bare = key_lower.split("/", 1)[-1] if "/" in key_lower else key_lower
-            if key_bare in lower and len(key_bare) >= 8:  # min length to avoid false positives
-                entry = litellm.model_cost[key]
-                max_tokens = entry.get("max_input_tokens")
-                if max_tokens:
-                    _token_cache[cache_key] = max_tokens
-                    return max_tokens
-    except Exception:
-        pass
-
-    # 4. Default — modern models typically have ≥200K context
-    _token_cache[cache_key] = 200000
-    return 200000
+    return resolve_input_budget(
+        resolved_model,
+        model_override=model_override,
+        run_override=override,
+        output_tokens=output_tokens,
+    )["tokens"]
 
 
 # --- Phase 1: Prune old tool results ---
@@ -344,6 +283,10 @@ async def generate_summary(
     api_key: str | None = None,
     base_url: str | None = None,
     use_responses: bool = False,
+    accounting: Any | None = None,
+    provider_id: str | None = None,
+    model_name: str | None = None,
+    agent_id: str | None = None,
 ) -> str:
     """Phase 3: Generate or update a structured summary of the middle messages.
 
@@ -387,6 +330,10 @@ async def generate_summary(
 
     messages = [{"role": "user", "content": prompt}]
 
+    family = "responses" if use_responses else "chat"
+    raw: Any = None
+    error: Exception | None = None
+    started = time.monotonic()
     try:
         if use_responses:
             # Responses API — the default for api.openai.com models. Reasoning
@@ -402,9 +349,9 @@ async def generate_summary(
                 kwargs["api_key"] = api_key
             if base_url:
                 kwargs["api_base"] = base_url
-            response = await litellm.aresponses(**kwargs)
+            raw = await litellm.aresponses(**kwargs)
             content = ""
-            for item in getattr(response, "output", []) or []:
+            for item in getattr(raw, "output", []) or []:
                 if getattr(item, "type", "") == "message":
                     for block in getattr(item, "content", []) or []:
                         if getattr(block, "type", "") in ("output_text", "text"):
@@ -420,14 +367,87 @@ async def generate_summary(
         if base_url:
             kwargs["api_base"] = base_url
 
-        response = await litellm.acompletion(**kwargs)
-        return response.choices[0].message.content or ""
+        raw = await litellm.acompletion(**kwargs)
+        return raw.choices[0].message.content or ""
     except Exception as e:
+        error = e
         logger.warning(f"Compaction summary LLM call failed: {e}")
         # Fallback: use previous summary or a minimal stub
         if previous_summary:
             return previous_summary
         return f"[Compaction summary unavailable — {len(middle_messages)} messages compacted]"
+    finally:
+        # Exactly one ledger attempt per actual provider request — success,
+        # error, or timeout all record.
+        if raw is not None or error is not None:
+            await _record_summary_call(
+                accounting,
+                raw,
+                family,
+                provider_id=provider_id,
+                model_name=model_name,
+                agent_id=agent_id,
+                model_str=model_str,
+                error=error,
+                latency_ms=int((time.monotonic() - started) * 1000),
+            )
+
+
+async def _record_summary_call(
+    accounting: Any | None,
+    raw: Any,
+    family: str,
+    *,
+    provider_id: str | None,
+    model_name: str | None,
+    agent_id: str | None,
+    model_str: str | None,
+    error: Exception | None = None,
+    latency_ms: int = 0,
+) -> None:
+    """Ledger the summary aux call — one row per provider request, even
+    with no rate snapshot (genuine reported amounts still count)."""
+    try:
+        from ..harness.scripted_model import ScriptedResponse
+        from ..services.call_accounting import unknown_call_rates
+        from ..services.model_ledger import record_system_call
+
+        # No caller snapshot → an unknown-authority snapshot still yields
+        # normalized native usage/cost (incl. a genuine explicit amount).
+        snap = accounting or unknown_call_rates(provider_id or "", model_name or "", {"type": ""})
+        assessment = snap.assess(raw, family=family)
+        usage = getattr(assessment, "usage", None)
+        cost_receipt = snap.receipt(assessment)
+        response = None
+        if error is None:
+            cost = float(assessment.amount) if assessment.amount is not None else 0.0
+            response = ScriptedResponse(
+                tokens_in=int(usage.input_tokens or 0) if usage else 0,
+                tokens_out=int(usage.output_tokens or 0) if usage else 0,
+                cached_tokens=usage.cache_read_tokens if usage else None,
+                thinking_tokens=usage.reasoning_tokens if usage else None,
+                cost=cost,
+                cost_source=assessment.source,
+                cost_receipt=cost_receipt,
+            )
+        await record_system_call(
+            kind="chat",
+            purpose="compaction",
+            provider_id=provider_id,
+            model_name=model_name,
+            model_str=model_str,
+            agent_id=agent_id,
+            response=response,
+            error=error,
+            latency_ms=latency_ms,
+            detail={
+                "operation": "compaction_summary",
+                "cost_source": assessment.source,
+                **(cost_receipt or {}),
+            },
+        )
+    except Exception:
+        logger.debug("summary accounting record failed", exc_info=True)
 
 
 # --- Phase 4: Reassemble ---
@@ -554,6 +574,9 @@ async def compact_context(
     base_url: str | None = None,
     force: bool = False,
     use_responses: bool = False,
+    input_budget: int | None = None,
+    resolved_model: dict | None = None,
+    accounting: Any | None = None,
 ) -> CompactionResult:
     """Run the 4-phase compaction pipeline.
 
@@ -571,7 +594,18 @@ async def compact_context(
         CompactionResult with the compacted messages and metadata.
     """
     config = agent_config.compaction
-    max_tokens = get_model_max_tokens(model_str)
+    model_cfg = agent_config.model
+    max_tokens = (
+        input_budget
+        if input_budget is not None
+        else get_model_max_tokens(
+            model_str,
+            agent_config.limits.max_context_tokens,
+            resolved_model=resolved_model,
+            model_override=(model_cfg.max_context_tokens if model_cfg else None),
+            output_tokens=(model_cfg.max_tokens if model_cfg else None),
+        )
+    )
     threshold_tokens = int(max_tokens * config.threshold)
 
     original_tokens = count_tokens(messages, model_str)
@@ -626,6 +660,10 @@ async def compact_context(
         api_key=api_key,
         base_url=base_url,
         use_responses=use_responses,
+        accounting=accounting,
+        provider_id=(model_cfg.provider_id if model_cfg else None),
+        model_name=(model_cfg.name if model_cfg else None),
+        agent_id=agent_config.id,
     )
 
     # Phase 4: Reassemble

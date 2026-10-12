@@ -92,8 +92,14 @@ async def test_probe_chat_records_ledger_row(db):
     assert row.run_id is None and row.agent_id is None
     assert row.provider_id == "p1" and row.model_name == "m1"
     assert row.tokens_in == 9 and row.tokens_out == 1
-    assert row.cost == pytest.approx(0.0025)
-    assert row.detail == {"operation": "validate", "cost_source": "provider"}
+    # W11: hidden SDK cost hints are not billing — no local authority → unknown.
+    assert row.cost == 0.0
+    # Canonical receipt keys ride alongside the legacy fields — the probe's
+    # rate capture failed (no catalog row), so usage/cost stay unknown.
+    assert row.detail["operation"] == "validate"
+    assert row.detail["cost_source"] == "unknown"
+    assert row.detail["cost_assessment"]["amount"] is None
+    assert row.detail["rate_authority"]["pricing_authority"]["source"] == "unknown"
 
 
 async def test_probe_responses_uses_responses_usage(db):
@@ -111,7 +117,7 @@ async def test_probe_responses_uses_responses_usage(db):
     row = (await _calls(db))[0]
     assert row.tokens_in == 7 and row.tokens_out == 2
     assert row.thinking_tokens == 1
-    assert row.detail["cost_source"] == "provider"
+    assert row.detail["cost_source"] == "unknown"
 
 
 async def test_probe_error_and_timeout_status(db):
@@ -241,14 +247,15 @@ async def test_normal_harness_call_writes_one_ledger_row(db, workspace):
 
 
 def test_response_cost_recipe():
-    # provider cost wins, explicit 0 counts.
+    # A genuine provider amount wins — an explicit 0 counts as reported.
     raw = {"cost": 0.0, "_hidden_params": {"response_cost": 5.0}}
     assert response_cost(raw, "m") == (0.0, "provider")
+    # W11: SDK-hidden cost hints are deliberately ignored, never billing.
     raw = {"_hidden_params": {"response_cost": 0.125}}
-    assert response_cost(raw, "m") == (0.125, "provider")
+    assert response_cost(raw, "m") == (0.0, "unknown")
     raw = SimpleNamespace(cost=None, _hidden_params={})
     cost, source = response_cost(raw, "definitely-not-a-real-model-xyz")
-    assert source in ("litellm", "unknown")
+    assert source == "unknown"
     assert isinstance(cost, float)
 
 

@@ -1274,7 +1274,7 @@ async def test_context_overflow_forces_compaction_and_retries(db, workspace, mon
     from agentos.harness import compaction as compaction_mod
 
     async def fake_summary(
-        middle, previous_summary, model_str, api_key=None, base_url=None, use_responses=False
+        middle, previous_summary, model_str, api_key=None, base_url=None, use_responses=False, **_kw
     ):
         return "condensed earlier conversation"
 
@@ -1404,13 +1404,19 @@ async def test_responses_cost_recipe_nonstream(monkeypatch):
     monkeypatch.setattr(adapter, "_load_provider", load_provider)
     import litellm as _litellm
 
-    monkeypatch.setattr(_litellm, "completion_cost", lambda **_: 0.25)
+    monkeypatch.setattr(
+        _litellm,
+        "completion_cost",
+        lambda **_: (_ for _ in ()).throw(AssertionError("SDK cost hit")),
+        raising=False,
+    )
     result = await adapter.complete(
         agent_model=ModelConfig(provider_id="p", name="m"),
         messages=[{"role": "user", "content": "hi"}],
     )
-    assert result.cost == pytest.approx(0.25)
-    assert result.cost_source == "litellm"
+    # W11: without a captured rate snapshot the SDK recipe is never billing.
+    assert result.cost == 0.0
+    assert result.cost_source == "unknown"
     assert result.tokens_in == 0 and result.tokens_out == 0
     assert result.thinking_tokens == 0
 
@@ -1436,9 +1442,27 @@ async def test_responses_cost_recipe_stream_and_provider_precedence(monkeypatch)
         return _RESPONSES_PROVIDER
 
     monkeypatch.setattr(adapter, "_load_provider", load_provider)
-    import litellm as _litellm
 
-    monkeypatch.setattr(_litellm, "completion_cost", lambda **_: 0.25)
+    # W11: an explicit provider-reported 0 wins — assessed against the
+    # frozen pre-call snapshot, never the SDK recipe.
+    class _A:
+        amount = 0
+        source = "provider"
+        usage = None
+
+    class _Snap:
+        def assess(self, raw, *, family):
+            return _A()
+
+        def receipt(self, a):
+            return {"cost_assessment": {"amount": "0", "source": a.source}}
+
+    from unittest.mock import AsyncMock as _AM
+
+    monkeypatch.setattr(
+        "agentos.harness.litellm_adapter.capture_call_rates",
+        _AM(return_value=_Snap()),
+    )
     final = None
     async for kind, payload in adapter.complete_stream(
         agent_model=ModelConfig(provider_id="p", name="m"),

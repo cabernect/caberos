@@ -661,3 +661,268 @@ async def test_model_call_detail_named_keys_and_types(db):
         "chunk_count": 4,
     }
     assert isinstance(mc["data"]["detail"]["chunk_count"], int)
+
+
+@pytest.mark.asyncio
+async def test_receipt_projection_whitelist_run_detail_and_timeline(
+    client, db_session, db, timeline_run
+):
+    """cost_assessment/rate_authority survive the read projection — but
+    only their whitelisted fields; secrets and arbitrary keys never do."""
+    canary = CANARY
+    db.add(
+        ModelCall(
+            id="mc-receipt",
+            run_id="r-tl",
+            agent_id="a",
+            turn=2,
+            kind="chat",
+            purpose="reasoning",
+            provider_id="p1",
+            model_name="m1",
+            model_str="openai/m1",
+            tokens_in=1000,
+            tokens_out=100,
+            cost=0.003,
+            latency_ms=50,
+            status="ok",
+            created_at=datetime.now(UTC),
+            detail={
+                "operation": "chat",
+                "cost_source": "user_rate",
+                "evil": canary,
+                "api_key": canary,
+                "cost_assessment": {
+                    "amount": "0.003",
+                    "source": "user_rate",
+                    "currency": "USD",
+                    "reason": None,
+                    "snapshot_revision": None,
+                    "calculated_at": "2026-10-12T00:00:00Z",
+                    "calculation_version": "aggregate-token-rates-v2",
+                    "tier": {"type": "context", "size": 200000, "leak": canary},
+                    "rates": {"input": 2, "output": 10, "leak": canary},
+                    "usage": {
+                        "input_tokens": 1000,
+                        "output_tokens": 100,
+                        "cache_read_tokens": None,
+                        "cache_write_tokens": 0,
+                        "reasoning_tokens": None,
+                        "cache_write_1h_tokens": 0,
+                        "audio_input_tokens": 0,
+                        "audio_output_tokens": 0,
+                        "leak": canary,
+                    },
+                    "leak": canary,
+                },
+                "rate_authority": {
+                    "provider_id": "p1",
+                    "request_model_id": "m1",
+                    "config_fingerprint": "fp",
+                    "offering_revision": 3,
+                    "snapshot_revision": None,
+                    "routing_override_unresolved": False,
+                    "pricing_authority": {
+                        "source": "user_override",
+                        "confidence": "user_declared",
+                        "as_of": "2026-10-12T00:00:00Z",
+                        "leak": canary,
+                    },
+                    "leak": canary,
+                },
+            },
+        )
+    )
+    await db.commit()
+
+    resp = client.get("/api/runs/r-tl")
+    assert resp.status_code == 200
+    body = resp.json()
+    blob = json.dumps(body)
+    assert canary not in blob, "secret/canary leaked through run detail"
+
+    # Run-detail model_calls: receipt fields projected and intact.
+    call = next(c for c in body["model_calls"] if c["id"] == "mc-receipt")
+    detail = call["detail"]
+    assert detail["operation"] == "chat"
+    assert detail["cost_source"] == "user_rate"
+    assessment = detail["cost_assessment"]
+    assert assessment["amount"] == "0.003"
+    assert assessment["source"] == "user_rate"
+    assert assessment["calculation_version"] == "aggregate-token-rates-v2"
+    assert assessment["rates"] == {"input": "2", "output": "10"}
+    assert assessment["usage"]["input_tokens"] == 1000
+    assert assessment["usage"]["output_tokens"] == 100
+    # Nullable counter stays explicitly null, not dropped.
+    assert assessment["usage"]["cache_read_tokens"] is None
+    assert "leak" not in assessment
+    assert "leak" not in assessment["usage"]
+    assert assessment["tier"] == {"type": "context", "size": 200000}
+    authority = detail["rate_authority"]
+    assert authority["provider_id"] == "p1"
+    assert authority["request_model_id"] == "m1"
+    assert authority["offering_revision"] == 3
+    assert authority["pricing_authority"] == {
+        "source": "user_override",
+        "confidence": "user_declared",
+        "as_of": "2026-10-12T00:00:00Z",
+    }
+    assert "leak" not in authority
+
+    # Timeline event for the same call uses the same projector.
+    event = next(
+        e
+        for e in body["timeline"]
+        if e["type"] == "model_call" and e["id"] == "model_call:mc-receipt"
+    )
+    ev_detail = event["data"]["detail"]
+    # model_call events get the scoped policy: full receipt fields
+    # survive — all 8 nullable usage counters and the authority dict.
+    assert ev_detail["cost_source"] == "user_rate"
+    assert ev_detail["cost_assessment"]["amount"] == "0.003"
+    assert ev_detail["cost_assessment"]["rates"]["input"] == "2"
+    ev_usage = ev_detail["cost_assessment"]["usage"]
+    assert ev_usage["input_tokens"] == 1000
+    assert ev_usage["output_tokens"] == 100
+    assert ev_usage["cache_read_tokens"] is None
+    assert set(ev_usage) == {
+        "input_tokens",
+        "output_tokens",
+        "cache_read_tokens",
+        "cache_write_tokens",
+        "reasoning_tokens",
+        "cache_write_1h_tokens",
+        "audio_input_tokens",
+        "audio_output_tokens",
+    }
+    ev_auth = ev_detail["rate_authority"]
+    assert ev_auth["provider_id"] == "p1"
+    assert ev_auth["request_model_id"] == "m1"
+    assert ev_auth["pricing_authority"]["source"] == "user_override"
+    assert canary not in json.dumps(ev_detail)
+
+
+@pytest.mark.asyncio
+async def test_receipt_scoped_policy_only_for_model_call_events(db):
+    """The widened numeric/metadata allowances apply ONLY to model_call
+    events — generic bound_payload keeps dropping secret-named keys."""
+    import json as _json
+
+    from agentos.redaction import bound_payload
+
+    detail = {
+        "rate_authority": {"provider_id": "p1"},
+        "usage": {"input_tokens": 5},
+    }
+    out, red, _ = bound_payload({"detail": detail})
+    # Without the scoped policy: authority + token counters drop.
+    assert "rate_authority" not in out["detail"]
+    assert out["detail"]["usage"] == {}
+    # A non-model_call event that somehow carries the same keys still
+    # drops them — the widening is not global.
+    from agentos.services.observability_timeline import _event
+
+    other = _event("x", "tool_call", data={"detail": detail})
+    assert "rate_authority" not in other["data"]["detail"]
+
+    # Inside an allowed authority dict, secret-named values are still
+    # scrubbed by the recursive pass.
+    scoped = {
+        "detail": {
+            "rate_authority": {
+                "provider_id": "p1",
+                "api_key": CANARY,
+                "env": CANARY,
+            }
+        }
+    }
+    mc = _event("mc", "model_call", data=scoped)
+    blob = _json.dumps(mc["data"])
+    assert CANARY not in blob
+    assert mc["data"]["detail"]["rate_authority"]["provider_id"] == "p1"
+
+
+def test_projector_redact_before_truncate_and_rate_validation():
+    """A >255-char credential is fully redacted, never prefix-truncated;
+    invalid rate scalars project as null, not crashy floats."""
+    from agentos.services.accounting_projection import project_call_detail
+
+    long_secret = "sk-proj-" + ("a" * 300)
+    detail = {
+        "cost_source": long_secret,
+        "cost_assessment": {
+            "amount": long_secret,
+            "reason": "x " + long_secret,
+            "rates": {
+                "input": float("nan"),
+                "output": float("inf"),
+                "cache_read": -3,
+                "cache_write": True,
+                "reasoning": "abc",
+            },
+        },
+        "rate_authority": {
+            "provider_id": long_secret,
+            "routing_override_unresolved": "false",
+        },
+    }
+    out = project_call_detail(detail)
+    blob = json.dumps(out)
+    assert long_secret not in blob
+    assert "a" * 64 not in blob  # no unredacted prefix survives
+    assert "[REDACTED]" in blob or "REDACTED" in blob
+    assert out["cost_assessment"]["rates"] == {
+        "input": None,
+        "output": None,
+        "cache_read": None,
+        "cache_write": None,
+        "reasoning": None,
+    }
+    assert out["rate_authority"]["routing_override_unresolved"] is None
+    # Valid rates serialize exactly as decimal strings.
+    good = project_call_detail({"cost_assessment": {"rates": {"input": 2, "output": 10.5}}})
+    assert good["cost_assessment"]["rates"] == {"input": "2", "output": "10.5"}
+
+
+@pytest.mark.asyncio
+async def test_receipt_long_secret_redacted_at_both_read_seams(
+    client, db_session, db, timeline_run
+):
+    """The >255-char credential never leaks a prefix through run detail
+    or the timeline event."""
+    long_secret = "sk-proj-" + ("b" * 300)
+    db.add(
+        ModelCall(
+            id="mc-secret",
+            run_id="r-tl",
+            agent_id="a",
+            turn=3,
+            kind="chat",
+            provider_id="p1",
+            model_name="m1",
+            model_str="openai/m1",
+            tokens_in=1,
+            tokens_out=1,
+            cost=0.0,
+            latency_ms=1,
+            status="ok",
+            created_at=datetime.now(UTC),
+            detail={
+                "operation": "chat",
+                "cost_assessment": {
+                    "amount": "0.003",
+                    "reason": f"billed {long_secret} twice",
+                },
+                "rate_authority": {
+                    "provider_id": long_secret,
+                },
+            },
+        )
+    )
+    await db.commit()
+    resp = client.get("/api/runs/r-tl")
+    blob = resp.text
+    assert long_secret not in blob
+    assert "b" * 64 not in blob  # no unredacted prefix anywhere
+    call = next(c for c in resp.json()["model_calls"] if c["id"] == "mc-secret")
+    assert "REDACTED" in call["detail"]["cost_assessment"]["reason"]

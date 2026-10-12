@@ -36,6 +36,7 @@ from ..redaction import (
     redact_text,
 )
 from ..sandbox import probe as sandbox_probe
+from ..services.accounting_projection import project_call_detail
 from ..services.observability_filters import filter_runs
 from ..services.observability_spend import platform_spend
 from ..services.observability_timeline import build_run_timeline
@@ -273,7 +274,18 @@ _CALL_DETAIL_KEYS = (
 def _safe_call_detail(detail) -> dict | None:
     if not isinstance(detail, dict):
         return None
-    return {k: redact_secrets(str(detail[k]))[0][:255] for k in _CALL_DETAIL_KEYS if k in detail}
+    projected = project_call_detail(detail)
+    if projected is None:
+        return None
+    # Older API shape: the five legacy keys stay stringified; the new
+    # structured receipt fields pass through as objects.
+    legacy = {
+        k: redact_secrets(str(projected[k]))[0][:255] for k in _CALL_DETAIL_KEYS if k in projected
+    }
+    for key in ("cost_assessment", "rate_authority"):
+        if key in projected:
+            legacy[key] = projected[key]
+    return legacy or None
 
 
 def _audit_out(a: AuditRecord) -> AuditOut:

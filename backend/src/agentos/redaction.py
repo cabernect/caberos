@@ -137,7 +137,15 @@ def _secret_key(key) -> bool:
     return SECRET_KEY_RE.search(str(key)) is not None or str(key) in PROHIBITED_KEYS
 
 
-def _scrub(value, max_depth: int, max_list: int, max_str: int, depth: int = 0):
+def _scrub(
+    value,
+    max_depth: int,
+    max_list: int,
+    max_str: int,
+    depth: int = 0,
+    numeric_allow: frozenset = NUMERIC_ALLOW_KEYS,
+    metadata_allow: frozenset = frozenset(),
+):
     """Recursive scrub → (value, redacted, truncated).
 
     Containers deeper than max_depth collapse to a marker; lists keep
@@ -153,11 +161,15 @@ def _scrub(value, max_depth: int, max_list: int, max_str: int, depth: int = 0):
         for i, (k, v) in enumerate(value.items()):
             if _secret_key(k):
                 # Numeric token counters stay; every other secret-named
-                # value drops regardless of type.
-                if not (
-                    str(k) in NUMERIC_ALLOW_KEYS
+                # value drops regardless of type. A scoped event policy
+                # may widen the numeric set or keep whitelisted dict
+                # metadata — the scrubber still recurses inside.
+                keep = (
+                    str(k) in numeric_allow
                     and (v is None or isinstance(v, (int, float, bool)))
-                ):
+                    or (str(k) in metadata_allow and isinstance(v, dict))
+                )
+                if not keep:
                     redacted = True
                     continue
             # Keys can carry canaries too — regex-redact + bound, and drop
@@ -168,7 +180,9 @@ def _scrub(value, max_depth: int, max_list: int, max_str: int, depth: int = 0):
             if i >= max_list:
                 truncated = True
                 break
-            v2, v_red, v_trunc = _scrub(v, max_depth, max_list, max_str, depth + 1)
+            v2, v_red, v_trunc = _scrub(
+                v, max_depth, max_list, max_str, depth + 1, numeric_allow, metadata_allow
+            )
             redacted = redacted or v_red
             truncated = truncated or v_trunc
             out[key_text] = v2
@@ -183,7 +197,9 @@ def _scrub(value, max_depth: int, max_list: int, max_str: int, depth: int = 0):
             if i >= max_list:
                 truncated = True
                 break
-            v2, v_red, v_trunc = _scrub(item, max_depth, max_list, max_str, depth + 1)
+            v2, v_red, v_trunc = _scrub(
+                item, max_depth, max_list, max_str, depth + 1, numeric_allow, metadata_allow
+            )
             redacted = redacted or v_red
             truncated = truncated or v_trunc
             out.append(v2)
@@ -206,16 +222,30 @@ _TIERS = [(5, 25, 500), (4, 15, 200), (3, 8, 100), (2, 5, 60)]
 SUMMARY_BUDGET = 2000
 
 
-def bound_payload(value, budget: int = SUMMARY_BUDGET):
+def bound_payload(
+    value,
+    budget: int = SUMMARY_BUDGET,
+    *,
+    allowed_numeric_keys: frozenset | None = None,
+    allowed_metadata_keys: frozenset = frozenset(),
+):
     """Scrub + structure-bound a payload → (payload, redacted, truncated).
 
     Progressive tiers keep the JSON valid at every cutoff — if even the
     tightest tier overflows, the structure collapses to a marker dict.
+
+    ``allowed_numeric_keys`` widens the numeric-value allowlist under
+    secret-regex names (defaults to ``NUMERIC_ALLOW_KEYS``);
+    ``allowed_metadata_keys`` keeps whitelisted *dict* values under
+    secret-regex names — the scrub still recurses inside them.
     """
+    numeric_allow = NUMERIC_ALLOW_KEYS if allowed_numeric_keys is None else allowed_numeric_keys
     redacted = False
     truncated = False
     for max_depth, max_list, max_str in _TIERS:
-        out, red, trunc = _scrub(value, max_depth, max_list, max_str)
+        out, red, trunc = _scrub(
+            value, max_depth, max_list, max_str, 0, numeric_allow, allowed_metadata_keys
+        )
         redacted = redacted or red
         truncated = truncated or trunc
         try:

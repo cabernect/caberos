@@ -36,6 +36,7 @@ uv run pyinstaller \
   --collect-submodules tiktoken_ext \
   --add-data "${BACKEND_DIR}/src/agentos/defaults:agentos/defaults" \
   --add-data "${BACKEND_DIR}/src/agentos/mcp/catalog.yaml:agentos/mcp" \
+  --add-data "${BACKEND_DIR}/src/agentos/providers/data:agentos/providers/data" \
   src/agentos/gateway_entry.py
 
 chmod +x "${GATEWAY_OUTPUT_DIR}/caberos-gateway/caberos-gateway"

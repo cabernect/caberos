@@ -353,7 +353,26 @@ async def lifespan(app: FastAPI):
         lambda t: t.exception() if not t.cancelled() and t.exception() else None
     )
 
+    # W11 catalog worker — polls the auto-refresh toggle (60s tick), never
+    # blocks on network. Schedules configured-provider discovery in the
+    # background so the picker has local offerings without a live fetch.
+    from .models.provider import Provider
+    from .providers.catalog import start_catalog_worker, stop_catalog_worker
+    from .providers.model_catalog import schedule_provider_refresh
+
+    start_catalog_worker()
+
+    async def _discover_providers() -> None:
+        async with async_session_factory() as db:
+            result = await db.execute(select(Provider.id))
+            for (pid,) in result.all():
+                schedule_provider_refresh(pid)
+
+    asyncio.create_task(_discover_providers())
+
     yield
+
+    await stop_catalog_worker()
 
     # Shutdown: kill every background terminal process group and browser
     # session first — agents must not orphan processes on gateway exit.

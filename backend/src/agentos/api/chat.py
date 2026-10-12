@@ -170,7 +170,7 @@ async def compact_session(
     """
     from ..agent_service import get_active_config
     from ..db import async_session_factory
-    from ..harness.compaction import compact_context, get_model_max_tokens
+    from ..harness.compaction import compact_context
     from ..harness.context import assemble_system_prompt, build_message_history
     from ..models.run import Message, Run
     from ..models.session import Session
@@ -206,10 +206,13 @@ async def compact_session(
         recent = [SimpleNamespace(role=m.role, content=m.content) for m in all_messages]
         history = build_message_history(system_prompt, recent, "", None)
 
-        # Get model info
+        # Get model info — resolved metadata + frozen rate snapshot ride
+        # the same capture as execution calls.
         model_str = "gpt-4o"
         api_key = None
         base_url = None
+        resolved_model: dict = {}
+        accounting = None
         if config.model.is_configured:
             try:
                 adapter = await ProviderRegistry(db).for_model(config.model.provider_id)
@@ -217,8 +220,22 @@ async def compact_session(
                 model_str = info["model_str"]
                 api_key = info["api_key"]
                 base_url = info["base_url"]
+                resolved_model = info.get("resolved_model") or {}
+                accounting = info.get("accounting")
             except Exception:
                 pass
+
+        from ..providers.catalog_policy import resolve_input_budget
+
+        try:
+            input_budget = resolve_input_budget(
+                resolved_model,
+                model_override=config.model.max_context_tokens,
+                run_override=config.limits.max_context_tokens,
+                output_tokens=config.model.max_tokens,
+            )["tokens"]
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
 
         # Run compaction (force=True)
         system_msgs = [history[0]] if history and history[0].get("role") == "system" else []
@@ -232,6 +249,9 @@ async def compact_session(
             api_key=api_key,
             base_url=base_url,
             force=True,
+            input_budget=input_budget,
+            resolved_model=resolved_model,
+            accounting=accounting,
         )
 
         # Persist the updated summary
@@ -249,7 +269,7 @@ async def compact_session(
             "compacted": compaction_result.compacted,
             "original_tokens": compaction_result.original_tokens,
             "compacted_tokens": compaction_result.compacted_tokens,
-            "max_context_tokens": get_model_max_tokens(model_str),
+            "max_context_tokens": input_budget,
             "head_count": compaction_result.head_count,
             "middle_count": compaction_result.middle_count,
             "tail_count": compaction_result.tail_count,
