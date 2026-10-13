@@ -6,6 +6,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..providers.catalog_policy import catalog_identity
 from ..providers.model_catalog import get_offering
 from .cost_assessment import CostAssessment, assess_usage
 from .usage_receipts import normalize_usage, reported_amount
@@ -91,6 +92,21 @@ async def capture_call_rates(
     routing = provider_config.get("extra_params") or {}
     unsafe_routing = bool(_ROUTING_OVERRIDES.intersection(routing))
     pricing = None if unsafe_routing else resolved.get("pricing")
+    native_identity = catalog_identity(
+        provider_config["type"], model_id, provider_config.get("base_url")
+    )
+    # Native OpenAI context pricing uses total prompt input, including cache
+    # reads. An explicit catalog mapping does not attest a proxy's billing basis.
+    context_tier_basis = (
+        "aggregate_input"
+        if provider_config["type"] == "openai"
+        and native_identity is not None
+        and native_identity[0] == "openai"
+        and (not offering.catalog_mapping_explicit or offering.catalog_provider_id == "openai")
+        and authority.get("source") == "models_dev"
+        and not unsafe_routing
+        else None
+    )
     provenance = {
         "provider_id": provider_id,
         "request_model_id": model_id,
@@ -99,6 +115,7 @@ async def capture_call_rates(
         "snapshot_revision": offering.snapshot_revision or None,
         "pricing_authority": authority,
         "routing_override_unresolved": unsafe_routing,
+        "context_tier_basis": context_tier_basis,
     }
     return CallRateSnapshot(
         provider_type=provider_config["type"],
@@ -107,4 +124,5 @@ async def capture_call_rates(
         model_metadata_json=json.dumps(resolved),
         rate_source=source,
         snapshot_revision=offering.snapshot_revision or None,
+        context_tier_basis=context_tier_basis,
     )
