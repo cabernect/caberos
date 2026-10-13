@@ -30,6 +30,7 @@ import os
 import platform
 from contextlib import AsyncExitStack
 from typing import Any
+from urllib.parse import urlparse
 
 log = logging.getLogger("agentos.mcp.client")
 
@@ -130,6 +131,40 @@ def _resolve_stdio_command(
     )
 
 
+def _bearer_resource_metadata(challenge: str) -> str | None:
+    """Extract resource_metadata= from a Bearer challenge; None otherwise.
+    Malformed quoting (unterminated/bare text) is rejected, not salvaged."""
+    scheme, _, params = challenge.partition(" ")
+    if scheme.lower() != "bearer" or not params:
+        return None
+    for part in params.split(","):
+        key, _, value = part.strip().partition("=")
+        if key.lower() == "resource_metadata":
+            value = value.strip()
+            if value.startswith('"'):
+                if len(value) < 2 or not value.endswith('"'):
+                    return None
+                value = value[1:-1]
+            elif '"' in value or not value:
+                return None
+            return value or None
+    return None
+
+
+def _valid_metadata_url(url: str) -> bool:
+    """Absolute http/https URL with a real host and no embedded credentials."""
+    try:
+        parsed = urlparse(url)
+        return (
+            parsed.scheme in ("http", "https")
+            and bool(parsed.hostname)
+            and parsed.username is None
+            and parsed.password is None
+        )
+    except ValueError:
+        return False
+
+
 class McpClient:
     """Thin wrapper around the MCP SDK — one instance per server connection.
 
@@ -159,6 +194,9 @@ class McpClient:
 
         self._session: Any = None
         self._exit_stack: AsyncExitStack | None = None
+        # Set by the response hook when an undeclared-OAuth HTTP server answers
+        # a Bearer resource_metadata challenge — never triggers a fetch or flow.
+        self.oauth_required = False
         self._connected = False
         self._lock = asyncio.Lock()
         self._conn_task: asyncio.Task | None = None
@@ -180,6 +218,7 @@ class McpClient:
         if self._connected:
             return
 
+        self.oauth_required = False
         # Spawn the connection task — it owns the exit stack lifecycle
         self._conn_task = asyncio.create_task(self._connection_loop())
         # Wait for the connection to complete (or fail)
@@ -351,6 +390,30 @@ class McpClient:
                     http_kwargs["auth"] = self.auth
                 if self.headers:
                     http_kwargs["headers"] = self.headers
+
+                if self.auth is None:
+                    # Undeclared auth: watch for a Bearer resource_metadata
+                    # challenge on this server's own URL — flag only, never
+                    # fetch metadata, mint a token, or redirect.
+                    expected = httpx2.URL(self.url)
+
+                    async def _observe_oauth_challenge(response: httpx2.Response) -> None:
+                        try:
+                            request = response.request
+                            if (
+                                response.status_code == 401
+                                and request.method == "POST"
+                                and request.url == expected
+                            ):
+                                challenge = response.headers.get("www-authenticate", "")
+                                if len(challenge) <= 4096:
+                                    meta = _bearer_resource_metadata(challenge)
+                                    if meta and _valid_metadata_url(meta):
+                                        self.oauth_required = True
+                        except Exception:
+                            pass
+
+                    http_kwargs["event_hooks"] = {"response": [_observe_oauth_challenge]}
 
                 http_client = httpx2.AsyncClient(
                     base_url=self.url,
