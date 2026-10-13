@@ -46,11 +46,11 @@ provenance must not silently change exact request IDs into display names.
 | P03 | Input/output/cache/reasoning | Preserve reported counters; missing differs from zero; no cached/reasoning double billing |
 | P04 | Tiered or unsupported pricing | Correct supported recipe and threshold; unresolved when required dimensions are unavailable |
 | P05 | Exact arithmetic/snapshot | Decimal amount and currency; stable rate/calculation version; no live-rate drift on reread |
-| P06 | Historic vs later price | Effective dates respected; later-rate backfill clearly retrospective estimate |
-| P07 | Preview/apply/concurrent retry | Preview shows eligible calls and provenance; atomic/idempotent apply; reported costs untouched |
+| P06 | Historic vs later price | **Excluded — historical backfill not in W11 (operator decision 2026-10-13)** |
+| P07 | Preview/apply/concurrent retry | **Excluded — historical backfill not in W11 (operator decision 2026-10-13)** |
 | P08 | Migration and rollback | Original IDs, usage, and monetary values preserved on a copy; failure restores baseline |
 | P09 | Runless/system calls and unknown totals | Embedding/probe/title/extract supported; incomplete/unknown totals remain labelled |
-| P10 | Catalog updated after a cost assessment | Existing stored usage, reported amounts, and rate-versioned estimates remain unchanged; explicit backfill retains historical/retrospective distinction |
+| P10 | Catalog updated after a cost assessment | Existing stored usage, reported amounts, and rate-versioned estimates remain unchanged (snapshot invariance) |
 
 Use deterministic rates, usage, and times. Author independent expected amounts
 for each recipe before testing; do not compare an implementation to itself.
@@ -78,7 +78,7 @@ Do not assert that an estimated amount equals a provider invoice.
 | D16 | Docker/elevated/system fallback | Build-time dependencies respected; no runtime sudo/package-manager bootstrap |
 | D17 | Packaged app / HTTP MCP / local-provider choice | Bundled app works without developer runtimes; HTTP MCP does not require local Node/uv; no silent model-server/model-weight installs |
 | D18 | Host MCP runtime vs Windows shell sandbox | Managed runtime usable by the MCP launcher is not automatically claimed available inside MXC; sandbox permissions unchanged |
-| D19 | Approved Git MCP preparation | Show declared Git/server/launcher requirements; reuse compatible tools; app prepares verified missing prerequisites after consent; no manual Git installation required on supported platforms |
+| D19 | Approved Git MCP preparation | **Excluded — combined Git MCP preparation not in W11 (operator decision 2026-10-13)** |
 | D20 | General settings vs automatic installation | Optional tools visible in global General; explicit proactive installation permitted; workflow requests require approval; neither implies permission for later repository writes |
 
 ## Defect Inventory

@@ -1,5 +1,7 @@
 # W11 Runtime Readiness — Test Results
 
+**Current closeout status (2026-10-13):** confirmed B1/B30 residual defects fixed; final local backend/frontend gates pass. Real managed-install downloads remain NOT RUN awaiting specific operator consent. Historical slice reports below are retained and do not define remaining scope.
+
 **Scope of this report:** Track A — model catalog foundation, execution
 accounting glue, and receipt read projection. This is a *slice* result, not
 whole-W11 completion: dependency installation, remaining catalog/accounting
@@ -21,8 +23,9 @@ acceptance items, and the remaining defect inventory are still pending.
 - **Receipt safety:** run-detail and timeline expose projected rate provenance
   and nullable usage counters. Only model-call events use the scoped sanitizer
   allowance; nested credentials and unapproved fields remain redacted.
-- **Tier basis (not implemented in this slice):** context-tier assessment requires
-  `context_tier_basis == "aggregate_input"`; unsupported bases, audio
+- **Tier basis:** native OpenAI catalog pricing now captures
+  `context_tier_basis == "aggregate_input"` (see the cost regression below);
+  other unsupported bases, audio
   billing, and nonstandard cache lifetimes assess as `unknown` rather than
   guessed.
 - **Unknown budget policy:** unresolvable input budgets allocate the
@@ -200,7 +203,7 @@ acceptance items, and the remaining defect inventory are still pending.
 
 Log: `.scratch/w11/installer-backend-tests.log`. **No real downloads or installs were performed** — all publisher/archive/health I/O is injected fixtures.
 
-## Pending tracks (not covered here)
+## Pending tracks (historical checkpoint — superseded by closeout status above; not active obligations)
 
 - Dependency runtime installation for the approved recipes
   (`12-dependencies`) — recipe metadata is lead-authored and fixed;
@@ -210,6 +213,84 @@ Log: `.scratch/w11/installer-backend-tests.log`. **No real downloads or installs
 - Observability spend/metrics beyond the priced-source enum
   (`models_dev`/`user_rate`/`provider_rate`), whose 6 golden tests pass —
   no new metrics queries are planned in this slice.
-- Track A still needs operator-requested backfill preview/apply and verified
-  production tier-basis wiring; unsupported tier semantics remain unknown.
-- Remaining defect-inventory items in `11-bug-fixes.md`.
+- Backfill preview/apply is **excluded from W11** (operator decision
+  2026-10-13) — existing receipts remain unchanged. Broader unsupported
+  tier-basis pricing remains a stated limitation (honestly unresolved), not
+  new mandatory math expansion. Real installer runs are **NOT exercised**
+  pending operator consent.
+- Remaining defect-inventory items in `11-bug-fixes.md` — B1 and B30 residual
+  are now fixed (below); B2 startup reconcile and B3 native-tier fix verified.
+
+## Caber zero-cost regression (2026-10-12)
+
+- The latest real Caber run's frozen receipts contain valid token usage and
+  OpenAI catalog rates, but assess as unknown with
+  `reason: unsupported_context_tier_basis`. The legacy run scalar remains zero.
+- Reproduced through real local catalog resolution and `capture_call_rates`,
+  not a calculator test that manually supplies its missing basis. Runtime capture
+  had never passed the basis that the existing tier arithmetic required.
+- Native OpenAI catalog pricing now freezes aggregate prompt input as its
+  context-tier basis, including cached input. Custom proxies, cross-provider
+  mappings, and undeclared routing overrides do not inherit that billing basis.
+  Unsupported pricing and usage remain unresolved.
+- Three endpoint cases cover the default native endpoint, the official explicit
+  API endpoint, and an explicitly mapped proxy; recorded cached/uncached usage
+  and an above-threshold example use independent expected Decimal amounts.
+- Full backend suite: **1109 passed**, before the final cross-provider guard
+  tightening (`.scratch/w11/caber-cost-full-backend.log`). Final-code accounting
+  suites: **19 passed** (`caber-cost-final-accounting.log`). Ruff check and format
+  check pass (`caber-cost-final-ruff-{check,format}.log`). Frontend is unchanged.
+- Frozen offline replay estimates the two main agent turns at **USD 0.00369824**
+  and the auxiliary call at **USD 0.0004824**. These are catalog-based estimates,
+  not provider invoices. No production costs were changed or model calls made.
+- The running backend has not been restarted; it needs to load the fix before
+  new tasks benefit. Existing unknown receipts are not automatically repriced.
+  The conversation intentionally keeps its shared zero display — unresolved and genuine zero both render as $0.000 per the user's explicit choice; the unknown-vs-priced distinction lives in receipt-level accounting/observability.
+
+## B1 undeclared-OAuth + B30 reconcile-note fixes (2026-10-13)
+
+- **B1:** an HTTP MCP server with no declared `oauth_config` that answers the
+  initialize POST with `401 + WWW-Authenticate: Bearer resource_metadata=…`
+  is now observed (response hook on the existing SDK request — no extra probe,
+  no metadata/token fetch, no browser redirect). On failure, the registry
+  persists a default consent config (`scope: ""`, localhost callback
+  `redirect_uri`), surfaces `OAuth authorization required — connect via
+  dashboard` as the connect error, and emits an `Authorize {name}` warning
+  notification — distinct from the expired-refresh `Reconnect {name}` error.
+  A configured-OAuth server with no stored token gets the same clean guidance
+  instead of a silent `False`. Negative challenges (Basic, bare 401, invalid
+  or credentialed metadata URLs, 403/500) persist nothing.
+- **B30:** `_reconcile_stale_occurrences` now appends the restart reason to an
+  existing error note instead of overwriting it; running rows only, so a
+  second startup does not re-append.
+- Tests: `test_mcp.py` + `test_scheduler.py` + `test_mcp_oauth_refresh.py` —
+  **93 passed** (`.scratch/w11/w11-b1-b30-fix-tests.log`); Ruff check/format
+  clean on the five touched files. Excludes: no PATCH-auth metadata edit path,
+  no auto OAuth flow, Git-MCP prep, backfill — unchanged.
+
+## Explicit W11 exclusions (unchanged scope)
+
+- **Backfill** (historical unknown-cost receipts): excluded — P10 snapshot
+  invariance stays authoritative; existing receipts are not repriced.
+- **Git MCP prep**: excluded.
+
+## W11 closeout gate (2026-10-13)
+
+- Full backend: **1121 passed** (`.scratch/w11/final-gate-backend.log`).
+- Ruff `check src/ tests/` clean; `format --check` — 263 files already
+  formatted (`final-gate-ruff-{check,format}.log`).
+- Frontend: **156 tests passed**, lint warnings only (pre-existing),
+  `npm run build` succeeded (`final-gate-frontend-{test,lint,build}.log`).
+- Browser QA (real isolated QA stack :18081/:15173, current code): an
+  oauth-configured HTTP server row presents `Connect OAuth` +
+  `Reconnect`/`Remove` — consent control only, no automatic authorization
+  or redirect. Desktop verified at 1440. At 375px the existing MCP header
+  row pushes action controls off-screen — mobile consent usability is NOT
+  verified; this layout limitation is recorded for the upcoming frontend
+  rework. No frontend layout code was changed in W11. Screenshots:
+  `.scratch/w11/qa-mcp-oauth-consent-desktop.png` (1440) and `-mobile.png`
+  (375). No console errors. Real-API evidence (`GET /api/mcp/servers`):
+  `auth_type:"oauth"`, persisted `oauth_config` with default scope +
+  localhost callback `redirect_uri`.
+- NOT exercised: real installer downloads — awaiting operator consent for
+  Node 24.21.0 / uv 0.12.24 / Git 2.53.0 under `/tmp/w11-live-install-qa`.

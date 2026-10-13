@@ -4,7 +4,7 @@
 optional dependencies in one workstream. The filename is retained so existing
 bug references keep working. Former W12 is now the dependency track of W11.
 **Branch:** `feat/v0.2.0-runtime-readiness`, based on merged W10 (`468310d`).
-**Status:** implementation in progress — Track A model catalog + execution accounting slice is implemented and gate-tested; dependency track and remaining items are pending. See [test results](test_result/11-runtime-readiness-test-results.md).
+**Status:** core catalog/accounting + dependency tracks implemented; W11 closeout in progress. See [test results](test_result/11-runtime-readiness-test-results.md).
 **Test plan:** [W11 acceptance](test_plan/11-runtime-readiness-test-plan.md).
 
 ## Outcome
@@ -84,12 +84,9 @@ Disable LiteLLM remote cost-map loading before its first import using `LITELLM_L
 - Pricing recipes explicitly handle applicable tiers and cache read/write usage.
   Do not double-count cached input or reasoning already included in other usage.
   Unsupported rates or missing required counters leave estimates unresolved.
-- Backfill is an operator-requested preview/apply operation for unresolved calls.
-  Updates are atomic/idempotent and never replace an existing reported amount.
-  A later rate without historical applicability yields a labelled retrospective
-  estimate, not recovered historical billing.
-- Existing receipt IDs, recorded amounts, and usage survive migration unchanged.
-  Do not rewrite historical zeroes into invented charges.
+- Historical-cost backfill is excluded from W11 by operator decision (2026-10-13).
+  Existing receipt IDs, usage, and monetary values remain unchanged; no
+  repricing operation is planned.
 
 ## Track B - Dependency Readiness
 
@@ -104,7 +101,7 @@ Detailed requirements live in [the dependency track](12-dependencies.md).
   only after verifying the exact official artifact recipe, either through an
   approved JavaScript MCP setup or an explicit General-settings install — never
   on startup automatically.
-- Git MCP setup prepares supported missing prerequisites through one approved app-managed plan; manual Git installation is not the default user journey. General settings also permits explicit proactive installation of supported optional tools.
+- Git MCP combined preparation (declared package + Git + launcher/runtime prep in one plan): **Excluded from W11 by operator decision, 2026-10-13.** Proactive General-settings runtime installs remain supported; manual Git installation is not the default user journey.
 - Initial end-user scope is Chromium, LibreOffice, and conditional MCP runtimes/tools (Node/npm, uv/uvx, Git). FFmpeg/transcoding and Tesseract/OCR are deferred until product features consume them. A local model server is provider-specific configuration, not an automatic dependency download.
 - Runtime callers obtain paths from the dependency module. Never silently modify
   global PATH, system installations, personal browser profiles, or agent authority.
@@ -125,7 +122,7 @@ Detailed requirements live in [the dependency track](12-dependencies.md).
 
 1. Audit the existing defect list and verify supported artifact recipes/platforms.
 2. Catalog persistence, resolution, and overrides; route existing consumers through it.
-3. Shared usage/cost normalization, versioned rates, and explicit backfill.
+3. Shared usage/cost normalization and versioned rates. (Explicit backfill: **Excluded from W11 by operator decision, 2026-10-13** — existing receipts remain unchanged.)
 4. Dependency registry, managed installer jobs, executable-path integration.
 5. Settings/picker presentation, remaining confirmed defects, and integration QA.
 
@@ -136,7 +133,29 @@ Do not commit or push without operator approval.
 
 ## Bugs
 
-### B1 — HTTP MCP servers don't discover OAuth on 401
+### B1 — HTTP MCP servers don't discover OAuth on 401 (FIXED 2026-10-13)
+
+**Fix applied:** the HTTP client's response hook observes the *existing*
+initialize response — a `401` `POST` to the server's own exact URL carrying a
+bounded `Bearer` `resource_metadata` challenge (validated absolute URL, no
+embedded credentials) — and flags `oauth_required` only, never fetching
+metadata, minting a token, or redirecting. On connect failure the registry
+persists a default consent config (`scope: ""`, localhost callback
+`redirect_uri`) via a conditional only-if-empty update, surfaces `OAuth
+authorization required — connect via dashboard`, and emits an
+`Authorize {name}` warning notification (distinct from the expired-token
+`Reconnect {name}` error). A configured-OAuth server with no stored token
+gets the same guidance. Negative challenges (Basic, bare 401, malformed or
+credentialed metadata, 403/500) persist nothing. Regressions:
+`test_undeclared_http_oauth_prompts_consent_not_crash`,
+`test_negative_challenges_do_not_flag_oauth` (param'd),
+`test_oauth_hook_exact_url_and_challenge_edges`,
+`test_no_hook_when_auth_preconfigured`,
+`test_malformed_args_json_returns_false_not_unbound`,
+`test_record_oauth_requirement_never_clobbers`. Remaining step is explicit
+operator consent (Connect with OAuth) — no automatic flow.
+The earlier `PATCH auth fields` proposal is superseded by the observed-challenge
+mechanism; no unused auth-edit API was added.
 
 **Symptom:** adding `{"type": "http", "url": "https://mcp.tradingview.com/mcp"}`
 fails with `mcp_connection_failed` + "Server returned an error response".
@@ -157,7 +176,7 @@ discovery as part of the transport handshake — minimal config suffices there.
 - `PATCH /servers/{id}` gains the ability to change `auth_type`/`oauth_config`
   so a misconfigured server is fixable without delete/re-add.
 
-### B2 — Orphaned `pending`/`awaiting_approval` runs never reconciled
+### B2 — Orphaned `pending`/`awaiting_approval` runs never reconciled (FIXED)
 
 **Symptom:** an agent card shows a permanent "running" indicator —
 `GET /api/runs?status=pending,running,awaiting_approval` keeps returning a
@@ -177,7 +196,18 @@ resume anything) survives every restart as a zombie.
 - Verified live: reload marked the orphan and zero non-terminal rows
   remain; the stale row itself was reconciled manually first.
 
-### B3 — Run cost always `$0.000000` despite recorded tokens
+### B3 — Run cost always `$0.000000` despite recorded tokens (FIXED 2026-10-13 — native tier path)
+
+**Fix applied:** `capture_call_rates` records the context-tier basis at freeze
+time for native official-OpenAI catalog pricing (aggregate input incl. cached),
+so `gpt-5.x` context-tier rates now reach `call_assessment` with real amounts;
+unsupported/cross-provider/proxy pricing still resolves as honestly unresolved
+(`unsupported_context_tier_basis` → unknown, not invented). Regressions:
+`test_call_accounting.py::test_native_openai_catalog_context_tiers_reach_call_assessment`
+(3 param'd cases), `test_cost_assessment`, `test_usage_receipts`.
+Operator decision: chat keeps its shared zero display — unresolved and genuine
+zero both render as `$0.000`; the unknown-vs-priced distinction lives in
+receipt-level accounting/observability, not a new chat-side calculator.
 
 **Current ownership:** Track A. W10 already distinguishes unknown pricing from
 recorded zero in Platform spend; catalog resolution and transport consistency
@@ -501,6 +531,11 @@ Verified live: `algorithmic-art` detail → 200 with 11 usage rows.
 **Fix direction:** preserve the materialization note — e.g. `occ.error = result.get("error") or occ.error`, or store the skip-count in a dedicated column.
 
 **Fix applied (2026-10-02):** `scheduler.py` `_execute` now does `occ.error = result.get("error") or occ.error` — a run error wins, a clean run keeps the materialization note. Regression: `test_execute_preserves_materialization_note`. **Independent re-verification (2026-10-02):** `kill -9` the gateway with a `run_once` schedule enabled → ~2.5 min outage → restart → startup sweep materialized one occurrence at the latest missed instant (09:06) which completed with `error = "2 earlier occurrence(s) skipped"` — the note survives `_execute`. FIXED. **Residual edge case:** `_reconcile_stale_occurrences` (scheduler.py:318) still overwrites `occ.error` unconditionally with `"Gateway restarted during execution"` — a note-carrying occurrence killed mid-run loses the note to the restart error. Same clobber shape, narrower path.
+**Residual fixed (2026-10-13):** `_reconcile_stale_occurrences` now appends —
+`occ.error = f"{occ.error}; {reason}"` when a note exists; reconcile touches
+`running` rows only, so a second startup cannot duplicate the reason.
+Regression: `test_reconcile_preserves_existing_error_note` (asserts both
+fragments + double-run stability).
 
 ### B31 — Run holds an uncommitted write transaction across the whole first model call: concurrent scheduled runs trigger a global `database is locked` storm (FIXED — round 2)
 

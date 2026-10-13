@@ -90,7 +90,7 @@ preferred source is absent. Report detected-but-incompatible separately from rea
 
 ### Guided Integration Setup
 
-Optional does not mean the operator must install tools manually. A Git MCP setup should present one CaberOS-owned preparation plan: the declared server package, Git, the MCP launcher/runtime, and any required Python environment. After explicit approval, fixed recipes prepare supported missing requirements, validate them, and configure the integration. Existing compatible installations are reused. Approving setup does not approve subsequent repository writes or expand agent capabilities.
+Optional does not mean the operator must install tools manually. ~~A Git MCP setup should present one CaberOS-owned preparation plan~~ — **combined Git MCP preparation is excluded from W11 by operator decision (2026-10-13)**; proactive General-settings runtime installs remain supported, and any future prep plan must still follow explicit approval, fixed recipes, reuse of compatible tools, and no expansion of repository-write or agent authority.
 
 Global General settings lists supported optional tools even when no integration currently needs them, so an operator can proactively install Git. An agent/workflow may request preparation, but downloads begin only after operator approval of the same trusted installation plan. No LLM-generated shell commands, arbitrary package/URL guesses, or implicit package downloads during probing.
 

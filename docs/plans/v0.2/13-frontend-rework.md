@@ -1,6 +1,6 @@
 # Frontend Rework (W13)
 
-**Status: Backlog.** Brainstorming starts after the other v0.2 workstreams land —
+**Status: Queued after W11 — upcoming, not deferred.** Brainstorming starts after the other v0.2 workstreams land —
 pages are still changing under W5/W8/W9, so refactoring now would churn work
 in flight. This doc is an inventory and direction note, not a spec.
 

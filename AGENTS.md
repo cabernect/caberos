@@ -285,11 +285,18 @@ subprocess recipes where useful, and guided system installation where a managed
 recipe is not verified. No automatic downloads or privilege escalation. See
 `docs/plans/v0.2/11-bug-fixes.md`, `12-dependencies.md`, and the W11 test plan.
 The implementation checkpoint includes local model offerings, frozen pricing
-receipts, dependency readiness, approved managed-install jobs, and SSE-first
-notifications. Backfill, combined Git MCP preparation, and real installer
-verification remain pending; see the W11 test-results document.
+receipts, dependency readiness, approved managed-install jobs, SSE-first
+notifications, native OpenAI context-tier cost capture, and MCP 401 challenge
+discovery (records consent-required config without any automatic OAuth flow).
+Chat intentionally shares a zero display for unresolved and genuine zero —
+the distinction lives in receipts/observability. Historical-cost backfill and
+combined Git MCP preparation are **excluded from W11** (operator decision
+2026-10-13). Real installer runs remain pending specific operator download
+consent. W13 frontend rework follows W11 — upcoming, not deferred.
+Closeout verification is in progress — not all of W11 is verified yet; see
+the W11 test-results document.
 Initial dependency scope follows implemented end-user features; FFmpeg/OCR remain deferred, and local MCP runtimes are conditional rather than app prerequisites.
-Optional Tools & Runtimes belongs in global Settings -> General (not agent General settings). Git MCP preparation is app-managed after explicit consent; optional does not mean nontechnical users must install Git manually.
+Optional Tools & Runtimes belongs in global Settings -> General (not agent General settings). Any future combined Git MCP preparation must be app-managed after explicit consent; it is excluded from W11.
 Catalog/accounting authority is the bundled/local models.dev snapshot with a daily validated refresh; LiteLLM is model execution only, not a metadata/pricing fallback. Catalog refresh is enabled by default and respects explicit opt-outs; the internal catalog has no maintenance card in General settings.
 
 ```bash
