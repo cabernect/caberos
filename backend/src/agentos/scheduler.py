@@ -315,7 +315,8 @@ async def _reconcile_stale_occurrences() -> None:
         for occ in stale:
             occ.status = "cancelled"
             occ.finished_at = _now()
-            occ.error = "Gateway restarted during execution"
+            restart_reason = "Gateway restarted during execution"
+            occ.error = f"{occ.error}; {restart_reason}" if occ.error else restart_reason
         if stale:
             await db.commit()
             log.info("Reconciled %d stale running occurrence(s)", len(stale))

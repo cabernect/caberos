@@ -666,6 +666,32 @@ async def test_reconcile_stale_occurrences(db, agent):
 
 
 @pytest.mark.asyncio
+async def test_reconcile_preserves_existing_error_note(db, agent):
+    """A stale 'running' occurrence that already carries a skip/error note
+    must keep it alongside the restart reason — overwriting loses context."""
+    sched = await _mk_schedule(db, agent)
+    rev = await svc.current_revision(db, sched)
+    occ = await svc._record_occurrence(db, sched, rev, NOW, status="running")
+    occ.started_at = NOW
+    occ.error = "2 earlier occurrence(s) skipped"
+    await db.commit()
+
+    await svc._reconcile_stale_occurrences()
+
+    await db.refresh(occ)
+    assert occ.status == "cancelled"
+    assert occ.finished_at is not None
+    assert "2 earlier occurrence(s) skipped" in occ.error
+    assert "Gateway restarted during execution" in occ.error
+
+    # Reconcile is only for 'running' rows — a second startup must not
+    # append the reason again.
+    await svc._reconcile_stale_occurrences()
+    await db.refresh(occ)
+    assert occ.error == "2 earlier occurrence(s) skipped; Gateway restarted during execution"
+
+
+@pytest.mark.asyncio
 async def test_restart_persistence_no_loss(db, agent):
     """Future next_fire survives a restart — sweep leaves it untouched."""
     sched = await _mk_schedule(db, agent)
