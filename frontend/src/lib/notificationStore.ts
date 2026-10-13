@@ -52,6 +52,10 @@ let toasts: Notification[] = [];
 const listeners = new Set<Listener>();
 let seenIds = new Set<string>();
 let baselineDone = false;
+// Wall time when this store session started — a delayed baseline response
+// can contain events emitted after mount; only truly historical rows are
+// marked seen without delivering.
+let watchStartedAt = 0;
 let refCount = 0;
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -277,29 +281,37 @@ async function fetchSnapshot(gen: number) {
     const live = notifications.filter(
       (x) => livePending.has(x.id) && !list.some((l) => l.id === x.id),
     );
-    if (!baselineDone) {
-      // First fetch is the baseline — existing rows don't re-deliver.
-      for (const n of list) seenIds.add(n.id);
-      baselineDone = true;
-      notifications = [...live, ...list];
-      loading = false;
-    } else {
-      notifications = [...live, ...list];
-      for (const n of notifications) {
-        if (!n.read && !seenIds.has(n.id)) {
-          process(n); // SSE-gap fallback
-          // Followers must get the fresh frame as if the stream lived —
-          // an invalidation alone would leave their ping undelivered.
-          if (leader) broadcastNotification(n);
+    const wasBaseline = !baselineDone;
+    if (wasBaseline) {
+      // First fetch is the baseline — but a delayed/failed initial fetch
+      // can return rows created after this store mounted (the gap between
+      // mount and the server's stream subscription). Those are live events,
+      // not history — only genuinely historical rows are marked seen.
+      for (const n of list) {
+        const createdAt = Date.parse(n.created_at);
+        if (n.read || !Number.isFinite(createdAt) || createdAt < watchStartedAt) {
+          seenIds.add(n.id);
         }
       }
-      livePending.clear();
-      loading = false;
-      // A completed leader-side catch-up/fallback pass is the one truth
-      // followers need — share it so they refresh once, without their own
-      // backend traffic.
-      if (leader) broadcastInboxChanged();
+      baselineDone = true;
     }
+    notifications = [...live, ...list];
+    for (const n of notifications) {
+      if (!n.read && !seenIds.has(n.id)) {
+        process(n); // SSE-gap fallback
+        // Followers must get the fresh frame as if the stream lived —
+        // an invalidation alone would leave their ping undelivered.
+        if (leader) broadcastNotification(n);
+      }
+    }
+    // The baseline response may predate rows that arrived live while it
+    // flew — keep livePending until a snapshot can actually see them.
+    if (!wasBaseline) livePending.clear();
+    loading = false;
+    // A completed leader-side catch-up/fallback pass is the one truth
+    // followers need — share it so they refresh once, without their own
+    // backend traffic.
+    if (leader) broadcastInboxChanged();
     emit();
   } catch {
     if (current(gen) && activeRequest === req) {
@@ -392,6 +404,7 @@ function start() {
   if (running) return;
   running = true;
   const gen = ++generation;
+  watchStartedAt = Date.now();
   baselineDone = false;
   loading = true;
   seenIds = new Set();
@@ -474,6 +487,7 @@ function stop() {
   toasts = [];
   seenIds = new Set();
   deferredReports.clear();
+  watchStartedAt = 0;
   baselineDone = false;
   loading = false;
   stopCrossTab();

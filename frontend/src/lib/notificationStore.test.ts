@@ -714,3 +714,299 @@ describe("SSE-first polling (B41)", () => {
     );
   });
 });
+
+describe("subscribe-transition gap repro (H04)", () => {
+  // Deterministic driver: attempt 1 HELLOs then closes (or rejects); the
+  // reconnect attempt waits on an externally-held promise before HELLO.
+  // A gap item is created AFTER mount but emitted server-side during the
+  // subscribe transition — it must surface exactly once via catch-up.
+
+  it("A: established-session reconnect — HELLO catch-up delivers the gap item once", async () => {
+    vi.setSystemTime("2026-10-13T04:00:00Z");
+    let attempts = 0;
+    let releaseSecond: (() => void) | null = null;
+    apiMock.streamNotifications.mockImplementation(
+      (_s: AbortSignal, onConnected?: () => void) => {
+        attempts++;
+        if (attempts === 1) {
+          return (async function* () {
+            onConnected?.(); // healthy HELLO
+            // then EOF → loop enters reconnect backoff
+          })();
+        }
+        return (async function* () {
+          await new Promise<void>((r) => (releaseSecond = r));
+          onConnected?.(); // reconnect HELLO
+          await new Promise(() => {}); // stays open
+        })();
+      },
+    );
+    const item = notif({ id: "n-gap-a", created_at: "2026-10-13T04:00:01Z" });
+    apiMock.listNotifications
+      .mockResolvedValueOnce([]) // baseline
+      .mockResolvedValueOnce([]) // first-HELLO catch-up — predates the emit
+      .mockResolvedValue([item]); // reconnect catch-up sees the gap item
+    const toasts = mountToasts();
+    const inbox = mountInbox();
+    await flush(20);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    await flush(20);
+    expect(attempts).toBe(2); // reconnect attempt opened, HELLO pending
+    await act(async () => {
+      releaseSecond?.();
+    });
+    await flush(30);
+    expect(toasts.result.current.filter((t) => t.id === item.id)).toHaveLength(
+      1,
+    );
+    expect(
+      apiMock.reportDelivery.mock.calls.filter(
+        (c) => c[0] === item.id && c[1] === "toast",
+      ),
+    ).toHaveLength(1);
+    expect(apiMock.reportDelivery).toHaveBeenCalledWith(
+      item.id,
+      "toast",
+      "delivered",
+      undefined,
+    );
+    expect(apiMock.markNotificationRead).not.toHaveBeenCalledWith(item.id);
+    expect(inbox.result.current.some((n) => n.id === item.id)).toBe(true);
+    // A repeat refresh must not re-toast or re-report.
+    refreshNotifications();
+    await flush(20);
+    expect(toasts.result.current.filter((t) => t.id === item.id)).toHaveLength(
+      1,
+    );
+    expect(
+      apiMock.reportDelivery.mock.calls.filter(
+        (c) => c[0] === item.id && c[1] === "toast",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("B: initial fetch+stream fail offline, then recovery delivers the gap item once", async () => {
+    vi.setSystemTime("2026-10-13T04:00:00Z");
+    let attempts = 0;
+    let releaseSecond: (() => void) | null = null;
+    apiMock.streamNotifications.mockImplementation(
+      (_s: AbortSignal, onConnected?: () => void) => {
+        attempts++;
+        if (attempts === 1) {
+          return (async function* () {
+            throw new Error("backend offline");
+          })();
+        }
+        return (async function* () {
+          await new Promise<void>((r) => (releaseSecond = r));
+          onConnected?.();
+          await new Promise(() => {});
+        })();
+      },
+    );
+    const gap = notif({ id: "n-gap-b", created_at: "2026-10-13T04:00:01Z" });
+    const old = notif({ id: "n-old-b", created_at: "2026-10-12T00:00:00Z" });
+    apiMock.listNotifications
+      .mockRejectedValueOnce(new Error("backend offline")) // initial baseline
+      .mockResolvedValue([old, gap]); // catch-up sees both
+    const toasts = mountToasts();
+    const inbox = mountInbox();
+    await flush(20);
+    expect(attempts).toBe(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    await flush(20);
+    expect(attempts).toBe(2); // reconnect opened, HELLO held
+    await act(async () => {
+      releaseSecond?.();
+    });
+    await flush(30);
+    expect(toasts.result.current.filter((t) => t.id === gap.id)).toHaveLength(
+      1,
+    );
+    const gapReports = apiMock.reportDelivery.mock.calls.filter(
+      (c) => c[0] === gap.id && c[1] === "toast",
+    );
+    expect(gapReports).toHaveLength(1);
+    expect(apiMock.reportDelivery).toHaveBeenCalledWith(
+      gap.id,
+      "toast",
+      "delivered",
+      undefined,
+    );
+    // Historical row must not toast and must never be reported.
+    expect(toasts.result.current.filter((t) => t.id === old.id)).toHaveLength(
+      0,
+    );
+    expect(
+      apiMock.reportDelivery.mock.calls.filter((c) => c[0] === old.id),
+    ).toHaveLength(0);
+    expect(apiMock.markNotificationRead).not.toHaveBeenCalledWith(gap.id);
+    expect(inbox.result.current.some((n) => n.id === gap.id)).toBe(true);
+    // Repeat catch-up refresh — still exactly one delivery.
+    refreshNotifications();
+    await flush(20);
+    expect(
+      apiMock.reportDelivery.mock.calls.filter(
+        (c) => c[0] === gap.id && c[1] === "toast",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("C: in-flight baseline overlap — server-returned gap item delivered once", async () => {
+    vi.setSystemTime("2026-10-13T04:00:00Z");
+    let resolveBaseline: ((v: Notification[]) => void) | null = null;
+    const finishBaseline = (rows: Notification[]) => resolveBaseline?.(rows);
+    apiMock.streamNotifications.mockImplementation(
+      (_s: AbortSignal, onConnected?: () => void) =>
+        (async function* () {
+          onConnected?.(); // HELLO lands while baseline fetch is pending
+          await new Promise(() => {});
+        })(),
+    );
+    const old = notif({ id: "n-old-c", created_at: "2026-10-12T00:00:00Z" });
+    const gap = notif({ id: "n-gap-c", created_at: "2026-10-13T04:00:01Z" });
+    apiMock.listNotifications
+      .mockImplementationOnce(() => new Promise((r) => (resolveBaseline = r)))
+      .mockResolvedValue([old, gap]); // committed rows persist in follow-ups
+    const toasts = mountToasts();
+    const inbox = mountInbox();
+    await flush(20); // HELLO + catch-up queued behind the held baseline
+    // The baseline response carries the row the server emitted during the
+    // subscribe transition — no SSE frame ever arrives for it.
+    finishBaseline([old, gap]);
+    await flush(30);
+    // Healthy-pipeline control: a later pushed item does toast.
+    const control = notif({
+      id: "n-live-c",
+      created_at: "2026-10-13T04:00:02Z",
+    });
+    const cb = crossTabMock.onNotification.mock.calls[0]?.[0];
+    cb?.(control);
+    await flush(20);
+    expect(toasts.result.current.filter((t) => t.id === control.id)).toHaveLength(
+      1,
+    );
+    // The gap item must be delivered exactly once — not lost to the
+    // baseline's "already present" semantics.
+    expect(toasts.result.current.filter((t) => t.id === gap.id)).toHaveLength(
+      1,
+    );
+    expect(
+      apiMock.reportDelivery.mock.calls.filter(
+        (c) => c[0] === gap.id && c[1] === "toast",
+      ),
+    ).toHaveLength(1);
+    expect(toasts.result.current.filter((t) => t.id === old.id)).toHaveLength(
+      0,
+    );
+    expect(
+      apiMock.reportDelivery.mock.calls.filter((c) => c[0] === old.id),
+    ).toHaveLength(0);
+    expect(inbox.result.current.some((n) => n.id === gap.id)).toBe(true);
+    refreshNotifications();
+    await flush(20);
+    expect(
+      apiMock.reportDelivery.mock.calls.filter(
+        (c) => c[0] === gap.id && c[1] === "toast",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("D: baseline read:true row never reports even when timestamp is fresh", async () => {
+    vi.setSystemTime("2026-10-13T04:00:00Z");
+    const readFresh = notif({
+      id: "n-read-fresh",
+      created_at: "2026-10-13T04:00:01Z",
+      read: true,
+    });
+    apiMock.listNotifications.mockResolvedValue([readFresh]);
+    mountToasts();
+    mountInbox();
+    await flush(30);
+    expect(apiMock.reportDelivery).not.toHaveBeenCalled();
+  });
+
+  it("E: unparseable created_at is treated as historical, never delivered", async () => {
+    vi.setSystemTime("2026-10-13T04:00:00Z");
+    const bad = notif({ id: "n-baddate", created_at: "not-a-date" });
+    apiMock.listNotifications.mockResolvedValue([bad]);
+    mountToasts();
+    mountInbox();
+    await flush(30);
+    expect(apiMock.reportDelivery).not.toHaveBeenCalled();
+    // Still lands in the inbox as a row — suppressed from delivery, not data.
+  });
+
+  it("F: same-millisecond created_at as watch start is treated as fresh", async () => {
+    vi.setSystemTime("2026-10-13T04:00:00Z");
+    const sameMs = notif({
+      id: "n-samems",
+      created_at: new Date(Date.now()).toISOString(),
+    });
+    apiMock.listNotifications.mockResolvedValue([sameMs]);
+    const toasts = mountToasts();
+    mountInbox();
+    await flush(30);
+    expect(toasts.result.current.filter((t) => t.id === sameMs.id)).toHaveLength(
+      1,
+    );
+    expect(
+      apiMock.reportDelivery.mock.calls.filter(
+        (c) => c[0] === sameMs.id && c[1] === "toast",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("G: UTC-offset created_at parses to the same instant", async () => {
+    vi.setSystemTime("2026-10-13T04:00:00Z");
+    const offset = notif({
+      id: "n-offset",
+      created_at: "2026-10-13T13:00:01+09:00", // == 04:00:01Z
+    });
+    apiMock.listNotifications.mockResolvedValue([offset]);
+    const toasts = mountToasts();
+    mountInbox();
+    await flush(30);
+    expect(toasts.result.current.filter((t) => t.id === offset.id)).toHaveLength(
+      1,
+    );
+  });
+
+  it("H: fresh baseline row on a follower toasts, then promotion reports once (no dup)", async () => {
+    vi.setSystemTime("2026-10-13T04:00:00Z");
+    let leaderCb: ((v: boolean) => void) | undefined;
+    crossTabMock.onLeaderChange.mockImplementation(
+      (cb: (v: boolean) => void) => {
+        leaderCb = cb;
+        return () => {};
+      },
+    );
+    crossTabMock.isLeader.mockReturnValue(false);
+    const fresh = notif({
+      id: "n-fresh-follower",
+      created_at: "2026-10-13T04:00:01Z",
+    });
+    apiMock.listNotifications.mockResolvedValue([fresh]);
+    const toasts = mountToasts();
+    mountInbox();
+    await flush(30);
+    expect(toasts.result.current.filter((t) => t.id === fresh.id)).toHaveLength(
+      1,
+    );
+    expect(apiMock.reportDelivery).not.toHaveBeenCalled(); // follower defers
+    leaderCb!(true);
+    await flush(30);
+    expect(
+      apiMock.reportDelivery.mock.calls.filter(
+        (c) => c[0] === fresh.id && c[1] === "toast",
+      ),
+    ).toHaveLength(1);
+    expect(toasts.result.current.filter((t) => t.id === fresh.id)).toHaveLength(
+      1,
+    );
+  });
+});
