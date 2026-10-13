@@ -1,6 +1,6 @@
 # W11 Runtime Readiness — Test Results
 
-**Current closeout status (2026-10-13):** confirmed B1/B30 residual defects fixed; final local backend/frontend gates pass. Real managed-install downloads remain NOT RUN awaiting specific operator consent. Historical slice reports below are retained and do not define remaining scope.
+**Current closeout status (2026-10-13):** confirmed B1/B30 residual defects, B48 notification gap, and B49 cancellation bookkeeping fixed. The prior full backend gate passed 1121 tests before B49; the frontend gate passed 164 tests. B49's focused verification is recorded below. The independent report records approved real Node/uv installs on macOS ARM64; Git real-install verification remains incomplete. Install-dialog UI is operator-verified; no additional UI rerun is required. Historical slice reports below are retained and do not define remaining scope.
 
 **Scope of this report:** Track A — model catalog foundation, execution
 accounting glue, and receipt read projection. This is a *slice* result, not
@@ -294,3 +294,38 @@ Log: `.scratch/w11/installer-backend-tests.log`. **No real downloads or installs
   localhost callback `redirect_uri`.
 - NOT exercised: real installer downloads — awaiting operator consent for
   Node 24.21.0 / uv 0.12.24 / Git 2.53.0 under `/tmp/w11-live-install-qa`.
+
+## B48 notification baseline gap (2026-10-13)
+
+- Following independent H04 review, black-box probes exposed a startup
+  gap with the same stranded-notification symptom in
+  `frontend/src/lib/notificationStore.test.ts` (A–H): offline-failed
+  baseline → recovery and in-flight baseline carrying the transition row
+  both stranded delivery; established-session reconnect was already green.
+  Red: `.scratch/w11/notif-gap-red-final.log` (5 failed). Fix in
+  `notificationStore.ts` — `watchStartedAt` marks only historical baseline
+  rows; fresh rows run the existing delivery pipeline. Green:
+  `notif-gap-frontend-test.log` (164), lint 0 errors, build OK.
+  The original H04 probe was deleted; its precise cause remains unproven.
+- Live QA proof (isolated :18081/:15173, held fetch+stream via init-script):
+  emitted `2a1f6213` during the hold → release → exactly one toast +
+  `toast|delivered|1` delivery row; 30 s idle → zero recurring inbox GETs.
+  The saved screenshot `.scratch/w11/qa-h04-gap-toast.png` was captured
+  after dismissal and does not prove visible toast rendering. The QA-only
+  recipe `/tmp/w11-qa/handoff/notif-intercept.js` also holds preference
+  GETs, so this live check covers delayed startup, not solely an in-flight
+  inbox request. The focused regressions cover that precise request race.
+
+## B49 cancel-job dependency statuses (2026-10-13)
+
+- Scratch probe proved parent `cancelled` vs dep `pending` mismatch
+  (`.scratch/w11/check-cancel-dependency-state.log`); fix adds
+  `_finalize_cancelled_dependencies` for both the in-flight and queued-cancel
+  paths. Red: `cancel-dep-state-red.log` (4); green:
+  `cancel-dep-state-green.log` + **83 passed** on the three installer-focused
+  files; Ruff clean/format on the two touched files.
+- API fixture evidence (QA `:18081`, canned persisted job — no real
+  install): `GET /api/dependencies/jobs/{id}` returns `git:cancelled,
+  nodejs:not_started`. This cancellation check uses fixtures without
+  downloading anything; the independent report separately records approved
+  real Node/uv installs.

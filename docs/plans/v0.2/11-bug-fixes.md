@@ -769,6 +769,80 @@ fragments + double-run stability).
 
 **Tests:** `test_agent_attribution_snapshots_name`, `test_prune_notifications_ages_out_rows_and_deliveries`; vitest `quiet hours do NOT silence approval_required`. Verified live: columns + `ix_notifications_agent_id` in the app DB, gateway healthy after patch.
 
+### B48 — Initial notification baseline suppresses events created during startup/recovery (FIXED 2026-10-13)
+
+**Symptom (confirmed startup reproductions following H04 review):** a notification committed while the
+frontend's first inbox `GET` (or the stream subscription it precedes) is
+still pending is never delivered — 0 delivery rows, stays unread, stranded
+permanently after the next snapshot. Reproduced only in the
+startup/recovery window: a notification emitted mid-transition vanished;
+a later one during a healthy stream delivered instantly.
+
+**Root cause:** `notificationStore.fetchSnapshot` treated the FIRST
+successful list response as a pure baseline — `seenIds.add(n.id)` for every
+row — suppressing rows created after the store mounted (offline→recovery,
+in-flight baseline overlap, or any delayed initial fetch). Established-session
+HELLO catch-ups were unaffected, which is why the gap was invisible in
+normal reconnect flows. Not B38 — B38 is the follower-promotion
+`deferredReports` mechanism, already fixed; the original H04 probe was
+deleted, so its exact initialization involvement remains unproven.
+
+**Fix applied:** the store records `watchStartedAt = Date.now()` when
+`start()` begins (before async prefs/fetch; reset on `stop()`; not reset on
+retries). The baseline marks as seen only rows that are `read`, have an
+unparseable `created_at`, or were created before mount; fresh rows fall
+through the existing fresh-unread process/broadcast pipeline unchanged.
+`livePending` keeps its stale-snapshot protection. Regressions (vitest,
+`notificationStore.test.ts` "subscribe-transition gap repro (H04)" probes
+A–H): offline baseline failure → recovery delivers once; in-flight
+baseline containing the gap row delivers once; established reconnect
+unchanged; read/invalid-date rows stay suppressed; same-millisecond and
+UTC-offset timestamps parse fresh; follower-toast→promotion reports once.
+32 tests pass. Live QA evidence (held fetch+stream via init-script,
+committed `2a1f6213` during hold, release): exactly one toast + one
+`toast|delivered` delivery row, zero recurring GETs after HELLO.
+
+**Independent re-verification (2026-10-13, QA :18081/:15173, uncommitted
+fix tree):** fresh browser session, confirmed leader (prefs + snapshot +
+stream + failed-deliveries in backend log). Probes emitted at 0/1/2/4/7 s
+offsets around a reload — all produced `toast:delivered` rows (~10 ms,
+`attempts=1`), inbox rows correctly unread. Emits while no session existed
+took the baseline-suppression path (unread, zero deliveries). Two-tab
+promotion: leader closed, probe emitted 1 s later delivered by the
+promoted follower within 8 s. The post-`watchStartedAt`-inside-first-
+snapshot slice (~40 ms on localhost) is unit-covered rather than
+live-hit. **Verdict: verified fixed** — no stranding across the
+reload/close/promotion boundaries that stranded the original probe.
+
+### B49 — Cancelled install job leaves in-flight dependency status `pending` (FIXED 2026-10-13)
+
+**Symptom (independent-test cosmetic observation, confirmed):** cancelling an
+install job mid-download leaves the job-level `state` at `cancelled` but the
+in-flight dependency row still reads `pending` — the persisted job is
+misleading about which dependency was actually in flight.
+
+**Root cause:** `runtime_installer._run_job`'s `asyncio.CancelledError` path
+(and the queued-cancel `_job_done` terminalization) set only the parent
+`state` — nothing finalized per-dependency `pending` rows.
+
+**Fix applied:** `RuntimeInstaller._finalize_cancelled_dependencies` — on a
+cancelled job, pending rows become `cancelled` when the row is the
+job's `current_dep`, otherwise `not_started`; reused/completed/failed rows
+are preserved. Called in `_run_job`'s `finally` (covers cooperative
+`_CancelRequested` and task cancellation) and in `_job_done`'s
+cancelling→cancelled terminalization (covers queued cancels before the
+worker's first await). Regressions: `test_cancel_marks_dependency_states`
+(event-held download, reload-stable statuses, dep lock released),
+strengthened `test_queued_cancel_resolves`, param'd
+`test_cancel_preserves_earlier_dep_status[completed|reused]` (earlier dep
+preserved, double-cancel idempotent). Red:
+`.scratch/w11/cancel-dep-state-red.log`; green: `cancel-dep-state-green.log`
+(4 cancel tests) + `test_runtime_installer.py` + `test_dependencies.py` +
+`test_mcp_stdio_resolver.py` = **83 passed**. Real QA API evidence:
+canned cancelled-job JSON read via `GET /api/dependencies/jobs/{id}` on the
+isolated QA stack returns `git:cancelled, nodejs:not_started` (fixture —
+no real download/install run).
+
 ## Tests first
 
 - Fake HTTP MCP that 401s with `WWW-Authenticate` → server gains
