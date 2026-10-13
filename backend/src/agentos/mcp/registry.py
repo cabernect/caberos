@@ -23,7 +23,7 @@ import json
 import logging
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..capabilities.catalog import mcp_server_grant_name
@@ -54,26 +54,36 @@ async def _notify_connection_failure(server: McpServer, error: str) -> None:
         return
     from ..notifications import create_notification
 
+    consent_required = "oauth authorization required" in error.lower()
     is_oauth_failure = "oauth" in error.lower()
-    if is_oauth_failure:
+    if consent_required:
+        notification_type = "oauth_reauth_required"
+        title = f"Authorize {server.name}"
+        message = (
+            "This MCP server requires OAuth. Connect with OAuth from the "
+            "dashboard to authorize access."
+        )
+        severity = "warning"
+    elif is_oauth_failure:
         notification_type = "oauth_reauth_required"
         title = f"Reconnect {server.name}"
+        message = (
+            "The OAuth refresh token is no longer valid. "
+            "Re-authorize this MCP server to restore access."
+        )
+        severity = "error"
     else:
         notification_type = "mcp_connection_failed"
         title = f"MCP connection failed: {server.name}"
-    message = (
-        "The OAuth refresh token is no longer valid. "
-        "Re-authorize this MCP server to restore access."
-        if is_oauth_failure
-        else f"{error} Check the MCP server and reconnect from the dashboard."
-    )
+        message = f"{error} Check the MCP server and reconnect from the dashboard."
+        severity = "error"
 
     try:
         async with async_session_factory() as db:
             await create_notification(
                 db,
                 notification_type=notification_type,
-                severity="error",
+                severity=severity,
                 title=title,
                 message=message,
                 action_path="/mcps",
@@ -83,6 +93,27 @@ async def _notify_connection_failure(server: McpServer, error: str) -> None:
             _notification_errors[server.id] = error
     except Exception:
         log.exception("Failed to persist MCP connection failure notification")
+
+
+async def _record_oauth_requirement(server: McpServer) -> None:
+    """Persist a default consent config for a server that answered a Bearer
+    challenge without a declared OAuth config. Re-reads the row so a
+    concurrently saved non-empty config is never overwritten."""
+    default = {
+        "scope": "",
+        "redirect_uri": f"http://localhost:{settings.control_plane_port}/api/mcp/oauth/callback",
+    }
+    async with async_session_factory() as db:
+        # Only fill an empty slot — a concurrently saved non-empty config wins.
+        await db.execute(
+            update(McpServer)
+            .where(McpServer.id == server.id, McpServer.oauth_config.is_(None))
+            .values(oauth_config=json.dumps(default))
+        )
+        await db.commit()
+        row = await db.get(McpServer, server.id, populate_existing=True)
+        if row is not None and row.oauth_config:
+            server.oauth_config = row.oauth_config
 
 
 def _namespace(server_name: str, tool_name: str) -> str:
@@ -212,7 +243,10 @@ async def connect_server(server: McpServer) -> bool:
                     "Use the 'Connect with OAuth' button in the dashboard.",
                     server.name,
                 )
-                return False
+                raise ConnectionError(
+                    f"MCP server '{server.name}' OAuth authorization required "
+                    "— connect via dashboard"
+                )
 
         client = McpClient(
             transport=server.transport,
@@ -226,12 +260,27 @@ async def connect_server(server: McpServer) -> bool:
         )
         try:
             await client.connect()
-        except TimeoutError:
-            if oauth_reauth_required:
+        except Exception as connect_error:
+            if (
+                server.transport == "http"
+                and not oauth_config
+                and getattr(client, "oauth_required", False)
+            ):
+                # The initialize response carried a Bearer challenge —
+                # persist a default consent config so the dashboard can
+                # offer Connect OAuth, then let the ConnectionError path
+                # record guidance and notify.
+                await _record_oauth_requirement(server)
                 raise ConnectionError(
-                    f"MCP server '{server.name}' OAuth re-authentication required "
-                    "— use the dashboard"
-                )
+                    f"MCP server '{server.name}' OAuth authorization required "
+                    "— connect via dashboard"
+                ) from connect_error
+            if isinstance(connect_error, TimeoutError):
+                if oauth_reauth_required:
+                    raise ConnectionError(
+                        f"MCP server '{server.name}' OAuth re-authentication "
+                        "required — use the dashboard"
+                    ) from connect_error
             raise
         _clients[server.id] = client
 

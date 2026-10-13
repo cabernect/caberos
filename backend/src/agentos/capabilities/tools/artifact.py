@@ -132,16 +132,3 @@ async def artifact_restore(args: dict[str, Any], workspace_path: str, **kwargs: 
     except (ArtifactError, KeyError):
         pass
     return out
-
-
-async def artifact_export_pdf(args: dict[str, Any], workspace_path: str, **kwargs: Any) -> dict:
-    """artifact_export_pdf(artifact_id) → render current revision to PDF."""
-    try:
-        return await service.export_pdf(
-            kwargs["db"],
-            args["artifact_id"],
-            workspace_path=workspace_path,
-            **_provenance(kwargs),
-        )
-    except ArtifactError as e:
-        return {"error": str(e)}

@@ -21,9 +21,13 @@ interface ModelSelectorProps {
 interface ProviderModels {
   provider: Provider;
   models: ModelInfo[];
+  listRevision?: string;
 }
 
-const modelCache = new Map<string, ModelInfo[]>();
+interface LoadState {
+  generation: number;
+  mounted: boolean;
+}
 
 export function ModelSelector({
   defaultProviderId,
@@ -31,6 +35,7 @@ export function ModelSelector({
   onChange,
 }: ModelSelectorProps) {
   const [providers, setProviders] = useState<ProviderModels[]>([]);
+  const [loadErrors, setLoadErrors] = useState<Set<string>>(new Set());
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
@@ -40,43 +45,82 @@ export function ModelSelector({
       : "",
   );
 
+  // Per-instance request generation — two mounted selectors never
+  // invalidate each other, and an out-of-order provider list or model
+  // response can never reset newer state.
+  const loadState = useRef<LoadState>({ generation: 0, mounted: true });
+
+  const refreshProviders = () => {
+    const gen = ++loadState.current.generation;
+    api
+      .listProviders()
+      .then((provs) => {
+        if (!loadState.current.mounted || gen !== loadState.current.generation)
+          return;
+        setProviders((current) =>
+          provs.map((provider) => {
+            const existing = current.find(
+              (e) => e.provider.id === provider.id,
+            );
+            // Keep last-known models during the fresh GET — a slow or
+            // failed refresh shows the stale list, not an empty one.
+            return { provider, models: existing?.models ?? [], listRevision: existing?.listRevision };
+          }),
+        );
+        for (const provider of provs) {
+          api
+            .listModels(provider.id)
+            .then((resp) => {
+              if (
+                !loadState.current.mounted ||
+                gen !== loadState.current.generation
+              )
+                return;
+              setLoadErrors((prev) => {
+                const next = new Set(prev);
+                next.delete(provider.id);
+                return next;
+              });
+              setProviders((current) =>
+                current.map((entry) =>
+                  entry.provider.id === provider.id
+                    ? {
+                        ...entry,
+                        models: resp.models,
+                        listRevision: resp.revision,
+                      }
+                    : entry,
+                ),
+              );
+            })
+            .catch(() => {
+              if (
+                !loadState.current.mounted ||
+                gen !== loadState.current.generation
+              )
+                return;
+              // Retain last-known metadata; flag the provider as stale
+              // rather than dropping its entries.
+              setLoadErrors((prev) => new Set(prev).add(provider.id));
+            });
+        }
+      })
+      .catch(() => {
+        if (loadState.current.mounted && gen === loadState.current.generation) {
+          setProviders([]);
+          setLoadErrors(new Set());
+        }
+      });
+  };
+
+  // Local GET on mount — the backend never probes upstream here.
   useEffect(() => {
-    let cancelled = false;
-
-    api.listProviders().then((provs) => {
-      if (cancelled) return;
-
-      // Render providers immediately. Each model list arrives independently so
-      // one slow or unavailable provider cannot block the whole selector.
-      setProviders(
-        provs.map((provider) => ({
-          provider,
-          models: modelCache.get(provider.id) || [],
-        })),
-      );
-
-      for (const provider of provs) {
-        if (modelCache.has(provider.id)) continue;
-
-        api.listModels(provider.id).then((resp) => {
-          if (cancelled) return;
-          modelCache.set(provider.id, resp.models);
-          setProviders((current) =>
-            current.map((entry) =>
-              entry.provider.id === provider.id
-                ? { ...entry, models: resp.models }
-                : entry,
-            ),
-          );
-        }).catch(() => {
-          // Keep the provider visible even when its discovery endpoint fails.
-        });
-      }
-    }).catch(() => {
-      if (!cancelled) setProviders([]);
-    });
-
-    return () => { cancelled = true; };
+    loadState.current.mounted = true;
+    refreshProviders();
+    return () => {
+      loadState.current.mounted = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleSelect = (
@@ -106,32 +150,29 @@ export function ModelSelector({
     );
     setOpen(false);
     setSearch("");
-    // Look up the default model's capabilities from the providers list
-    // so thinking/vision toggles work with the default model too
     const defaultModel = lookupDefaultModel();
     onChange(defaultModel);
   };
 
-  // Find the default model's metadata (capabilities) from loaded providers
   const lookupDefaultModel = (): SelectedModel | null => {
     if (!defaultProviderId || !defaultModelName) return null;
     const pm = providers.find((p) => p.provider.id === defaultProviderId);
     if (!pm) return null;
-    const model = pm.models.find((m) => m.name === defaultModelName);
+    const model = pm.models.find((m) => m.id === defaultModelName);
     if (!model) return null;
     return {
       provider_id: defaultProviderId,
-      name: defaultModelName,
+      name: model.id,
       supports_vision: model.supports_vision,
       supports_thinking: model.supports_thinking,
       thinking_efforts: model.thinking_efforts,
     };
   };
 
-  // When providers load and the current selection is the agent default
-  // (or no explicit selection), emit the default model's capabilities so
-  // thinking/vision toggles work. Use a ref so we don't keep re-emitting
-  // the same default when providers refresh or selected flips back.
+  // Emit the default model's capabilities so thinking/vision toggles
+  // work. The emitted key includes the metadata revision so a catalog
+  // refresh emits exactly once for the *changed* capability set — not a
+  // re-render loop on every list refresh.
   const emittedDefaultKey = useRef<string | null>(null);
   useEffect(() => {
     if (providers.length === 0) return;
@@ -140,18 +181,32 @@ export function ModelSelector({
     const defaultKey = `${defaultProviderId}/${defaultModelName}`;
     const isCurrentlyDefault = !selected || selected === defaultKey;
     if (!isCurrentlyDefault) return;
-    if (emittedDefaultKey.current === defaultKey) return;
 
-    const defaultModel = lookupDefaultModel();
-    if (defaultModel) {
-      setSelected(defaultKey);
-      onChange(defaultModel);
-      emittedDefaultKey.current = defaultKey;
-    }
+    const pm = providers.find((p) => p.provider.id === defaultProviderId);
+    const model = pm?.models.find((m) => m.id === defaultModelName);
+    if (!model) return;
+    // Emit once per actual capability change: same row revision but a
+    // flipped flag (or a legacy backend without revisions) still re-emits.
+    const signature = JSON.stringify([
+      model.supports_vision ?? null,
+      model.supports_thinking ?? null,
+      model.thinking_efforts ?? [],
+    ]);
+    const key = `${defaultKey}/${pm?.listRevision ?? ""}:${model.revision ?? ""}:${model.snapshot_revision ?? ""}:${signature}`;
+    if (emittedDefaultKey.current === key) return;
+    emittedDefaultKey.current = key;
+    setSelected(defaultKey);
+    onChange(lookupDefaultModel());
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [providers, defaultProviderId, defaultModelName, selected, onChange]);
+  }, [providers, defaultProviderId, defaultModelName, selected]);
 
-  // Focus search input when dropdown opens
+  // Refetch on every open — the listing is local so this stays cheap.
+  const toggleOpen = () => {
+    const next = !open;
+    setOpen(next);
+    if (next) refreshProviders();
+  };
+
   useEffect(() => {
     if (open) {
       setTimeout(() => searchRef.current?.focus(), 0);
@@ -160,7 +215,6 @@ export function ModelSelector({
     }
   }, [open]);
 
-  // Filter models by search query (case-insensitive, matches model name or provider name)
   const searchLower = search.toLowerCase();
   const filteredProviders = search
     ? providers
@@ -168,7 +222,8 @@ export function ModelSelector({
           provider,
           models: models.filter(
             (m) =>
-              m.name.toLowerCase().includes(searchLower) ||
+              m.id.toLowerCase().includes(searchLower) ||
+              (m.display_name ?? "").toLowerCase().includes(searchLower) ||
               provider.name.toLowerCase().includes(searchLower),
           ),
         }))
@@ -176,18 +231,71 @@ export function ModelSelector({
     : providers;
 
   const isDefault =
-    !selected || (defaultProviderId && defaultModelName && selected === `${defaultProviderId}/${defaultModelName}`);
-  const defaultProviderName = providers.find((p) => p.provider.id === defaultProviderId)?.provider.name;
+    !selected ||
+    (defaultProviderId &&
+      defaultModelName &&
+      selected === `${defaultProviderId}/${defaultModelName}`);
+  const defaultProviderName = providers.find(
+    (p) => p.provider.id === defaultProviderId,
+  )?.provider.name;
   const selectedLabel = isDefault
     ? defaultModelName
       ? `${defaultModelName} · ${defaultProviderName || defaultProviderId?.slice(0, 8)} (default)`
       : "Select a model…"
     : formatModelLabel(selected, providers);
 
+  const availabilityNote = (model: ModelInfo): string | null => {
+    const parts: string[] = [];
+    if (model.availability === "unavailable") parts.push("unavailable");
+    else if (model.availability === "unknown") parts.push("unknown");
+    if (model.stale) parts.push("stale");
+    return parts.length ? ` · ${parts.join(" · ")}` : null;
+  };
+
+  // Per-field source + confidence labels — distinct for each limit, no
+  // "unsupported" claim on unknown.
+  const fmt = (v: number) =>
+    v >= 1000 ? `${Math.round(v / 1000)}K` : String(v);
+  const fieldTip = (
+    label: string,
+    value: number | null | undefined,
+    source?: string,
+    confidence?: string,
+  ): string => {
+    const shown =
+      value != null ? `${value.toLocaleString()} tokens` : "Unknown";
+    const src = source ?? "unknown";
+    const conf = confidence ?? "unknown";
+    return `${label}: ${shown} — ${src} (${conf})`;
+  };
+  const limitsTitle = (model: ModelInfo): string => {
+    const prov = model.provenance ?? {};
+    return [
+      fieldTip(
+        "Input limit",
+        model.max_context_tokens,
+        prov["max_context_tokens"]?.source,
+        prov["max_context_tokens"]?.confidence,
+      ),
+      fieldTip(
+        "Total context",
+        model.context_window_tokens,
+        prov["context_window_tokens"]?.source,
+        prov["context_window_tokens"]?.confidence,
+      ),
+      fieldTip(
+        "Output limit",
+        model.max_output_tokens,
+        prov["max_output_tokens"]?.source,
+        prov["max_output_tokens"]?.confidence,
+      ),
+    ].join("\n");
+  };
+
   return (
     <div className="relative shrink-0">
       <button
-        onClick={() => setOpen(!open)}
+        onClick={toggleOpen}
         className="flex items-center gap-1 rounded-[5px] border px-2 py-1.5 font-mono text-[12px] whitespace-nowrap transition"
         style={{
           borderColor: "var(--border)",
@@ -202,7 +310,9 @@ export function ModelSelector({
           (e.currentTarget.style.borderColor = "var(--border)")
         }
       >
-        <span className="max-w-[200px] truncate" title={selectedLabel}>{selectedLabel}</span>
+        <span className="max-w-[200px] truncate" title={selectedLabel}>
+          {selectedLabel}
+        </span>
         <span
           className="text-[10px] opacity-60"
           style={{ transform: open ? "rotate(180deg)" : "none" }}
@@ -213,10 +323,7 @@ export function ModelSelector({
 
       {open && (
         <>
-          <div
-            className="fixed inset-0 z-40"
-            onClick={() => setOpen(false)}
-          />
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
           <div
             className="absolute bottom-full left-0 z-50 mb-1 max-h-80 min-w-[240px] overflow-y-auto rounded-md border p-1 shadow-lg"
             style={{
@@ -225,7 +332,6 @@ export function ModelSelector({
               boxShadow: "0 4px 16px rgba(0,0,0,0.08)",
             }}
           >
-            {/* Search input */}
             <div className="relative mb-1">
               <Search
                 className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
@@ -249,20 +355,23 @@ export function ModelSelector({
               />
             </div>
 
-            {/* Current model — highlighted at top so user always sees what's active */}
             {!search && selected && !isDefault && (
               <div
                 className="mb-1 flex items-center gap-2 rounded-[4px] px-3 py-1.5 font-mono text-[12px]"
                 style={{ background: "var(--surface)", color: "var(--accent)" }}
               >
-                <span className="text-[10px] font-bold uppercase" style={{ color: "var(--accent)" }}>
+                <span
+                  className="text-[10px] font-bold uppercase"
+                  style={{ color: "var(--accent)" }}
+                >
                   Current
                 </span>
-                <span className="truncate" title={selectedLabel}>{selectedLabel}</span>
+                <span className="truncate" title={selectedLabel}>
+                  {selectedLabel}
+                </span>
               </div>
             )}
 
-            {/* Default option */}
             <button
               onClick={handleUseDefault}
               className={cn(
@@ -270,21 +379,21 @@ export function ModelSelector({
               )}
               style={{
                 color:
-                  !selected || selected === `${defaultProviderId}/${defaultModelName}`
+                  !selected ||
+                  selected === `${defaultProviderId}/${defaultModelName}`
                     ? "var(--accent)"
                     : "var(--ink)",
               }}
               onMouseEnter={(e) =>
                 (e.currentTarget.style.background = "var(--surface)")
               }
-              onMouseLeave={(e) =>
-                (e.currentTarget.style.background = "none")
-              }
+              onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
             >
               <span style={{ color: "var(--ink-2)" }}>Agent default</span>
               {defaultModelName && (
                 <span style={{ color: "var(--ink-3)" }}>
-                  {defaultModelName} · {defaultProviderName || defaultProviderId?.slice(0, 8)}
+                  {defaultModelName} ·{" "}
+                  {defaultProviderName || defaultProviderId?.slice(0, 8)}
                 </span>
               )}
             </button>
@@ -308,22 +417,31 @@ export function ModelSelector({
                   style={{ background: "var(--surface)" }}
                 >
                   {provider.name}
+                  {loadErrors.has(provider.id) && (
+                    <span className="ml-1" title="Model list failed to load; showing last-known data">
+                      · refresh failed
+                    </span>
+                  )}
                 </div>
                 {models.map((model) => {
                   const key = `${provider.id}/${model.id}`;
+                  const note = availabilityNote(model);
+                  const label = model.display_name || model.id;
                   return (
                     <button
                       key={key}
-                      onClick={() => handleSelect(
-                        provider.id, model.id,
-                        !!model.supports_vision,
-                        !!model.supports_thinking,
-                        model.thinking_efforts || [],
-                      )}
+                      onClick={() =>
+                        handleSelect(
+                          provider.id,
+                          model.id,
+                          !!model.supports_vision,
+                          !!model.supports_thinking,
+                          model.thinking_efforts || [],
+                        )
+                      }
                       className="flex w-full items-center gap-1 px-3 py-1.5 text-left font-mono text-[12px] transition"
                       style={{
-                        color:
-                          selected === key ? "var(--accent)" : "var(--ink)",
+                        color: selected === key ? "var(--accent)" : "var(--ink)",
                       }}
                       onMouseEnter={(e) =>
                         (e.currentTarget.style.background = "var(--surface)")
@@ -332,30 +450,43 @@ export function ModelSelector({
                         (e.currentTarget.style.background = "none")
                       }
                     >
-                      <span className="flex-1 truncate">{model.name}</span>
-                      {model.supports_thinking && (
+                      <span className="flex-1 truncate">
+                        {label}
+                        {label !== model.id && (
+                          <span style={{ color: "var(--ink-3)" }}>
+                            {" "}
+                            · {model.id}
+                          </span>
+                        )}
+                        {note && (
+                          <span style={{ color: "var(--ink-3)" }}>{note}</span>
+                        )}
+                      </span>
+                      {model.supports_thinking === true && (
                         <Brain
                           className="ml-1 h-3.5 w-3.5 shrink-0"
                           style={{ color: "var(--ink-3)" }}
                           aria-label="Supports thinking/reasoning"
                         />
                       )}
-                      {model.supports_vision && (
+                      {model.supports_vision === true && (
                         <Eye
                           className="ml-1 h-3.5 w-3.5 shrink-0"
                           style={{ color: "var(--ink-3)" }}
                           aria-label="Supports vision/image input"
                         />
                       )}
-                      {model.max_context_tokens && (
-                        <span
-                          className="ml-1 shrink-0 font-mono text-[10px]"
-                          style={{ color: "var(--ink-4)" }}
-                          title={`Context: ${((model.context_window_tokens ?? model.max_context_tokens) / 1024).toFixed(0)}K tokens${model.max_context_tokens ? ` · Input: ${(model.max_context_tokens / 1024).toFixed(0)}K` : ""}${model.max_output_tokens ? ` · Output: ${(model.max_output_tokens / 1024).toFixed(0)}K` : ""}`}
-                        >
-                          {((model.context_window_tokens ?? model.max_context_tokens) / 1024).toFixed(0)}K
-                        </span>
-                      )}
+                      <span
+                        className="ml-1 shrink-0 font-mono text-[10px]"
+                        style={{ color: "var(--ink-4)" }}
+                        title={limitsTitle(model)}
+                      >
+                        {model.context_window_tokens != null
+                          ? fmt(model.context_window_tokens)
+                          : model.max_context_tokens != null
+                            ? `in ${fmt(model.max_context_tokens)}`
+                            : "?"}
+                      </span>
                     </button>
                   );
                 })}

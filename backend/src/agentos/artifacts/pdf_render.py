@@ -1,8 +1,7 @@
 """Pure-Python PDF rendering — reportlab backend.
 
 Renders a normalized element list (the same vocabulary as docx spec blocks)
-to PDF bytes. This is the universal export path when LibreOffice isn't
-installed, and the build backend for direct spec→PDF creation.
+to PDF bytes for direct spec-to-PDF creation.
 
 Font honesty: reportlab's built-in Helvetica is latin-1 only — non-latin
 text (Vietnamese, CJK, emoji) renders as boxes. We register the first

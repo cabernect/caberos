@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ..auth import require_operator
-from ..config import settings
+from ..config import env_pinned, settings
 from ..models.operator import Operator
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
@@ -121,3 +121,75 @@ async def set_browser_settings(
         detected=detected_browsers(),
         runtime=runtime_status(),
     )
+
+
+class ModelCatalogStatusOut(BaseModel):
+    auto_refresh: bool
+    pinned: bool
+    available: bool
+    source: str
+    revision: str | None
+    fetched_at: str | None
+    refresh_in_progress: bool
+    last_error: str | None
+
+
+class ModelCatalogUpdate(BaseModel):
+    auto_refresh: bool
+
+
+def _catalog_status() -> ModelCatalogStatusOut:
+    from ..providers.catalog import get_catalog_snapshot
+
+    st = get_catalog_snapshot().status()
+    return ModelCatalogStatusOut(
+        auto_refresh=settings.model_catalog_auto_refresh,
+        pinned=env_pinned("model_catalog_auto_refresh"),
+        available=st["available"],
+        source=st["source"],
+        revision=st["revision"],
+        fetched_at=st["fetched_at"],
+        refresh_in_progress=st["refresh_in_progress"],
+        last_error=st["last_error"],
+    )
+
+
+@router.get("/model-catalog")
+async def get_model_catalog(
+    operator: Operator = Depends(require_operator),
+) -> ModelCatalogStatusOut:
+    """Local catalog status — never fetches."""
+    return _catalog_status()
+
+
+@router.put("/model-catalog")
+async def set_model_catalog(
+    req: ModelCatalogUpdate,
+    operator: Operator = Depends(require_operator),
+) -> ModelCatalogStatusOut:
+    from ..config import persist_setting
+
+    if env_pinned("model_catalog_auto_refresh"):
+        raise HTTPException(
+            status_code=409,
+            detail="model_catalog_auto_refresh is pinned by "
+            "AGENTOS_MODEL_CATALOG_AUTO_REFRESH — remove it to manage here",
+        )
+    persist_setting("model_catalog_auto_refresh", req.auto_refresh)
+    return _catalog_status()
+
+
+@router.post("/model-catalog/refresh")
+async def refresh_model_catalog(
+    operator: Operator = Depends(require_operator),
+) -> dict:
+    """Explicit operator refresh — the only fetch path besides the
+    consent-gated daily worker. Runs the deduplicated snapshot job."""
+    from ..providers.catalog import get_catalog_snapshot
+
+    snapshot = get_catalog_snapshot()
+    snapshot.schedule_refresh()
+    return {
+        "scheduled": True,
+        **_catalog_status().model_dump(),
+    }

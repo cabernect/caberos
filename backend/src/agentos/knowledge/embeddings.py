@@ -55,6 +55,17 @@ async def _provider_for(db: AsyncSession, resource: EmbeddingResource) -> Provid
     return provider
 
 
+def _provider_config(provider: Provider) -> dict:
+    """Plain config dict for rate capture — matches the adapter shape."""
+    return {
+        "api_key": decrypt(provider.encrypted_key) if provider.encrypted_key else "",
+        "base_url": provider.base_url,
+        "org_id": provider.org_id,
+        "extra_params": json.loads(provider.extra_params or "{}"),
+        "type": provider.type,
+    }
+
+
 def _litellm_kwargs(provider: Provider, resource: EmbeddingResource) -> dict:
     api_key = decrypt(provider.encrypted_key) if provider.encrypted_key else None
     extra = json.loads(provider.extra_params or "{}")
@@ -83,6 +94,8 @@ def _record_call(
     status: str,
     error: str | None,
     model_str: str,
+    cost_receipt: dict | None = None,
+    assessment_source: str = "unknown",
 ) -> None:
     """Ledger entry per provider call — best-effort accounting: a
     bookkeeping failure must never break embedding work."""
@@ -108,6 +121,8 @@ def _record_call(
                     "generation_id": generation_id,
                     "operation": operation,
                     "chunk_count": chunk_count,
+                    "cost_source": assessment_source,
+                    **(cost_receipt or {}),
                 },
             )
         )
@@ -137,16 +152,39 @@ async def embed_texts(
     if not egress_permitted(provider, resource):
         raise EmbeddingUnavailable("remote embedding egress is not enabled for this resource")
     kwargs = _litellm_kwargs(provider, resource)
+    provider_config = _provider_config(provider)
+    from ..services.call_accounting import capture_call_rates
+
     vectors: list[list[float]] = []
     for start in range(0, len(texts), _BATCH_SIZE):
         batch = texts[start : start + _BATCH_SIZE]
         started = time.monotonic()
+        # Frozen pre-call rate authority per batch — never litellm's
+        # completion_cost.
+        snapshot = None
+        try:
+            snapshot = await capture_call_rates(
+                db, provider.id, resource.model_name, provider_config
+            )
+        except Exception:
+            try:
+                from ..services.call_accounting import unknown_call_rates
+
+                snapshot = unknown_call_rates(provider.id, resource.model_name, provider_config)
+            except Exception:
+                pass
         try:
             response = await asyncio.wait_for(
                 litellm.aembedding(input=batch, **kwargs),
                 timeout=_EMBED_TIMEOUT_SECONDS,
             )
         except Exception as error:  # provider/network/timeout — caller degrades
+            error_receipt = None
+            if snapshot is not None:
+                try:
+                    error_receipt = snapshot.receipt(snapshot.assess(None, family="embedding"))
+                except Exception:
+                    error_receipt = None
             _record_call(
                 db,
                 resource,
@@ -162,14 +200,26 @@ async def embed_texts(
                 status="error",
                 error=str(error),
                 model_str=kwargs["model"],
+                cost_receipt=error_receipt,
             )
             raise EmbeddingUnavailable(str(error)) from error
-        usage = getattr(response, "usage", None)
-        tokens_in = int(getattr(usage, "prompt_tokens", 0) or 0)
-        try:
-            cost = float(litellm.completion_cost(completion_response=response) or 0.0)
-        except Exception:
-            cost = 0.0
+        # Canonical legacy fields from assessment.usage — the normalizer's
+        # native tokens only (embedding family total_tokens fallback),
+        # never raw SDK attribute reads.
+        cost = 0.0
+        cost_receipt = None
+        assessment_source = "unknown"
+        tokens_in = 0
+        if snapshot is not None:
+            try:
+                assessment = snapshot.assess(response, family="embedding")
+                usage = assessment.usage
+                tokens_in = int(usage.input_tokens or 0) if usage else 0
+                cost = float(assessment.amount) if assessment.amount is not None else 0.0
+                cost_receipt = snapshot.receipt(assessment)
+                assessment_source = assessment.source
+            except Exception:
+                cost_receipt = None
         _record_call(
             db,
             resource,
@@ -185,6 +235,8 @@ async def embed_texts(
             status="ok",
             error=None,
             model_str=kwargs["model"],
+            cost_receipt=cost_receipt,
+            assessment_source=assessment_source,
         )
         vectors.extend([item["embedding"] for item in response.data])
     return vectors

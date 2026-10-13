@@ -17,15 +17,65 @@ export interface Provider {
   custom_models: string[];
 }
 
+export interface ModelProvenance {
+  value?: unknown;
+  source?: "models_dev" | "provider" | "user_override" | "unknown" | string;
+  as_of?: string | null;
+  confidence?:
+    | "catalog_documented"
+    | "provider_reported"
+    | "user_declared"
+    | "unknown"
+    | string;
+}
+
 export interface ModelInfo {
+  /** Exact request identifier — always forwarded to the provider as-is. */
   id: string;
+  /** Legacy display label — same as id; friendly labels use display_name. */
   name: string;
+  /** Friendly display label from the catalog (additive, W11). */
+  display_name?: string | null;
   supports_vision?: boolean;
   supports_thinking?: boolean;
   thinking_efforts?: string[];
   max_context_tokens?: number | null;
   context_window_tokens?: number | null;
   max_output_tokens?: number | null;
+  availability?: "available" | "unavailable" | "unknown" | null;
+  lifecycle?: string | null;
+  provenance?: Record<string, ModelProvenance> | null;
+  pricing?: Record<string, unknown> | null;
+  revision?: number | null;
+  snapshot_revision?: string | null;
+  discovery_error?: string | null;
+  stale?: boolean | null;
+  last_confirmed_at?: string | null;
+}
+
+/** GET /api/providers/{id}/models response — additive fields optional so
+ * older backends stay compatible. */
+export interface ProviderModelsResponse {
+  discovery: string;
+  models: ModelInfo[];
+  revision?: string;
+  snapshot_revision?: string | null;
+  fetched_at?: string | null;
+  refresh_in_progress?: boolean;
+}
+
+/** GET /api/dependencies row (W11 readiness — no installers yet). */
+export interface RuntimeDependency {
+  id: string;
+  label: string;
+  status: "ready" | "missing" | "incompatible" | "error" | string;
+  source: "override" | "system" | "managed" | "none" | string;
+  version: string | null;
+  executables: Record<string, string>;
+  detail: string | null;
+  unlocks: string;
+  managed_recipe_available: boolean;
+  guidance_url: string | null;
 }
 
 export interface Agent {
@@ -984,4 +1034,51 @@ export interface DashboardStats {
   time_series: TimeSeriesPoint[];
   by_agent: AgentStat[];
   recent_runs: RunSummary[];
+}
+
+export interface InstallPlanDependency {
+  id: string;
+  label: string;
+  action: "install" | "reuse";
+  version: string | null;
+  publisher: string;
+  license: string | null;
+  verification: string | null;
+  download_url: string | null;
+  metadata_url: string | null;
+  sha256: string | null;
+  download_bytes: number | null;
+  destination: string | null;
+  unlocks: string;
+}
+
+export interface InstallPlan {
+  id: string;
+  operator_id: string;
+  platform: string | null;
+  expires_at: string;
+  recipe_sha256: string;
+  dependencies: InstallPlanDependency[];
+  total_download_bytes: number | null;
+}
+
+export interface InstallJobDep {
+  id: string;
+  action: string;
+  version: string | null;
+  status: string;
+  detail: string | null;
+}
+
+export interface InstallJob {
+  id: string;
+  plan_id: string;
+  operator_id: string;
+  state: string;
+  progress_bytes: number;
+  current_dep: string | null;
+  created_at: string;
+  completed_at?: string;
+  dependencies: InstallJobDep[];
+  log?: { at: string; text: string }[];
 }

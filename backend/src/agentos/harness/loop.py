@@ -42,6 +42,8 @@ class RunResult:
     max_context_tokens: int = 0  # model's context window
     compacted: bool = False  # whether compaction occurred this run
     context_breakdown: dict[str, int] = field(default_factory=dict)  # per-section token counts
+    # W11 additive — how max_context_tokens was resolved, never a guessed capacity.
+    context_budget_source: str | None = None
     loaded_capabilities: list[str] = field(default_factory=list)
     terminals_active: list[str] = field(default_factory=list)
 
@@ -201,12 +203,26 @@ class Harness:
                 except Exception:
                     past_sessions = []
 
-        # Check if the model supports vision (for system prompt awareness)
+        # Check if the model supports vision (for system prompt awareness) —
+        # resolved offering provenance, never a LiteLLM/heuristic guess.
         supports_vision = None
         if agent_config.model and agent_config.model.name:
-            from ..providers.model_catalog import _check_vision
+            try:
+                import json as _json
 
-            supports_vision = _check_vision(agent_config.model.name)
+                from ..providers.model_catalog import get_offering
+
+                _db = getattr(syscall_handler, "db", None)
+                offering = (
+                    await get_offering(_db, agent_config.model.provider_id, agent_config.model.name)
+                    if _db is not None
+                    else None
+                )
+                if offering is not None:
+                    resolved = _json.loads(offering.resolved_json or "{}")
+                    supports_vision = resolved.get("supports_vision")
+            except Exception:
+                supports_vision = None
         if hasattr(syscall_handler, "supports_vision"):
             syscall_handler.supports_vision = bool(supports_vision)
 
@@ -320,16 +336,20 @@ class Harness:
             count_text_tokens,
             count_tokens,
             count_tool_tokens,
-            get_model_max_tokens,
         )
 
         compaction_summary = getattr(session, "conversation_summary", None)
 
-        # Get model info for token counting + summary LLM call
+        # Get model info for token counting + summary LLM call.
+        # resolved_model + accounting come from the same frozen capture as
+        # the execution calls — one resolved input budget for compaction,
+        # the context bar, and any overflow retry.
         model_str = "gpt-4o"  # fallback
         api_key = None
         base_url = None
         use_responses = False
+        resolved_model: dict = {}
+        accounting = None
         if hasattr(self.model, "get_model_info"):
             try:
                 info = await self.model.get_model_info(agent_config.model)
@@ -337,8 +357,27 @@ class Harness:
                 api_key = info["api_key"]
                 base_url = info["base_url"]
                 use_responses = bool(info.get("use_responses"))
+                accounting = info.get("accounting")
+                resolved_model = info.get("resolved_model") or {}
             except Exception:
                 pass
+
+        from ..providers.catalog_policy import resolve_input_budget
+
+        try:
+            _budget = resolve_input_budget(
+                resolved_model,
+                model_override=(
+                    agent_config.model.max_context_tokens if agent_config.model else None
+                ),
+                run_override=agent_config.limits.max_context_tokens,
+                output_tokens=(agent_config.model.max_tokens if agent_config.model else None),
+            )
+            resolved_input_budget = _budget["tokens"]
+            context_budget_source = _budget["source"]
+        except Exception:
+            resolved_input_budget = 32768
+            context_budget_source = "application_fallback"
 
         if agent_config.compaction.auto_compaction and len(history) > 1:
             # Compact the message portion (exclude system prompt — always kept)
@@ -353,13 +392,14 @@ class Harness:
                 api_key=api_key,
                 base_url=base_url,
                 use_responses=use_responses,
+                input_budget=resolved_input_budget,
+                resolved_model=resolved_model,
+                accounting=accounting,
             )
 
             history = system_msgs + compaction_result.messages
-            result.max_context_tokens = get_model_max_tokens(
-                model_str,
-                agent_config.limits.max_context_tokens,
-            )
+            result.max_context_tokens = resolved_input_budget
+            result.context_budget_source = context_budget_source
             result.compacted = compaction_result.compacted
 
             # Per-section breakdown for the context tooltip
@@ -388,10 +428,8 @@ class Harness:
                     session.conversation_summary = compaction_result.summary
         else:
             # No compaction — still report token count for the context bar
-            result.max_context_tokens = get_model_max_tokens(
-                model_str,
-                agent_config.limits.max_context_tokens,
-            )
+            result.max_context_tokens = resolved_input_budget
+            result.context_budget_source = context_budget_source
 
             # Per-section breakdown for the context tooltip
             system_msgs = [history[0]] if history and history[0].get("role") == "system" else []
@@ -489,6 +527,9 @@ class Harness:
                         base_url=base_url,
                         force=True,
                         use_responses=use_responses,
+                        input_budget=resolved_input_budget,
+                        resolved_model=resolved_model,
+                        accounting=accounting,
                     )
                     if compaction_result.compacted:
                         history = system_msgs + compaction_result.messages
@@ -605,6 +646,7 @@ class Harness:
                 thinking_tokens=response.thinking_tokens,
                 cost=response.cost,
                 cost_source=response.cost_source,
+                cost_receipt=getattr(response, "cost_receipt", None),
             )
 
             # Step 9: Process tool calls
@@ -906,6 +948,7 @@ class Harness:
         thinking_tokens: int | None = None,
         cost: float = 0.0,
         cost_source: str | None = None,
+        cost_receipt: dict | None = None,
         error: str | None = None,
     ) -> None:
         """Write one ModelCall row per model request (v0.2 foundations).
@@ -944,7 +987,11 @@ class Harness:
                 latency_ms=latency_ms,
                 status=status,
                 error=error[:2000] if error else None,
-                detail={"cost_source": cost_source} if cost_source is not None else None,
+                detail={
+                    **({"cost_source": cost_source} if cost_source is not None else {}),
+                    **(cost_receipt or {}),
+                }
+                or None,
             )
             async with async_session_factory() as session:
 

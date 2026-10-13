@@ -165,3 +165,22 @@ async def test_platform_price_and_thinking_coverage_preserve_reported_zero(db):
     assert empty["priced_calls"] == 0
     assert empty["unpriced_calls"] == 0
     assert empty["thinking_reported_calls"] == 0
+
+
+async def test_catalog_and_declared_zero_estimates_have_pricing_coverage(db):
+    now = datetime.now(UTC)
+    for source in ("models_dev", "user_rate", "provider_rate", "unknown"):
+        db.add(
+            ModelCall(
+                id=source,
+                created_at=now,
+                cost=0.0,
+                detail={"cost_source": source},
+            )
+        )
+    await db.commit()
+    result = await platform_spend(db, since=now - timedelta(days=1))
+    assert result["total_calls"] == 4
+    assert result["total_cost"] == 0.0
+    assert result["priced_calls"] == 3
+    assert result["unpriced_calls"] == 1

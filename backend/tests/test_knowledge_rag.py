@@ -821,21 +821,65 @@ async def test_embed_call_ledger_records_usage(db, monkeypatch):
     assert row.kind == "embedding"
     assert row.purpose == "embedding"
     assert row.status == "ok"
-    assert row.detail == {
+    assert set(row.detail) == {
+        "resource_id",
+        "generation_id",
+        "operation",
+        "chunk_count",
+        "cost_source",
+        "cost_assessment",
+        "rate_authority",
+    }
+    assert {
+        key: row.detail[key] for key in ("resource_id", "generation_id", "operation", "chunk_count")
+    } == {
         "resource_id": resource.id,
         "generation_id": "gen-1",
         "operation": "index",
         "chunk_count": 2,
     }
+    assert row.detail["cost_source"] == "unknown"
+    assessment = row.detail["cost_assessment"]
+    assert {
+        key: value
+        for key, value in assessment.items()
+        if key not in ("calculated_at", "snapshot_revision")
+    } == {
+        "amount": None,
+        "source": "unknown",
+        "currency": "USD",
+        "reason": "missing_pricing",
+        "rates": None,
+        "usage": {
+            "input_tokens": 3,
+            "output_tokens": 0,
+            "cache_read_tokens": None,
+            "cache_write_tokens": None,
+            "reasoning_tokens": None,
+            "cache_write_1h_tokens": None,
+            "audio_input_tokens": 0,
+            "audio_output_tokens": 0,
+        },
+        "tier": None,
+        "calculation_version": "aggregate-token-rates-v2",
+    }
+    assert isinstance(assessment["calculated_at"], str)
+    authority = row.detail["rate_authority"]
+    assert authority["provider_id"] == provider.id
+    assert authority["request_model_id"] == "embed-test"
+    assert authority["offering_revision"] == 0
+    assert authority["pricing_authority"]["source"] == "unknown"
+    assert authority["routing_override_unresolved"] is False
+    assert authority["snapshot_revision"] == assessment["snapshot_revision"]
     assert row.run_id == "run-1"
     assert row.agent_id == "agent-1"
     assert row.provider_id == provider.id
     assert row.model_name == "embed-test"
     assert row.model_str == "ollama/embed-test"
-    assert row.tokens_in > 0
+    assert row.tokens_in == 3
     assert row.tokens_out == 0
     assert row.latency_ms >= 0
-    assert row.cost >= 0.0
+    assert row.cost == 0.0  # Legacy scalar; the receipt keeps unpriced cost unknown.
 
 
 async def test_embed_call_ledger_records_failure(db, monkeypatch):

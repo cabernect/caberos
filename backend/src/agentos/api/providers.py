@@ -8,6 +8,7 @@ never returned in plaintext. Model discovery is dynamic where available
 import json
 import logging
 import uuid
+from datetime import UTC
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -92,6 +93,17 @@ class ModelInfo(BaseModel):
     max_context_tokens: int | None = None
     context_window_tokens: int | None = None
     max_output_tokens: int | None = None
+    # W11 additive fields — optional so older rows stay valid.
+    display_name: str | None = None
+    availability: str | None = None  # available | unavailable | unknown
+    lifecycle: str | None = None
+    provenance: dict | None = None
+    pricing: dict | None = None
+    revision: int | None = None
+    snapshot_revision: str | None = None
+    discovery_error: str | None = None
+    stale: bool | None = None
+    last_confirmed_at: str | None = None
 
 
 @router.get("")
@@ -121,6 +133,9 @@ async def create_provider(
     db.add(provider)
     await db.commit()
     await db.refresh(provider)
+    from ..providers.model_catalog import schedule_provider_refresh
+
+    schedule_provider_refresh(provider.id)
     return ProviderOut.from_model(provider)
 
 
@@ -162,6 +177,9 @@ async def update_provider(
 
     await db.commit()
     await db.refresh(provider)
+    from ..providers.model_catalog import schedule_provider_refresh
+
+    schedule_provider_refresh(provider.id)
     return ProviderOut.from_model(provider)
 
 
@@ -199,18 +217,154 @@ async def list_models(
     operator: Operator = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Dynamic model discovery (D40). Returns models if the provider supports it."""
+    """Local resolved offerings (D40) — never fetches, never validates.
+
+    Populated by the scheduled/explicit discovery path; a provider with
+    no discovery yet reports unknown availability rather than a fake
+    empty list.
+    """
+    from ..providers.catalog import get_catalog_snapshot
+    from ..providers.model_catalog import list_offerings, provider_refresh_in_progress
+
     result = await db.execute(select(Provider).where(Provider.id == provider_id))
     provider = result.scalar_one_or_none()
     if provider is None:
         raise HTTPException(status_code=404, detail="Provider not found")
 
-    adapter = LiteLLMAdapter(db)
-    models = await adapter.discover_models(provider_id)
+    offerings = await list_offerings(db, provider_id)
+    by_id = {o.model_id: o for o in offerings}
+    custom = json.loads(provider.custom_models) if provider.custom_models else []
+    # Custom names without an offering yet surface as unknown too.
+
+    # Snapshot freshness gate — a stale active pointer still serves, but
+    # the UI should show it as aged, not live.
+    snapshot = get_catalog_snapshot()
+    snapshot_status = snapshot.status()
+    snapshot_sha = snapshot_status.get("revision")
+    fetched_at = snapshot_status.get("fetched_at")
+    snapshot_stale = None
+    if fetched_at:
+        try:
+            from datetime import datetime
+
+            snapshot_stale = (
+                datetime.now(UTC) - datetime.fromisoformat(fetched_at)
+            ).total_seconds() >= 86400
+        except Exception:
+            snapshot_stale = None
+
+    models: list[ModelInfo] = []
+    for offering in offerings:
+        resolved = json.loads(offering.resolved_json or "{}")
+        prov = resolved.pop("provenance", {}) or {}
+        models.append(
+            ModelInfo(
+                id=offering.model_id,
+                name=offering.model_id,  # exact request id — never a display alias
+                display_name=resolved.get("display_name"),
+                supports_vision=resolved.get("supports_vision", False),
+                supports_thinking=resolved.get("supports_thinking", False),
+                thinking_efforts=resolved.get("thinking_efforts", []),
+                max_context_tokens=resolved.get("max_context_tokens"),
+                context_window_tokens=resolved.get("context_window_tokens"),
+                max_output_tokens=resolved.get("max_output_tokens"),
+                availability=offering.discovery_state,
+                lifecycle=resolved.get("lifecycle"),
+                provenance=prov or None,
+                pricing=resolved.get("pricing"),
+                revision=offering.revision,
+                snapshot_revision=offering.snapshot_revision or None,
+                discovery_error=offering.discovery_error,
+                stale=snapshot_stale,
+                last_confirmed_at=(
+                    offering.discovered_at.isoformat() if offering.discovered_at else None
+                ),
+            )
+        )
+    for name in custom:
+        if name not in by_id:
+            models.append(ModelInfo(id=name, name=name, availability="unknown"))
+
+    # Composite revision: snapshot SHA + provider config fingerprint +
+    # summed row revisions — a collision on max(row.rev) can't hide a
+    # snapshot or config change.
+    import hashlib as _hashlib
+
+    rev_material = "|".join(
+        [
+            str(snapshot_sha or "none"),
+            provider.type or "",
+            provider.base_url or "",
+            ",".join(f"{o.model_id}:{o.revision}" for o in offerings),
+        ]
+    )
     return {
-        "discovery": "dynamic" if models else "unavailable",
-        "models": [ModelInfo(**m) for m in models],
+        "discovery": "dynamic",
+        "models": models,
+        "revision": _hashlib.sha256(rev_material.encode()).hexdigest(),
+        "fetched_at": fetched_at,
+        "snapshot_revision": snapshot_sha,
+        "refresh_in_progress": provider_refresh_in_progress(provider_id),
     }
+
+
+@router.post("/{provider_id}/models/refresh")
+async def refresh_models(
+    provider_id: str,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Explicit provider discovery — schedules the bounded job."""
+    from ..providers.model_catalog import schedule_provider_refresh
+
+    result = await db.execute(select(Provider).where(Provider.id == provider_id))
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Provider not found")
+    schedule_provider_refresh(provider_id)
+    return {"scheduled": True}
+
+
+class ModelMetadataIn(BaseModel):
+    fields: dict = {}
+    catalog_provider_id: str | None = None
+    catalog_model_id: str | None = None
+    clear_catalog_mapping: bool = False
+
+
+@router.put("/{provider_id}/models/{model_name:path}/metadata")
+async def set_model_metadata(
+    provider_id: str,
+    model_name: str,
+    body: ModelMetadataIn,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Operator-declared overrides + explicit catalog mapping.
+
+    Overrides are validated per field — invalid values 400, they never
+    coerce into model facts. The mapping is the only way a non-official
+    provider claims a catalog offering.
+    """
+    from ..providers.model_catalog import update_override
+
+    result = await db.execute(select(Provider).where(Provider.id == provider_id))
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Provider not found")
+    try:
+        offering = await update_override(
+            db,
+            provider_id,
+            model_name,
+            body.fields,
+            catalog_provider_id=body.catalog_provider_id,
+            catalog_model_id=body.catalog_model_id,
+            clear_catalog_mapping=body.clear_catalog_mapping,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    await db.commit()
+    resolved = json.loads(offering.resolved_json or "{}")
+    return {"resolved": resolved, "revision": offering.revision}
 
 
 @router.post("/{provider_id}/validate")

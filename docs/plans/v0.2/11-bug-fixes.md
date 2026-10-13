@@ -1,18 +1,161 @@
-# v0.2 Bug Fixes and Hardening (W11)
+# v0.2 Runtime Readiness (W11)
+
+**Scope:** model catalog and pricing, confirmed bug fixes, and app-managed
+optional dependencies in one workstream. The filename is retained so existing
+bug references keep working. Former W12 is now the dependency track of W11.
+**Branch:** `feat/v0.2.0-runtime-readiness`, based on merged W10 (`468310d`).
+**Status:** core catalog/accounting + dependency tracks implemented; W11 closeout in progress. See [test results](test_result/11-runtime-readiness-test-results.md).
+**Test plan:** [W11 acceptance](test_plan/11-runtime-readiness-test-plan.md).
 
 ## Outcome
 
-Known defects found during W3 development are fixed or honestly bounded, with
-regression tests. This ticket is a living list — append newly found bugs rather
-than filing ad-hoc.
+Users can choose models with honest metadata and pricing, make optional
+capabilities ready through explicit dependency installation, and use the
+application without the remaining confirmed defects. Each track has its own
+acceptance gate; one passing track does not conceal failures in another.
+
+This plan also retains the living defect inventory below. Audit it before
+implementation: historical FIXED entries are regression checks, not new work.
+Release signing, updater verification, security/release workflows, and final
+release hardening stay in the separate last workstream. General frontend
+rework remains post-v0.2 and is not pulled into this scope.
 
 ## Dependencies
 
 - 08b MCP OAuth machinery (already built — discovery, DCR, PKCE, token persistence)
+- Merged W10 ledger, correlation, read-boundary redaction, and spend coverage.
+- W2/W3/W4 artifact, preview, and existing managed-browser integration.
+
+## Track A - Model Catalog And Pricing
+
+### Identity And Resolution
+
+- A configured model offering is `(provider_id, exact request model_id)`.
+  Do not merge proxy/direct-provider offerings by similar names.
+- Persist resolved metadata and per-field source, confirmation time, and
+  freshness. Keep identity fields scalar; field-level provenance can be a
+  companion map while existing model-list clients retain their scalar fields.
+- Capabilities/limits prefer explicit user overrides, then applicable provider
+  evidence, then applicable catalog metadata. Defaults/inference are labelled
+  assumed, never verified facts.
+- Availability is available/unavailable/unknown. A failed or incomplete
+  discovery is not evidence that every previously discovered model vanished.
+  An operator may configure a custom model without claiming provider-confirmed
+  availability.
+- Keep input capacity, total context window, and output capacity distinct.
+  Unknown model limits must not silently become a verified 200K limit. Runtime
+  context budgets are an explicit policy, not an invented model property.
+- Picker/settings and runtime vision/compaction resolution use the same catalog
+  module. Remove independent fuzzy-name assumptions as sources of truth.
+
+### Refresh
+
+- `get` and `list` read local resolved records. Network refresh and validation
+  probes are separate operations; a metadata read never starts a paid call.
+- Load persisted data immediately; refresh asynchronously with deduplicated
+  jobs. Preserve last-known data and expose stale/error states during outages.
+- Catalog snapshot refresh: once per 24 hours while running, plus one deduplicated overdue refresh after startup; provider discovery TTL remains 15 minutes. Manual refresh and relevant provider-configuration changes invalidate affected records. Expiry marks freshness, not unavailability.
+- Remote metadata refresh follows configured egress consent. Never forward
+  provider credentials or private aliases to unrelated catalog sources.
+- Use configured-provider discovery and models.dev catalog records. LiteLLM is execution-only: do not use its static model list, capability/limit helpers, online cost map, `completion_cost`, or `cost_per_token` as CaberOS catalog/accounting fallbacks. OpenRouter discovery remains only for configured OpenRouter offerings, not a universal oracle.
+
+### Local Catalog Snapshot
+
+Ship a validated models.dev JSON snapshot with MIT attribution for immediate offline operation. Keep the bundled snapshot read-only; store refreshed snapshots under application data. Refresh through a bounded HTTPS fetch with proper CA verification, validate the internal projection, and atomically activate only a successful snapshot. Retain the last-known-good snapshot on any failure. Picker/runtime/accounting reads are local, and the refresh never blocks model execution.
+
+Retain source identity, fetched time, upstream model metadata dates, content/revision identity, and historical rate versions. Show last successful refresh, staleness/errors, and a Refresh now action. Keep user overrides separate so updates cannot erase them. Unknown offerings or unsupported pricing stay unknown rather than falling back to a guessed LiteLLM entry.
+
+Disable LiteLLM remote cost-map loading before its first import using `LITELLM_LOCAL_MODEL_COST_MAP=True`; any bundled map needed internally by the execution SDK is not CaberOS catalog or pricing authority. Do not feed models.dev JSON directly into LiteLLM: the formats differ. Do not disable TLS certificate verification.
+
+### Usage And Cost
+
+- Keep `ModelCall` as the per-request usage receipt, including runless calls.
+  Do not introduce a parallel run-only usage ledger.
+- Preserve provider-reported monetary amounts. Distinguish reported amounts,
+  catalog estimates, user-rate estimates, and unresolved cost; generated
+  LiteLLM metadata must not masquerade as a verified provider invoice.
+- CaberOS computes estimates from stored usage and applicable versioned models.dev/user rates. Preserve genuine provider-reported monetary amounts; never treat LiteLLM-generated cost metadata as reported billing. Daily catalog refresh does not silently reprice existing assessments.
+- Consolidate Responses and Chat Completions cost handling. Reported zero is
+  valid; invalid/nonfinite amounts are not. Missing usage stays distinguishable
+  from reported zero.
+- Estimates use a versioned rate snapshot, currency, billing dimensions,
+  calculation version, observation time, calculation time, and effective dates
+  where known. Use exact decimal arithmetic.
+- Pricing recipes explicitly handle applicable tiers and cache read/write usage.
+  Do not double-count cached input or reasoning already included in other usage.
+  Unsupported rates or missing required counters leave estimates unresolved.
+- Historical-cost backfill is excluded from W11 by operator decision (2026-10-13).
+  Existing receipt IDs, usage, and monetary values remain unchanged; no
+  repricing operation is planned.
+
+## Track B - Dependency Readiness
+
+Detailed requirements live in [the dependency track](12-dependencies.md).
+
+- App-managed installation is the default where a verified distribution exists;
+  fixed subprocess recipes are an implementation option, not an agent shell.
+- Keep operator UX in global Settings -> General (Optional Tools & Runtimes):
+  detect, inspect source/version/location, consent, install progress, cancel,
+  re-check, decline, and actionable failures.
+- Reuse the managed Chrome installer. Private Node/npm installation is offered
+  only after verifying the exact official artifact recipe, either through an
+  approved JavaScript MCP setup or an explicit General-settings install — never
+  on startup automatically.
+- Git MCP combined preparation (declared package + Git + launcher/runtime prep in one plan): **Excluded from W11 by operator decision, 2026-10-13.** Proactive General-settings runtime installs remain supported; manual Git installation is not the default user journey.
+- Initial end-user scope is Chromium, LibreOffice, and conditional MCP runtimes/tools (Node/npm, uv/uvx, Git). FFmpeg/transcoding and Tesseract/OCR are deferred until product features consume them. A local model server is provider-specific configuration, not an automatic dependency download.
+- Runtime callers obtain paths from the dependency module. Never silently modify
+  global PATH, system installations, personal browser profiles, or agent authority.
+- No automatic downloads or privilege escalation at startup or on an agent's
+  suggestion; installation requires explicit operator approval.
+
+## Track C - Confirmed Defects
+
+- Establish a failing regression before each fix; preserve existing FIXED cases.
+- B3's remaining pricing/catalog work belongs to Track A, not a competing
+  LiteLLM global-map patch.
+- Confirm outstanding OAuth/lifecycle/UI defects against the merged tree before
+  claiming their historical root causes still apply.
+- Installer/catalog failures are included in this track's regression discipline,
+  not an excuse to expand into general refactoring or release packaging.
+
+## Implementation Order And Completion
+
+1. Audit the existing defect list and verify supported artifact recipes/platforms.
+2. Catalog persistence, resolution, and overrides; route existing consumers through it.
+3. Shared usage/cost normalization and versioned rates. (Explicit backfill: **Excluded from W11 by operator decision, 2026-10-13** — existing receipts remain unchanged.)
+4. Dependency registry, managed installer jobs, executable-path integration.
+5. Settings/picker presentation, remaining confirmed defects, and integration QA.
+
+Use one branch with logical dependency-ordered commits. All three acceptance
+tracks must pass before closeout. Test without live downloads/providers by
+default; real installer tests require explicit permission and isolated app data.
+Do not commit or push without operator approval.
 
 ## Bugs
 
-### B1 — HTTP MCP servers don't discover OAuth on 401
+### B1 — HTTP MCP servers don't discover OAuth on 401 (FIXED 2026-10-13)
+
+**Fix applied:** the HTTP client's response hook observes the *existing*
+initialize response — a `401` `POST` to the server's own exact URL carrying a
+bounded `Bearer` `resource_metadata` challenge (validated absolute URL, no
+embedded credentials) — and flags `oauth_required` only, never fetching
+metadata, minting a token, or redirecting. On connect failure the registry
+persists a default consent config (`scope: ""`, localhost callback
+`redirect_uri`) via a conditional only-if-empty update, surfaces `OAuth
+authorization required — connect via dashboard`, and emits an
+`Authorize {name}` warning notification (distinct from the expired-token
+`Reconnect {name}` error). A configured-OAuth server with no stored token
+gets the same guidance. Negative challenges (Basic, bare 401, malformed or
+credentialed metadata, 403/500) persist nothing. Regressions:
+`test_undeclared_http_oauth_prompts_consent_not_crash`,
+`test_negative_challenges_do_not_flag_oauth` (param'd),
+`test_oauth_hook_exact_url_and_challenge_edges`,
+`test_no_hook_when_auth_preconfigured`,
+`test_malformed_args_json_returns_false_not_unbound`,
+`test_record_oauth_requirement_never_clobbers`. Remaining step is explicit
+operator consent (Connect with OAuth) — no automatic flow.
+The earlier `PATCH auth fields` proposal is superseded by the observed-challenge
+mechanism; no unused auth-edit API was added.
 
 **Symptom:** adding `{"type": "http", "url": "https://mcp.tradingview.com/mcp"}`
 fails with `mcp_connection_failed` + "Server returned an error response".
@@ -33,7 +176,7 @@ discovery as part of the transport handshake — minimal config suffices there.
 - `PATCH /servers/{id}` gains the ability to change `auth_type`/`oauth_config`
   so a misconfigured server is fixable without delete/re-add.
 
-### B2 — Orphaned `pending`/`awaiting_approval` runs never reconciled
+### B2 — Orphaned `pending`/`awaiting_approval` runs never reconciled (FIXED)
 
 **Symptom:** an agent card shows a permanent "running" indicator —
 `GET /api/runs?status=pending,running,awaiting_approval` keeps returning a
@@ -53,7 +196,23 @@ resume anything) survives every restart as a zombie.
 - Verified live: reload marked the orphan and zero non-terminal rows
   remain; the stale row itself was reconciled manually first.
 
-### B3 — Run cost always `$0.000000` despite recorded tokens
+### B3 — Run cost always `$0.000000` despite recorded tokens (FIXED 2026-10-13 — native tier path)
+
+**Fix applied:** `capture_call_rates` records the context-tier basis at freeze
+time for native official-OpenAI catalog pricing (aggregate input incl. cached),
+so `gpt-5.x` context-tier rates now reach `call_assessment` with real amounts;
+unsupported/cross-provider/proxy pricing still resolves as honestly unresolved
+(`unsupported_context_tier_basis` → unknown, not invented). Regressions:
+`test_call_accounting.py::test_native_openai_catalog_context_tiers_reach_call_assessment`
+(3 param'd cases), `test_cost_assessment`, `test_usage_receipts`.
+Operator decision: chat keeps its shared zero display — unresolved and genuine
+zero both render as `$0.000`; the unknown-vs-priced distinction lives in
+receipt-level accounting/observability, not a new chat-side calculator.
+
+**Current ownership:** Track A. W10 already distinguishes unknown pricing from
+recorded zero in Platform spend; catalog resolution and transport consistency
+remain. The historical proposal below is background, not authorization to guess
+prices from aliases or mutate LiteLLM's global pricing map.
 
 **Symptom:** Traces → agent detail shows every run at `$0.000000` while
 the Tokens column has real values (e.g. 12059, 12563). Spend totals and
@@ -372,6 +531,11 @@ Verified live: `algorithmic-art` detail → 200 with 11 usage rows.
 **Fix direction:** preserve the materialization note — e.g. `occ.error = result.get("error") or occ.error`, or store the skip-count in a dedicated column.
 
 **Fix applied (2026-10-02):** `scheduler.py` `_execute` now does `occ.error = result.get("error") or occ.error` — a run error wins, a clean run keeps the materialization note. Regression: `test_execute_preserves_materialization_note`. **Independent re-verification (2026-10-02):** `kill -9` the gateway with a `run_once` schedule enabled → ~2.5 min outage → restart → startup sweep materialized one occurrence at the latest missed instant (09:06) which completed with `error = "2 earlier occurrence(s) skipped"` — the note survives `_execute`. FIXED. **Residual edge case:** `_reconcile_stale_occurrences` (scheduler.py:318) still overwrites `occ.error` unconditionally with `"Gateway restarted during execution"` — a note-carrying occurrence killed mid-run loses the note to the restart error. Same clobber shape, narrower path.
+**Residual fixed (2026-10-13):** `_reconcile_stale_occurrences` now appends —
+`occ.error = f"{occ.error}; {reason}"` when a note exists; reconcile touches
+`running` rows only, so a second startup cannot duplicate the reason.
+Regression: `test_reconcile_preserves_existing_error_note` (asserts both
+fragments + double-run stability).
 
 ### B31 — Run holds an uncommitted write transaction across the whole first model call: concurrent scheduled runs trigger a global `database is locked` storm (FIXED — round 2)
 
@@ -604,6 +768,80 @@ Verified live: `algorithmic-art` detail → 200 with 11 usage rows.
 **Also observed during deploy:** a leftover dev `uvicorn` squatting on :8081 — packaged app silently talked to stale code (B42 class again; killed it).
 
 **Tests:** `test_agent_attribution_snapshots_name`, `test_prune_notifications_ages_out_rows_and_deliveries`; vitest `quiet hours do NOT silence approval_required`. Verified live: columns + `ix_notifications_agent_id` in the app DB, gateway healthy after patch.
+
+### B48 — Initial notification baseline suppresses events created during startup/recovery (FIXED 2026-10-13)
+
+**Symptom (confirmed startup reproductions following H04 review):** a notification committed while the
+frontend's first inbox `GET` (or the stream subscription it precedes) is
+still pending is never delivered — 0 delivery rows, stays unread, stranded
+permanently after the next snapshot. Reproduced only in the
+startup/recovery window: a notification emitted mid-transition vanished;
+a later one during a healthy stream delivered instantly.
+
+**Root cause:** `notificationStore.fetchSnapshot` treated the FIRST
+successful list response as a pure baseline — `seenIds.add(n.id)` for every
+row — suppressing rows created after the store mounted (offline→recovery,
+in-flight baseline overlap, or any delayed initial fetch). Established-session
+HELLO catch-ups were unaffected, which is why the gap was invisible in
+normal reconnect flows. Not B38 — B38 is the follower-promotion
+`deferredReports` mechanism, already fixed; the original H04 probe was
+deleted, so its exact initialization involvement remains unproven.
+
+**Fix applied:** the store records `watchStartedAt = Date.now()` when
+`start()` begins (before async prefs/fetch; reset on `stop()`; not reset on
+retries). The baseline marks as seen only rows that are `read`, have an
+unparseable `created_at`, or were created before mount; fresh rows fall
+through the existing fresh-unread process/broadcast pipeline unchanged.
+`livePending` keeps its stale-snapshot protection. Regressions (vitest,
+`notificationStore.test.ts` "subscribe-transition gap repro (H04)" probes
+A–H): offline baseline failure → recovery delivers once; in-flight
+baseline containing the gap row delivers once; established reconnect
+unchanged; read/invalid-date rows stay suppressed; same-millisecond and
+UTC-offset timestamps parse fresh; follower-toast→promotion reports once.
+32 tests pass. Live QA evidence (held fetch+stream via init-script,
+committed `2a1f6213` during hold, release): exactly one toast + one
+`toast|delivered` delivery row, zero recurring GETs after HELLO.
+
+**Independent re-verification (2026-10-13, QA :18081/:15173, uncommitted
+fix tree):** fresh browser session, confirmed leader (prefs + snapshot +
+stream + failed-deliveries in backend log). Probes emitted at 0/1/2/4/7 s
+offsets around a reload — all produced `toast:delivered` rows (~10 ms,
+`attempts=1`), inbox rows correctly unread. Emits while no session existed
+took the baseline-suppression path (unread, zero deliveries). Two-tab
+promotion: leader closed, probe emitted 1 s later delivered by the
+promoted follower within 8 s. The post-`watchStartedAt`-inside-first-
+snapshot slice (~40 ms on localhost) is unit-covered rather than
+live-hit. **Verdict: verified fixed** — no stranding across the
+reload/close/promotion boundaries that stranded the original probe.
+
+### B49 — Cancelled install job leaves in-flight dependency status `pending` (FIXED 2026-10-13)
+
+**Symptom (independent-test cosmetic observation, confirmed):** cancelling an
+install job mid-download leaves the job-level `state` at `cancelled` but the
+in-flight dependency row still reads `pending` — the persisted job is
+misleading about which dependency was actually in flight.
+
+**Root cause:** `runtime_installer._run_job`'s `asyncio.CancelledError` path
+(and the queued-cancel `_job_done` terminalization) set only the parent
+`state` — nothing finalized per-dependency `pending` rows.
+
+**Fix applied:** `RuntimeInstaller._finalize_cancelled_dependencies` — on a
+cancelled job, pending rows become `cancelled` when the row is the
+job's `current_dep`, otherwise `not_started`; reused/completed/failed rows
+are preserved. Called in `_run_job`'s `finally` (covers cooperative
+`_CancelRequested` and task cancellation) and in `_job_done`'s
+cancelling→cancelled terminalization (covers queued cancels before the
+worker's first await). Regressions: `test_cancel_marks_dependency_states`
+(event-held download, reload-stable statuses, dep lock released),
+strengthened `test_queued_cancel_resolves`, param'd
+`test_cancel_preserves_earlier_dep_status[completed|reused]` (earlier dep
+preserved, double-cancel idempotent). Red:
+`.scratch/w11/cancel-dep-state-red.log`; green: `cancel-dep-state-green.log`
+(4 cancel tests) + `test_runtime_installer.py` + `test_dependencies.py` +
+`test_mcp_stdio_resolver.py` = **83 passed**. Real QA API evidence:
+canned cancelled-job JSON read via `GET /api/dependencies/jobs/{id}` on the
+isolated QA stack returns `git:cancelled, nodejs:not_started` (fixture —
+no real download/install run).
 
 ## Tests first
 

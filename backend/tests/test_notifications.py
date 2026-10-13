@@ -547,3 +547,120 @@ async def test_startup_reconcile_interrupts_pending_approvals(db):
     assert payload["args"] == {"command": "rm -rf tmp/"}
     assert payload["approval_id"] == "ap-dead"
     assert tool_rows[0].seq == 6
+
+
+@pytest.mark.asyncio
+async def test_mark_read_broadcasts_inbox_changed_after_commit(client, db):
+    """The REST read ack publishes a typed invalidation once committed."""
+    item = await create_notification(
+        db,
+        notification_type="x",
+        severity="info",
+        title="t",
+        message="m",
+        event_id="chg-1",
+    )
+    await db.commit()
+    q = notif.subscribe()
+    try:
+        resp = await client.post(f"/api/notifications/{item.id}/read")
+        assert resp.status_code == 200
+        assert await asyncio.wait_for(q.get(), timeout=2) == {"type": "inbox_changed"}
+    finally:
+        notif.unsubscribe(q)
+
+
+@pytest.mark.asyncio
+async def test_mark_all_broadcasts_inbox_changed_after_commit(client, db):
+    await create_notification(
+        db,
+        notification_type="x",
+        severity="info",
+        title="t",
+        message="m",
+        event_id="chg-2",
+    )
+    await db.commit()
+    q = notif.subscribe()
+    try:
+        resp = await client.post("/api/notifications/read-all")
+        assert resp.status_code == 200
+        assert await asyncio.wait_for(q.get(), timeout=2) == {"type": "inbox_changed"}
+    finally:
+        notif.unsubscribe(q)
+
+
+@pytest.mark.asyncio
+async def test_inbox_changed_rollback_never_broadcasts(db):
+    """A rollback must disarm the invalidation — no phantom marker."""
+
+    q = notif.subscribe()
+    try:
+        notif.notify_inbox_changed(db)
+        await db.execute(text("SELECT 1"))  # force an open transaction
+        await db.rollback()
+        # A later unrelated commit must not release the stale marker.
+        await create_notification(
+            db,
+            notification_type="x",
+            severity="info",
+            title="t",
+            message="m",
+            event_id="chg-3",
+        )
+        await db.commit()
+        items = [await asyncio.wait_for(q.get(), timeout=2)]
+        while not q.empty():
+            items.append(q.get_nowait())
+        assert not any(i.get("type") == "inbox_changed" for i in items)
+    finally:
+        notif.unsubscribe(q)
+
+
+@pytest.mark.asyncio
+async def test_queue_overflow_posts_invalidation_marker():
+    """A saturated subscriber gets a bounded inbox_changed marker instead
+    of silently dropping every event."""
+    q = notif.subscribe()
+    try:
+        while not q.full():
+            q.put_nowait({"type": "notification", "notification": {"id": "x"}})
+        notif.broadcast({"type": "notification", "notification": {"id": "real"}})
+        marker_found = False
+        seen = 0
+        while not q.empty():
+            item = q.get_nowait()
+            seen += 1
+            if item.get("type") == "inbox_changed":
+                marker_found = True
+        assert marker_found
+        assert seen == 256
+    finally:
+        notif.unsubscribe(q)
+
+
+@pytest.mark.asyncio
+async def test_stream_yields_inbox_changed_frame_raw():
+    """The SSE generator must emit the marker as its own typed frame, not
+    wrapped as a notification payload."""
+    from agentos.api.notifications import notification_stream
+
+    q = notif.subscribe()
+    resp = await notification_stream(_operator=object())
+    payload = None
+
+    # Drive one body iteration via the streaming response's iterator.
+    async def read_one():
+        nonlocal payload
+        async for chunk in resp.body_iterator:
+            if "inbox_changed" in chunk:
+                payload = chunk
+                return
+
+    task = asyncio.create_task(read_one())
+    await asyncio.sleep(0.05)
+    notif.broadcast({"type": "inbox_changed"})
+    await asyncio.wait_for(task, timeout=2)
+    assert '"type": "inbox_changed"' in payload
+    assert '"notification"' not in payload
+    notif.unsubscribe(q)

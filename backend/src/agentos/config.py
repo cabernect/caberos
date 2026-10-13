@@ -77,6 +77,12 @@ class Settings(BaseSettings):
     # Can be toggled at runtime via PUT /api/settings/yolo.
     yolo_mode: bool = False
 
+    # models.dev catalog auto-refresh — daily upstream fetch of model
+    # metadata/rates. Enabled by default; the bundled snapshot and last
+    # successful refresh remain available offline. Explicit opt-outs win.
+    # Set via PUT /api/settings/model-catalog or AGENTOS_MODEL_CATALOG_AUTO_REFRESH.
+    model_catalog_auto_refresh: bool = True
+
     # Browser runtime override — path to a Chromium-family binary (Chrome,
     # Chromium, Edge, Brave). When set, the managed Chrome-for-Testing
     # install is skipped. The browser still launches with its own
@@ -84,6 +90,9 @@ class Settings(BaseSettings):
     # Set via AGENTOS_BROWSER_BINARY in .env or the env, or persisted via
     # PUT /api/settings/browser (env wins over the persisted value).
     browser_binary: str = ""
+    # Explicit runtime binary overrides — env-only for now
+    # (AGENTOS_RUNTIME_BINARY_OVERRIDES as a JSON dict of command→path).
+    runtime_binary_overrides: dict[str, str] = {}
 
     @property
     def db_url(self) -> str:
@@ -144,7 +153,7 @@ def _apply_persisted_overrides() -> None:
         saved = json.loads(path.read_text())
     except Exception:
         return
-    for key in ("browser_binary", "yolo_mode"):
+    for key in ("browser_binary", "yolo_mode", "model_catalog_auto_refresh"):
         if key in saved and not env_pinned(key):
             setattr(settings, key, saved[key])
 

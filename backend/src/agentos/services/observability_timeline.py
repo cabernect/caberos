@@ -41,6 +41,7 @@ from ..models.schedule import ScheduleOccurrence
 from ..models.source import RunSource
 from ..models.terminal import TerminalSession
 from ..redaction import (
+    NUMERIC_ALLOW_KEYS,
     SUMMARY_BUDGET,
     bound_payload,
     project_args,
@@ -48,6 +49,7 @@ from ..redaction import (
     redact_secrets,
     redact_text,
 )
+from .accounting_projection import project_call_detail
 from .tool_status import tool_event_status
 
 _TERMINAL_RUN_STATUSES = {"completed", "failed", "stopped", "interrupted", "limit_exceeded"}
@@ -83,6 +85,25 @@ def _safe_text(value, max_chars=500):
     return redact_text(str(value), max_chars)[0]
 
 
+# Scoped widenings for model_call events only: the projected receipt
+# carries nullable token counters and whitelisted authority dicts under
+# names the generic secret-key regex would otherwise drop.
+_MODEL_CALL_NUMERIC_KEYS = NUMERIC_ALLOW_KEYS | frozenset(
+    {
+        "input_tokens",
+        "output_tokens",
+        "cache_read_tokens",
+        "cache_write_tokens",
+        "reasoning_tokens",
+        "cache_write_1h_tokens",
+        "audio_input_tokens",
+        "audio_output_tokens",
+    }
+)
+_MODEL_CALL_METADATA_KEYS = frozenset({"rate_authority", "pricing_authority"})
+_MODEL_CALL_BUDGET = 10000
+
+
 def _event(
     event_id,
     event_type,
@@ -99,7 +120,15 @@ def _event(
 ):
     """Central final pass — every data field goes through the structural
     sanitizer so no projector slip can leak raw content."""
-    bounded, scrub_red, scrub_trunc = bound_payload(data or {}, budget=budget)
+    if event_type == "model_call":
+        bounded, scrub_red, scrub_trunc = bound_payload(
+            data or {},
+            budget=_MODEL_CALL_BUDGET,
+            allowed_numeric_keys=_MODEL_CALL_NUMERIC_KEYS,
+            allowed_metadata_keys=_MODEL_CALL_METADATA_KEYS,
+        )
+    else:
+        bounded, scrub_red, scrub_trunc = bound_payload(data or {}, budget=budget)
     return {
         "id": str(event_id),
         "type": event_type,
@@ -284,19 +313,7 @@ async def build_run_timeline(db: AsyncSession, run: Run) -> list[dict]:
                     "cost": m.cost,
                     "latency_ms": m.latency_ms,
                     "error": error,
-                    "detail": {
-                        k: detail.get(k)
-                        for k in (
-                            "resource_id",
-                            "generation_id",
-                            "operation",
-                            "chunk_count",
-                            "cost_source",
-                        )
-                        if k in detail
-                    }
-                    if detail
-                    else None,
+                    "detail": project_call_detail(detail),
                 },
                 redacted=bool(m.error and error != m.error),
             )

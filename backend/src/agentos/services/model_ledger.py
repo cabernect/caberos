@@ -10,6 +10,10 @@ because its receipt couldn't be filed).
 import logging
 from typing import Any
 
+from .call_accounting import CallRateSnapshot
+from .cost_assessment import assess_usage
+from .usage_receipts import normalize_usage, reported_amount
+
 log = logging.getLogger(__name__)
 
 
@@ -31,31 +35,34 @@ def _valid_cost(value: Any) -> float | None:
     return f if math.isfinite(f) and f >= 0 else None
 
 
-def response_cost(raw_response: Any, model_str: str | None) -> tuple[float, str]:
-    """Exact cost recipe — returns (cost, source).
+def response_cost(
+    raw_response: Any,
+    model_str: str | None,
+    *,
+    accounting: CallRateSnapshot | None = None,
+    family: str = "chat",
+    provider_type: str = "",
+) -> tuple[float, str]:
+    """Compatibility amount; the full assessment retains exact decimals.
 
-    1. Provider-reported ``cost`` (explicit 0 counts).
-    2. LiteLLM ``_hidden_params.response_cost``.
-    3. ``litellm.completion_cost`` — unknown pricing raises or returns
-       None → (0.0, "unknown"). No pricing is ever invented.
+    A routed model string is not a provider offering. Without a captured local
+    rate authority only a genuine reported monetary amount can resolve cost.
+    SDK-generated hidden costs are deliberately ignored.
     """
-    value = _valid_cost(_get(raw_response, "cost"))
-    if value is not None:
-        return value, "provider"
-    hidden = _get(raw_response, "_hidden_params") or {}
-    value = _valid_cost(_get(hidden, "response_cost"))
-    if value is not None:
-        return value, "provider"
-    try:
-        import litellm
-
-        cost = litellm.completion_cost(completion_response=raw_response, model=model_str)
-        value = _valid_cost(cost)
-        if value is None:
-            return 0.0, "unknown"
-        return value, "litellm"
-    except Exception:
-        return 0.0, "unknown"
+    if accounting is not None:
+        assessment = accounting.assess(raw_response, family=family)
+    else:
+        amount, currency = reported_amount(raw_response, provider_type=provider_type)
+        assessment = assess_usage(
+            normalize_usage(raw_response, family=family, provider_type=provider_type),
+            None,
+            reported_cost=amount,
+            reported_currency=currency,
+        )
+    return (
+        float(assessment.amount) if assessment.amount is not None else 0.0,
+        assessment.source,
+    )
 
 
 async def record_system_call(
@@ -103,6 +110,9 @@ async def record_system_call(
             cost = response.cost or 0.0
             if getattr(response, "cost_source", None) is not None:
                 detail = {**(detail or {}), "cost_source": response.cost_source}
+            receipt = getattr(response, "cost_receipt", None)
+            if receipt:
+                detail = {**(detail or {}), **receipt}
 
         row = ModelCall(
             run_id=run_id,

@@ -23,9 +23,22 @@ type PeerState = {
 };
 
 type TabMsg =
-  | { type: "hello"; tabId: string; visible: boolean; focused?: boolean; keys: string[] }
-  | { type: "heartbeat"; tabId: string; visible: boolean; focused?: boolean; keys: string[] }
+  | {
+      type: "hello";
+      tabId: string;
+      visible: boolean;
+      focused?: boolean;
+      keys: string[];
+    }
+  | {
+      type: "heartbeat";
+      tabId: string;
+      visible: boolean;
+      focused?: boolean;
+      keys: string[];
+    }
   | { type: "notification"; tabId: string; notification: Notification }
+  | { type: "inbox_changed"; tabId: string }
   | { type: "prefs"; tabId: string }
   | { type: "bye"; tabId: string };
 
@@ -42,6 +55,7 @@ const peers = new Map<string, PeerState>();
 const leaderListeners = new Set<(leader: boolean) => void>();
 const notificationListeners = new Set<(n: Notification) => void>();
 const prefsListeners = new Set<() => void>();
+const inboxChangedListeners = new Set<() => void>();
 
 let channel: BroadcastChannel | null = null;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -50,14 +64,18 @@ let wasLeader = false;
 let running = false;
 
 function selfVisible(): boolean {
-  return typeof document === "undefined" || document.visibilityState === "visible";
+  return (
+    typeof document === "undefined" || document.visibilityState === "visible"
+  );
 }
 
 /** "Looking at it" = tab visible AND its window focused. A backgrounded
  *  window (user in another app) still reports visible, but the operator
  *  isn't watching — OS pings exist for exactly that case (B40). */
 function selfFocused(): boolean {
-  return selfVisible() && (typeof document === "undefined" || document.hasFocus());
+  return (
+    selfVisible() && (typeof document === "undefined" || document.hasFocus())
+  );
 }
 
 function pruneStale() {
@@ -119,6 +137,10 @@ function handle(msg: TabMsg) {
   if (msg.type === "bye") {
     peers.delete(msg.tabId);
     maybeNotifyLeader();
+    return;
+  }
+  if (msg.type === "inbox_changed") {
+    for (const cb of inboxChangedListeners) cb();
     return;
   }
   peers.set(msg.tabId, {
@@ -250,6 +272,18 @@ export function broadcastPrefsChanged() {
 export function onPrefsChanged(cb: () => void): () => void {
   prefsListeners.add(cb);
   return () => prefsListeners.delete(cb);
+}
+
+/** Leader → followers: an inbox-mutation invalidation (read acks, or a
+ *  catch-up fetch the leader just completed) so peers refresh once —
+ *  followers never re-broadcast (no fetch ping-pong). */
+export function broadcastInboxChanged() {
+  post({ type: "inbox_changed", tabId: TAB_ID });
+}
+
+export function onInboxChanged(cb: () => void): () => void {
+  inboxChangedListeners.add(cb);
+  return () => inboxChangedListeners.delete(cb);
 }
 
 export function selfTabVisible(): boolean {

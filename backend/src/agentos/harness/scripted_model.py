@@ -25,6 +25,9 @@ class ScriptedResponse:
     cost: float = 0.0
     # "provider" | "litellm" | "unknown" | None — provenance of `cost`.
     cost_source: str | None = None
+    # W11 immutable call receipt: cost_assessment + rate_authority for the
+    # frozen pre-call rate snapshot (None on fake/scripted models).
+    cost_receipt: dict | None = None
 
 
 @dataclass

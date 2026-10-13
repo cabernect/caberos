@@ -41,7 +41,7 @@ async def platform_spend(
     # their recorded value; an explicitly unknown source remains unpriced.
     priced = case(
         (cost_source == "unknown", 0),
-        (cost_source.in_(("provider", "litellm")), 1),
+        (cost_source.in_(("provider", "litellm", "models_dev", "user_rate", "provider_rate")), 1),
         (ModelCall.cost > 0, 1),
         else_=0,
     )

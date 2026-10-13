@@ -59,3 +59,6 @@ skills-lock.json
 
 # HyperFrames project output (intro videos etc.) — local media work, not repo content
 videos/
+
+# W11 vendored catalog bundle must ship — un-ignore this data dir
+!backend/src/agentos/providers/data/

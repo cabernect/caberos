@@ -35,6 +35,7 @@ import type { ThemeMode } from "@/lib/theme";
 import { useTheme } from "@/lib/themeHook";
 import { resetSetupGuideState } from "@/components/setupGuideState";
 import { NotificationPrefsForm } from "@/components/NotificationPrefsForm";
+import { OptionalToolsAndRuntimes } from "@/components/OptionalToolsAndRuntimes";
 
 // Open URLs in the system browser when running inside Tauri,
 // fall back to normal browser navigation otherwise.
@@ -469,7 +470,10 @@ function GeneralTab({
         </h2>
         <div
           className="rounded-xl p-5"
-          style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
+          style={{
+            border: "1px solid var(--border-soft)",
+            background: "var(--sidebar)",
+          }}
         >
           {loading ? (
             <p className="text-[13px] text-[var(--ink-2)]">Loading…</p>
@@ -507,7 +511,10 @@ function GeneralTab({
         </h2>
         <div
           className="rounded-xl p-5"
-          style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
+          style={{
+            border: "1px solid var(--border-soft)",
+            background: "var(--sidebar)",
+          }}
         >
           <div className="flex items-center justify-between gap-4">
             <div>
@@ -529,7 +536,10 @@ function GeneralTab({
         </h2>
         <div
           className="rounded-xl p-5"
-          style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
+          style={{
+            border: "1px solid var(--border-soft)",
+            background: "var(--sidebar)",
+          }}
         >
           <NotificationPrefsForm />
         </div>
@@ -542,7 +552,10 @@ function GeneralTab({
         </h2>
         <div
           className="rounded-xl p-5"
-          style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
+          style={{
+            border: "1px solid var(--border-soft)",
+            background: "var(--sidebar)",
+          }}
         >
           <div className="flex items-center justify-between">
             <div>
@@ -562,6 +575,8 @@ function GeneralTab({
           </div>
         </div>
       </div>
+
+      <OptionalToolsAndRuntimes />
     </div>
   );
 }
@@ -805,7 +820,10 @@ function BrowserTab() {
         </h2>
         <div
           className="rounded-xl p-5 space-y-3"
-          style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
+          style={{
+            border: "1px solid var(--border-soft)",
+            background: "var(--sidebar)",
+          }}
         >
           <div className="flex items-center justify-between">
             <div>
@@ -832,8 +850,16 @@ function BrowserTab() {
               className="rounded-full px-3 py-1 text-[11px] font-medium shrink-0"
               style={
                 available
-                  ? { background: "color-mix(in srgb, var(--success) 15%, transparent)", color: "var(--success)" }
-                  : { background: "color-mix(in srgb, var(--warning) 15%, transparent)", color: "var(--warning)" }
+                  ? {
+                      background:
+                        "color-mix(in srgb, var(--success) 15%, transparent)",
+                      color: "var(--success)",
+                    }
+                  : {
+                      background:
+                        "color-mix(in srgb, var(--warning) 15%, transparent)",
+                      color: "var(--warning)",
+                    }
               }
             >
               {available ? "Ready" : "Not installed"}
@@ -1012,7 +1038,8 @@ function BrowserTab() {
                 className="mt-2 rounded-md border px-3 py-2 text-[12px]"
                 style={{
                   borderColor: "var(--warning)",
-                  background: "color-mix(in srgb, var(--warning) 10%, transparent)",
+                  background:
+                    "color-mix(in srgb, var(--warning) 10%, transparent)",
                   color: "var(--warning)",
                 }}
               >
@@ -1042,7 +1069,10 @@ function BrowserTab() {
         </h2>
         <div
           className="rounded-xl p-5 space-y-4"
-          style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
+          style={{
+            border: "1px solid var(--border-soft)",
+            background: "var(--sidebar)",
+          }}
         >
           <p className="text-[12px] text-[var(--ink-3)]">
             Let an agent stay logged into websites between runs — you log in
@@ -1422,7 +1452,10 @@ function MigrationTab() {
         </h2>
         <div
           className="rounded-xl p-5"
-          style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
+          style={{
+            border: "1px solid var(--border-soft)",
+            background: "var(--sidebar)",
+          }}
         >
           <p className="text-[13px] text-[var(--ink-2)]">
             Export all CaberOS data to a ZIP archive — including agents,
@@ -1457,7 +1490,10 @@ function MigrationTab() {
         </h2>
         <div
           className="rounded-xl p-5"
-          style={{ border: "1px solid var(--danger)", background: "var(--sidebar)" }}
+          style={{
+            border: "1px solid var(--danger)",
+            background: "var(--sidebar)",
+          }}
         >
           <p className="text-[13px] text-[var(--ink-2)]">
             Delete all local CaberOS data and return to the initial setup state.
@@ -1485,7 +1521,10 @@ function MigrationTab() {
         </h2>
         <div
           className="rounded-xl p-5"
-          style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
+          style={{
+            border: "1px solid var(--border-soft)",
+            background: "var(--sidebar)",
+          }}
         >
           {/* Step 1: Pick file (or show selected file) */}
           {!selectedFile && !result && (
@@ -1869,7 +1908,10 @@ function MigrationTab() {
         </h2>
         <div
           className="rounded-xl p-5"
-          style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
+          style={{
+            border: "1px solid var(--border-soft)",
+            background: "var(--sidebar)",
+          }}
         >
           <ul className="space-y-2 text-[13px] text-[var(--ink-2)]">
             <li className="flex items-center gap-2">
@@ -2113,7 +2155,10 @@ function PresetProviderForm({
       </div>
       <div
         className="rounded-xl p-5"
-        style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
+        style={{
+          border: "1px solid var(--border-soft)",
+          background: "var(--sidebar)",
+        }}
       >
         <div className="space-y-3">
           <Field label="Display name">
@@ -2205,16 +2250,43 @@ function ModelsTab({
   const [discovering, setDiscovering] = useState<Record<string, boolean>>({});
   const [newModel, setNewModel] = useState<Record<string, string>>({});
   const { toast } = useConfirm();
+  const mounted = useRef(true);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   const handleDiscover = async (provider: Provider) => {
     setDiscovering((prev) => ({ ...prev, [provider.id]: true }));
-    try {
-      const result = await api.listModels(provider.id);
-      setDiscovered((prev) => ({ ...prev, [provider.id]: result.models }));
-    } catch (e) {
-      toast(String(e));
-    } finally {
+    const done = () =>
       setDiscovering((prev) => ({ ...prev, [provider.id]: false }));
+    try {
+      // Explicit refresh — schedules backend discovery; the GET itself is
+      // local so the first read returns current offerings immediately.
+      await api.refreshProviderModels(provider.id).catch(() => null);
+      let sawProgress = false;
+      let waited = 0;
+      for (;;) {
+        if (!mounted.current) return;
+        const resp = await api.listModels(provider.id);
+        if (!mounted.current) return;
+        setDiscovered((prev) => ({ ...prev, [provider.id]: resp.models }));
+        sawProgress = resp.refresh_in_progress === true;
+        if (!sawProgress) break;
+        waited += 1;
+        if (waited >= 60) {
+          toast("Refresh is still running; re-check later");
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    } catch (e) {
+      if (mounted.current) toast(String(e));
+    } finally {
+      if (mounted.current) done();
     }
   };
 
@@ -2265,7 +2337,10 @@ function ModelsTab({
           <div
             key={provider.id}
             className="rounded-xl p-5"
-            style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
+            style={{
+              border: "1px solid var(--border-soft)",
+              background: "var(--sidebar)",
+            }}
           >
             <div className="mb-4 flex items-center justify-between">
               <div>
@@ -2451,7 +2526,10 @@ function AboutTab() {
       {/* Logo + version */}
       <div
         className="flex items-center gap-4 rounded-xl p-6"
-        style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
+        style={{
+          border: "1px solid var(--border-soft)",
+          background: "var(--sidebar)",
+        }}
       >
         <LogoMark className="h-12 w-12" color="var(--ink)" />
         <div className="flex-1">
@@ -2549,7 +2627,10 @@ function AboutTab() {
         </h2>
         <div
           className="rounded-xl p-5"
-          style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
+          style={{
+            border: "1px solid var(--border-soft)",
+            background: "var(--sidebar)",
+          }}
         >
           <div className="grid grid-cols-2 gap-4">
             <div>
@@ -2595,7 +2676,10 @@ function AboutTab() {
         </h2>
         <div
           className="rounded-xl p-5"
-          style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
+          style={{
+            border: "1px solid var(--border-soft)",
+            background: "var(--sidebar)",
+          }}
         >
           <div className="space-y-2">
             <a
@@ -2636,7 +2720,10 @@ function AboutTab() {
         </h2>
         <div
           className="rounded-xl p-5"
-          style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
+          style={{
+            border: "1px solid var(--border-soft)",
+            background: "var(--sidebar)",
+          }}
         >
           <div className="space-y-2">
             <p className="text-[13px] text-[var(--ink-2)]">
@@ -2675,6 +2762,16 @@ function ProviderCard({
   const { toast } = useConfirm();
   const [models, setModels] = useState<ModelInfo[] | null>(null);
   const [loadingModels, setLoadingModels] = useState(false);
+  const discoveryLifecycle = useRef({ mounted: true, generation: 0 });
+
+  useEffect(() => {
+    discoveryLifecycle.current.mounted = true;
+    ++discoveryLifecycle.current.generation;
+    return () => {
+      discoveryLifecycle.current.mounted = false;
+      ++discoveryLifecycle.current.generation;
+    };
+  }, [provider.id]);
 
   useEffect(() => {
     setName(provider.name);
@@ -2702,13 +2799,30 @@ function ProviderCard({
 
   const handleDiscover = async () => {
     setLoadingModels(true);
+    const generation = ++discoveryLifecycle.current.generation;
+    const live = () =>
+      discoveryLifecycle.current.mounted &&
+      generation === discoveryLifecycle.current.generation;
     try {
-      const result = await api.listModels(provider.id);
-      setModels(result.models);
+      await api.refreshProviderModels(provider.id).catch(() => null);
+      let waited = 0;
+      for (;;) {
+        if (!live()) return;
+        const result = await api.listModels(provider.id);
+        if (!live()) return;
+        setModels(result.models);
+        if (!result.refresh_in_progress || ++waited >= 60) {
+          if (waited >= 60 && result.refresh_in_progress) {
+            toast("Refresh is still running; re-check later");
+          }
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 1000));
+      }
     } catch (e) {
-      toast(String(e));
+      if (live()) toast(String(e));
     } finally {
-      setLoadingModels(false);
+      if (live()) setLoadingModels(false);
     }
   };
 
@@ -2716,7 +2830,10 @@ function ProviderCard({
     return (
       <div
         className="rounded-xl p-5"
-        style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
+        style={{
+          border: "1px solid var(--border-soft)",
+          background: "var(--sidebar)",
+        }}
       >
         <div className="mb-4 flex items-center justify-between">
           <h3 className="text-[14px] font-semibold text-[var(--ink)]">
@@ -2852,7 +2969,10 @@ function ProviderCard({
   return (
     <div
       className="flex items-center justify-between rounded-xl p-5"
-      style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
+      style={{
+        border: "1px solid var(--border-soft)",
+        background: "var(--sidebar)",
+      }}
     >
       <div className="flex items-center gap-3">
         <div>
@@ -2935,7 +3055,10 @@ function ProviderForm({
   return (
     <div
       className="rounded-xl p-5"
-      style={{ border: "1px solid var(--accent)", background: "var(--sidebar)" }}
+      style={{
+        border: "1px solid var(--accent)",
+        background: "var(--sidebar)",
+      }}
     >
       <div className="mb-4 flex items-center justify-between">
         <h3 className="text-[14px] font-semibold text-[var(--ink)]">

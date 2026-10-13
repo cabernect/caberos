@@ -23,6 +23,7 @@ Set-Location $BackendDir
 
 $defaultsSrc = Join-Path $BackendDir "src\agentos\defaults"
 $catalogSrc = Join-Path $BackendDir "src\agentos\mcp\catalog.yaml"
+$modelsDevSrc = Join-Path $BackendDir "src\agentos\providers\data"
 
 uv run pyinstaller `
     --noconfirm `
@@ -43,6 +44,7 @@ uv run pyinstaller `
     --collect-submodules tiktoken_ext `
     --add-data "$defaultsSrc;agentos/defaults" `
     --add-data "$catalogSrc;agentos/mcp" `
+    --add-data "$modelsDevSrc;agentos/providers/data" `
     src\agentos\gateway_entry.py
 
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed with exit code $LASTEXITCODE" }

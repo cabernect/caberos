@@ -22,7 +22,11 @@ from ..config_schema import ModelConfig
 from ..models.provider import Provider
 from ..providers.litellm_transport import LiteLLMTransport
 from ..secret_store import decrypt
-from ..services.model_ledger import response_cost
+from ..services.call_accounting import (
+    CallRateSnapshot,
+    capture_call_rates,
+    unknown_call_rates,
+)
 from .scripted_model import ScriptedResponse
 
 # Auto-inject summary="detailed" when reasoning_effort is set but no explicit
@@ -118,6 +122,37 @@ class LiteLLMAdapter:
             return tool_calls
         return [{**tc, "name": restore_map.get(tc["name"], tc["name"])} for tc in tool_calls]
 
+    async def _capture_rates(self, agent_model: ModelConfig, provider: dict) -> CallRateSnapshot:
+        """Frozen pre-call rate authority — a capture failure degrades to
+        the unknown snapshot so a genuine provider amount is preserved."""
+        try:
+            return await capture_call_rates(
+                self.db, agent_model.provider_id, agent_model.name, provider
+            )
+        except Exception:
+            log.debug("rate capture failed; call proceeds unknown", exc_info=True)
+            return unknown_call_rates(agent_model.provider_id, agent_model.name, provider)
+
+    @staticmethod
+    def _apply_assessment(
+        snapshot: CallRateSnapshot | None, raw: Any, family: str
+    ) -> tuple[int, int, int | None, int | None, float, str | None, dict | None]:
+        """Canonical legacy fields from assessment.usage — the normalizer's
+        native tokens only, never SDK extractors or text-length guesses."""
+        if snapshot is None:
+            return 0, 0, None, None, 0.0, "unknown", None
+        assessment = snapshot.assess(raw, family=family)
+        usage = assessment.usage
+        return (
+            int(usage.input_tokens or 0) if usage else 0,
+            int(usage.output_tokens or 0) if usage else 0,
+            usage.cache_read_tokens if usage else None,
+            usage.reasoning_tokens if usage else None,
+            float(assessment.amount) if assessment.amount is not None else 0.0,
+            assessment.source,
+            snapshot.receipt(assessment),
+        )
+
     async def _load_provider(self, provider_id: str) -> dict[str, Any]:
         """Load and decrypt provider config (D39). Cached per session."""
         if provider_id in self._provider_cache:
@@ -148,6 +183,8 @@ class LiteLLMAdapter:
         """
         provider = await self._load_provider(agent_model.provider_id)
         model_str, api_base = self._route_model(provider, agent_model.name)
+        snapshot = await self._capture_rates(agent_model, provider)
+
         return {
             "model_str": model_str,
             "api_key": provider["api_key"] or None,
@@ -156,6 +193,10 @@ class LiteLLMAdapter:
             # reasoning models reject even plain calls on chat completions
             # when params like max_tokens are sent.
             "use_responses": self._model_family(provider, agent_model.name) == "responses",
+            # Frozen rate snapshot + resolved metadata — aux callers
+            # (summaries, compaction budgets) pin the same authority.
+            "accounting": snapshot,
+            "resolved_model": (json.loads(snapshot.model_metadata_json) if snapshot else {}),
         }
 
     @staticmethod
@@ -362,12 +403,20 @@ class LiteLLMAdapter:
                 )
             }
 
+        snapshot = await self._capture_rates(agent_model, provider)
         response = await asyncio.wait_for(
             self.transport.responses(**kwargs), timeout=settings.model_request_timeout
         )
         content, thinking, tool_calls = self._parse_response_output(response)
-        tokens_in, tokens_out, cached_tokens, thinking_tokens = self._response_usage(response)
-        cost, cost_source = response_cost(response, model_str)
+        (
+            tokens_in,
+            tokens_out,
+            cached_tokens,
+            thinking_tokens,
+            cost,
+            cost_source,
+            cost_receipt,
+        ) = self._apply_assessment(snapshot, response, "responses")
         return ScriptedResponse(
             tool_calls=self._restore_tool_names(tool_calls, restore_map),
             content=content,
@@ -378,6 +427,7 @@ class LiteLLMAdapter:
             thinking_tokens=thinking_tokens,
             cost=cost,
             cost_source=cost_source,
+            cost_receipt=cost_receipt,
         )
 
     async def _complete_responses_stream(
@@ -410,6 +460,7 @@ class LiteLLMAdapter:
                 )
             }
 
+        snapshot = await self._capture_rates(agent_model, provider)
         stream = await asyncio.wait_for(
             self.transport.responses(**kwargs), timeout=settings.model_request_timeout
         )
@@ -455,9 +506,6 @@ class LiteLLMAdapter:
                     )
             elif event_type == "response.completed":
                 completed_response = self._response_attr(event, "response")
-                tokens_in, tokens_out, cached_tokens, thinking_tokens = self._response_usage(
-                    completed_response
-                )
 
         parsed_tools = []
         for call in tool_calls.values():
@@ -467,11 +515,15 @@ class LiteLLMAdapter:
                 args = {}
             parsed_tools.append({"id": call["id"], "name": call["name"], "args": args})
         parsed_tools = self._restore_tool_names(parsed_tools, restore_map)
-        cost, cost_source = (
-            response_cost(completed_response, model_str)
-            if completed_response is not None
-            else (0.0, "unknown")
-        )
+        (
+            tokens_in,
+            tokens_out,
+            cached_tokens,
+            thinking_tokens,
+            cost,
+            cost_source,
+            cost_receipt,
+        ) = self._apply_assessment(snapshot, completed_response, "responses")
         yield (
             "done",
             ScriptedResponse(
@@ -486,6 +538,7 @@ class LiteLLMAdapter:
                 thinking_tokens=thinking_tokens,
                 cost=cost,
                 cost_source=cost_source,
+                cost_receipt=cost_receipt,
             ),
         )
 
@@ -583,6 +636,7 @@ class LiteLLMAdapter:
 
         # Call LiteLLM — retry on the Responses API when the server says to
         # (reasoning models reject tools on chat completions).
+        snapshot = await self._capture_rates(agent_model, provider)
         try:
             response = await self.transport.completion(**kwargs)
         except Exception as e:
@@ -620,33 +674,17 @@ class LiteLLMAdapter:
         # Restore original tool names (mcp_playwright_* → mcp.playwright.*)
         tool_calls = self._restore_tool_names(tool_calls, restore_map)
 
-        # Extract token usage and cost
-        usage = response.usage
-        tokens_in = usage.prompt_tokens if usage else 0
-        tokens_out = usage.completion_tokens if usage else 0
-        cached_tokens = self._cached_tokens(usage)
-        thinking_tokens = self._reasoning_tokens(usage)
-
-        # LiteLLM provides cost via response.cost, but it's not always set
-        cost = 0.0
-        cost_source: str | None = None
-        try:
-            if hasattr(response, "cost") and response.cost:
-                cost = float(response.cost)
-                cost_source = "provider"
-        except (TypeError, ValueError):
-            cost = 0.0
-        if cost == 0.0 and tokens_in > 0:
-            try:
-                prompt_cost, completion_cost = litellm.cost_per_token(
-                    model=model_str,
-                    prompt_tokens=tokens_in,
-                    completion_tokens=tokens_out,
-                )
-                cost = prompt_cost + completion_cost
-                cost_source = "litellm"
-            except Exception:
-                pass
+        # Canonical usage + cost from the frozen pre-call rate snapshot —
+        # SDK usage extractors and cost hints are never billing.
+        (
+            tokens_in,
+            tokens_out,
+            cached_tokens,
+            thinking_tokens,
+            cost,
+            cost_source,
+            cost_receipt,
+        ) = self._apply_assessment(snapshot, response, "chat")
 
         content = message.content or ""
 
@@ -660,6 +698,7 @@ class LiteLLMAdapter:
             thinking_tokens=thinking_tokens,
             cost=cost,
             cost_source=cost_source,
+            cost_receipt=cost_receipt,
         )
 
     async def complete_stream(
@@ -731,6 +770,7 @@ class LiteLLMAdapter:
 
         # Call LiteLLM with streaming — retry on the Responses API when the
         # server says to (reasoning models reject tools on chat completions).
+        snapshot = await self._capture_rates(agent_model, provider)
         try:
             stream = await asyncio.wait_for(
                 self.transport.completion(**kwargs), timeout=settings.model_request_timeout
@@ -756,6 +796,7 @@ class LiteLLMAdapter:
         cached_tokens: int | None = None
         thinking_tokens: int | None = None
         cost = 0.0
+        usage_chunk: Any = None
 
         stream_iterator = aiter(stream)
         while True:
@@ -770,13 +811,11 @@ class LiteLLMAdapter:
                     f"Model stream was idle for {settings.model_stream_idle_timeout}s"
                 ) from exc
 
+            # Any usage-bearing chunk counts — providers send usage on the
+            # final choices chunk too, not just dedicated usage frames.
+            if getattr(chunk, "usage", None):
+                usage_chunk = chunk
             if not chunk.choices:
-                # Usage info sometimes comes in a separate chunk
-                if hasattr(chunk, "usage") and chunk.usage:
-                    tokens_in = chunk.usage.prompt_tokens or 0
-                    tokens_out = chunk.usage.completion_tokens or 0
-                    cached_tokens = self._cached_tokens(chunk.usage)
-                    thinking_tokens = self._reasoning_tokens(chunk.usage)
                 continue
 
             delta = chunk.choices[0].delta
@@ -831,30 +870,20 @@ class LiteLLMAdapter:
         # Restore original tool names (mcp_playwright_* → mcp.playwright.*)
         tool_calls = self._restore_tool_names(tool_calls, restore_map)
 
-        # If we didn't get usage from streaming, estimate
-        if tokens_in == 0:
-            tokens_in = sum(len(m.get("content", "")) for m in messages) // 4
-        if tokens_out == 0:
-            tokens_out = (len(full_content) + len(full_thinking)) // 4
-
-        # Get cost — LiteLLM doesn't always set stream.cost for streaming
-        # responses, so fall back to calculating it from token counts
-        cost = 0.0
-        try:
-            if hasattr(stream, "cost") and stream.cost:
-                cost = float(stream.cost)
-        except (TypeError, ValueError):
-            cost = 0.0
-        if cost == 0.0 and tokens_in > 0:
-            try:
-                prompt_cost, completion_cost = litellm.cost_per_token(
-                    model=model_str,
-                    prompt_tokens=tokens_in,
-                    completion_tokens=tokens_out,
-                )
-                cost = prompt_cost + completion_cost
-            except Exception:
-                pass
+        # Canonical usage + cost from the frozen pre-call snapshot —
+        # never stream.cost or cost_per_token. No usage chunk → assess the
+        # stream object; the normalizer yields nulls, we don't guess.
+        (
+            tokens_in,
+            tokens_out,
+            cached_tokens,
+            thinking_tokens,
+            cost,
+            cost_source,
+            cost_receipt,
+        ) = self._apply_assessment(
+            snapshot, usage_chunk if usage_chunk is not None else stream, "chat"
+        )
 
         final = ScriptedResponse(
             tool_calls=tool_calls,
@@ -865,6 +894,8 @@ class LiteLLMAdapter:
             cached_tokens=cached_tokens,
             thinking_tokens=thinking_tokens,
             cost=cost,
+            cost_source=cost_source,
+            cost_receipt=cost_receipt,
         )
         yield ("done", final)
 

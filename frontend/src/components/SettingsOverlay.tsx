@@ -189,17 +189,29 @@ function GeneralTab({
     }
   }, [agent]);
 
-  // Fetch models when provider changes
+  // Fetch models when provider changes — cancelled so a late response
+  // from the previous provider can't clobber the new one's list.
   useEffect(() => {
     if (!providerId) {
       setModels([]);
       return;
     }
+    let cancelled = false;
     setLoadingModels(true);
-    api.listModels(providerId)
-      .then((r) => setModels(r.models))
-      .catch(() => setModels([]))
-      .finally(() => setLoadingModels(false));
+    api
+      .listModels(providerId)
+      .then((r) => {
+        if (!cancelled) setModels(r.models);
+      })
+      .catch(() => {
+        if (!cancelled) setModels([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingModels(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [providerId]);
 
   const handleSave = async () => {

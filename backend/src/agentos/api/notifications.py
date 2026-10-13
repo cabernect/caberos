@@ -80,6 +80,7 @@ async def mark_all_notifications_read(
     _operator=Depends(require_operator),
 ):
     await db.execute(update(Notification).where(Notification.read.is_(False)).values(read=True))
+    notif.notify_inbox_changed(db)
     await db.commit()
     return {"updated": True}
 
@@ -95,6 +96,7 @@ async def mark_notification_read(
     if notification is None:
         raise HTTPException(status_code=404, detail="Notification not found")
     notification.read = True
+    notif.notify_inbox_changed(db)
     await db.commit()
     return {"updated": True}
 
@@ -111,7 +113,8 @@ async def notification_stream(_operator=Depends(require_operator)):
     """SSE fan-out — one event per committed notification row.
 
     The client's delivery coordinator evaluates suppression/prefs on
-    arrival; the 5 s inbox poll remains as a reconnect fallback.
+    arrival; a bounded inbox poll only runs while the stream is down
+    (no HELLO received yet, or the connection dropped).
     """
     queue = notif.subscribe()
 
@@ -121,7 +124,10 @@ async def notification_stream(_operator=Depends(require_operator)):
             while True:
                 try:
                     payload = await asyncio.wait_for(queue.get(), timeout=25.0)
-                    yield _sse({"type": "notification", "notification": payload})
+                    if payload.get("type") == "inbox_changed":
+                        yield _sse(payload)
+                    else:
+                        yield _sse({"type": "notification", "notification": payload})
                 except TimeoutError:
                     yield ": keepalive\n\n"
         finally:
