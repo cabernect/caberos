@@ -179,6 +179,16 @@ class RuntimeInstaller:
             raise PlanError(404, "job not found")
         return self._jobs_dir / f"{job_id}.json"
 
+    @staticmethod
+    def _finalize_cancelled_dependencies(job: dict) -> None:
+        """On a cancelled job, pending rows get truthful terminal states:
+        the in-flight dependency is 'cancelled', later ones 'not_started'.
+        Reused/completed/failed rows are preserved."""
+        current = job.get("current_dep")
+        for row in job.get("dependencies", []):
+            if row.get("status") == "pending":
+                row["status"] = "cancelled" if row["id"] == current else "not_started"
+
     def _write_job(self, job: dict) -> None:
         """Atomic bounded job file — refuses to persist over the cap."""
         self._jobs_dir.mkdir(parents=True, exist_ok=True)
@@ -504,6 +514,8 @@ class RuntimeInstaller:
         self._cancel_events.pop(job_id, None)
         if job and job["state"] in _STATES_ACTIVE | {"cancelling"}:
             job["state"] = "cancelled" if job["state"] == "cancelling" else "interrupted"
+            if job["state"] == "cancelled":
+                self._finalize_cancelled_dependencies(job)
             job["completed_at"] = utcnow().isoformat()
             self._write_job(job)
 
@@ -558,6 +570,8 @@ class RuntimeInstaller:
             job["completed_at"] = utcnow().isoformat()
             self._job_log(job, f"job failed: {type(exc).__name__}")
         finally:
+            if job["state"] == "cancelled":
+                self._finalize_cancelled_dependencies(job)
             self._write_job(job)
             self._registry.clear_cache()
             try:

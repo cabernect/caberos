@@ -629,7 +629,98 @@ async def test_queued_cancel_resolves(tmp_path):
     except asyncio.CancelledError:
         pass
     final = installer.get_job(job["id"], "op-1")
-    assert final["state"] in ("cancelled", "interrupted", "failed")
+    assert final["state"] == "cancelled"
+    dep = next(d for d in final["dependencies"] if d["id"] == "git")
+    assert dep["status"] == "not_started"  # worker never reached it
+
+
+async def test_cancel_marks_dependency_states(tmp_path):
+    """Cancelling mid-download finalizes every pending dep honestly —
+    the in-flight one is 'cancelled', later ones 'not_started', and the
+    same statuses survive a persistence reload."""
+    entered = asyncio.Event()
+
+    async def held_download(url, target, job, cancel):
+        entered.set()
+        await asyncio.Future()
+        return 0, hashlib.sha256(b"").hexdigest()
+
+    recipes = _with_blobs(_recipe_env(), git=b"", nodejs=b"")
+    installer = _installer(
+        tmp_path,
+        download=held_download,
+        status_rows=_status_rows(),
+        recipes=recipes,
+    )
+    plan = await installer.plan(["git", "nodejs"], "op-1")
+    job = await installer.start(plan["id"], "op-1", True)
+    await asyncio.wait_for(entered.wait(), timeout=2.0)
+    await installer.cancel(job["id"], "op-1")
+    task = installer._jobs[job["id"]]
+    try:
+        await asyncio.wait_for(task, timeout=10)
+    except asyncio.CancelledError:
+        pass
+
+    final = installer.get_job(job["id"], "op-1")
+    assert final["state"] == "cancelled"
+    statuses = {d["id"]: d["status"] for d in final["dependencies"]}
+    assert statuses["git"] == "cancelled"
+    assert statuses["nodejs"] == "not_started"
+
+    # Same truthful statuses survive a fresh process reload.
+    reloaded = _installer(tmp_path, status_rows=_status_rows(), recipes=recipes).get_job(
+        job["id"], "op-1"
+    )
+    assert {d["id"]: d["status"] for d in reloaded["dependencies"]} == statuses
+
+    # Dep lock released — a new install plan for git is not blocked.
+    assert not installer._dep_locks["git"].locked()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("preceding", ["completed", "reused"])
+async def test_cancel_preserves_earlier_dep_status(tmp_path, preceding):
+    """A cancelled job must not rewrite deps that already finished —
+    completed/reused survives; only the held dep is cancelled."""
+    entered = asyncio.Event()
+    git_blob = _tar({"bin/git": b"#!"})
+    git_dl = _download_for(git_blob)
+
+    async def download(url, target, job, cancel):
+        if job["current_dep"] == "git" and preceding == "completed":
+            return await git_dl(url, target, job, cancel)
+        entered.set()
+        await asyncio.Future()
+        return 0, hashlib.sha256(b"").hexdigest()
+
+    if preceding == "completed":
+        recipes = _with_blobs(_recipe_env(), git=git_blob, nodejs=b"")
+        status_rows = _status_rows()
+    else:  # git already ready via system — plan reuses it
+        recipes = _with_blobs(_recipe_env(), nodejs=b"")
+        status_rows = _status_rows(
+            {2: {"status": "ready", "source": "system", "version": "2.53.0"}}
+        )
+    installer = _installer(tmp_path, download=download, status_rows=status_rows, recipes=recipes)
+    plan = await installer.plan(["git", "nodejs"], "op-1")
+    job = await installer.start(plan["id"], "op-1", True)
+    await asyncio.wait_for(entered.wait(), timeout=5.0)
+
+    await installer.cancel(job["id"], "op-1")
+    task = installer._jobs[job["id"]]
+    try:
+        await asyncio.wait_for(task, timeout=10)
+    except asyncio.CancelledError:
+        pass
+    # Second cancel is idempotent — still terminal, same statuses.
+    await installer.cancel(job["id"], "op-1")
+
+    final = installer.get_job(job["id"], "op-1")
+    assert final["state"] == "cancelled"
+    statuses = {d["id"]: d["status"] for d in final["dependencies"]}
+    assert statuses["git"] == preceding  # untouched prior result
+    assert statuses["nodejs"] == "cancelled"
 
 
 async def test_http_transport_bounded_download(tmp_path):
