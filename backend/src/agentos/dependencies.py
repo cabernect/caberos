@@ -20,6 +20,13 @@ from pathlib import Path
 from typing import Any
 
 from .config import settings
+from .runtime_support import (
+    DEPENDENCIES,
+    inside,
+    is_executable,
+    npm_entrypoint,
+    probe_environment,
+)
 
 log = logging.getLogger("agentos.dependencies")
 
@@ -79,21 +86,10 @@ def _is_windows() -> bool:
 
 
 def _is_executable(path: Path) -> bool:
-    """A file that exists and can plausibly be executed on this platform."""
-    if not path.is_file():
-        return False
-    if _is_windows():
-        # X_OK is meaningless on Windows — a resolved .exe/.cmd/.bat or an
-        # extension-less executable file counts.
-        return path.suffix.lower() in (".exe", ".cmd", ".bat", "")
-    return os.access(path, os.X_OK)
+    return is_executable(path, _is_windows())
 
 
-def _inside(child: Path, parent: Path) -> bool:
-    try:
-        return child.resolve().is_relative_to(parent.resolve())
-    except (OSError, RuntimeError):
-        return False
+_inside = inside
 
 
 async def _read_stream(stream: Any, cap: int, total: list[int]) -> bytes:
@@ -322,9 +318,7 @@ class RuntimeDependencyRegistry:
             # Every matching location is a candidate in order — a broken
             # earlier install must not mask a ready later one.
             seen: set[str] = set()
-            well_known = (
-                _libreoffice_dirs() if dep_id == "libreoffice" else spec.get("well_known", [])
-            )
+            well_known = spec.get("well_known", [])
             for path in self._find_all_in_dirs(commands[0], [*self._search_dirs(), *well_known]):
                 if path in seen:
                     continue
@@ -376,7 +370,7 @@ class RuntimeDependencyRegistry:
     def _system_groups(self, dep_id: str, commands: list[str], spec: dict) -> list[dict]:
         """Each directory containing ALL commands of a group is one
         candidate — never mixed parents across installations."""
-        well_known = _libreoffice_dirs() if dep_id == "libreoffice" else spec.get("well_known", [])
+        well_known = spec.get("well_known", [])
         dirs = [*self._search_dirs(), *well_known]
         if self._finder is not None:
             found: dict[str, str] = {}
@@ -525,35 +519,13 @@ class RuntimeDependencyRegistry:
             return [path, *args]
         # Only npm/npx have a fixed trusted cli.js entrypoint — any other
         # .cmd/.bat wrapper is never executed (no COMSPEC, no WinError 193).
-        if command not in ("npm", "npx"):
+        resolved = npm_entrypoint(command, p, executables)
+        if resolved is None:
             return None
-        parent = p.parent
-        node = executables.get("node")
-        if node is None:
-            return None
-        node_path = Path(node)
-        if node_path.parent != parent:
-            return None
-        script = parent / "node_modules" / "npm" / "bin" / f"{command}-cli.js"
-        try:
-            if not script.resolve().is_relative_to(parent.resolve()):
-                return None
-        except (OSError, RuntimeError):
-            return None
-        if not script.is_file():
-            return None
-        return [str(node_path), str(script), *args]
+        node, script = resolved
+        return [node, str(script), *args]
 
-    @staticmethod
-    def _child_env(executables: dict) -> dict:
-        env = dict(os.environ)
-        dirs = {str(Path(p).parent) for p in executables.values()}
-        env["PATH"] = os.pathsep.join([*dirs, env.get("PATH", "")])
-        env["npm_config_update_notifier"] = "false"
-        env["npm_config_audit"] = "false"
-        env["npm_config_fund"] = "false"
-        env["UV_NO_PROGRESS"] = "1"
-        return env
+    _child_env = staticmethod(probe_environment)
 
     @staticmethod
     def _compatible(
@@ -695,60 +667,7 @@ class RuntimeDependencyRegistry:
         return versions
 
 
-_DEPENDENCIES: dict[str, dict] = {
-    "nodejs": {
-        "label": "Node.js",
-        "commands": ["node", "npm", "npx"],
-        "health": {
-            "node": ["--version"],
-            "npm": ["--version"],
-            "npx": ["--version"],
-        },
-        "unlocks": "Local MCP servers (stdio)",
-        "managed": True,
-    },
-    "uv": {
-        "label": "uv",
-        "commands": ["uv", "uvx"],
-        "health": {"uv": ["--version"], "uvx": ["--version"]},
-        "unlocks": "Python MCP servers and tools",
-        "managed": True,
-    },
-    "git": {
-        "label": "Git",
-        "commands": ["git"],
-        "health": {"git": ["--version"]},
-        "unlocks": "Git MCP servers and workspace tooling",
-        "managed": True,
-    },
-    "libreoffice": {
-        "label": "LibreOffice",
-        "commands": ["soffice"],
-        "health": {"soffice": ["--version"]},
-        "unlocks": "Layout-faithful Office→PDF export",
-        "managed": False,
-        "guidance_url": "https://www.libreoffice.org/download/download-libreoffice/",
-    },
-    "chromium": {
-        "label": "Chromium",
-        "commands": ["chromium"],
-        "health": {},
-        "unlocks": "Managed browser automation and previews",
-        "managed": True,
-    },
-}
-
-
-def _libreoffice_dirs() -> list[str]:
-    dirs = [
-        "/Applications/LibreOffice.app/Contents/MacOS",
-        "/usr/lib/libreoffice/program",
-    ]
-    for env_key in ("PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMW6432"):
-        base = os.environ.get(env_key)
-        if base:
-            dirs.append(os.path.join(base, "LibreOffice", "program"))
-    return dirs
+_DEPENDENCIES = DEPENDENCIES  # shared spec lives in runtime_support
 
 
 _REGISTRY: RuntimeDependencyRegistry | None = None

@@ -30,6 +30,9 @@ from typing import Any
 from .config import settings
 from .dependencies import RuntimeDependencyRegistry
 from .redaction import redact_text
+from .runtime_support import DEPENDENCIES, npm_entrypoint, probe_environment
+from .runtime_support import inside as _inside
+from .runtime_support import is_executable as _is_exec
 
 log = logging.getLogger("agentos.runtime_installer")
 
@@ -97,33 +100,6 @@ def _bounded(text: str, limit: int = 255) -> str:
 def _first_version(text: str) -> str | None:
     m = _VERSION_RE.search(text)
     return m.group(1) if m else None
-
-
-def _label(dep_id: str) -> str:
-    return {"nodejs": "Node.js", "uv": "uv", "git": "Git"}.get(dep_id, dep_id)
-
-
-def _unlocks(dep_id: str) -> str:
-    return {
-        "nodejs": "Local MCP servers (stdio)",
-        "uv": "Python MCP servers and tools",
-        "git": "Git MCP servers and workspace tooling",
-    }.get(dep_id, "")
-
-
-def _inside(child: Path, parent: Path) -> bool:
-    try:
-        return child.resolve().is_relative_to(parent.resolve())
-    except (OSError, RuntimeError):
-        return False
-
-
-def _is_exec(path: Path, windows: bool) -> bool:
-    if not path.is_file():
-        return False
-    if windows:
-        return path.suffix.lower() in (".exe", ".cmd", ".bat", "")
-    return os.access(path, os.X_OK)
 
 
 class RuntimeInstaller:
@@ -349,10 +325,12 @@ class RuntimeInstaller:
                     f"{dep_id} is pinned by an explicit override — "
                     "clear it in runtime settings first",
                 )
+            label = DEPENDENCIES.get(dep_id, {}).get("label", dep_id)
+            unlocks = DEPENDENCIES.get(dep_id, {}).get("unlocks", "")
             if existing.get("status") == "ready":
                 row = {
                     "id": dep_id,
-                    "label": _label(dep_id),
+                    "label": label,
                     "action": "reuse",
                     "version": existing.get("version"),
                     "publisher": None,
@@ -363,7 +341,7 @@ class RuntimeInstaller:
                     "sha256": None,
                     "download_bytes": None,
                     "destination": None,
-                    "unlocks": _unlocks(dep_id),
+                    "unlocks": unlocks,
                 }
                 deps_public.append(row)
                 deps_internal.append(
@@ -384,7 +362,7 @@ class RuntimeInstaller:
             deps_public.append(
                 {
                     "id": dep_id,
-                    "label": _label(dep_id),
+                    "label": label,
                     "action": "install",
                     "version": recipe["version"],
                     "publisher": recipe["publisher"],
@@ -395,7 +373,7 @@ class RuntimeInstaller:
                     "sha256": sha,
                     "download_bytes": size,
                     "destination": str(abs_dest),
-                    "unlocks": _unlocks(dep_id),
+                    "unlocks": unlocks,
                 }
             )
             # Frozen execution spec — the worker never re-reads the file.
@@ -1008,25 +986,15 @@ class RuntimeInstaller:
     ) -> list[str] | None:
         p = Path(path)
         if p.suffix.lower() in (".cmd", ".bat"):
-            if cmd not in ("npm", "npx"):
+            resolved = npm_entrypoint(cmd, p, executables, root=payload)
+            if resolved is None:
                 return None
-            node = executables.get("node")
-            if node is None or Path(node).parent != p.parent:
-                return None
-            script = p.parent / "node_modules" / "npm" / "bin" / f"{cmd}-cli.js"
-            if not script.is_file() or not _inside(script, payload):
-                return None
+            node, script = resolved
             return [node, str(script.resolve()), "--version"]
         return [path, "--version"]
 
     def _health_env(self, executables: dict, dep_id: str, payload: Path) -> dict:
-        env = dict(os.environ)
-        dirs = {str(Path(p).parent) for p in executables.values()}
-        env["PATH"] = os.pathsep.join([*dirs, env.get("PATH", "")])
-        env["npm_config_update_notifier"] = "false"
-        env["npm_config_audit"] = "false"
-        env["npm_config_fund"] = "false"
-        env["UV_NO_PROGRESS"] = "1"
+        env = probe_environment(executables)
         if dep_id == "git":
             libexec = payload / "libexec" / "git-core"
             if libexec.is_dir():

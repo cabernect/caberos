@@ -16,7 +16,6 @@ install path — instead of failing silently or pretending.
 ## Dependencies
 
 - W3 previews (renderers that can use local tools)
-- W2 artifact export (`artifact_export_pdf` renderer chain)
 - W4 managed browser (Chromium install is a dep of this shape)
 
 ## Principle
@@ -39,10 +38,11 @@ FFmpeg/transcoding and Tesseract/OCR are deferred: neither feature currently con
 
 ## Known optional deps
 
+> **Scope note (2026-10-13):** Office→PDF export and the LibreOffice dependency were removed by operator decision. The table below lists the four active dependencies; native Office generation/previews and direct PDF creation/viewing are unaffected.
+
 | Dep | Unlocks | Without it |
 |---|---|---|
 | Chromium (managed profile) | W4 browser automation | Browser automation features are unavailable until a configured or private install exists |
-| LibreOffice (`soffice`) | Layout-faithful DOCX/PPTX/XLSX-to-PDF export | reportlab fallback for DOCX/XLSX; `renderer_unavailable` for PPTX; Office element previews still work without it |
 | Node.js/npm/npx | Selected JavaScript stdio MCP servers | Only those MCP servers can't launch; resolver already handles PATH |
 | uv/uvx | Selected Python stdio MCP servers | Only those MCP servers unavailable; a separate MCP Python environment may need to exist or be provisioned — the bundled gateway is not their interpreter |
 | Git | Git MCP servers and Git-based agent/workspace workflows | Git-dependent integrations/workflows are unavailable; unrelated app features still work |
@@ -52,7 +52,6 @@ FFmpeg/transcoding and Tesseract/OCR are deferred: neither feature currently con
 ```text
 Settings → General → Optional Tools & Runtimes
   ┌─────────────────────────────────────────────┐
-  │ LibreOffice        installed · 25.2   [✓]   │
   │ Chromium           not installed      [Install] │
   │ Node.js            detected · v22     [✓]   │
   │ uv/uvx             not installed      [Set up] │
@@ -70,9 +69,8 @@ instead of re-prompting forever.
 ## Detection
 
 A registry maps dep → detection strategy: `shutil.which` names + well-known
-paths (e.g. `/Applications/LibreOffice.app`, platform package locations) +
-version probe (`soffice --version`, `node --version`). `_find_soffice` in
-`artifacts/service.py` generalizes into this registry — one source of truth.
+paths (platform package locations) +
+version probe (`node --version`, `git --version`).
 
 ## Installation Policy
 
@@ -80,7 +78,6 @@ version probe (`soffice --version`, `node --version`). `_find_soffice` in
 |---|---|
 | Chromium | Reuse the existing private managed Chrome runtime |
 | Node.js/npm/npx | Detect compatible system installation; offer private managed runtime on verified platforms through General settings or approved JavaScript MCP setup; never auto-install on startup |
-| LibreOffice | Detection plus guided vendor/system installation initially |
 | uv/uvx | Detection plus guided installation only when a chosen Python MCP server requires it; managed recipes are a future verified extension |
 | Git | Detect compatible Git; CaberOS-managed setup on verified platforms, available directly in General or as a prerequisite of an approved Git MCP setup; not a manual-install requirement for nontechnical users |
 
@@ -146,8 +143,6 @@ and new desktop platform support are not implied by this workstream.
 
 Features query the dep registry, not bespoke `which()` calls:
 
-- `artifact_export_pdf` on pptx → `renderer_unavailable` + `missing_dep:
-  libreoffice` + hint pointing at General -> Optional Tools & Runtimes.
 - Image-only PDFs retain the current no-extractable-text limitation; do not offer Tesseract as a working remedy until an OCR implementation exists.
 - First-hit prompt: when a feature hits a missing dep, surface it once
   (notification or inline affordance); decline persists.
@@ -156,7 +151,6 @@ Features query the dep registry, not bespoke `which()` calls:
 
 - Registry detection: fake `which`/paths → correct status per dep
 - Status transitions: not installed → installing → installed/declined
-- Feature gating: pptx export reports `missing_dep` + hint when absent
 - Decline persistence: no re-prompt; feature shows limitation state
 - Install path: mocked installer → status flips, version recorded
 

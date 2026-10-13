@@ -104,7 +104,6 @@ Registered in `capabilities/builtin.py`. Two kinds: `tool` (workspace/shell/web 
 | `artifact_adopt` | tool | no | no | Start tracking an existing workspace file (revision 1 snapshot) |
 | `artifact_history` | tool | no | no | List immutable revisions for an artifact, newest first |
 | `artifact_restore` | tool | no | no | Restore an old revision's bytes as a NEW revision (never rewinds) |
-| `artifact_export_pdf` | tool | no | no | Render Office artifact to PDF — LibreOffice if installed, pure-Python reportlab fallback (docx/xlsx); honest status + renderer |
 
 ## Attachments
 
@@ -172,9 +171,9 @@ Tickets **01–09 implemented**: smoke slice, real-model chat + SSE streaming, f
 **v0.2 W1+W2 status (branch `feat/v0.2-artifacts`, unmerged):**
 - **W1 (merged via #49):** background terminals, capability search (ranked OR-token), per-tool MCP `tool_filter` + deny overrides, approval precedence (per-tool → wildcard → default), blast-radius accounting.
 - **W2 Artifact Studio (implemented):** `Artifact`/`ArtifactRevision` models — stable identity, immutable revisions, restore-as-new-revision, conflict detection on external edits, workspace containment, run/message provenance. Format handlers for docx/xlsx/pptx (spec→bytes, never raw XML) + pdf (inspect/validate + build). `artifact_*` capabilities wired through the mediator.
-- **PDF export:** `artifact_export_pdf` uses LibreOffice headless when installed (layout-faithful); otherwise a pure-Python reportlab renderer for docx/xlsx. pptx export requires the layout engine — `renderer_unavailable` honestly. TODO(W4): Chromium render path via the managed browser (positioned HTML for slides).
+- **Office→PDF export removed (operator decision, 2026-10-13):** `artifact_export_pdf` and the LibreOffice/renderer chain are gone; native Office generation/preview and direct `format: "pdf"` creation + viewing remain. No Chromium replacement engine added.
 - **Verification:** `backend/tests/test_artifacts.py` (22 tests) + `scripts/smoke_artifacts.py` — scripted chain through the real pipeline and `--live` mode driving a real provider end-to-end.
-- **Gaps:** `preview_status` column exists but rendering is W3; `artifact_base_revision_ids` on ExecutionManifest unpopulated; LibreOffice Docker packaging is W10; templates/themes guidance is W6 skills.
+- **Gaps:** `preview_status` column exists but rendering is W3; `artifact_base_revision_ids` on ExecutionManifest unpopulated; templates/themes guidance is W6 skills.
 
 **v0.2 W3 status (branch `feat/v0.2-previews`, unmerged):**
 - **W3 File previews + attachments (implemented):** shared preview module serves Conversation, Settings→Workspace, and Skills Studio. `agentos/previews.py` classifies bytes → bounded renderers (markdown/code/text/json/csv-table/image/pdf/docx-elements/pptx-slides/xlsx-workbook/media/unknown). Workspace endpoints (`preview`, `raw`, `pdf-page`) accept `path` or `{artifact_id, revision_id}`; skill endpoints mirror them rooted at the skill dir; composer gets ephemeral `attachments/preview` + `url-preview` (http(s)-only, 256 KB cap).

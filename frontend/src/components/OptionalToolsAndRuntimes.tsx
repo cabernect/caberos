@@ -8,7 +8,7 @@ const TERMINAL_STATES = new Set([
 ]);
 
 /** Only these three have managed recipes in this slice — Chromium keeps
- * its own installer; LibreOffice is guided-only. */
+ * its own installer. */
 const INSTALLABLE = new Set(["nodejs", "uv", "git"]);
 import {
   CheckCircle2,

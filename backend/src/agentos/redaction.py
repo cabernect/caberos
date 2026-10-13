@@ -312,6 +312,8 @@ _ARG_ALLOWLISTS = {
     "artifact_adopt": {"path", "change_summary"},
     "artifact_history": {"artifact_id"},
     "artifact_restore": {"artifact_id", "revision_id", "change_summary"},
+    # Removed capability — keep the allowlist entry so historical records
+    # carrying its arguments still redact consistently.
     "artifact_export_pdf": {"artifact_id"},
     "capabilities_search": {"query", "limit"},
     "capabilities_load": {"names"},

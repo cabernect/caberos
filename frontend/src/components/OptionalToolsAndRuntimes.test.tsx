@@ -1,4 +1,4 @@
-/** W11 readiness card — five dependency rows, statuses, recheck guards. */
+/** W11 readiness card — four dependency rows, statuses, recheck guards. */
 import { fireEvent, render, screen } from "@testing-library/react";
 import { act } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -20,38 +20,29 @@ const dep = (over: Partial<RuntimeDependency> = {}): RuntimeDependency => ({
   ...over,
 });
 
-const FIVE: RuntimeDependency[] = [
+const FOUR: RuntimeDependency[] = [
   dep({ id: "nodejs", label: "Node.js" }),
   dep({ id: "uv", label: "uv", version: "0.12.24" }),
   dep({ id: "git", label: "Git", version: "2.53.0" }),
-  dep({
-    id: "libreoffice",
-    label: "LibreOffice",
-    status: "missing",
-    source: "none",
-    version: null,
-    managed_recipe_available: false,
-    guidance_url: "https://www.libreoffice.org/download/download-libreoffice/",
-    unlocks: "Layout-faithful Office→PDF export",
-  }),
   dep({ id: "chromium", label: "Chromium", source: "managed", version: "141" }),
 ];
 
 describe("OptionalToolsAndRuntimes", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it("renders all five rows with statuses, versions and unlocks", async () => {
-    vi.spyOn(api, "getDependencies").mockResolvedValue({ dependencies: FIVE });
+  it("renders all four rows with statuses, versions and unlocks", async () => {
+    vi.spyOn(api, "getDependencies").mockResolvedValue({ dependencies: FOUR });
     render(<OptionalToolsAndRuntimes />);
     await act(async () => {});
-    for (const label of ["Node.js", "uv", "Git", "LibreOffice", "Chromium"]) {
+    for (const label of ["Node.js", "uv", "Git", "Chromium"]) {
       expect(screen.getByText(label)).toBeTruthy();
     }
     expect(screen.getAllByText("Ready").length).toBeGreaterThanOrEqual(4);
-    expect(screen.getByText("Missing")).toBeTruthy();
     expect(screen.getByText("24.21.0")).toBeTruthy();
-    expect(screen.getAllByText(/Unlocks:/).length).toBe(5);
-    expect(screen.getByText(/Guided setup/)).toBeTruthy();
+    expect(screen.getAllByText(/Unlocks:/).length).toBe(4);
+    // No LibreOffice row and no guided-setup affordance for these four.
+    expect(screen.queryByText("LibreOffice")).toBeNull();
+    expect(screen.queryByText(/Guided setup/)).toBeNull();
   });
 
   it("shows managed-setup note for missing deps with a recipe", async () => {
@@ -74,7 +65,7 @@ describe("OptionalToolsAndRuntimes", () => {
   it("recheck button POSTs once and swaps in fresh rows", async () => {
     const get = vi
       .spyOn(api, "getDependencies")
-      .mockResolvedValue({ dependencies: FIVE });
+      .mockResolvedValue({ dependencies: FOUR });
     const post = vi.spyOn(api, "recheckDependencies").mockResolvedValue({
       dependencies: [
         dep({
@@ -98,7 +89,7 @@ describe("OptionalToolsAndRuntimes", () => {
   });
 
   it("error surface keeps prior rows and is actionable", async () => {
-    vi.spyOn(api, "getDependencies").mockResolvedValue({ dependencies: FIVE });
+    vi.spyOn(api, "getDependencies").mockResolvedValue({ dependencies: FOUR });
     vi.spyOn(api, "recheckDependencies").mockRejectedValue(new Error("500"));
     render(<OptionalToolsAndRuntimes />);
     await act(async () => {});
@@ -124,7 +115,7 @@ describe("OptionalToolsAndRuntimes", () => {
     vi.useFakeTimers();
     try {
       vi.spyOn(api, "getDependencies").mockResolvedValue({
-        dependencies: FIVE,
+        dependencies: FOUR,
       });
       const jobs = vi
         .spyOn(api, "listDependencyJobs")
@@ -153,7 +144,7 @@ describe("OptionalToolsAndRuntimes", () => {
     let resolvePost: (v: {
       dependencies: RuntimeDependency[];
     }) => void = () => {};
-    vi.spyOn(api, "getDependencies").mockResolvedValue({ dependencies: FIVE });
+    vi.spyOn(api, "getDependencies").mockResolvedValue({ dependencies: FOUR });
     const post = vi
       .spyOn(api, "recheckDependencies")
       .mockImplementation(() => new Promise((r) => (resolvePost = r)));
@@ -162,7 +153,7 @@ describe("OptionalToolsAndRuntimes", () => {
     fireEvent.click(screen.getByRole("button", { name: /Re-check/ }));
     unmount();
     await act(async () => {
-      resolvePost({ dependencies: FIVE });
+      resolvePost({ dependencies: FOUR });
     });
     expect(post).toHaveBeenCalledTimes(1);
     expect(screen.queryByText("Node.js")).toBeNull();
@@ -176,7 +167,7 @@ describe("idle job monitor", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       vi.spyOn(api, "getDependencies").mockResolvedValue({
-        dependencies: FIVE,
+        dependencies: FOUR,
       });
       const jobs = vi
         .spyOn(api, "listDependencyJobs")
@@ -198,7 +189,7 @@ describe("idle job monitor", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       vi.spyOn(api, "getDependencies").mockResolvedValue({
-        dependencies: FIVE,
+        dependencies: FOUR,
       });
       let first = true;
       const jobs = vi
@@ -251,7 +242,7 @@ describe("idle job monitor", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       vi.spyOn(api, "getDependencies").mockResolvedValue({
-        dependencies: FIVE,
+        dependencies: FOUR,
       });
       let calls = 0;
       const jobs = vi
@@ -307,11 +298,11 @@ describe("idle job monitor", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       vi.spyOn(api, "getDependencies").mockResolvedValue({
-        dependencies: FIVE,
+        dependencies: FOUR,
       });
       const post = vi
         .spyOn(api, "recheckDependencies")
-        .mockResolvedValue({ dependencies: FIVE });
+        .mockResolvedValue({ dependencies: FOUR });
       const jobs = vi
         .spyOn(api, "listDependencyJobs")
         .mockResolvedValue({ jobs: [] });
@@ -339,7 +330,7 @@ describe("idle job monitor", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       vi.spyOn(api, "getDependencies").mockResolvedValue({
-        dependencies: FIVE,
+        dependencies: FOUR,
       });
       let calls = 0;
       const jobs = vi
@@ -417,7 +408,7 @@ describe("integrated install flow", () => {
         ],
       });
       vi.spyOn(api, "recheckDependencies").mockResolvedValue({
-        dependencies: FIVE,
+        dependencies: FOUR,
       });
       const queued = {
         id: "j1",

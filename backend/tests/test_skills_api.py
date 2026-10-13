@@ -192,3 +192,15 @@ class TestLifecycleApi:
         assert resp.status_code == 200
         assert resp.json()["skills"][0]["name"] == "mine"
         assert resp.json()["skills"][0]["pin"].startswith("live:")
+
+
+def test_office_documents_allowed_tools_excludes_export_pdf():
+    """Builtin office-documents must not advertise the removed
+    artifact_export_pdf capability."""
+    from agentos.skills.loader import load_skill
+
+    skill = load_skill("__test__", "office-documents")
+    assert skill is not None
+    tools = skill.get("allowed_tools", "").split()
+    assert "artifact_export_pdf" not in tools
+    assert "artifact_create" in tools

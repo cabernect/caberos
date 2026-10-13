@@ -3,7 +3,6 @@
 No revise: PDFs are write-once — a rendered end state, not an editable
 source. Direct creation takes the docx-style block spec and renders it
 through agentos.artifacts.pdf_render (same normalized element vocabulary).
-Office→PDF export of existing artifacts lives in the service.
 """
 
 from io import BytesIO

@@ -8,7 +8,6 @@ from .registry import CapabilityDef, registry
 from .tools.artifact import (
     artifact_adopt,
     artifact_create,
-    artifact_export_pdf,
     artifact_history,
     artifact_inspect,
     artifact_restore,
@@ -1189,25 +1188,5 @@ def register_builtin_capabilities() -> None:
             require_approval=False,
             subject_scoped=False,
             execute=artifact_restore,
-        )
-    )
-
-    registry.register(
-        CapabilityDef(
-            name="artifact_export_pdf",
-            effects=frozenset({"workspace_write", "local_execute"}),
-            kind="tool",
-            description="Render an Office artifact to PDF. Uses LibreOffice when installed for layout fidelity, otherwise a pure-Python renderer. Honest status: exported / renderer_unavailable / failed, plus which renderer produced it.",
-            parameters_schema={
-                "type": "object",
-                "properties": {
-                    "artifact_id": {"type": "string"},
-                },
-                "required": ["artifact_id"],
-            },
-            egress=False,
-            require_approval=False,
-            subject_scoped=False,
-            execute=artifact_export_pdf,
         )
     )

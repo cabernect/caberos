@@ -329,3 +329,42 @@ Log: `.scratch/w11/installer-backend-tests.log`. **No real downloads or installs
   nodejs:not_started`. This cancellation check uses fixtures without
   downloading anything; the independent report separately records approved
   real Node/uv installs.
+
+## Office→PDF export + LibreOffice removal (2026-10-13)
+
+- Operator decision: `artifact_export_pdf`, `_find_soffice`, and the
+  LibreOffice/reportlab export chain removed; dependency spec now lists
+  **four** resources (Node.js, uv, Git, Chromium). Native Office generation
+  and previews and direct `format:"pdf"` creation/viewing preserved; no
+  Chromium replacement engine added. `redaction.py` keeps the removed
+  capability's arg allowlist for historical records.
+- Implementation consolidation: new private `runtime_support.py` shares
+  dependency specs + `inside`/`is_executable`/`probe_environment`/
+  `npm_entrypoint` between detection and installer — net code shrinks.
+- Lead-measured size: the targeted implementation files shrink by **189
+  lines**, including the new shared module. Detection/installer/shared code
+  alone goes from 1911 to 1900 lines: this is a modest consolidation, not a
+  wholesale installer redesign. Most deleted code is the retired export
+  path. Counts include comments/blank lines and exclude tests/docs/skills;
+  frozen comparison: `.scratch/w11/libreoffice-removal-measurement.json`.
+- Verification: `test_runtime_installer`+`test_dependencies`+
+  `test_mcp_stdio_resolver`+`test_artifacts`+`test_previews`+
+  `test_capability_effects`+`test_runtime_support` = **176 passed**
+  (`.scratch/w11/libreoffice-removal-green.log`); Ruff check + format clean
+  (`libreoffice-removal-ruff.log`). Frontend: OptionalToolsAndRuntimes +
+  ToolCallBlock **20 passed**; lint 0 errors; build OK.
+- Live QA (isolated :18081/:15173): Settings shows the four resources at
+  1440 + 375, no LibreOffice row or vendor link; real workspace preview API
+  returns `pdf`(1 page)/`docx`/`xlsx`/`pptx` from fixture files. No export
+  affordance was found on the checked Settings card, composer tray, and
+  agents list. Screenshots `.scratch/w11/qa-settings-4deps-*.png`.
+- Review follow-up: restored default wrapper-parent containment in
+  `npm_entrypoint`, verified its symlink-escape regression, and checked
+  the updated Office skill's allowed tools. The helper/dependency/installer/
+  skills follow-up gate passed **79 tests**; this overlaps the earlier 176
+  and is not an additional unique-test total.
+- PDF browser smoke: a real PDF attachment produced a visible PNG thumbnail;
+  the full sent-message PDF panel was not exercised because QA has no model
+  configured. Re-check returned 200 and a 25-second idle observation recorded
+  no dependency-job polling. Evidence:
+  `.scratch/w11/libreoffice-removal-qa-evidence.json`.

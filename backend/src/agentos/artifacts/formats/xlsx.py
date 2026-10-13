@@ -2,7 +2,7 @@
 
 Formula honesty: openpyxl persists formula strings without evaluating them.
 `formulas_recalculated` is reported separately from authorship and is only
-true when a real calculation engine (LibreOffice) produced values.
+true when a real calculation engine produced values.
 """
 
 import zipfile

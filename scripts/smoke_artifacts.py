@@ -30,7 +30,7 @@ from agentos.pipeline import InboundMessage, Pipeline  # noqa: E402
 
 ARTIFACT_GRANTS = [
     CapabilityGrant(name=f"artifact_{n}", require_approval=False)
-    for n in ("create", "inspect", "revise", "history", "restore", "adopt", "export_pdf")
+    for n in ("create", "inspect", "revise", "history", "restore", "adopt")
 ]
 
 
@@ -98,12 +98,6 @@ class ArtifactChainModel(ScriptedModel):
         if step == 3:
             return ScriptedResponse(
                 tool_calls=[{"id": "c4", "name": "artifact_history", "args": {"artifact_id": aid}}]
-            )
-        if step == 4:
-            return ScriptedResponse(
-                tool_calls=[
-                    {"id": "c5", "name": "artifact_export_pdf", "args": {"artifact_id": aid}}
-                ]
             )
         return ScriptedResponse(content="Artifact smoke complete.")
 

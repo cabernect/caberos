@@ -53,13 +53,12 @@ async def test_missing_node_is_missing_not_ready(registry):
     assert registry.resolve("node") is None
 
 
-async def test_all_five_ids_present(registry):
+async def test_all_four_ids_present(registry):
     rows = await registry.status()
     assert {r["id"] for r in rows} == {
         "nodejs",
         "uv",
         "git",
-        "libreoffice",
         "chromium",
     }
 
@@ -360,7 +359,7 @@ def api_client():
         app.dependency_overrides.update(prior)
 
 
-def test_dependencies_api_returns_five(api_client, tmp_path, monkeypatch):
+def test_dependencies_api_returns_four(api_client, tmp_path, monkeypatch):
     reg = RuntimeDependencyRegistry(
         data_dir=tmp_path / "rt",
         runner=_runner_fail(),
@@ -377,7 +376,6 @@ def test_dependencies_api_returns_five(api_client, tmp_path, monkeypatch):
         "nodejs",
         "uv",
         "git",
-        "libreoffice",
         "chromium",
     }
     resp2 = api_client.post("/api/dependencies/recheck")
@@ -780,31 +778,3 @@ async def test_windows_untrusted_wrapper_never_executes(monkeypatch, tmp_path):
     node = _row(await reg.status(), "nodejs")
     assert node["status"] != "ready"
     assert not any(str(a[0]).endswith(".cmd") for a in argv_seen)
-
-
-async def test_windows_libreoffice_programfiles(monkeypatch, tmp_path):
-    """PROGRAMFILES well-known dir resolves soffice.exe on simulated
-    Windows."""
-    import agentos.dependencies as deps_mod
-
-    monkeypatch.setattr(deps_mod.platform, "system", lambda: "Windows")
-    prog = tmp_path / "Program Files"
-    soffice = prog / "LibreOffice" / "program" / "soffice.exe"
-    soffice.parent.mkdir(parents=True)
-    soffice.write_text("x")
-    monkeypatch.setenv("PROGRAMFILES", str(prog))
-    argv_seen = []
-
-    async def runner(argv, env):
-        argv_seen.append(argv)
-        return 0, b"LibreOffice 25.2.0\n", b""
-
-    reg = RuntimeDependencyRegistry(
-        data_dir=tmp_path / "rt",
-        runner=runner,
-        platform_key="windows-arm64",
-    )
-    lo = _row(await reg.status(), "libreoffice")
-    assert lo["status"] == "ready"
-    assert lo["version"] == "25.2.0"
-    assert [str(soffice), "--version"] in argv_seen

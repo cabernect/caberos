@@ -143,7 +143,7 @@ def _status_rows(overrides=None):
             "managed_recipe_available": True,
             "guidance_url": None,
         }
-        for d in ("nodejs", "uv", "git", "libreoffice", "chromium")
+        for d in ("nodejs", "uv", "git", "chromium")
     ]
     for i, patch in (overrides or {}).items():
         rows[i].update(patch)

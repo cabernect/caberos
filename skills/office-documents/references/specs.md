@@ -35,6 +35,10 @@ Exact shapes accepted by `artifact_create` (`spec`) and `artifact_revise` (`ops`
 
 - `index`, `table`, `row`, `col` are zero-based. Paragraph indexes count every paragraph, headings included — confirm positions with `artifact_inspect` (or `read_file`) before replacing.
 
+## PDF (`.pdf`)
+
+Use `artifact_create` with `format: "pdf"`, a `.pdf` path, and the same `title` and `blocks` shape shown in the Word create spec above. This creates a PDF directly; it does not convert an existing Office file. PDFs have no revise ops: create a new PDF for changed content.
+
 ## Excel (`.xlsx`)
 
 **Create spec**
@@ -57,7 +61,7 @@ Exact shapes accepted by `artifact_create` (`spec`) and `artifact_revise` (`ops`
 - `rows` are appended in order starting at row 1.
 - `cells` maps a cell reference to a value (`5`, `"text"`) or an object with `value` or `formula`, plus optional `number_format`, `bold`, `italic`, `color` (hex like `"FF0000"`).
 - `formats` maps a range to the same style keys.
-- Sheets are set to landscape and fit-to-width for printing and PDF export.
+- Sheets are set to landscape and fit-to-width for printing in a spreadsheet application.
 
 **Revise ops**
 

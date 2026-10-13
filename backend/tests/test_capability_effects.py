@@ -23,6 +23,21 @@ def _caps():
 
 
 class TestCapabilityEffects:
+    def test_artifact_export_pdf_removed_from_builtins(self):
+        """Office→PDF export capability was removed (operator decision,
+        2026-10-13); native create/inspect/revise/adopt/history/restore and
+        direct PDF creation stay registered."""
+        assert "artifact_export_pdf" not in registry._caps
+        for name in (
+            "artifact_create",
+            "artifact_inspect",
+            "artifact_revise",
+            "artifact_adopt",
+            "artifact_history",
+            "artifact_restore",
+        ):
+            assert name in registry._caps, name
+
     def test_builtin_read_capabilities(self):
         for name in (
             "read_file",

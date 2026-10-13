@@ -510,71 +510,6 @@ async def test_imported_pdf_is_readable_but_not_editable(db, workspace, artifact
         )
 
 
-async def test_pdf_export_reportlab_fallback_without_soffice(
-    db, workspace, artifact_storage, monkeypatch
-):
-    """No LibreOffice → reportlab renders a valid, tracked PDF."""
-    from io import BytesIO
-
-    from pypdf import PdfReader
-
-    from agentos.artifacts import service
-    from agentos.models.artifact import Artifact
-
-    monkeypatch.setattr(service, "_find_soffice", lambda: None)
-
-    art, _ = await service.create_structured(
-        db,
-        workspace_id="agent-1",
-        workspace_path=workspace,
-        rel_path="report.docx",
-        format="docx",
-        spec={
-            "title": "Báo cáo quý",
-            "blocks": [
-                {"type": "heading", "level": 1, "text": "Tổng quan"},
-                {"type": "paragraph", "text": "Chuyên gia phân tích."},
-                {"type": "table", "header": ["K", "V"], "rows": [["ok", "1"]]},
-            ],
-        },
-        created_by="agent-1",
-    )
-
-    result = await service.export_pdf(db, art.id, workspace_path=workspace)
-    assert result["export_status"] == "exported"
-    assert result["renderer"] == "reportlab"
-
-    pdf_art = await db.get(Artifact, result["pdf_artifact_id"])
-    assert pdf_art.format == "pdf"
-    data = await service.revision_bytes(db, pdf_art.current_revision_id)
-    reader = PdfReader(BytesIO(data))
-    text = reader.pages[0].extract_text()
-    assert "Báo cáo quý" in text
-    assert "Tổng quan" in text
-
-
-async def test_pdf_export_unavailable_when_no_renderer_or_extractor(
-    db, workspace, artifact_storage, monkeypatch
-):
-    """renderer_unavailable only when neither soffice nor to_elements exists."""
-    from agentos.artifacts import service
-
-    monkeypatch.setattr(service, "_find_soffice", lambda: None)
-
-    art, _ = await service.create(
-        db,
-        workspace_id="agent-1",
-        workspace_path=workspace,
-        rel_path="data.csv",
-        data=b"a,b\n1,2\n",
-        created_by="agent-1",
-    )
-
-    result = await service.export_pdf(db, art.id, workspace_path=workspace)
-    assert result["export_status"] == "renderer_unavailable"
-    assert "pdf_artifact_id" not in result
-
-
 async def test_create_pdf_directly_from_spec(db, workspace, artifact_storage):
     """spec → PDF bytes — pdf is now a creatable (write-once) format."""
     from io import BytesIO
@@ -839,9 +774,9 @@ async def test_create_structured_refuses_attachments_dir(db, workspace, artifact
         )
 
 
-async def test_mediated_restore_adopt_export_carry_provenance(db, workspace, artifact_storage):
+async def test_mediated_restore_adopt_carry_provenance(db, workspace, artifact_storage):
     """Regression: artifact_restore used to TypeError on the
-    source_message_id provenance key; adopt/export also drop run/call
+    source_message_id provenance key; adopt also drops run/call
     without the threading. Every mediated writer must carry
     run/call/subagent onto its revisions."""
     from sqlalchemy import select
@@ -857,7 +792,6 @@ async def test_mediated_restore_adopt_export_carry_provenance(db, workspace, art
             "artifact_revise",
             "artifact_restore",
             "artifact_adopt",
-            "artifact_export_pdf",
             "write_file",
         ]
     )
