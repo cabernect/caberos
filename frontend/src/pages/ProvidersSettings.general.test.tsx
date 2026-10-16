@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, fireEvent } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { ThemeProvider } from "@/lib/theme";
 
@@ -10,6 +10,8 @@ const apiMock = vi.hoisted(() => ({
   recheckDependencies: vi.fn(),
   listDependencyJobs: vi.fn(),
   getNotificationPrefs: vi.fn(),
+  getContextCapturePolicy: vi.fn(),
+  updateContextCapturePolicy: vi.fn(),
 }));
 
 vi.mock("@/lib/api", () => ({
@@ -122,5 +124,30 @@ describe("General settings (W11 internal catalog)", () => {
     // Its sibling cards remain.
     expect(screen.getByText("Optional Tools & Runtimes")).toBeTruthy();
     expect(screen.getAllByText("Notifications").length).toBeGreaterThan(0);
+  });
+
+  it("installation-wide capture retention lives here, fetched on expand", async () => {
+    apiMock.getContextCapturePolicy.mockResolvedValue({
+      retention_days: 7,
+      max_bytes: 268435456,
+      max_payload_bytes: 1048576,
+      pinned: { retention_days: false, max_bytes: false, max_payload_bytes: false },
+    });
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <ProvidersSettings />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    await act(async () => {});
+    // No agent selection needed — this is an installation policy.
+    const toggle = screen.getByRole("button", {
+      name: /Request capture retention/,
+    });
+    expect(apiMock.getContextCapturePolicy).not.toHaveBeenCalled();
+    fireEvent.click(toggle);
+    await act(async () => {});
+    expect(apiMock.getContextCapturePolicy).toHaveBeenCalled();
   });
 });

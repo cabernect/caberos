@@ -28,6 +28,8 @@ class ScriptedResponse:
     # W11 immutable call receipt: cost_assessment + rate_authority for the
     # frozen pre-call rate snapshot (None on fake/scripted models).
     cost_receipt: dict | None = None
+    # Request-capture reference for this dispatch (None on scripted models).
+    request_capture: Any = None
 
 
 @dataclass
@@ -52,6 +54,16 @@ class ScriptedModel:
 
     responses: list[ScriptedResponse]
     _index: int = field(default=0, init=False, repr=False)
+    # Deep-copied inputs per call — lets tests assert what the model saw at
+    # call time even though the harness mutates history afterwards.
+    seen_calls: list[dict[str, Any]] = field(default_factory=list, init=False, repr=False)
+
+    def _record(self, messages: Any, tools: Any) -> None:
+        import copy
+
+        self.seen_calls.append(
+            {"messages": copy.deepcopy(messages or []), "tools": copy.deepcopy(tools or [])}
+        )
 
     async def complete(
         self,
@@ -61,6 +73,7 @@ class ScriptedModel:
         **_kwargs: Any,
     ) -> ScriptedResponse:
         """Return the next scripted response."""
+        self._record(messages, tools)
         if messages is None:
             messages = []
         if self._index >= len(self.responses):
@@ -91,6 +104,7 @@ class ScriptedModel:
           - ("token", str) — output token chunk
           - ("done", ScriptedResponse) — final response object
         """
+        self._record(messages, tools)
         if self._index >= len(self.responses):
             resp = ScriptedResponse(content="Done.", tokens_in=10, tokens_out=1, cost=0.0)
             yield "done", resp

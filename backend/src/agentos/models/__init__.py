@@ -9,6 +9,8 @@ from .browser_profile import BrowserProfile
 from .capability import AgentCapability, Capability
 from .channel_config import ChannelConfig
 from .contact import Contact
+from .conversation_summary import ConversationSummary
+from .core import CoreRevision
 from .document import Document, DocumentChunk
 from .elicitation import ElicitationRequest
 from .execution_manifest import ExecutionManifest
@@ -26,6 +28,7 @@ from .notification import Notification, NotificationDelivery, NotificationPrefs
 from .operator import Operator, OperatorAuditLog
 from .operator_session import OperatorSession
 from .provider import Provider
+from .request_capture import ModelRequestCapture
 from .revision import RevisionedEntityMixin, RevisionMixin
 from .run import Message, Run
 from .schedule import Schedule, ScheduleOccurrence, ScheduleRevision
@@ -55,6 +58,9 @@ __all__ = [
     "McpTool",
     "Provider",
     "Contact",
+    "ConversationSummary",
+    "ModelRequestCapture",
+    "CoreRevision",
     "Document",
     "DocumentChunk",
     "EmbeddingResource",

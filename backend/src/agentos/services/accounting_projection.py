@@ -23,6 +23,9 @@ _LEGACY_KEYS = (
     "operation",
     "chunk_count",
     "cost_source",
+    "capture_id",
+    "capture_state",
+    "capture_surface",
 )
 
 _ASSESSMENT_SCALARS = (

@@ -902,6 +902,7 @@ class LiteLLMModelCatalog:
         started = time.perf_counter()
         raw = None
         error: BaseException | None = None
+        cap_ref = None
         try:
             if family == "responses":
                 kwargs: dict[str, Any] = {
@@ -914,7 +915,14 @@ class LiteLLMModelCatalog:
                 if api_base or provider["base_url"]:
                     kwargs["api_base"] = api_base or provider["base_url"]
                 kwargs.update(provider["extra_params"])
-                raw = await self.adapter.transport.responses(**kwargs)
+                from ..services.context_capture import capture_dispatch, capture_scope
+
+                with capture_scope(
+                    purpose="probe", agent_id=None, model=model_str, family="responses"
+                ):
+                    raw, cap_ref = await capture_dispatch(
+                        "responses_probe", kwargs, self.adapter.transport.responses
+                    )
                 return True
 
             kwargs = {
@@ -928,14 +936,27 @@ class LiteLLMModelCatalog:
                 kwargs["api_base"] = api_base or provider["base_url"]
             kwargs.update(provider["extra_params"])
 
-            raw = await self.adapter.transport.completion(**kwargs)
+            from ..services.context_capture import capture_dispatch, capture_scope
+
+            with capture_scope(purpose="probe", agent_id=None, model=model_str, family="chat"):
+                raw, cap_ref = await capture_dispatch(
+                    "chat_probe", kwargs, self.adapter.transport.completion
+                )
             return True
         except BaseException as exc:
             error = exc
             raise
         finally:
             await self._record_probe(
-                provider_id, model_name, model_str, family, raw, error, started, snapshot
+                provider_id,
+                model_name,
+                model_str,
+                family,
+                raw,
+                error,
+                started,
+                snapshot,
+                capture_ref=cap_ref if cap_ref is not None else getattr(error, "capture_ref", None),
             )
 
     async def _record_probe(
@@ -948,6 +969,7 @@ class LiteLLMModelCatalog:
         error: BaseException | None,
         started: float,
         snapshot: Any | None = None,
+        capture_ref: Any = None,
     ) -> None:
         """File the probe on the ledger — never blocks or fails validate."""
         try:
@@ -997,6 +1019,7 @@ class LiteLLMModelCatalog:
                     cost_receipt=cost_receipt,
                 )
             await record_system_call(
+                capture_ref=capture_ref,
                 kind="probe",
                 purpose="reasoning",
                 provider_id=provider_id,

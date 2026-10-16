@@ -36,6 +36,7 @@ import { useTheme } from "@/lib/themeHook";
 import { resetSetupGuideState } from "@/components/setupGuideState";
 import { NotificationPrefsForm } from "@/components/NotificationPrefsForm";
 import { OptionalToolsAndRuntimes } from "@/components/OptionalToolsAndRuntimes";
+import { ContextCaptureSettings } from "@/components/ContextCaptureSettings";
 
 // Open URLs in the system browser when running inside Tauri,
 // fall back to normal browser navigation otherwise.
@@ -542,6 +543,22 @@ function GeneralTab({
           }}
         >
           <NotificationPrefsForm />
+        </div>
+      </div>
+
+      {/* Request-capture retention — installation-wide */}
+      <div>
+        <h2 className="mb-3 text-[14px] font-semibold text-[var(--ink)]">
+          Request Capture
+        </h2>
+        <div
+          className="rounded-xl p-5"
+          style={{
+            border: "1px solid var(--border-soft)",
+            background: "var(--sidebar)",
+          }}
+        >
+          <ContextCaptureSettings />
         </div>
       </div>
 

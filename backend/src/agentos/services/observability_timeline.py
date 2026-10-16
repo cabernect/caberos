@@ -284,6 +284,8 @@ async def build_run_timeline(db: AsyncSession, run: Run) -> list[dict]:
                     "knowledge_snapshot_ids": knowledge_ids,
                     "browser_profile_id": manifest.browser_profile_id,
                     "artifact_base_revision_ids": artifact_bases,
+                    "core_revision_id": manifest.core_revision_id,
+                    "core_identity_source_version_id": manifest.core_identity_source_version_id,
                 },
             )
         )

@@ -354,14 +354,31 @@ class TestCompactionBudget:
             return "summary"
 
         monkeypatch.setattr("agentos.harness.compaction.generate_summary", fake_summary)
-        monkeypatch.setattr("agentos.harness.compaction.count_tokens", lambda *a, **k: 800)
+
+        # Constant 800 for the original-sizing calls keeps the historic
+        # budget trigger (threshold 500 < 800); the reassembled summary
+        # result tokenizes smaller so the ineffective-compaction guard
+        # stays honest.
+        def _count(msgs, *a, **k):
+            msgs = list(msgs)
+            if any(
+                "[Previous conversation summary]" in str(m.get("content", ""))
+                or str(m.get("content", "")) == "summary"
+                for m in msgs
+            ):
+                return 5  # compacted result — much smaller than originals
+            if len(msgs) == 30:
+                return 800  # the whole original run
+            return 300  # per-message sizing — tail keeps ~1 message
+
+        monkeypatch.setattr("agentos.harness.compaction.count_tokens", _count)
         config = AgentConfig(
             id="a1",
             name="A",
             model=ModelConfig(provider_id="p", name="m", max_context_tokens=None),
             compaction=CompactionConfig(threshold=0.5),
         )
-        history = [{"role": "user", "content": f"message {i}"} for i in range(20)]
+        history = [{"role": "user", "content": f"message {i}"} for i in range(30)]
 
         # budget 1000 → threshold 500 < 800 → compaction attempted.
         result = await compact_context(
@@ -441,14 +458,14 @@ class TestSummaryLedger:
             "acompletion",
             AsyncMock(side_effect=TimeoutError("slow")),
         )
-        out = await generate_summary(
-            [{"role": "user", "content": "x"}],
-            None,
-            "anthropic/m1",
-            provider_id="p1",
-            model_name="m1",
-        )
-        assert "unavailable" in out
+        with pytest.raises(TimeoutError):
+            await generate_summary(
+                [{"role": "user", "content": "x"}],
+                None,
+                "anthropic/m1",
+                provider_id="p1",
+                model_name="m1",
+            )
         async with db() as session:
             rows = (await session.execute(select(ModelCall))).scalars().all()
         assert len(rows) == 1

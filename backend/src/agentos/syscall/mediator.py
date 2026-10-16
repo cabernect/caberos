@@ -360,6 +360,8 @@ class SyscallHandler:
             extra_kwargs["db"] = self.db
             extra_kwargs["agent_id"] = agent_config.id
             extra_kwargs["run_id"] = run_id
+            extra_kwargs["session_id"] = getattr(session, "id", None)
+            extra_kwargs["agent_config"] = agent_config
             extra_kwargs["db_lock"] = getattr(self, "_db_lock", None)
             if cap.subject_scoped:
                 extra_kwargs["contact_id"] = subject_contact_id

@@ -116,6 +116,37 @@ async def db(db_engine, monkeypatch):
         yield session
 
 
+@pytest.fixture(autouse=True)
+def isolated_fs_roots(tmp_path, monkeypatch):
+    """Route all writable runtime roots into tmp_path — tests must never
+    touch the real agent home, workspace, knowledge, or data dirs."""
+    from agentos.config import settings
+
+    monkeypatch.setattr(settings, "agent_home_root", tmp_path / "agents")
+    monkeypatch.setattr(settings, "workspace_root", tmp_path / "workspaces")
+    monkeypatch.setattr(settings, "knowledge_root", tmp_path / "knowledge")
+    monkeypatch.setattr(settings, "skills_store_root", tmp_path / "skills-store")
+    monkeypatch.setattr(settings, "skills_drafts_root", tmp_path / "skills-drafts")
+    monkeypatch.setattr(settings, "db_path", tmp_path / "data" / "agentos.db")
+    monkeypatch.setattr(settings, "secret_key_path", tmp_path / "data" / "secret.key")
+    return tmp_path
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def isolated_db_runtime(db_engine, monkeypatch):
+    """Bind agentos.db's module-level engine/factory to the disposable
+    per-test engine — ledger, capture, init_db, and background sessions can
+    never reach the real database during tests. The explicit `db` fixture
+    still yields a session on the same engine; tests that override their
+    own factory/engine are unaffected."""
+    import agentos.db as db_module
+
+    factory = async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
+    monkeypatch.setattr(db_module, "engine", db_engine)
+    monkeypatch.setattr(db_module, "async_session_factory", factory)
+    yield
+
+
 @pytest.fixture
 def workspace(tmp_path):
     """Create a temporary workspace directory."""

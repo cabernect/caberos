@@ -73,12 +73,16 @@ async def record_system_call(
     model_name: str | None = None,
     model_str: str | None = None,
     run_id: str | None = None,
+    session_id: str | None = None,
     agent_id: str | None = None,
     sub_agent_id: str | None = None,
+    turn: int | None = None,
+    streamed: bool | None = None,
     response: Any = None,
     error: BaseException | None = None,
     latency_ms: int = 0,
     detail: dict | None = None,
+    capture_ref: Any = None,
 ) -> None:
     """Append a non-run ModelCall row. Failures are swallowed + logged.
 
@@ -101,7 +105,16 @@ async def record_system_call(
             status = (
                 "timeout" if isinstance(error, (TimeoutError, asyncio.TimeoutError)) else "error"
             )
-            error_text = f"{type(error).__name__}: {error}"[:2000]
+            from ..redaction import redact_secrets
+
+            # Generic exception TYPE only — provider error bodies can echo
+            # private request content and must never enter the receipt.
+            error_text, _ = redact_secrets(f"{type(error).__name__}")
+            error_text = error_text[:2000]
+        if capture_ref is None and response is not None:
+            capture_ref = getattr(response, "request_capture", None)
+        if capture_ref is None and error is not None:
+            capture_ref = getattr(error, "capture_ref", None)
         if response is not None:
             tokens_in = response.tokens_in or 0
             tokens_out = response.tokens_out or 0
@@ -114,10 +127,45 @@ async def record_system_call(
             if receipt:
                 detail = {**(detail or {}), **receipt}
 
+        if capture_ref is not None:
+            detail = {
+                **(detail or {}),
+                "capture_id": getattr(capture_ref, "id", None),
+                "capture_state": getattr(capture_ref, "state", None),
+                "capture_surface": getattr(capture_ref, "surface", None),
+            }
+        import uuid as _uuid
+
+        # The capture attempt snapshot is the authoritative fallback —
+        # caller-supplied values win only when non-None; aux/system callers
+        # (compaction, probes) that forget scope still land correlated.
+        _attempt = getattr(capture_ref, "attempt_metadata", None) or {}
+        run_id = run_id or _attempt.get("run_id")
+        session_id = session_id or _attempt.get("session_id")
+        agent_id = agent_id or _attempt.get("agent_id")
+        sub_agent_id = sub_agent_id or _attempt.get("sub_agent_id")
+        turn = (
+            turn
+            if isinstance(turn, int)
+            else (_attempt.get("turn") if type(_attempt.get("turn")) is int else 0)
+        )
+        if streamed is None:
+            streamed = bool(str(getattr(capture_ref, "surface", "") or "").endswith("stream"))
+        provider_id = provider_id or _attempt.get("provider_id")
+        model_name = model_name or _attempt.get("model_name")
+        model_str = model_str or _attempt.get("model_str")
+        # Per-attempt latency on the reference beats a caller's broad timer.
+        if getattr(capture_ref, "latency_ms", None) is not None:
+            latency_ms = capture_ref.latency_ms
+
         row = ModelCall(
+            id=getattr(capture_ref, "id", None) or str(_uuid.uuid4()),
             run_id=run_id,
+            session_id=session_id,
             agent_id=agent_id,
             sub_agent_id=sub_agent_id,
+            turn=turn,
+            streamed=streamed,
             kind=kind,
             purpose=purpose,
             provider_id=provider_id,
@@ -136,7 +184,42 @@ async def record_system_call(
         async with async_session_factory() as session:
 
             async def _write():
-                session.add(row)
+                # Upsert on the shared capture/call id — never duplicate a
+                # receipt already recorded by the dispatch boundary; the
+                # original created_at is preserved.
+                existing = await session.get(ModelCall, row.id)
+                if existing is None:
+                    session.add(row)
+                else:
+                    for field in (
+                        "run_id",
+                        "session_id",
+                        "agent_id",
+                        "sub_agent_id",
+                        "turn",
+                        "kind",
+                        "purpose",
+                        "provider_id",
+                        "model_name",
+                        "model_str",
+                        "streamed",
+                        "tokens_in",
+                        "tokens_out",
+                        "cached_tokens",
+                        "thinking_tokens",
+                        "cost",
+                        "latency_ms",
+                        "status",
+                        "error",
+                        "detail",
+                    ):
+                        new_val = getattr(row, field)
+                        if new_val is None:
+                            # A None never clobbers — the boundary
+                            # receipt's snapshot ids/turn/streamed survive
+                            # a writer that doesn't know them.
+                            continue
+                        setattr(existing, field, new_val)
                 await session.commit()
 
             await retry_locked_transaction(

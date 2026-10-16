@@ -56,6 +56,7 @@ class SQLiteBackend(DatabaseBackend):
             audit,
             capability,
             contact,
+            core,
             document,
             elicitation,
             execution_manifest,
@@ -67,6 +68,7 @@ class SQLiteBackend(DatabaseBackend):
             operator,
             operator_session,
             provider,
+            request_capture,
             run,
             session,
             source,
@@ -200,7 +202,21 @@ class SQLiteBackend(DatabaseBackend):
             ("memory_entries", "run_id", "VARCHAR(36)"),
             ("sessions", "summary", "TEXT"),
             ("sessions", "closed", "BOOLEAN DEFAULT 0"),
+            ("sessions", "title_generated", "BOOLEAN DEFAULT 0"),
+            # Session scope on ledger rows — links session-close
+            # summary/extraction calls to their conversation.
+            ("model_calls", "session_id", "VARCHAR(36)"),
             ("sessions", "conversation_summary", "TEXT"),
+            ("sessions", "conversation_summary_coverage", "TEXT"),
+            ("sessions", "conversation_summary_version", "INTEGER NOT NULL DEFAULT 0"),
+            ("sessions", "core_revision_id", "TEXT"),
+            ("sessions", "active_conversation_summary_id", "TEXT"),
+            ("sessions", "conversation_summary_coverage_known", "INTEGER"),
+            ("sessions", "learned_coverage", "TEXT"),
+            ("memory_entries", "source_refs", "TEXT DEFAULT '[]'"),
+            ("memory_entries", "revoked_at", "DATETIME"),
+            ("execution_manifests", "core_revision_id", "TEXT"),
+            ("execution_manifests", "core_identity_source_version_id", "TEXT"),
             ("mcp_servers", "require_approval", "BOOLEAN DEFAULT 1"),
             ("mcp_servers", "oauth_config", "TEXT"),
             ("channel_configs", "mode", "VARCHAR(20) DEFAULT 'polling'"),
@@ -265,6 +281,8 @@ class SQLiteBackend(DatabaseBackend):
             "ON model_calls(provider_id, model_name)",
             "CREATE INDEX IF NOT EXISTS ix_model_calls_kind_created "
             "ON model_calls(kind, created_at)",
+            "CREATE INDEX IF NOT EXISTS ix_model_calls_session_created "
+            "ON model_calls(session_id, created_at)",
             # W10 correlation indexes — after the additive columns above.
             "CREATE INDEX IF NOT EXISTS ix_audit_run_call_sub "
             "ON audit_records(run_id, call_id, sub_agent_id)",
@@ -460,6 +478,8 @@ class SQLiteBackend(DatabaseBackend):
             "VARCHAR(20) DEFAULT 'deny'",
             "TEXT NOT NULL DEFAULT '[]'",
             "TEXT NOT NULL DEFAULT '{}'",
+            "TEXT DEFAULT '[]'",
+            "INTEGER NOT NULL DEFAULT 0",
             "VARCHAR(20) NOT NULL DEFAULT 'na'",
             "VARCHAR(10) NOT NULL DEFAULT 'chunk'",
         }:

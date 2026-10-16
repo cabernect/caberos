@@ -31,6 +31,7 @@ from mcp.client.auth import OAuthClientProvider
 from ..db import async_session_factory
 from ..models.mcp import McpServer
 from . import credentials as mcp_creds
+from .client import _ensure_user_agent
 
 log = logging.getLogger("agentos.mcp.oauth")
 
@@ -493,7 +494,16 @@ async def _run_oauth_flow(server_id: str, server_url: str, auth, flow: OAuthFlow
 
     try:
         log.info("OAuth flow: making initial request to %s", server_url)
-        async with httpx2.AsyncClient(auth=auth, timeout=30.0) as client:
+        # No keep-alive: some servers (e.g. mcp.tradingview.com) reply 401
+        # with Connection: keep-alive yet immediately close the socket; a
+        # pooled client then writes the metadata GET onto the dead connection
+        # and dies with RemoteProtocolError.
+        async with httpx2.AsyncClient(
+            auth=auth,
+            timeout=30.0,
+            limits=httpx2.Limits(max_keepalive_connections=0),
+            event_hooks={"request": [_ensure_user_agent]},
+        ) as client:
             # Make a request to the actual server URL to trigger the 401
             # The MCP protocol uses POST with JSON-RPC, but any request
             # will trigger the auth flow

@@ -121,6 +121,7 @@ export interface Limits {
   max_cost_per_run: number;
   session_idle_timeout_min: number;
   max_context_tokens: number | null;
+  core_max_tokens?: number;
 }
 
 export interface HeartbeatConfig {
@@ -482,6 +483,16 @@ export interface SessionInfo {
   external_user_id?: string | null;
   active_run_id?: string | null;
   active_run_status?: string | null;
+  learning?: boolean;
+}
+
+// Transient session-activity frame (close-time learning indicator)
+export interface SessionActivityEvent {
+  type: "session_activity";
+  kind: string;
+  phase: "started" | "finished" | "failed";
+  session_id: string;
+  agent_id: string;
 }
 
 // SSE event payloads
@@ -764,6 +775,7 @@ export interface AuditOut {
 export interface ModelCallOut {
   id: string;
   run_id: string | null;
+  session_id: string | null;
   agent_id: string | null;
   sub_agent_id: string | null;
   turn: number;
@@ -797,6 +809,8 @@ export interface ManifestOut {
   knowledge_snapshot_ids: string[];
   browser_profile_id: string | null;
   artifact_base_revision_ids: string[];
+  core_revision_id?: string | null;
+  core_identity_source_version_id?: string | null;
 }
 
 export interface TimelineEvent {

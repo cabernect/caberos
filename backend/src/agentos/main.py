@@ -66,17 +66,40 @@ async def _session_sweeper() -> None:
         await asyncio.sleep(300)  # 5 minutes
         try:
             from .agent_service import get_active_config
-            from .memory.episodic import close_session, find_idle_sessions
+            from .memory.episodic import (
+                close_session,
+                find_idle_sessions,
+                session_idle_age_minutes,
+            )
+            from .models.session import Session
 
+            # Snapshot tuples, then close each candidate on its OWN session —
+            # a failed close must not starve the rest of the pass.
             async with async_session_factory() as db:
-                idle = await find_idle_sessions(db, idle_minutes=30)
-                for session in idle:
-                    agent_config = await get_active_config(db, session.agent_id)
-                    if agent_config:
-                        await close_session(db, agent_config, session, session.contact_id)
-                await db.commit()
-                if idle:
-                    print(f"[sweeper] Closed {len(idle)} idle session(s)")
+                candidates = [
+                    (s.id, s.agent_id, s.contact_id) for s in await find_idle_sessions(db)
+                ]
+            for sid, aid, cid in candidates:
+                try:
+                    async with async_session_factory() as owned:
+                        sess = await owned.get(Session, sid)
+                        if sess is None:
+                            continue
+                        agent_config = await get_active_config(owned, aid)
+                        if agent_config is None:
+                            continue
+                        if (
+                            session_idle_age_minutes(sess)
+                            < agent_config.limits.session_idle_timeout_min
+                        ):
+                            continue
+                        await close_session(owned, agent_config, sess, cid)
+                except Exception as exc:
+                    # Generic type only — provider bodies may carry private
+                    # content; the pass continues with the next candidate.
+                    print(f"[sweeper] Idle close failed for session {sid}: {type(exc).__name__}")
+            if candidates:
+                print("[sweeper] Idle session pass finished")
         except Exception as e:
             print(f"[sweeper] Error: {e}")
 

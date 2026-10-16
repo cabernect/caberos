@@ -3,6 +3,8 @@
 import os
 from pathlib import Path
 
+from pydantic import Field
+
 # Fix SSL cert verification for httpx/litellm on macOS.
 # The Homebrew ca-certificates bundle includes corporate/proxy CAs (e.g. FPT
 # captive portal) that the system /etc/ssl/cert.pem may not have. Always
@@ -45,6 +47,11 @@ class Settings(BaseSettings):
 
     # Agent home dir (MEMORY.md, etc.)
     agent_home_root: Path = Path.home() / "agentos" / "agents"
+
+    # Context bodies expire independently from conversation and usage records.
+    context_capture_retention_days: int = Field(default=7, ge=1)
+    context_capture_max_bytes: int = Field(default=256 * 1024 * 1024, ge=1)
+    context_capture_max_payload_bytes: int = Field(default=1024 * 1024, ge=1)
 
     # System-level skills directory (shared across all agents)
     skills_dir: Path = Path("../skills")  # relative to backend cwd → repo root/skills
@@ -153,30 +160,81 @@ def _apply_persisted_overrides() -> None:
         saved = json.loads(path.read_text())
     except Exception:
         return
-    for key in ("browser_binary", "yolo_mode", "model_catalog_auto_refresh"):
-        if key in saved and not env_pinned(key):
-            setattr(settings, key, saved[key])
+    if not isinstance(saved, dict):
+        return
+    capture_keys = {
+        "context_capture_retention_days",
+        "context_capture_max_bytes",
+        "context_capture_max_payload_bytes",
+    }
+    for key in (
+        "browser_binary",
+        "yolo_mode",
+        "model_catalog_auto_refresh",
+        *capture_keys,
+    ):
+        if key not in saved or env_pinned(key):
+            continue
+        value = saved[key]
+        if key in capture_keys and not (
+            isinstance(value, int) and not isinstance(value, bool) and value > 0
+        ):
+            # Malformed persisted policy is ignored, not applied — the
+            # settings default (or env pin) stands.
+            continue
+        setattr(settings, key, value)
 
 
 _apply_persisted_overrides()
 
 
-def persist_setting(key: str, value: object) -> None:
-    """Write an operator-editable setting to the data-dir overlay and apply
-    it to the live singleton."""
+def persist_settings(values: dict[str, object]) -> None:
+    """Write multiple operator-editable settings atomically — one merged
+    overlay write, then live singletons. Unknown keys are preserved."""
     import json
+    import os
+    import tempfile
 
     path = settings.db_path.parent / "app-settings.json"
     saved: dict = {}
     if path.is_file():
-        try:
-            saved = json.loads(path.read_text())
-        except Exception:
-            saved = {}
-    if value in (None, ""):
-        saved.pop(key, None)
-    else:
-        saved[key] = value
+        raw = path.read_text()
+        if raw.strip():
+            try:
+                loaded = json.loads(raw)
+            except json.JSONDecodeError as e:
+                raise ValueError(
+                    f"app-settings.json is malformed — refusing to overwrite: {e}"
+                ) from e
+            if not isinstance(loaded, dict):
+                raise ValueError(
+                    "app-settings.json must contain a JSON object — refusing to overwrite"
+                )
+            saved = loaded
+    for key, value in values.items():
+        if value in (None, ""):
+            saved.pop(key, None)
+        else:
+            saved[key] = value
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(saved, indent=2))
-    setattr(settings, key, value if value is not None else "")
+    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(json.dumps(saved, indent=2))
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    # Mutate singleton only after the durable write landed.
+    for key, value in values.items():
+        setattr(settings, key, value if value is not None else "")
+
+
+def persist_setting(key: str, value: object) -> None:
+    """Write one operator-editable setting to the data-dir overlay."""
+    persist_settings({key: value})

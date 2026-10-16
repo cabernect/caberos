@@ -207,3 +207,14 @@ def get_base_system_prompt(enabled_caps: list[str] | None = None) -> str:
 
     caps_section = _build_capabilities_section(enabled_caps)
     return _BASE_PROMPT_HEADER + "\n\n" + caps_section + "\n\n" + _BASE_PROMPT_FOOTER
+
+
+def base_prompt_parts(enabled_caps: list[str] | None = None) -> tuple[str, str, str]:
+    """(header, capabilities section, footer) — lets the assembler place the
+    stable platform shell around the pinned core before the variable
+    capability text without changing any prompt wording."""
+    if enabled_caps is None:
+        from ..capabilities.registry import registry
+
+        enabled_caps = [cap.name for cap in registry.list_all()]
+    return _BASE_PROMPT_HEADER, _build_capabilities_section(enabled_caps), _BASE_PROMPT_FOOTER

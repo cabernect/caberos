@@ -501,6 +501,9 @@ class TestMemoryCapabilities:
 
         handler = SyscallHandler(db=db, workspace_path=workspace)
         agent_config = _make_agent_config()
+        from agentos.agent_service import create_agent
+
+        await create_agent(db, agent_config)
         session = _make_session("contact-1")
 
         result = await handler.mediate(

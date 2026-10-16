@@ -131,6 +131,27 @@ def _resolve_stdio_command(
     )
 
 
+_USER_AGENT = None
+
+
+async def _ensure_user_agent(request) -> None:
+    """Event hook: inject a User-Agent when the SDK didn't set one.
+
+    The MCP SDK builds its OAuth discovery/registration/token requests with
+    only an `mcp-protocol-version` header — no client defaults merge, so no
+    User-Agent is sent. Some authorization servers (observed: CloudFront in
+    front of www.tradingview.com) reject UA-less requests with 403, which
+    kills the whole OAuth flow. setdefault keeps any explicitly configured
+    header authoritative.
+    """
+    global _USER_AGENT
+    if _USER_AGENT is None:
+        from .. import __version__
+
+        _USER_AGENT = f"CaberOS/{__version__}"
+    request.headers.setdefault("user-agent", _USER_AGENT)
+
+
 def _bearer_resource_metadata(challenge: str) -> str | None:
     """Extract resource_metadata= from a Bearer challenge; None otherwise.
     Malformed quoting (unterminated/bare text) is rejected, not salvaged."""
@@ -391,6 +412,7 @@ class McpClient:
                 if self.headers:
                     http_kwargs["headers"] = self.headers
 
+                hooks: dict[str, list] = {"request": [_ensure_user_agent]}
                 if self.auth is None:
                     # Undeclared auth: watch for a Bearer resource_metadata
                     # challenge on this server's own URL — flag only, never
@@ -413,11 +435,16 @@ class McpClient:
                         except Exception:
                             pass
 
-                    http_kwargs["event_hooks"] = {"response": [_observe_oauth_challenge]}
+                    hooks["response"] = [_observe_oauth_challenge]
+                http_kwargs["event_hooks"] = hooks
 
                 http_client = httpx2.AsyncClient(
                     base_url=self.url,
                     timeout=self.timeout,
+                    # No keep-alive: a 401 challenge can be followed by a silent
+                    # close; reusing the pooled connection then raises
+                    # RemoteProtocolError during OAuth discovery.
+                    limits=httpx2.Limits(max_keepalive_connections=0),
                     **http_kwargs,
                 )
                 result = await self._exit_stack.enter_async_context(

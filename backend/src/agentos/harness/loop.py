@@ -5,7 +5,9 @@ the syscall layer), enforces turn/cost limits, and emits SSE events.
 """
 
 import asyncio
+import hashlib
 import json
+import logging
 import time
 import uuid
 from collections.abc import Callable
@@ -14,11 +16,20 @@ from typing import Any
 
 from ..capabilities.catalog import CapabilityRunCatalog
 from ..config_schema import AgentConfig
+from ..services.context_capture import capture_scope, current_capture_scope
 from ..services.tool_status import tool_event_status
 from ..syscall.protocol import SyscallHandler, SyscallResult, ToolCall
-from .context import assemble_system_prompt, assemble_tool_schemas, build_message_history
+from .context import (
+    assemble_system_prompt,
+    assemble_tool_schemas,
+    attachment_lines,
+    build_message_history,
+)
+from .conversation import Conversation
 from .guardrails import apply_guardrails
 from .scripted_model import ScriptedModel, ScriptedResponse
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -139,12 +150,15 @@ class Harness:
         syscall_handler: SyscallHandler,
         run_id: str,
         recent_messages: list[Any] | None = None,
+        conversation: Conversation | None = None,
+        current_message_id: str | None = None,
         trigger: str = "user_message",
         event_emitter: EventEmitter = None,
         attachments: list[Any] | None = None,
         skill: str | None = None,
         parent_config: AgentConfig | None = None,
         resolved_skills: list[Any] | None = None,
+        core_snapshot: Any | None = None,
     ) -> RunResult:
         """Execute the agent loop (D19 steps 7-11).
 
@@ -156,52 +170,12 @@ class Harness:
         """
         # Step 7: Assemble context
         # Load KG facts for this contact (D34 — subject-scoped, D10)
+        # Startup retrieval removed (bounded-core slice): no KG/snippet/
+        # archive searches on dispatch — the tools/stores remain available
+        # on demand. Pinned core covers standing context.
         kg_facts: list[dict] = []
         recall_snippets: list[dict] = []
         past_sessions: list[dict] = []
-        if hasattr(syscall_handler, "db") and hasattr(session, "contact_id"):
-            from ..memory.triples import query_facts
-
-            try:
-                kg_facts = await query_facts(
-                    syscall_handler.db,
-                    contact_id=session.contact_id,
-                    agent_id=agent_config.id,
-                )
-            except Exception:
-                pass  # No facts yet, or contact not resolved — continue without
-
-            # Semantic recall fallback (D34) — fetch relevant snippets from past
-            # conversations. Bounded: top 3 results, only if there's a real query.
-            if message and len(message.strip()) > 3:
-                from ..memory.recall import recall_snippets as _recall
-
-                try:
-                    recall_snippets = await _recall(
-                        syscall_handler.db,
-                        contact_id=session.contact_id,
-                        agent_id=agent_config.id,
-                        query=message,
-                        limit=3,
-                    )
-                except Exception:
-                    pass  # No snippets yet, or FTS not ready — continue without
-
-                # Episodic recall (D34) — search past session summaries for
-                # topical context. Auto-injected into the system prompt so
-                # the agent knows "what we did before" without searching.
-                from ..memory.episodic import search_session_summaries
-
-                try:
-                    past_sessions = await search_session_summaries(
-                        syscall_handler.db,
-                        agent_id=agent_config.id,
-                        contact_id=session.contact_id,
-                        query=message,
-                        limit=3,
-                    )
-                except Exception:
-                    past_sessions = []
 
         # Check if the model supports vision (for system prompt awareness) —
         # resolved offering provenance, never a LiteLLM/heuristic guess.
@@ -318,28 +292,45 @@ class Harness:
             resolved_skills=resolved_skills,
             forced_skill_rendered=forced_skill_rendered,
             builder_draft=builder_draft,
+            core_snapshot=core_snapshot,
         )
         tool_schemas = assemble_tool_schemas(
             agent_config,
             capability_names=visible_capability_names,
         )
-        history = build_message_history(system_prompt, recent_messages or [], message, attachments)
+        if conversation is None:
+            # Compat path for non-persistent callers (subagents, direct
+            # harness tests): transient state, no coverage bookkeeping.
+            conversation = Conversation(session_id="")
+            history = build_message_history(
+                system_prompt, recent_messages or [], message, attachments
+            )
+            conversation.messages = history[1:]
+            conversation.source_ids = [set() for _ in conversation.messages]
+            # Transient conversation — never imports the parent session's
+            # summary (subagents spawn here too).
+            history = history[:1] + conversation.render()
+        else:
+            # Stored records → deterministic uncovered originals; the user
+            # row joins with its stored id so coverage can map it later.
+            user_content = message
+            if attachments:
+                user_content = "\n".join([message, *attachment_lines(attachments)])
+            user_row = {"role": "user", "content": user_content}
+            conversation.append(user_row, {current_message_id} if current_message_id else set())
+            history = [{"role": "system", "content": system_prompt}] + conversation.render()
 
         result = RunResult()
-
-        # --- Context compaction (head/middle/tail) ---
-        # Runs before the first LLM call. If auto-compaction is on and the
-        # context exceeds the threshold, older messages are summarized.
-        # The system prompt (history[0]) is always protected.
-        from .compaction import (
-            compact_context,
-            count_text_tokens,
-            count_tokens,
-            count_tool_tokens,
+        _call_receipts: dict[str, dict] = {}
+        # Object reference for the current-turn user row — identity lookup
+        # yields the protected tail index before every compaction.
+        _current_user_row = (
+            conversation.messages[-1]
+            if conversation.messages and conversation.messages[-1].get("role") == "user"
+            else None
         )
 
-        compaction_summary = getattr(session, "conversation_summary", None)
-
+        # --- Context compaction + budget ---
         # Get model info for token counting + summary LLM call.
         # resolved_model + accounting come from the same frozen capture as
         # the execution calls — one resolved input budget for compaction,
@@ -375,74 +366,161 @@ class Harness:
             )
             resolved_input_budget = _budget["tokens"]
             context_budget_source = _budget["source"]
-        except Exception:
-            resolved_input_budget = 32768
-            context_budget_source = "application_fallback"
+        except ValueError as exc:
+            # A KNOWN-capacity model with a contradictory reservation/output
+            # budget is a configuration error — never substitute a guessed
+            # 32k budget and dispatch anyway. Genuine unknown-capacity models
+            # fall through resolve_input_budget's own application_fallback.
+            result.status = "failed"
+            result.error = (
+                f"Model context/output budget is invalid — check the agent's model limits: {exc}"
+            )
+            return result
 
-        if agent_config.compaction.auto_compaction and len(history) > 1:
-            # Compact the message portion (exclude system prompt — always kept)
-            system_msgs = [history[0]] if history and history[0].get("role") == "system" else []
-            conversation_msgs = history[len(system_msgs) :]
+        # Shared helper: compact the conversation in place, rebuild history,
+        # persist coverage atomically (parent-session authority only — a
+        # transient Conversation has no session_id and never writes).
+        from .compaction import (
+            compact_context,
+            count_text_tokens,
+            count_tokens,
+            count_tool_tokens,
+        )
 
-            compaction_result = await compact_context(
-                messages=conversation_msgs,
+        _failed_auto_fingerprints: set[str] = set()
+
+        def _conv_fingerprint() -> str:
+            h = hashlib.sha256()
+            for m in conversation.messages:
+                h.update((m.get("role", "") + "|" + str(m.get("content", ""))[:200]).encode())
+            return h.hexdigest()
+
+        def _protected_tail_index() -> int | None:
+            if _current_user_row is None:
+                return None
+            for i, m in enumerate(conversation.messages):
+                if m is _current_user_row:
+                    return i
+            return None
+
+        async def _apply_compaction(*, force: bool) -> str | None:
+            """Compact the conversation when it helps. Returns an error string
+            when a *successful* summary could not be durably stored (CAS loss
+            or DB failure) — the caller must then fail the run instead of
+            dispatching on an unsaved summary."""
+            nonlocal history
+            reserved = count_text_tokens(system_prompt, model_str) + count_tool_tokens(
+                tool_schemas, model_str
+            )
+            fp = _conv_fingerprint()
+            if not force and fp in _failed_auto_fingerprints:
+                return None
+            cr = await compact_context(
+                messages=list(conversation.messages),
                 agent_config=agent_config,
                 model_str=model_str,
-                previous_summary=compaction_summary,
+                previous_summary=conversation.summary,
                 api_key=api_key,
                 base_url=base_url,
+                force=force,
                 use_responses=use_responses,
                 input_budget=resolved_input_budget,
                 resolved_model=resolved_model,
                 accounting=accounting,
+                reserved_tokens=reserved,
+                run_id=run_id,
+                session_id=getattr(session, "id", None),
+                source_ids=list(conversation.source_ids),
+                protected_tail_start=_protected_tail_index(),
             )
+            # The result always renders the summary exactly once + originals
+            history = history[:1] + list(cr.messages)
+            if cr.error:
+                if not force:
+                    _failed_auto_fingerprints.add(fp)
+                return None
+            if cr.compacted:
+                # Persist FIRST: a CAS loser or DB failure means the stored
+                # summary/coverage doesn't reflect this compaction — fail the
+                # run rather than continue on unsaved bookkeeping.
+                head_ids = conversation.source_ids[: cr.head_count]
+                tail_ids = conversation.source_ids[len(conversation.source_ids) - cr.tail_count :]
+                _db = getattr(syscall_handler, "db", None)
+                if (
+                    conversation.session_id
+                    and _db is not None
+                    and getattr(session, "id", None) == conversation.session_id
+                ):
+                    try:
+                        _head_ids = {
+                            sid
+                            for group in conversation.source_ids[: cr.head_count]
+                            for sid in (group or set())
+                        }
+                        _tail_ids = {
+                            sid
+                            for group in conversation.source_ids[
+                                len(conversation.source_ids) - cr.tail_count :
+                            ]
+                            for sid in (group or set())
+                        }
+                        stored = await conversation.store_summary(
+                            _db,
+                            cr.summary,
+                            conversation.covered_ids | cr.covered_ids,
+                            retained_head_ids=_head_ids,
+                            retained_tail_ids=_tail_ids,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "conversation summary persist failed for session %s",
+                            conversation.session_id,
+                        )
+                        return "Context compaction could not be saved; the run stopped safely."
+                    if not stored:
+                        return (
+                            "Context compaction lost a concurrent write conflict; "
+                            "the run stopped safely."
+                        )
+                conversation.messages = list(cr.retained_messages)
+                conversation.source_ids = head_ids + tail_ids
+                # Local summary update — next render keeps the summary row.
+                conversation.summary = cr.summary
+                conversation.covered_ids = conversation.covered_ids | cr.covered_ids
+            result.compacted = result.compacted or cr.compacted
+            return None
 
-            history = system_msgs + compaction_result.messages
-            result.max_context_tokens = resolved_input_budget
-            result.context_budget_source = context_budget_source
-            result.compacted = compaction_result.compacted
-
-            # Per-section breakdown for the context tooltip
+        async def _budget_gate() -> str | None:
+            """Per-dispatch full-budget gate. Returns an error message when
+            the dispatch must not happen, else None."""
+            nonlocal history
+            reserved = count_text_tokens(system_prompt, model_str) + count_tool_tokens(
+                tool_schemas, model_str
+            )
+            if reserved > resolved_input_budget:
+                # Fixed system/tool schemas alone exceed the hard input
+                # budget — no compaction can shrink a fixed section.
+                return "Request too large: system context and tool schemas alone exceed the model input budget."
+            if agent_config.compaction.auto_compaction:
+                persist_error = await _apply_compaction(force=False)
+                if persist_error:
+                    return persist_error
+            full = reserved + count_tokens(history[1:], model_str)
             result.context_breakdown = {
                 "system_prompt": count_text_tokens(system_prompt, model_str),
-                "conversation": count_tokens(compaction_result.messages, model_str),
+                "conversation": count_tokens(history[1:], model_str),
                 "tools": count_tool_tokens(tool_schemas, model_str),
             }
             result.context_tokens = sum(result.context_breakdown.values())
+            if full > resolved_input_budget:
+                return (
+                    "Context exceeds the model input budget and could not be "
+                    "compacted — summary generation unavailable."
+                )
+            return None
 
-            # Persist the updated summary to the session
-            if compaction_result.compacted and compaction_result.summary != compaction_summary:
-                if hasattr(syscall_handler, "db") and hasattr(session, "id"):
-                    from sqlalchemy import update as sa_update
-
-                    from ..models.session import Session as SessionModel
-
-                    await syscall_handler.db.execute(
-                        sa_update(SessionModel)
-                        .where(SessionModel.id == session.id)
-                        .values(conversation_summary=compaction_result.summary)
-                    )
-                    # Commit — a bare flush would hold the write txn across
-                    # the upcoming model call (B31).
-                    await syscall_handler.db.commit()
-                    session.conversation_summary = compaction_result.summary
-        else:
-            # No compaction — still report token count for the context bar
-            result.max_context_tokens = resolved_input_budget
-            result.context_budget_source = context_budget_source
-
-            # Per-section breakdown for the context tooltip
-            system_msgs = [history[0]] if history and history[0].get("role") == "system" else []
-            conversation_msgs = history[len(system_msgs) :]
-            result.context_breakdown = {
-                "system_prompt": count_tokens(system_msgs, model_str),
-                "conversation": count_tokens(conversation_msgs, model_str),
-                "tools": count_tool_tokens(tool_schemas, model_str),
-            }
-            # Total = sum of all sections (litellm's token_counter on full history
-            # can be inconsistent, so we sum the breakdown for accuracy)
-            result.context_tokens = sum(result.context_breakdown.values())
-
+        result.max_context_tokens = resolved_input_budget
+        result.context_budget_source = context_budget_source
         # Inject spawn context into the syscall handler so run_subagent
         # can access the harness, session, run_id, and event_emitter.
         if hasattr(syscall_handler, "_spawn_context"):
@@ -477,30 +555,69 @@ class Harness:
                 agent_config,
                 capability_names=visible_capability_names,
             )
-            result.context_breakdown["conversation"] = count_tokens(history[1:], model_str)
-            result.context_breakdown["tools"] = count_tool_tokens(tool_schemas, model_str)
-            result.context_tokens = sum(result.context_breakdown.values())
+            # Per-dispatch full-budget gate: refreshed schemas + summary-aware
+            # conversation count; compact under threshold, never dispatch an
+            # oversized request.
+            gate_error = await _budget_gate()
             result.loaded_capabilities = sorted(capability_catalog.loaded)
+            if gate_error:
+                result.status = "failed"
+                result.error = gate_error
+                break
 
             # Step 8: Call model
             # Use streaming if the adapter supports it (LiteLLMAdapter);
             # fall back to non-streaming for ScriptedModel
             call_started = time.monotonic()
             streamed_call = hasattr(self.model, "complete_stream")
+            capture_ref = None
+            _src_ids: list[str] = []
+            for _group in getattr(conversation, "source_ids", []) or []:
+                for _sid in _group or []:
+                    _src_ids.append(_sid)
+            _src_ids = sorted(set(_src_ids))
             try:
-                if streamed_call:
-                    response = await self._call_streaming(
-                        agent_config, history, tool_schemas, event_emitter
+                with capture_scope(
+                    run_id=getattr(syscall_handler, "_parent_run_id", None) or run_id,
+                    session_id=getattr(session, "id", None),
+                    agent_id=agent_config.id,
+                    sub_agent_id=getattr(syscall_handler, "_sub_agent_id", None),
+                    turn=result.total_turns,
+                    purpose="reasoning",
+                    core_revision_id=getattr(core_snapshot, "revision_id", None)
+                    if core_snapshot
+                    else None,
+                    core_identity_source_version_id=getattr(
+                        core_snapshot, "identity_source_version_id", None
                     )
-                else:
-                    response: ScriptedResponse = await self.model.complete(
-                        agent_model=agent_config.model,
-                        messages=history,
-                        tools=tool_schemas,
+                    if core_snapshot
+                    else None,
+                    summary_version=getattr(conversation, "summary_version", None),
+                    conversation_summary_id=getattr(conversation, "summary_id", None),
+                    coverage_known=bool(getattr(conversation, "coverage_known", False)),
+                    source_message_ids=_src_ids[:200],
+                    source_message_ids_total=len(_src_ids),
+                    source_message_ids_truncated=len(_src_ids) > 200,
+                    component_budget=getattr(result, "context_breakdown", None) or None,
+                ):
+                    if streamed_call:
+                        response = await self._call_streaming(
+                            agent_config, history, tool_schemas, event_emitter
+                        )
+                    else:
+                        response: ScriptedResponse = await self.model.complete(
+                            agent_model=agent_config.model,
+                            messages=history,
+                            tools=tool_schemas,
+                        )
+                        # Emit thinking if present (non-streaming path)
+                        if response.thinking and event_emitter:
+                            await self._emit(
+                                event_emitter, "thinking", {"content": response.thinking}
+                            )
+                    capture_ref = getattr(response, "request_capture", None) or (
+                        current_capture_scope().get("capture_ref")
                     )
-                    # Emit thinking if present (non-streaming path)
-                    if response.thinking and event_emitter:
-                        await self._emit(event_emitter, "thinking", {"content": response.thinking})
             except Exception as e:
                 # Mid-run context overflow: a tool result or accumulated turns
                 # pushed the request over the window after the pre-loop
@@ -509,48 +626,23 @@ class Harness:
                 # there is no recovery and the run must fail.
                 if not overflow_retried and _is_context_overflow(e):
                     overflow_retried = True
-                    import logging as _log
-
-                    _log.getLogger("agentos.harness.loop").warning(
+                    logger.warning(
                         "Context window exceeded mid-run; forcing compaction and retrying once: %s",
                         str(e)[:200],
                     )
-                    system_msgs = (
-                        [history[0]] if history and history[0].get("role") == "system" else []
-                    )
-                    compaction_result = await compact_context(
-                        messages=history[len(system_msgs) :],
-                        agent_config=agent_config,
-                        model_str=model_str,
-                        previous_summary=compaction_summary,
-                        api_key=api_key,
-                        base_url=base_url,
-                        force=True,
-                        use_responses=use_responses,
-                        input_budget=resolved_input_budget,
-                        resolved_model=resolved_model,
-                        accounting=accounting,
-                    )
-                    if compaction_result.compacted:
-                        history = system_msgs + compaction_result.messages
-                        compaction_summary = compaction_result.summary
-                        result.compacted = True
-                        if hasattr(syscall_handler, "db") and hasattr(session, "id"):
-                            from sqlalchemy import update as sa_update
-
-                            from ..models.session import Session as SessionModel
-
-                            await syscall_handler.db.execute(
-                                sa_update(SessionModel)
-                                .where(SessionModel.id == session.id)
-                                .values(conversation_summary=compaction_result.summary)
-                            )
-                            # Commit — a bare flush would hold the write txn
-                            # across the retry model call (B31).
-                            await syscall_handler.db.commit()
-                            session.conversation_summary = compaction_result.summary
+                    _persist_err = await _apply_compaction(force=True)
+                    if _persist_err:
+                        result.status = "failed"
+                        result.error = _persist_err
+                        break
+                    if result.compacted:
                         result.total_turns -= 1  # the retry reuses this turn
                         continue
+                _safe_err = (
+                    type(e).__name__
+                    if getattr(e, "capture_ref", None) is not None or capture_ref is not None
+                    else str(e)
+                )
                 await self._record_model_call(
                     syscall_handler,
                     run_id=run_id,
@@ -564,7 +656,8 @@ class Harness:
                         if isinstance(e, (TimeoutError, asyncio.TimeoutError))
                         else "error"
                     ),
-                    error=str(e),
+                    error=_safe_err,
+                    capture_ref=getattr(e, "capture_ref", None) or capture_ref,
                 )
                 import logging as _log
 
@@ -647,34 +740,41 @@ class Harness:
                 cost=response.cost,
                 cost_source=response.cost_source,
                 cost_receipt=getattr(response, "cost_receipt", None),
+                capture_ref=capture_ref or getattr(response, "request_capture", None),
             )
 
             # Step 9: Process tool calls
             if response.tool_calls:
+                # Normalize call ids ONCE — the assistant history row and the
+                # ToolCall objects must share the same ids.
+                for tc in response.tool_calls:
+                    if not tc.get("id"):
+                        tc["id"] = str(uuid.uuid4())
                 # Add the assistant message with tool_calls to history FIRST
                 # (must precede the tool result messages for OpenAI API compliance)
-                history.append(
-                    {
-                        "role": "assistant",
-                        "content": response.content or "",
-                        "tool_calls": [
-                            {
-                                "id": tc.get("id", str(uuid.uuid4())),
-                                "type": "function",
-                                "function": {
-                                    "name": tc["name"],
-                                    "arguments": json.dumps(tc.get("args", {})),
-                                },
-                            }
-                            for tc in response.tool_calls
-                        ],
-                    }
-                )
+                _assistant_batch = {
+                    "role": "assistant",
+                    "content": response.content or "",
+                    "tool_calls": [
+                        {
+                            "id": tc["id"],
+                            "type": "function",
+                            "function": {
+                                "name": tc["name"],
+                                "arguments": json.dumps(tc.get("args", {})),
+                            },
+                        }
+                        for tc in response.tool_calls
+                    ],
+                }
+                history.append(_assistant_batch)
+                conversation.append(_assistant_batch)
+                _batch_conv_idx = len(conversation.source_ids) - 1
 
                 # Build ToolCall objects
                 calls = [
                     ToolCall(
-                        id=tc.get("id", str(uuid.uuid4())),
+                        id=tc["id"],
                         name=tc["name"],
                         args=tc.get("args", {}),
                     )
@@ -736,7 +836,7 @@ class Harness:
                     # Emit the outcome: complete, denied, failed, timeout,
                     # or interrupted — the caller sees *how* a call ended.
                     if event_emitter:
-                        await self._emit(
+                        _receipt = await self._emit(
                             event_emitter,
                             "tool_call",
                             {
@@ -754,6 +854,8 @@ class Harness:
                                 else None,
                             },
                         )
+                        if isinstance(_receipt, dict):
+                            _call_receipts[call.id] = _receipt
 
                     result.tool_calls_made.append(
                         {
@@ -793,13 +895,17 @@ class Harness:
                                 f"the {TOOL_RESULT_MAX_CHARS}-char limit applies. "
                                 "Narrow the call or page through the data.]"
                             )
-                        history.append(
-                            {
-                                "role": "tool",
-                                "content": content,
-                                "tool_call_id": call.id,
-                                "name": call.name,
-                            }
+                        _tool_row = {
+                            "role": "tool",
+                            "content": content,
+                            "tool_call_id": call.id,
+                            "name": call.name,
+                        }
+                        history.append(_tool_row)
+                        _rid = _call_receipts.get(call.id) or {}
+                        conversation.append(
+                            _tool_row,
+                            {_rid["tool_message_id"]} if _rid.get("tool_message_id") else set(),
                         )
                     else:
                         consecutive_tool_failures += 1
@@ -810,23 +916,39 @@ class Harness:
                             "timeout": "Timed out",
                             "interrupted": "Interrupted",
                         }.get(syscall_result.status, "Error")
-                        history.append(
-                            {
-                                "role": "tool",
-                                "content": f"{prefix}: {syscall_result.denied_reason}",
-                                "tool_call_id": call.id,
-                                "name": call.name,
-                            }
+                        _tool_row = {
+                            "role": "tool",
+                            "content": f"{prefix}: {syscall_result.denied_reason}",
+                            "tool_call_id": call.id,
+                            "name": call.name,
+                        }
+                        history.append(_tool_row)
+                        _rid = _call_receipts.get(call.id) or {}
+                        conversation.append(
+                            _tool_row,
+                            {_rid["tool_message_id"]} if _rid.get("tool_message_id") else set(),
                         )
+
+                # Coverage bookkeeping: the assistant batch row is covered by
+                # every persisted tool row plus the flushed narration row.
+                _batch_ids: set[str] = set()
+                for _cid in (c.id for c in calls):
+                    _rc = _call_receipts.get(_cid) or {}
+                    if _rc.get("tool_message_id"):
+                        _batch_ids.add(_rc["tool_message_id"])
+                    if _rc.get("assistant_message_id"):
+                        _batch_ids.add(_rc["assistant_message_id"])
+                if _batch_ids:
+                    conversation.source_ids[_batch_conv_idx] = _batch_ids
 
                 # Stop if too many consecutive tool failures
                 if consecutive_tool_failures >= max_consecutive_failures:
-                    history.append(
-                        {
-                            "role": "user",
-                            "content": f"Note: {consecutive_tool_failures} consecutive tool calls returned empty or failed results. Stop calling tools and respond with what you know.",
-                        }
-                    )
+                    _note_row = {
+                        "role": "user",
+                        "content": f"Note: {consecutive_tool_failures} consecutive tool calls returned empty or failed results. Stop calling tools and respond with what you know.",
+                    }
+                    history.append(_note_row)
+                    conversation.append(_note_row)
 
                 # Emit turn_complete
                 result.loaded_capabilities = sorted(capability_catalog.loaded)
@@ -850,7 +972,9 @@ class Harness:
 
             # No tool calls → this is the final answer
             # Add the assistant message to history
-            history.append({"role": "assistant", "content": response.content or ""})
+            _final_row = {"role": "assistant", "content": response.content or ""}
+            history.append(_final_row)
+            conversation.append(_final_row)
             # Apply guardrails before emitting to the user (D2)
             guardrail_result = apply_guardrails(response.content)
             result.final_answer = guardrail_result.content
@@ -950,8 +1074,12 @@ class Harness:
         cost_source: str | None = None,
         cost_receipt: dict | None = None,
         error: str | None = None,
+        capture_ref: Any = None,
     ) -> None:
         """Write one ModelCall row per model request (v0.2 foundations).
+
+        When a capture reference carries a per-attempt latency, it wins —
+        the caller's broad timer would double-charge a retried call.
 
         Best-effort accounting on its OWN session (sub-agent handlers carry
         the parent's run id and their own sub-agent id): a write on the run's
@@ -968,7 +1096,9 @@ class Harness:
 
             record_run_id = getattr(syscall_handler, "_parent_run_id", None) or run_id
             sub_agent_id = getattr(syscall_handler, "_sub_agent_id", None)
+            capture_id = getattr(capture_ref, "id", None) if capture_ref is not None else None
             row = ModelCall(
+                id=capture_id or str(uuid.uuid4()),
                 run_id=record_run_id,
                 agent_id=agent_config.id,
                 sub_agent_id=sub_agent_id,
@@ -984,19 +1114,60 @@ class Harness:
                 cached_tokens=cached_tokens,
                 thinking_tokens=thinking_tokens,
                 cost=cost,
-                latency_ms=latency_ms,
+                latency_ms=(
+                    getattr(capture_ref, "latency_ms", None)
+                    if getattr(capture_ref, "latency_ms", None) is not None
+                    else latency_ms
+                ),
                 status=status,
                 error=error[:2000] if error else None,
                 detail={
                     **({"cost_source": cost_source} if cost_source is not None else {}),
                     **(cost_receipt or {}),
+                    **(
+                        {
+                            "capture_id": getattr(capture_ref, "id", None),
+                            "capture_state": getattr(capture_ref, "state", None),
+                            "capture_surface": getattr(capture_ref, "surface", None),
+                        }
+                        if capture_ref is not None
+                        else {}
+                    ),
                 }
                 or None,
             )
             async with async_session_factory() as session:
 
                 async def _persist() -> None:
-                    session.add(row)
+                    existing = await session.get(ModelCall, row.id)
+                    if existing is None:
+                        session.add(row)
+                    else:
+                        for field in (
+                            "run_id",
+                            "agent_id",
+                            "sub_agent_id",
+                            "turn",
+                            "kind",
+                            "purpose",
+                            "provider_id",
+                            "model_name",
+                            "model_str",
+                            "streamed",
+                            "tokens_in",
+                            "tokens_out",
+                            "cached_tokens",
+                            "thinking_tokens",
+                            "cost",
+                            "latency_ms",
+                            "status",
+                            "error",
+                            "detail",
+                        ):
+                            new_val = getattr(row, field)
+                            if new_val is None:
+                                continue
+                            setattr(existing, field, new_val)
                     await session.commit()
 
                 await retry_locked_transaction(
@@ -1009,13 +1180,15 @@ class Harness:
                 "Could not record model call for run %s", run_id
             )
 
-    async def _emit(self, emitter: EventEmitter, event_type: str, payload: dict[str, Any]) -> None:
-        """Safely emit an SSE event."""
+    async def _emit(self, emitter: EventEmitter, event_type: str, payload: dict[str, Any]) -> Any:
+        """Safely emit an SSE event; returns the emitter's result (persisting
+        emitters hand back a receipt with stored Message ids)."""
         if emitter is None:
-            return
+            return None
         result = emitter(event_type, payload)
         if hasattr(result, "__await__"):
-            await result
+            result = await result
+        return result
 
     async def _call_streaming(
         self,
