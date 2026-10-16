@@ -1,7 +1,8 @@
-# CaberOS Runtime Readiness
+# CaberOS
 
-Terms used for choosing model offerings and making optional local capabilities
-ready without confusing assumptions, estimates, or installed software with facts.
+Terms used for model offerings, runtime readiness, agent context, and
+experience-driven evolution, without confusing proposed improvements with
+demonstrated outcomes.
 
 ## Language
 
@@ -29,3 +30,49 @@ _Avoid_: System installation.
 A compatible dependency that supplies the required executables and supporting
 resources for a particular capability.
 _Avoid_: Downloaded, detected, or installed as synonyms for ready.
+
+**Recursive Self-Improvement**:
+In CaberOS, experience-driven revision of an agent's task behavior and the
+procedures it uses to develop further improvements. Improvement is evaluated
+against evidence, not assumed from a memory update or the agent's own claim.
+_Avoid_: Treating ordinary memory accumulation or rewriting the running OS as
+equivalent to recursive self-improvement.
+
+**Evolution Workflow**:
+A durable, versioned procedure that turns agent experiences into evaluated
+proposals for improvement. The procedure itself can be the subject of a proposed
+revision.
+_Avoid_: Treating a conversation or a skill's prose alone as the workflow.
+
+**Core Memory**:
+The bounded, curated information that must accompany every request for an agent:
+identity, durable preferences, and a small set of standing facts. A session uses
+a stable snapshot of this information.
+_Avoid_: Treating all retained knowledge as always-relevant core.
+
+**Long-Tail Memory**:
+Retained knowledge and experiences outside the always-loaded core, available
+through scoped retrieval when needed.
+_Avoid_: Automatically injecting every memory source into each request.
+
+**Core Curation**:
+Deliberate selection and maintenance of the information that belongs in core
+memory, distinct from learning or retaining a new memory.
+_Avoid_: Equating persistence with promotion into core.
+
+**Session Context**:
+The working representation of an active conversation: its messages, tool
+observations, task state, and any summary of older conversation.
+_Avoid_: Equating session continuity with a run-scoped scratchpad.
+
+**Conversation Compaction**:
+Lossy compression of part of an active conversation into a summary with explicit
+coverage, while retaining original records for recovery.
+_Avoid_: Calling silent history omission compaction, or confusing it with core
+curation.
+
+**Context Capture**:
+A recorded, potentially redacted representation of the input supplied for a
+particular model-call attempt, with its capture surface and completeness stated.
+_Avoid_: Presenting a reconstruction from current state as an original request,
+or equating transport input with proof of the provider's internal processing.

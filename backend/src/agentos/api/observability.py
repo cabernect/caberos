@@ -16,11 +16,12 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import require_operator
+from ..config import env_pinned, persist_settings, settings
 from ..db import get_db
 from ..models.agent import Agent
 from ..models.audit import AuditRecord
@@ -118,6 +119,7 @@ class TimelineEvent(BaseModel):
 class ModelCallOut(BaseModel):
     id: str
     run_id: str | None = None
+    session_id: str | None = None
     agent_id: str | None = None
     sub_agent_id: str | None = None
     turn: int
@@ -151,6 +153,8 @@ class ManifestOut(BaseModel):
     knowledge_snapshot_ids: list[str] = []
     browser_profile_id: str | None = None
     artifact_base_revision_ids: list[str] = []
+    core_revision_id: str | None = None
+    core_identity_source_version_id: str | None = None
 
 
 class RunDetail(BaseModel):
@@ -540,6 +544,8 @@ async def get_run_detail(
             knowledge_snapshot_ids=_safe_manifest_list(manifest_row.knowledge_snapshot_ids),
             browser_profile_id=manifest_row.browser_profile_id,
             artifact_base_revision_ids=_safe_manifest_list(manifest_row.artifact_base_revision_ids),
+            core_revision_id=manifest_row.core_revision_id,
+            core_identity_source_version_id=manifest_row.core_identity_source_version_id,
         )
         if manifest_row is not None
         else None
@@ -553,6 +559,7 @@ async def get_run_detail(
         ModelCallOut(
             id=m.id,
             run_id=m.run_id,
+            session_id=m.session_id,
             agent_id=m.agent_id,
             sub_agent_id=m.sub_agent_id,
             turn=m.turn,
@@ -996,3 +1003,193 @@ async def get_dashboard_stats(
         by_agent=by_agent,
         recent_runs=recent_runs,
     )
+
+
+# ---------------------------------------------------------------------------
+# Model request capture — operator inspection + retention policy
+# ---------------------------------------------------------------------------
+
+
+class ContextCapturePolicyOut(BaseModel):
+    retention_days: int
+    max_bytes: int
+    max_payload_bytes: int
+    pinned: dict[str, bool]
+
+
+class ContextCapturePolicyIn(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    retention_days: int = Field(gt=0)
+    max_bytes: int = Field(gt=0)
+    max_payload_bytes: int = Field(gt=0)
+
+
+@router.get("/context-capture-policy")
+async def get_context_capture_policy(
+    _op: Any = Depends(require_operator),
+) -> ContextCapturePolicyOut:
+    """Installation-wide capture retention — applies to ALL agents."""
+    return ContextCapturePolicyOut(
+        retention_days=settings.context_capture_retention_days,
+        max_bytes=settings.context_capture_max_bytes,
+        max_payload_bytes=settings.context_capture_max_payload_bytes,
+        pinned={
+            "retention_days": env_pinned("context_capture_retention_days"),
+            "max_bytes": env_pinned("context_capture_max_bytes"),
+            "max_payload_bytes": env_pinned("context_capture_max_payload_bytes"),
+        },
+    )
+
+
+@router.put("/context-capture-policy")
+async def put_context_capture_policy(
+    req: ContextCapturePolicyIn,
+    _op: Any = Depends(require_operator),
+) -> ContextCapturePolicyOut:
+    """Persist the policy through the app-settings overlay — atomic write,
+    then singleton mutation only after the durable save."""
+    from pydantic import ValidationError
+
+    values = {
+        "context_capture_retention_days": req.retention_days,
+        "context_capture_max_bytes": req.max_bytes,
+        "context_capture_max_payload_bytes": req.max_payload_bytes,
+    }
+    # Reject only CHANGED pinned fields — an unchanged pinned value sent
+    # back by the UI is not an attempted override and is simply not
+    # persisted.
+    current = {
+        "context_capture_retention_days": settings.context_capture_retention_days,
+        "context_capture_max_bytes": settings.context_capture_max_bytes,
+        "context_capture_max_payload_bytes": settings.context_capture_max_payload_bytes,
+    }
+    pinned_changed = [k for k, v in values.items() if env_pinned(k) and v != current[k]]
+    if pinned_changed:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "pinned": pinned_changed,
+                "conflict": "environment-pinned settings",
+            },
+        )
+    values = {k: v for k, v in values.items() if not env_pinned(k)}
+    try:
+        persist_settings(values)
+    except (ValidationError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return await get_context_capture_policy(_op)
+
+
+@router.get("/model-calls/{call_id}/context")
+async def get_model_call_context(
+    call_id: str,
+    _op: Any = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Operator inspection of one captured request body — the capture row's
+    current state is authoritative (expiry is re-evaluated on read, not a
+    stale available-at-write flag)."""
+    call = await db.get(ModelCall, call_id)
+    if call is None:
+        raise HTTPException(status_code=404, detail="Model call not found")
+
+    from ..models.request_capture import ModelRequestCapture
+    from ..services.context_capture import (
+        BOUNDARY_LABEL,
+        allowed_reason,
+        allowed_surface,
+        enforce_retention,
+        project_capture_metadata,
+        project_capture_payload,
+    )
+
+    # Retention is enforced on inspection too — an aged body must not survive
+    # merely because no new model calls have run.
+    await enforce_retention()
+
+    # Read the LATEST row state from a fresh owned session — never a cached
+    # snapshot from the caller's open session.
+    from ..db import async_session_factory
+
+    async with async_session_factory() as read_db:
+        capture = await read_db.get(ModelRequestCapture, call_id)
+    if capture is None:
+        # No capture row — never present reconstructed input as captured.
+        detail = call.detail or {}
+        if detail.get("capture_state") == "failed":
+            state = "failed"
+            reason = "save_failed"
+        elif getattr(call, "kind", "") == "embedding":
+            state = "not_applicable"
+            reason = None
+        else:
+            state = "not_recorded"
+            reason = None
+        return {
+            "call_id": call_id,
+            "state": state,
+            "surface": None,
+            "redacted": False,
+            "truncated": False,
+            "reason": reason,
+            "metadata": {},
+            "payload": None,
+        }
+
+    meta: dict | None = {}
+    try:
+        meta = json.loads(capture.capture_meta or "{}")
+        if not isinstance(meta, dict):
+            meta = None
+    except Exception:
+        meta = None
+    malformed_meta = meta is None
+    if malformed_meta:
+        meta = {}
+    scope_raw = meta.get("scope")
+    if scope_raw is not None and not isinstance(scope_raw, dict):
+        malformed_meta = True
+    state = capture.state
+    reason = allowed_reason(capture.expiry_reason) or allowed_reason(meta.get("reason"))
+    payload = None
+    if state not in ("expired",):
+        payload_text = capture.payload
+        if payload_text:
+            try:
+                decoded = json.loads(payload_text)
+                if not isinstance(decoded, dict):
+                    state = "failed"
+                    reason = "malformed_body"
+                else:
+                    # Read-side projection: the same structured scrubbers as
+                    # write time — capability policies apply again.
+                    payload, read_flags = project_capture_payload(decoded)
+                    if payload is None:
+                        state = "failed"
+                        reason = "malformed_body"
+                    elif state == "available" and read_flags.get("truncated"):
+                        state = "partial"
+            except Exception:
+                state = "failed"
+                reason = "malformed_body"
+        else:
+            # An available/partial row with no body is not available.
+            state = "failed"
+            reason = "no_body"
+    if malformed_meta:
+        # Never present a captured body under corrupt/foreign metadata.
+        state = "failed"
+        reason = "malformed_metadata"
+        payload = None
+    return {
+        "call_id": call_id,
+        "state": state,
+        "surface": allowed_surface(meta.get("surface")),
+        "redacted": True,
+        "truncated": state == "partial",
+        "reason": reason,
+        "metadata": project_capture_metadata(meta.get("scope")),
+        "payload": payload,
+        "label": BOUNDARY_LABEL,
+    }

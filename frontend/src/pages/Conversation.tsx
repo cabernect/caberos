@@ -15,6 +15,13 @@ import { ChatInputBar, type Attachment, type ChatInputBarHandle, type ContextIte
 import { SettingsOverlay } from "@/components/SettingsOverlay";
 import { useDesktopFileDrop } from "@/lib/desktopFileDrop";
 import { refreshNotifications } from "@/lib/notificationStore";
+import {
+  onSessionActivity,
+  primeLearning,
+  startSessionActivity,
+  stopSessionActivity,
+  useLearningSessions,
+} from "@/lib/sessionActivity";
 import { setFocusedEntities } from "@/lib/focusRegistry";
 import { useResizableWidth } from "@/lib/useResizableWidth";
 
@@ -208,12 +215,28 @@ export function Conversation() {
 
   const loadSessions = useCallback(() => {
     if (!agentId) return;
-    api.listSessions(agentId).then(setSessions).catch(() => {});
+    api.listSessions(agentId)
+      .then((list) => {
+        setSessions(list);
+        primeLearning(list.filter((s) => s.learning).map((s) => s.id));
+      })
+      .catch(() => {});
   }, [agentId]);
 
   useEffect(() => {
     loadSessions();
   }, [loadSessions]);
+
+  // Session-close learning is background work — subscribe to the per-agent
+  // activity stream so the UI can show it in progress, then refresh the
+  // session list when an attempt resolves (status flips to closed/open).
+  const learningSessions = useLearningSessions();
+  useEffect(() => {
+    if (!agentId) return;
+    startSessionActivity(agentId);
+    return () => stopSessionActivity();
+  }, [agentId]);
+  useEffect(() => onSessionActivity(() => loadSessions()), [loadSessions]);
 
   // Deep-link: ?session=<id> selects that session (e.g. from a notification)
   useEffect(() => {
@@ -1398,6 +1421,15 @@ export function Conversation() {
           >
             {headerTitle}
           </span>
+          {activeSessionId && learningSessions.has(activeSessionId) && (
+            <span
+              className="flex shrink-0 items-center gap-1 text-[11px] text-[var(--accent)]"
+              title="Closing this session — summarizing and saving durable memory"
+            >
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Learning
+            </span>
+          )}
           {sessionElapsed && (
             <span
               className="text-[11px] tabular-nums text-[var(--ink-3)]"

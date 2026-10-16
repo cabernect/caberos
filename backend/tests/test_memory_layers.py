@@ -2,14 +2,14 @@
 
 Layers:
 1. Episodic — session summaries (FTS5) + raw messages (FTS5)
-2. Working — run-scoped memory_entries, deleted at run end
-3. Semantic — MEMORY.md (file, auto-extracted at run end)
-4. KG — memory_triples (auto-extracted at session close)
+2. Working — run-scoped scratch, retained until clean session-close learning
+3. Core — bounded MEMORY.md with curated updates
+4. KG — memory_triples maintained through explicit memory tools
 
 Also tests:
 - search_history tool (episodic — exact recall)
 - search_session_summaries (episodic — topical recall)
-- close_session (summary + KG extraction)
+- close_session (summary + validated durable learning)
 - find_idle_sessions (sweeper query)
 - clear_run_entries (working memory cleanup)
 """
@@ -369,7 +369,35 @@ class TestSearchHistoryTool:
     async def test_search_history_tool_executes(self, db):
         from agentos.capabilities.tools.memory import search_history
         from agentos.memory.episodic import index_message
+        from agentos.models.run import Message, Run
+        from agentos.models.session import Session
 
+        # Scoped history joins real Session/Run rows — seed the chain.
+        db.add(
+            Session(
+                id="sess-1",
+                agent_id="test-agent",
+                contact_id="contact-1",
+            )
+        )
+        db.add(
+            Run(
+                id="run-1",
+                session_id="sess-1",
+                contact_id="contact-1",
+                agent_id="test-agent",
+                status="completed",
+            )
+        )
+        db.add(
+            Message(
+                id="msg-1",
+                run_id="run-1",
+                role="user",
+                content="Error: connection refused on port 5432",
+                seq=0,
+            )
+        )
         await index_message(
             db,
             message_id="msg-1",

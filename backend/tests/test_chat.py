@@ -73,6 +73,7 @@ async def test_list_sessions_exposes_active_run_for_reconnect(db):
             "external_user_id": None,
             "active_run_id": run_id,
             "active_run_status": "running",
+            "learning": False,
         }
     ]
 

@@ -36,4 +36,8 @@ class ExecutionManifest(Base, IdMixin):
     knowledge_snapshot_ids: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     browser_profile_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     artifact_base_revision_ids: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    # Pinned core snapshot + the config version that generated its managed
+    # identity prefix (recorded separately from current config).
+    core_revision_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    core_identity_source_version_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[str] = mapped_column(DateTime(timezone=True), server_default=func.now())

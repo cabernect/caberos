@@ -22,7 +22,7 @@ fi
 # Start backend
 echo "[dev] Starting backend on :8081..."
 cd backend
-AGENTOS_RELOAD=true uv run python -m agentos.gateway_entry &
+AGENTOS_RELOAD=false uv run python -m agentos.gateway_entry &
 BACKEND_PID=$!
 
 # Start frontend (when it exists)

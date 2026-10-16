@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Plus, Settings, Trash2, ArrowLeft, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useLearningSessions } from "@/lib/sessionActivity";
 import type { SessionInfo } from "@/lib/types";
 
 interface ChatSidebarProps {
@@ -169,6 +170,7 @@ function SessionItem({
   onDelete: () => void;
 }) {
   const [hovering, setHovering] = useState(false);
+  const learning = useLearningSessions().has(session.id) || session.learning === true;
 
   const channelLabel = session.channel
     ? { telegram: "TG", zalo_bot: "Zalo", discord: "DC", zalo_oa: "Zalo OA" }[
@@ -205,6 +207,13 @@ function SessionItem({
         <Loader2
           className="h-3.5 w-3.5 shrink-0 animate-spin"
           style={{ color: "var(--accent)" }}
+        />
+      )}
+      {!running && learning && !hovering && (
+        <Loader2
+          className="h-3.5 w-3.5 shrink-0 animate-spin opacity-60"
+          style={{ color: "var(--ink-3)" }}
+          aria-label="Learning from this session"
         />
       )}
       {hovering && (

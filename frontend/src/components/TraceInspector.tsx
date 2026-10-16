@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { api } from "@/lib/api";
 import type { RunDetail, TimelineEvent } from "@/lib/types";
 import type { TraceRow } from "@/lib/traceLayout";
 import { fmtCostValue, fmtMs, originLabel, spanLabel, timingLabel, TYPE_LABEL } from "@/lib/traceFormat";
@@ -131,6 +132,128 @@ function ioFor(row: TraceRow): { input: unknown; output: unknown } {
     default:
       return { input: null, output: null };
   }
+}
+
+/** Fetches the redacted SDK-boundary capture for one model call. */
+function ModelCallInput({ callId }: { callId: string }) {
+  const [ctx, setCtx] = useState<Awaited<
+    ReturnType<typeof api.getModelCallContext>
+  > | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
+  const fetchRef = useRef(0);
+
+  useEffect(() => {
+    // Reset on selection change; a stale/out-of-order fetch must not
+    // overwrite a newer selection's capture.
+    const seq = ++fetchRef.current;
+    setCtx(null);
+    setFailed(null);
+    api
+      .getModelCallContext(callId)
+      .then((r) => {
+        if (fetchRef.current === seq) setCtx(r);
+      })
+      .catch((e) => {
+        if (fetchRef.current === seq)
+          setFailed(e instanceof Error ? e.message : "Failed to load");
+      });
+  }, [callId]);
+
+  if (failed) return <Empty label={`Capture unavailable: ${failed}`} />;
+  if (ctx === null) return <Empty label="Loading captured request…" />;
+  // A stale response for another call can never render under this span.
+  if (ctx.call_id !== callId)
+    return <Empty label="Capture unavailable for this call." />;
+  const label =
+    ctx.label ??
+    "Captured at CaberOS's SDK boundary after request preparation and redaction; not a native provider wire capture.";
+  const state = ctx.state;
+  return (
+    <div className="space-y-2 text-[11px]">
+      <div className="flex flex-wrap items-center gap-1">
+        <Pill>{state.replace(/_/g, " ")}</Pill>
+        {ctx.surface && <Pill>{ctx.surface}</Pill>}
+        {ctx.redacted && <Pill tone="warn">redacted</Pill>}
+        {ctx.truncated && <Pill>partial</Pill>}
+        {ctx.reason && <Pill>{ctx.reason}</Pill>}
+      </div>
+      <p className="text-[10px] text-[var(--ink-3)]">{label}</p>
+      {ctx.metadata && Object.keys(ctx.metadata).length > 0 && (
+        <div className="space-y-0.5">
+          {typeof ctx.metadata.core_revision_id === "string" && (
+            <Row k="Core" v={String(ctx.metadata.core_revision_id)} />
+          )}
+          {typeof ctx.metadata.core_identity_source_version_id === "string" && (
+            <Row k="Core source" v={String(ctx.metadata.core_identity_source_version_id)} />
+          )}
+          {ctx.metadata.summary_version != null && (
+            <Row k="Summary" v={String(ctx.metadata.summary_version)} />
+          )}
+          {typeof ctx.metadata.coverage_known === "boolean" && (
+            <Row
+              k="Coverage"
+              v={ctx.metadata.coverage_known ? "known" : "unknown"}
+            />
+          )}
+          {typeof ctx.metadata.source_message_ids_total === "number" && (
+            <Row
+              k="Source messages"
+              v={`${ctx.metadata.source_message_ids_total}${ctx.metadata.source_message_ids_truncated ? " (truncated)" : ""}`}
+            />
+          )}
+          {ctx.metadata.component_budget != null &&
+            typeof ctx.metadata.component_budget === "object" && (
+              <details className="mt-0.5">
+                <summary className="cursor-pointer text-[10px] text-[var(--ink-3)]">
+                  Context breakdown (estimates)
+                </summary>
+                <KeyValue data={ctx.metadata.component_budget as Record<string, unknown>} />
+              </details>
+            )}
+        </div>
+      )}
+      {ctx.payload?.dispatch_input ? (
+        <>
+          <p className="text-[10px] font-medium text-[var(--ink-2)]">
+            Dispatch input
+          </p>
+          <KeyValue data={ctx.payload.dispatch_input} />
+          {(ctx.payload.rendered_context?.messages ?? []).length > 0 && (
+            <details className="mt-1">
+              <summary className="cursor-pointer text-[10px] text-[var(--ink-3)]">
+                Rendered context ({ctx.payload.rendered_context?.messages?.length} messages)
+              </summary>
+              <KeyValue
+                data={{ messages: ctx.payload.rendered_context?.messages }}
+              />
+            </details>
+          )}
+          {(ctx.payload.rendered_context?.tools ?? []).length > 0 && (
+            <details className="mt-1">
+              <summary className="cursor-pointer text-[10px] text-[var(--ink-3)]">
+                Tool schemas ({ctx.payload.rendered_context?.tools?.length})
+              </summary>
+              <KeyValue
+                data={{ tools: ctx.payload.rendered_context?.tools }}
+              />
+            </details>
+          )}
+        </>
+      ) : (
+        <Empty
+          label={
+            state === "expired"
+              ? "Request body expired by retention policy."
+              : state === "failed"
+                ? "Capture failed before the request body was saved."
+                : state === "not_applicable"
+                  ? "This call kind is not captured."
+                  : "No request body recorded."
+          }
+        />
+      )}
+    </div>
+  );
 }
 
 export function TraceInspector({
@@ -297,7 +420,11 @@ export function TraceInspector({
 
         {tab === "input" &&
           (isModel ? (
-            <Honest text={NO_IO_TEXT} onViewMessages={onViewMessages} />
+            event.id.startsWith("model_call:") ? (
+              <ModelCallInput callId={event.id.slice("model_call:".length)} />
+            ) : (
+              <Honest text={NO_IO_TEXT} onViewMessages={onViewMessages} />
+            )
           ) : isRoot ? (
             <RunMessages run={run} roles={["user"]} />
           ) : input && Object.keys(input).length ? (
@@ -308,7 +435,11 @@ export function TraceInspector({
 
         {tab === "output" &&
           (isModel ? (
-            <Honest text={NO_IO_TEXT} onViewMessages={onViewMessages} />
+            <Honest
+              text="Response bodies are not recorded — the Input tab shows
+the captured request when retention allows."
+              onViewMessages={onViewMessages}
+            />
           ) : isRoot ? (
             <RunMessages run={run} roles={["assistant", "thinking"]} />
           ) : output && Object.keys(output).length ? (

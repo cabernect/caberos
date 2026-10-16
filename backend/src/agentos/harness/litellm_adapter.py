@@ -27,6 +27,7 @@ from ..services.call_accounting import (
     capture_call_rates,
     unknown_call_rates,
 )
+from ..services.context_capture import capture_dispatch
 from .scripted_model import ScriptedResponse
 
 # Auto-inject summary="detailed" when reasoning_effort is set but no explicit
@@ -221,6 +222,38 @@ class LiteLLMAdapter:
         return f"{provider['type']}/{model_name}", provider["base_url"]
 
     @staticmethod
+    def _reassert_runtime(
+        kwargs: dict[str, Any],
+        *,
+        model: str,
+        messages: list | None = None,
+        input_items: list | None = None,
+        tools: list | None,
+        stream: bool | None,
+    ) -> None:
+        """Re-assert runtime-owned request fields AFTER provider
+        extra_params merged. Extras may enrich (headers, sampling
+        controls) but can never reroute the billed model, replace the
+        counted messages/tools, or change the request stream shape."""
+        kwargs["model"] = model
+        if messages is not None:
+            kwargs["messages"] = messages
+            # The opposite endpoint's payload key can never ride along —
+            # an extras-supplied input would bypass counted context.
+            kwargs.pop("input", None)
+        if input_items is not None:
+            kwargs["input"] = input_items
+            kwargs.pop("messages", None)
+        if tools:
+            kwargs["tools"] = tools
+        else:
+            kwargs.pop("tools", None)
+        if stream is None:
+            kwargs.pop("stream", None)
+        else:
+            kwargs["stream"] = stream
+
+    @staticmethod
     def _needs_responses_api(exc: Exception) -> bool:
         """True when the server tells us to retry on the Responses API —
         e.g. 'use /v1/responses' for reasoning models given tools on
@@ -383,17 +416,17 @@ class LiteLLMAdapter:
         model_str, api_base = self._route_model(provider, agent_model.name)
         sanitized_messages = self._sanitize_messages(messages)
         sanitized_tools, restore_map = self._sanitize_tools(tools or [])
+        input_items = self._responses_input(sanitized_messages)
+        responses_tools = self._responses_tools(sanitized_tools)
         kwargs: dict[str, Any] = {
             "model": model_str,
-            "input": self._responses_input(sanitized_messages),
+            "input": input_items,
             "api_key": provider["api_key"] or None,
             "api_base": api_base,
         }
+        kwargs.update(provider["extra_params"])
         if agent_model.max_tokens:
             kwargs["max_output_tokens"] = agent_model.max_tokens
-        responses_tools = self._responses_tools(sanitized_tools)
-        if responses_tools:
-            kwargs["tools"] = responses_tools
         if agent_model.thinking_enabled is not None:
             kwargs["reasoning"] = {
                 "effort": (
@@ -402,10 +435,26 @@ class LiteLLMAdapter:
                     else "none"
                 )
             }
+        # Runtime-owned native input/tools recomputed from the sanitized
+        # counted originals always win over provider extras.
+        self._reassert_runtime(
+            kwargs, model=model_str, input_items=input_items, tools=responses_tools, stream=None
+        )
 
         snapshot = await self._capture_rates(agent_model, provider)
-        response = await asyncio.wait_for(
-            self.transport.responses(**kwargs), timeout=settings.model_request_timeout
+        response, cap_ref = await capture_dispatch(
+            "responses",
+            kwargs,
+            lambda **kw: asyncio.wait_for(
+                self.transport.responses(**kw), timeout=settings.model_request_timeout
+            ),
+            rendered={"messages": messages, "tools": tools},
+            tool_aliases=restore_map,
+            attempt_metadata={
+                "provider_id": agent_model.provider_id,
+                "model_name": agent_model.name,
+                "model_str": model_str,
+            },
         )
         content, thinking, tool_calls = self._parse_response_output(response)
         (
@@ -428,6 +477,7 @@ class LiteLLMAdapter:
             cost=cost,
             cost_source=cost_source,
             cost_receipt=cost_receipt,
+            request_capture=cap_ref,
         )
 
     async def _complete_responses_stream(
@@ -439,18 +489,18 @@ class LiteLLMAdapter:
     ):
         model_str, api_base = self._route_model(provider, agent_model.name)
         sanitized_tools, restore_map = self._sanitize_tools(tools or [])
+        input_items = self._responses_input(self._sanitize_messages(messages))
+        responses_tools = self._responses_tools(sanitized_tools)
         kwargs: dict[str, Any] = {
             "model": model_str,
-            "input": self._responses_input(self._sanitize_messages(messages)),
+            "input": input_items,
             "api_key": provider["api_key"] or None,
             "api_base": api_base,
             "stream": True,
         }
+        kwargs.update(provider["extra_params"])
         if agent_model.max_tokens:
             kwargs["max_output_tokens"] = agent_model.max_tokens
-        responses_tools = self._responses_tools(sanitized_tools)
-        if responses_tools:
-            kwargs["tools"] = responses_tools
         if agent_model.thinking_enabled is not None:
             kwargs["reasoning"] = {
                 "effort": (
@@ -459,10 +509,28 @@ class LiteLLMAdapter:
                     else "none"
                 )
             }
+        self._reassert_runtime(
+            kwargs,
+            model=model_str,
+            input_items=input_items,
+            tools=responses_tools,
+            stream=True,
+        )
 
         snapshot = await self._capture_rates(agent_model, provider)
-        stream = await asyncio.wait_for(
-            self.transport.responses(**kwargs), timeout=settings.model_request_timeout
+        stream, cap_ref = await capture_dispatch(
+            "responses_stream",
+            kwargs,
+            lambda **kw: asyncio.wait_for(
+                self.transport.responses(**kw), timeout=settings.model_request_timeout
+            ),
+            rendered={"messages": messages, "tools": tools},
+            tool_aliases=restore_map,
+            attempt_metadata={
+                "provider_id": agent_model.provider_id,
+                "model_name": agent_model.name,
+                "model_str": model_str,
+            },
         )
         full_content = ""
         full_thinking = ""
@@ -530,6 +598,7 @@ class LiteLLMAdapter:
                 tool_calls=parsed_tools,
                 content=full_content,
                 thinking=full_thinking,
+                request_capture=cap_ref,
                 # Reported usage wins — an explicit provider zero stays 0,
                 # no char-estimate fallback.
                 tokens_in=tokens_in,
@@ -629,6 +698,9 @@ class LiteLLMAdapter:
         # Sanitize tool names in message history too
         messages = self._sanitize_messages(messages)
         kwargs["messages"] = messages
+        # Extras merged above may never replace the counted request —
+        # runtime-owned model/messages/tools/stream win the merge.
+        self._reassert_runtime(kwargs, model=model_str, messages=messages, tools=tools, stream=None)
 
         # Thinking/reasoning controls use the endpoint-specific field.
         family = self._model_family(provider, agent_model.name)
@@ -638,7 +710,18 @@ class LiteLLMAdapter:
         # (reasoning models reject tools on chat completions).
         snapshot = await self._capture_rates(agent_model, provider)
         try:
-            response = await self.transport.completion(**kwargs)
+            response, cap_ref = await capture_dispatch(
+                "chat",
+                kwargs,
+                self.transport.completion,
+                rendered={"messages": orig_messages, "tools": orig_tools},
+                tool_aliases=restore_map,
+                attempt_metadata={
+                    "provider_id": agent_model.provider_id,
+                    "model_name": agent_model.name,
+                    "model_str": model_str,
+                },
+            )
         except Exception as e:
             if self._needs_responses_api(e):
                 log.info(
@@ -692,6 +775,7 @@ class LiteLLMAdapter:
             tool_calls=tool_calls,
             content=content,
             thinking="",  # reasoning tokens handled separately if needed
+            request_capture=cap_ref,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
             cached_tokens=cached_tokens,
@@ -767,13 +851,30 @@ class LiteLLMAdapter:
 
         # Request usage info in streaming responses (OpenAI-compatible)
         kwargs["stream_options"] = {"include_usage": True}
+        # Extras merged above may never replace the counted request —
+        # runtime-owned model/messages/tools/stream win the merge.
+        self._reassert_runtime(kwargs, model=model_str, messages=messages, tools=tools, stream=True)
+        if kwargs.get("stream_options") != {"include_usage": True}:
+            kwargs["stream_options"] = {"include_usage": True}
 
         # Call LiteLLM with streaming — retry on the Responses API when the
         # server says to (reasoning models reject tools on chat completions).
         snapshot = await self._capture_rates(agent_model, provider)
         try:
-            stream = await asyncio.wait_for(
-                self.transport.completion(**kwargs), timeout=settings.model_request_timeout
+            stream, cap_ref = await capture_dispatch(
+                "chat_stream",
+                kwargs,
+                lambda **kw: asyncio.wait_for(
+                    self.transport.completion(**kw),
+                    timeout=settings.model_request_timeout,
+                ),
+                rendered={"messages": orig_messages, "tools": orig_tools},
+                tool_aliases=restore_map,
+                attempt_metadata={
+                    "provider_id": agent_model.provider_id,
+                    "model_name": agent_model.name,
+                    "model_str": model_str,
+                },
             )
         except Exception as e:
             if self._needs_responses_api(e):
@@ -884,11 +985,13 @@ class LiteLLMAdapter:
         ) = self._apply_assessment(
             snapshot, usage_chunk if usage_chunk is not None else stream, "chat"
         )
+        cap_ref = getattr(stream, "request_capture", cap_ref)
 
         final = ScriptedResponse(
             tool_calls=tool_calls,
             content=full_content,
             thinking=full_thinking,
+            request_capture=cap_ref,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
             cached_tokens=cached_tokens,

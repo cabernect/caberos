@@ -729,9 +729,10 @@ def register_builtin_capabilities() -> None:
             effects=frozenset({"workspace_write"}),
             kind="memory",
             description=(
-                "Store a conversation snippet for later recall. Use this when the user "
-                "shares something worth remembering but not important enough for MEMORY.md "
-                "or a structured fact."
+                "Store a run-scoped working note for this task. Durable confirmed facts "
+                "may be retained by post-run learning; this call alone does not guarantee "
+                "persistence across sessions. Use memory_remember_fact for an explicit "
+                "structured durable fact."
             ),
             parameters_schema={
                 "type": "object",
@@ -828,14 +829,19 @@ def register_builtin_capabilities() -> None:
             effects=frozenset({"workspace_write"}),
             kind="memory",
             description=(
-                "Update MEMORY.md — the agent's long-term notebook. Use this when you learn "
-                "something important about the user that should persist across all future "
-                "sessions. The content replaces the entire file."
+                "Update the curated memory portion of the bounded always-loaded MEMORY.md "
+                "core. Include only clear durable general preferences and a few standing "
+                "facts, not detailed project history. Managed soul/persona/task is read-only. "
+                "Core updates apply to future sessions; this session keeps its pinned core."
             ),
             parameters_schema={
                 "type": "object",
                 "properties": {
                     "content": {"type": "string", "description": "The new MEMORY.md content"},
+                    "expected_hash": {
+                        "type": "string",
+                        "description": "Whole-file hash your edit is based on — returned on conflict for a safe retry.",
+                    },
                 },
                 "required": ["content"],
             },

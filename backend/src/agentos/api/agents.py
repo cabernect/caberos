@@ -5,7 +5,7 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -244,7 +244,12 @@ async def update_agent_route(
     if req.limits is not None:
         from ..config_schema import Limits
 
-        config.limits = Limits(**req.limits)
+        # Merge with existing limits — partial updates (e.g. only the core
+        # ceiling) must not clobber the other fields. Invalid values → 422.
+        try:
+            config.limits = Limits(**{**config.limits.model_dump(), **req.limits})
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail="Invalid limits update") from exc
     if req.heartbeat is not None:
         from ..config_schema import HeartbeatConfig
 

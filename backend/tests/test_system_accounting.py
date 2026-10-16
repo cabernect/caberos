@@ -135,7 +135,9 @@ async def test_probe_error_and_timeout_status(db):
         await catalog.validate_model("p1", "m1")
     rows = await _calls(db)
     assert rows[-1].status == "error"
-    assert "refused" in rows[-1].error
+    # Provider error bodies may echo private request content — the
+    # receipt records the exception TYPE only.
+    assert rows[-1].error == "RuntimeError"
 
 
 async def test_title_generation_records_row(db, monkeypatch):
@@ -159,6 +161,62 @@ async def test_title_generation_records_row(db, monkeypatch):
     assert row.run_id is None
     assert row.tokens_in == 11 and row.tokens_out == 4
     assert row.detail == {"operation": "session_title"}
+
+
+async def test_title_records_run_session_link(db, monkeypatch):
+    """Title calls carry the triggering run + session so they surface in
+    the run's trace instead of as run-less ledger rows."""
+    from agentos import pipeline
+    from agentos.providers import ProviderRegistry
+
+    config = _agent_config()
+    monkeypatch.setattr(
+        ProviderRegistry,
+        "for_model",
+        lambda self, pid: _AsyncStub(
+            ScriptedResponse(content="Linked Title", tokens_in=5, tokens_out=2, cost=0.0)
+        ),
+    )
+    await pipeline._generate_session_title(
+        db, config, "hi", "hello", run_id="run-x", session_id="sess-x"
+    )
+    row = (await _calls(db))[0]
+    assert row.kind == "title"
+    assert row.run_id == "run-x"
+    assert row.session_id == "sess-x"
+
+
+async def test_title_prompt_uses_latest_messages(db, monkeypatch):
+    """Selection must pick the conversation's END, not its start — the
+    title should describe what the session ended up being about."""
+    from types import SimpleNamespace
+
+    from agentos import pipeline
+    from agentos.providers import ProviderRegistry
+
+    seen = {}
+
+    class _Probe(_AsyncStub):
+        async def complete(self, agent_model, messages, tools):
+            seen["prompt"] = messages[0]["content"]
+            return ScriptedResponse(content="T", tokens_in=1, tokens_out=1)
+
+    monkeypatch.setattr(ProviderRegistry, "for_model", lambda self, pid: _Probe())
+    config = _agent_config()
+
+    # Oldest-first, as _bg_title supplies it — 9 user/assistant turns.
+    msgs = [
+        SimpleNamespace(role="user" if i % 2 == 0 else "assistant", content=f"turn-{i}")
+        for i in range(9)
+    ] + [SimpleNamespace(role="tool_call", content="ignore me")]
+
+    await pipeline._generate_session_title_from_history(db, config, msgs)
+
+    prompt = seen["prompt"]
+    # Latest 6 = turn-8..turn-3 (tool_call row excluded), chronological.
+    assert "turn-8" in prompt and "turn-3" in prompt
+    assert "turn-0" not in prompt and "turn-2" not in prompt
+    assert prompt.index("turn-3") < prompt.index("turn-8")
 
 
 async def test_title_error_row_and_fallback_unchanged(db, monkeypatch):
@@ -191,20 +249,48 @@ async def test_memory_extract_records_row_and_error(db, monkeypatch):
         ProviderRegistry,
         "for_model",
         lambda self, pid: _AsyncStub(
-            ScriptedResponse(content="NOTHING_TO_REMEMBER", tokens_in=20, tokens_out=2)
+            ScriptedResponse(
+                content='{"memories": [], "clarifications": [], "core_markdown": null, "core_source_ids": []}',
+                tokens_in=20,
+                tokens_out=2,
+            )
         ),
     )
-    messages = [
-        SimpleNamespace(role="user", content="remember me"),
-        SimpleNamespace(role="assistant", content="ok"),
-    ]
+    # Extraction now only considers real persisted parent-run messages —
+    # seed the run/session/messages it can cite.
+    import uuid as _uuid
+
+    from agentos.models.run import Message, Run
+    from agentos.models.session import Session
+
+    session = Session(id=str(_uuid.uuid4()), agent_id="acc-agent", contact_id="c1")
+    run = Run(
+        id=str(_uuid.uuid4()),
+        session_id=session.id,
+        contact_id="c1",
+        agent_id="acc-agent",
+        status="completed",
+    )
+    db.add_all([session, run])
+    await db.commit()
+    m1 = Message(id=str(_uuid.uuid4()), run_id=run.id, role="user", content="remember me", seq=0)
+    m2 = Message(id=str(_uuid.uuid4()), run_id=run.id, role="assistant", content="ok", seq=1)
+    db.add_all([m1, m2])
+    await db.commit()
+    messages = [m1, m2]
     await auto_extract.auto_extract_memory(
-        db, config, agent_id="acc-agent", messages=messages, run_id="run-x"
+        db,
+        config,
+        agent_id="acc-agent",
+        messages=messages,
+        run_id=run.id,
+        contact_id="c1",
+        session_id=session.id,
     )
     row = (await _calls(db))[0]
     assert row.kind == "extract"
     assert row.agent_id == "acc-agent"
-    assert row.run_id == "run-x"  # original run traced exactly
+    assert row.run_id == run.id  # original run traced exactly
     assert row.detail == {"operation": "memory_extract"}
 
     monkeypatch.setattr(
@@ -212,9 +298,16 @@ async def test_memory_extract_records_row_and_error(db, monkeypatch):
         "for_model",
         lambda self, pid: _AsyncStub(error=TimeoutError("t")),
     )
-    await auto_extract.auto_extract_memory(
-        db, config, agent_id="acc-agent", messages=messages, run_id="run-x"
-    )
+    with pytest.raises(TimeoutError):
+        await auto_extract.auto_extract_memory(
+            db,
+            config,
+            agent_id="acc-agent",
+            messages=messages,
+            run_id=run.id,
+            contact_id="c1",
+            session_id=session.id,
+        )
     rows = await _calls(db)
     assert len(rows) == 2  # extraction raises but the row exists
     assert rows[-1].status == "timeout"
@@ -271,6 +364,12 @@ class _AsyncStub:
             return self
 
         return _go().__await__()
+
+    async def get_model_info(self, model):
+        return {
+            "model_str": "test-model",
+            "resolved_model": {"context_window_tokens": 32768},
+        }
 
     async def complete(self, agent_model, messages, tools):
         if self._error:

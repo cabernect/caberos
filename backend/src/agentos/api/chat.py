@@ -10,6 +10,7 @@ GET    /api/chat/{agent_id}/sessions/{sid}/messages  — session messages
 DELETE /api/chat/{agent_id}/sessions/{sid}       — delete session
 """
 
+import asyncio
 import json
 import uuid
 from datetime import datetime
@@ -170,9 +171,12 @@ async def compact_session(
     """
     from ..agent_service import get_active_config
     from ..db import async_session_factory
-    from ..harness.compaction import compact_context
-    from ..harness.context import assemble_system_prompt, build_message_history
-    from ..models.run import Message, Run
+    from ..harness.compaction import (
+        compact_context,
+        count_text_tokens,
+        count_tool_tokens,
+    )
+    from ..harness.context import assemble_system_prompt, assemble_tool_schemas
     from ..models.session import Session
     from ..providers import ProviderRegistry
 
@@ -190,21 +194,11 @@ async def compact_session(
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
 
-        # Load all messages from the session
-        msg_result = await db.execute(
-            select(Message)
-            .where(Message.run_id.in_(select(Run.id).where(Run.session_id == session.id)))
-            .order_by(Message.seq)
-        )
-        all_messages = msg_result.scalars().all()
+        # Load the session's uncovered conversation — deterministic order,
+        # coverage-aware, no LIMIT cut, no dummy user message.
+        from ..harness.conversation import Conversation
 
-        # Build message history (same as harness does)
-        # Use a dummy message — compaction works on history, not the new message
-        system_prompt = assemble_system_prompt(config, "")
-        from types import SimpleNamespace
-
-        recent = [SimpleNamespace(role=m.role, content=m.content) for m in all_messages]
-        history = build_message_history(system_prompt, recent, "", None)
+        conversation = await Conversation.load(db, session)
 
         # Get model info — resolved metadata + frozen rate snapshot ride
         # the same capture as execution calls.
@@ -237,12 +231,40 @@ async def compact_session(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc))
 
-        # Run compaction (force=True)
-        system_msgs = [history[0]] if history and history[0].get("role") == "system" else []
-        conversation_msgs = history[len(system_msgs) :]
+        # Reserved = fixed system prompt + initially permitted schemas +
+        # resolved assigned skill menu — the same fixed budget the live
+        # path counts on its first dispatch.
+        from ..capabilities.catalog import CapabilityRunCatalog
+        from ..skills.resolution import resolve_effective_skills
 
+        resolved_skills = await resolve_effective_skills(db, agent_id)
+        capability_catalog = CapabilityRunCatalog(agent_config=config, db=db)
+        tool_schemas = assemble_tool_schemas(
+            config, capability_names=capability_catalog.model_capability_names()
+        )
+        # Reserved accounting uses the session's PINNED core (the fixed
+        # managed/curated envelope), never the live notebook plus a
+        # duplicated identity. The pin is created if this session predates
+        # core support.
+        from ..memory.core import CoreConflict, load_or_pin_core
+
+        try:
+            pinned_core = await load_or_pin_core(db, config, session)
+            await db.commit()
+        except CoreConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        system_prompt = assemble_system_prompt(
+            config, "", resolved_skills=resolved_skills, core_snapshot=pinned_core
+        )
+        reserved_tokens = count_text_tokens(system_prompt, model_str) + count_tool_tokens(
+            tool_schemas, model_str
+        )
+
+        # Run compaction (force=True) against uncovered originals; the
+        # summary already renders inside the result exactly once.
         compaction_result = await compact_context(
-            messages=conversation_msgs,
+            messages=list(conversation.messages),
+            source_ids=list(conversation.source_ids),
             agent_config=config,
             model_str=model_str,
             previous_summary=session.conversation_summary,
@@ -252,18 +274,41 @@ async def compact_session(
             input_budget=input_budget,
             resolved_model=resolved_model,
             accounting=accounting,
+            reserved_tokens=reserved_tokens,
+            session_id=body.session_id,
+            # Manual /compact has no parent run — an honest blank, not a
+            # fabricated run_id.
+            run_id=None,
         )
 
-        # Persist the updated summary
-        if compaction_result.summary != session.conversation_summary:
-            from sqlalchemy import update as sa_update
-
-            await db.execute(
-                sa_update(Session)
-                .where(Session.id == session.id)
-                .values(conversation_summary=compaction_result.summary)
+        # Persist summary + coverage + version in one conditional write —
+        # only after a valid compaction, even when the text is unchanged
+        # (newly covered IDs still need storing). A CAS loss is a conflict.
+        if compaction_result.compacted:
+            _head_ids = {
+                sid
+                for group in conversation.source_ids[: compaction_result.head_count]
+                for sid in (group or set())
+            }
+            _tail_ids = {
+                sid
+                for group in conversation.source_ids[
+                    len(conversation.source_ids) - compaction_result.tail_count :
+                ]
+                for sid in (group or set())
+            }
+            stored = await conversation.store_summary(
+                db,
+                compaction_result.summary,
+                conversation.covered_ids | compaction_result.covered_ids,
+                retained_head_ids=_head_ids,
+                retained_tail_ids=_tail_ids,
             )
-            await db.commit()
+            if not stored:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Conversation was compacted concurrently; retry",
+                )
 
         return {
             "compacted": compaction_result.compacted,
@@ -274,6 +319,7 @@ async def compact_session(
             "middle_count": compaction_result.middle_count,
             "tail_count": compaction_result.tail_count,
             "summary": compaction_result.summary,
+            "error": compaction_result.error,
         }
 
 
@@ -426,6 +472,9 @@ async def list_sessions(
         .order_by(Session.last_activity_at.desc())
     )
     rows = result.all()
+    from ..memory.episodic import closing_session_ids
+
+    closing = closing_session_ids()
     sessions = []
     for sess, msg_count in rows:
         active_result = await db.execute(
@@ -450,9 +499,46 @@ async def list_sessions(
                 "external_user_id": sess.external_user_id,
                 "active_run_id": active_run.id if active_run else None,
                 "active_run_status": active_run.status if active_run else None,
+                "learning": sess.id in closing,
             }
         )
     return sessions
+
+
+@router.get("/{agent_id}/session-activity/stream")
+async def session_activity_stream(
+    agent_id: str,
+    operator: Operator = Depends(require_operator),
+) -> StreamingResponse:
+    """Transient session-activity frames for this agent (close-time learning).
+
+    UI state only — nothing persisted, dropped frames are safe because the
+    sessions list carries an authoritative `learning` flag on next fetch.
+    """
+    from .. import session_activity
+
+    queue = session_activity.subscribe()
+
+    async def gen():
+        try:
+            yield f"data: {json.dumps({'type': 'hello'})}\n\n"
+            while True:
+                try:
+                    payload = await asyncio.wait_for(queue.get(), timeout=25.0)
+                except TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                if payload.get("agent_id") != agent_id:
+                    continue
+                yield f"data: {json.dumps(payload)}\n\n"
+        finally:
+            session_activity.unsubscribe(queue)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/{agent_id}/sessions")

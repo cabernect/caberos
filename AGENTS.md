@@ -28,7 +28,7 @@ CaberOS is an open-source, local-first AI Agent Operating System. It hosts perso
 - **D33:** FastAPI is the current gateway/API layer. The React dashboard is one client, with Tauri and CLI as future clients using the same REST + SSE contracts. A deeper CaberCore seam is deferred until a non-HTTP entry point requires it.
 - **Execution loop invariant:** A conversation advances strictly as reason → act → observe → repeat, one reasoning step at a time. Multiple tool calls emitted in one model turn may execute concurrently within that single step, but the agent must not run separate jobs concurrently across reasoning steps.
 - **D34:** Three-layer memory: working memory (session), MEMORY.md (file in agent home dir `~/agentos/agents/{agent_id}/`), knowledge graph (SQLite triples). FTS5 default, embeddings configurable.
-- **D35:** Agent identity = `soul`, `persona`, `task` — versioned config fields on AgentConfig (in the DB). NOT workspace files. MEMORY.md is the exception (agent-managed file, not versioned).
+- **D35:** Agent identity = `soul`, `persona`, `task` — authoritative versioned config fields in the DB, not workspace files. Plan 14 renders identity once into the real `MEMORY.md`; immutable revision evidence pins the whole core per session.
 - **D37:** Workspaces are shared directories for working files only. Identity is in the DB, MEMORY.md is in the agent home dir — neither in the workspace.
 - **D38:** MCP tools are in v0.1 (revised — was v0.2). CLI/TUI (`caber`) still deferred to v0.2. v0.1 ships React dashboard + MCP integration. `scripts/smoke.py` is a dev tool, not a product CLI.
 - **D9/D13 (revised):** Four capability kinds: `tool`, `sub_agent`, `memory`, `mcp_tool`. Native `connector_action` kind removed — MCP replaces it. CaberOS owns credential custody at rest; MCP servers receive credentials via env/headers at runtime.
@@ -64,13 +64,38 @@ To test: start both servers (backend on :8081, frontend on :5173), then use Play
 
 ## System prompt + memory flow
 
-Each run assembles: base prompt → soul/persona/task → `MEMORY.md` → skill menu
-→ contact-scoped KG facts → relevant past-session summaries → semantic recall.
-`MEMORY.md` is agent-scoped, always loaded, and protected from conversation compaction.
-KG facts, summaries, and recall snippets are queried per contact and bounded.
-During/after a run, memory tools write working snippets, triples, or `MEMORY.md`;
-`memory/auto_extract.py` promotes durable facts and clears run-scoped snippets.
-The base prompt (`harness/base_prompt.py`) contains platform rules shared by agents.
+Plan 14 (`docs/plans/v0.2/14-context-and-memory.md`) is in progress on
+`feat/v0.2.0-context-memory`; do not assume it is deployed.
+
+Each run assembles platform instructions, the whole bounded session-pinned
+`MEMORY.md`, assigned skill metadata/active procedures, coherent uncovered
+conversation plus its saved summary, and currently loaded permitted schemas.
+Managed soul/persona/task appears once inside the core. Detailed memory and
+other sessions are retrieved through existing tools, not injected at startup.
+Conversation reads use `harness/conversation.py`; complete-input budgeting
+precedes each model turn. Tool-result reduction redesign remains out of scope.
+Conversation summaries persist as immutable `ConversationSummary` snapshots —
+the session points at the active one and a losing CAS write never leaves a row.
+Chat-model dispatch attempts receive a capture reference; bodies are
+best-effort, redacted and retained under the installation retention policy —
+embeddings are not applicable and legacy calls stay not-recorded. The trace
+inspector reads them via `/api/model-calls/{id}/context`, which re-projects the
+stored body on read.
+
+`memory/core.py` owns publication: exact bytes, identity validation, ceiling,
+optimistic hash checks, revisions, and session pins. Automatic durable learning
+runs at session close (`close_session`): a full-transcript summary plus a
+session-scoped extraction over every terminal non-test run's parent
+user/assistant rows, then a conditional `closed` write. Provider, parse, or
+core-conflict failures leave the session open with originals and scratch
+retained; explicit dashboard resume reopens a closed session like a channel
+resume. Close is triggered by the sweeper or lazy trigger once a session is
+idle past the agent's live `limits.session_idle_timeout_min` (the legacy
+per-session `idle_timeout_min` column is no longer consulted). In-flight
+closes broadcast `session_activity` SSE frames and set `learning` on the
+sessions list, so the chat view can show internal work running.
+Memory never expands permissions. The agent-global core is for the
+personal owner's use, not unrelated contacts.
 
 ## Built-in capabilities
 
@@ -143,7 +168,7 @@ root and other dirs are scratch space (scripts, drafts, `write_file` output).
 |---|---|---|
 | Agent identity (soul, persona, task) | DB — AgentConfig fields | yes (AgentVersion) |
 | Agent config (model, capabilities, limits, etc.) | DB — AgentConfig fields | yes (AgentVersion) |
-| MEMORY.md | File — `~/agentos/agents/{agent_id}/MEMORY.md` | no (living document) |
+| MEMORY.md | File — `~/agentos/agents/{agent_id}/MEMORY.md` | living file; immutable `CoreRevision` evidence/session pins (plan 14) |
 | Knowledge graph | DB — memory_triples table | no |
 | Provider keys | DB — encrypted (Fernet) | n/a |
 | Connector tokens | DB — encrypted (Fernet) | n/a |
@@ -374,10 +399,11 @@ backend/src/agentos/
 │   ├── builtin.py       — register_builtin_capabilities() (tools + memory caps)
 │   └── tools/           — file, shell, web, datetime, subagent, memory
 ├── memory/              — memory layers and promotion (D34)
-│   ├── notebook.py      — MEMORY.md read/write (agent home dir)
-│   ├── auto_extract.py  — post-run durable fact extraction and deduplication
+│   ├── core.py          — bounded MEMORY.md publication, revisions, session pins (plan 14)
+│   ├── notebook.py      — legacy notebook compatibility helpers
+│   ├── auto_extract.py  — durable fact extraction and deduplication (session-close and direct-run modes)
 │   ├── triples.py       — knowledge graph (subject/predicate/object triples)
-│   └── recall.py        — semantic recall (FTS5 / Postgres tsvector)
+│   └── recall.py        — lexical recall (FTS5 / Postgres tsvector) + core archive
 ├── skills/              — skill loading (D11b, D11c) — NOT auto-injected
 │   └── loader.py        — list_skills (menu), load_skill (full content + resources)
 ├── db_backends/         — pluggable database backends (D5)

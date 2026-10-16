@@ -37,6 +37,7 @@ import type {
   SchedulePayload,
   ScheduleTrigger,
   SchedulerAlert,
+  SessionActivityEvent,
   SessionInfo,
   Skill,
   SkillDetail,
@@ -91,11 +92,13 @@ export interface PreviewBackend {
 export class ApiError extends Error {
   readonly status: number;
   readonly code?: string;
-  constructor(status: number, message: string, code?: string) {
+  readonly detail?: unknown;
+  constructor(status: number, message: string, code?: string, detail?: unknown) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
+    this.detail = detail;
   }
 }
 
@@ -107,9 +110,11 @@ export class ApiError extends Error {
 async function apiError(resp: Response): Promise<ApiError> {
   const text = await resp.text().catch(() => "");
   let code: string | undefined;
+  let rawDetail: unknown;
   let message = `${resp.status}: ${text || resp.statusText}`;
   try {
     const detail = JSON.parse(text)?.detail;
+    rawDetail = detail;
     if (typeof detail === "string") {
       message = detail;
     } else if (Array.isArray(detail)) {
@@ -127,7 +132,7 @@ async function apiError(resp: Response): Promise<ApiError> {
   } catch {
     /* non-JSON error body — keep raw */
   }
-  return new ApiError(resp.status, message, code);
+  return new ApiError(resp.status, message, code, rawDetail);
 }
 
 async function fetchBlob(path: string): Promise<string> {
@@ -212,6 +217,56 @@ export interface BrowserRuntimeInfo {
     downloaded: number;
     total: number | null;
   } | null;
+}
+
+// Shared SSE frame parser — yields each parsed `data:` JSON payload;
+// keepalive comments and malformed frames are skipped. Callers (not the
+// parser) invoke their handlers so a throwing handler can't be swallowed
+// as bad JSON.
+async function* streamSseFrames(
+  path: string,
+  signal?: AbortSignal,
+): AsyncGenerator<any> {
+  const base = await baseReady;
+  const resp = await fetch(`${base}${path}`, {
+    credentials: "include",
+    headers: authHeaders(),
+    signal,
+  });
+  if (!resp.ok) throw await apiError(resp);
+  if (!resp.body) return;
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let match: RegExpMatchArray | null;
+      // Frames are blank-line separated; tolerate CRLF as well as LF.
+      while ((match = buffer.match(/\r?\n\r?\n/)) !== null) {
+        const raw = buffer.slice(0, match.index);
+        buffer = buffer.slice(match.index! + match[0].length);
+        let data = "";
+        for (const line of raw.split(/\r?\n/)) {
+          if (line.startsWith("data: ")) data += line.slice(6);
+        }
+        if (!data) continue; // keepalive / comments — ignore
+        let payload: any;
+        try {
+          payload = JSON.parse(data);
+        } catch {
+          continue; // malformed frame — skip
+        }
+        yield payload;
+      }
+    }
+  } finally {
+    // Always release the socket — aborts and EOF must not leak it.
+    Promise.resolve(reader.cancel() ?? undefined).catch(() => {});
+    reader.releaseLock();
+  }
 }
 
 export const api = {
@@ -333,12 +388,62 @@ export const api = {
 
   // Agent files — MEMORY.md, skills, workspace
   getMemory: (id: string) =>
-    request<{ content: string; exists: boolean }>(`/api/agents/${id}/memory`),
-  updateMemory: (id: string, content: string) =>
-    request<{ ok: boolean; bytes: number }>(`/api/agents/${id}/memory`, {
+    request<{
+      content: string;
+      exists: boolean;
+      curated_content?: string;
+      managed_content?: string | null;
+      hash?: string | null;
+      token_count?: number;
+      max_tokens?: number | null;
+      revision_id?: string | null;
+    }>(`/api/agents/${id}/memory`),
+  updateMemory: (id: string, content: string, expectedHash?: string) =>
+    request<{
+      ok: boolean;
+      revision_id?: string;
+      token_count?: number;
+      hash?: string;
+      detail?: { conflict?: string; current_hash?: string };
+    }>(`/api/agents/${id}/memory`, {
       method: "PUT",
-      body: JSON.stringify({ content }),
+      body: JSON.stringify(
+        expectedHash ? { content, expected_hash: expectedHash } : { content }
+      ),
     }),
+  getModelCallContext: (callId: string) =>
+    request<{
+      call_id: string;
+      state: string;
+      surface?: string | null;
+      redacted: boolean;
+      truncated: boolean;
+      reason?: string | null;
+      metadata?: Record<string, unknown>;
+      payload?: {
+        rendered_context?: { messages?: unknown[]; tools?: unknown[] };
+        dispatch_input?: Record<string, unknown>;
+      } | null;
+      label?: string;
+    }>(`/api/model-calls/${callId}/context`),
+  getContextCapturePolicy: () =>
+    request<{
+      retention_days: number;
+      max_bytes: number;
+      max_payload_bytes: number;
+      pinned: Record<string, boolean>;
+    }>(`/api/context-capture-policy`),
+  updateContextCapturePolicy: (policy: {
+    retention_days: number;
+    max_bytes: number;
+    max_payload_bytes: number;
+  }) =>
+    request(`/api/context-capture-policy`, { method: "PUT", body: JSON.stringify(policy) }),
+  cleanupMemory: (id: string) =>
+    request<{ ok: boolean; revision_id?: string; token_count?: number }>(
+      `/api/agents/${id}/memory/cleanup`,
+      { method: "POST" }
+    ),
   listAgentSkills: (id: string) => request<Skill[]>(`/api/agents/${id}/skills`),
   listAvailableSkills: (id: string) =>
     request<SkillInfo[]>(`/api/agents/${id}/available-skills`),
@@ -772,57 +877,35 @@ export const api = {
     onConnected?: () => void,
     onInboxChanged?: () => void,
   ): AsyncGenerator<Notification> {
-    const base = await baseReady;
-    const resp = await fetch(`${base}/api/notifications/stream`, {
-      credentials: "include",
-      headers: authHeaders(),
-      signal,
-    });
-    if (!resp.ok) throw await apiError(resp);
-    if (!resp.body) return;
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
     let helloSeen = false; // hello fires once per stream attempt
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        let match: RegExpMatchArray | null;
-        // Frames are blank-line separated; tolerate CRLF as well as LF.
-        while ((match = buffer.match(/\r?\n\r?\n/)) !== null) {
-          const raw = buffer.slice(0, match.index);
-          buffer = buffer.slice(match.index! + match[0].length);
-          let data = "";
-          for (const line of raw.split(/\r?\n/)) {
-            if (line.startsWith("data: ")) data += line.slice(6);
-          }
-          if (!data) continue; // keepalive / comments — ignore
-          let payload: any;
-          try {
-            payload = JSON.parse(data);
-          } catch {
-            continue; // malformed frame — skip
-          }
-          // Callbacks outside the parse catch — a throwing handler must
-          // not be swallowed as bad JSON.
-          if (payload?.type === "hello") {
-            if (!helloSeen) {
-              helloSeen = true;
-              onConnected?.();
-            }
-          } else if (payload?.type === "inbox_changed") {
-            onInboxChanged?.();
-          } else if (payload?.type === "notification" && payload.notification) {
-            yield payload.notification as Notification;
-          }
+    for await (const payload of streamSseFrames("/api/notifications/stream", signal)) {
+      // Callbacks outside the parser's JSON catch — a throwing handler must
+      // not be swallowed as a bad frame.
+      if (payload?.type === "hello") {
+        if (!helloSeen) {
+          helloSeen = true;
+          onConnected?.();
         }
+      } else if (payload?.type === "inbox_changed") {
+        onInboxChanged?.();
+      } else if (payload?.type === "notification" && payload.notification) {
+        yield payload.notification as Notification;
       }
-    } finally {
-      // Always release the socket — aborts and EOF must not leak it.
-      Promise.resolve(reader.cancel() ?? undefined).catch(() => {});
-      reader.releaseLock();
+    }
+  },
+
+  // Transient session-activity frames for one agent (close-time learning).
+  streamSessionActivity: async function* (
+    agentId: string,
+    signal?: AbortSignal,
+  ): AsyncGenerator<SessionActivityEvent> {
+    for await (const payload of streamSseFrames(
+      `/api/chat/${agentId}/session-activity/stream`,
+      signal,
+    )) {
+      if (payload?.type === "session_activity") {
+        yield payload as SessionActivityEvent;
+      }
     }
   },
 

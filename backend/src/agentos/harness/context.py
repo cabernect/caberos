@@ -1,4 +1,4 @@
-"""Context assembly (D35 — order: base prompt, soul, persona, task, MEMORY.md, skills, KG, turns, recall).
+"""Context assembly: platform instructions, pinned core, skills, and runtime guidance.
 
 The base system prompt (platform-level operating instructions) is always loaded
 first, before the agent's identity. This tells the agent how to work inside
@@ -17,13 +17,6 @@ log = logging.getLogger(__name__)
 from ..config_schema import AgentConfig  # noqa: E402
 from ..models.run import Message  # noqa: E402
 from .base_prompt import get_base_system_prompt  # noqa: E402
-
-
-def _load_memory_md(agent_config: AgentConfig) -> str:
-    """Load MEMORY.md from the agent home dir (D34). Returns empty string if missing."""
-    from ..memory.notebook import read_memory
-
-    return read_memory(agent_config.id)
 
 
 def _load_skill_menu(agent_config: AgentConfig) -> str:
@@ -72,44 +65,46 @@ def assemble_system_prompt(
     resolved_skills: list[Any] | None = None,
     forced_skill_rendered: dict[str, Any] | None = None,
     builder_draft: dict[str, Any] | None = None,
+    core_snapshot: Any | None = None,
 ) -> str:
-    """Build the system prompt from base prompt + agent identity (D35 order).
+    """Build the system prompt with managed identity once inside the pinned core.
 
-    Order:
-    1. Base system prompt (platform instructions — adaptive to enabled tools)
-    2. Soul (who the agent is — values, principles)
-    3. Persona (how the agent communicates — tone, style)
-    4. Task (what the agent does — mission, instructions)
-    5. MEMORY.md (long-term memory — agent-curated notebook)
-    6. Available Skills (menu — names + descriptions only)
-    7. Saved browser logins (operator-managed persistent profiles — W4)
-    8. KG facts (knowledge graph — passed in by the harness from the DB)
-    9. Past sessions (episodic — session summaries for topical recall)
-    10. Recall snippets (semantic recall fallback — D34)
-    11. Forced skill (slash command — full body injected when user types /skillname)
-    12. Model capabilities (vision support — tells the agent if it can process images)
+    Normal sessions use platform header, whole pinned core, capability guidance,
+    skill menu, and applicable browser/forced-skill/model guidance. Transient
+    callers without a core snapshot use configured identity without a notebook.
+    Optional legacy recall arguments render only when explicitly supplied;
+    normal run startup does not search or populate those arguments.
     """
     parts: list[str] = []
 
-    # 1. Base system prompt — adaptive to enabled capabilities
     if enabled_caps is None:
         enabled_caps = get_enabled_capabilities(agent_config)
-    parts.append(get_base_system_prompt(enabled_caps))
 
-    # 2-4. Agent identity (D35)
-    if agent_config.soul:
-        parts.append(f"## Soul\n\n{agent_config.soul}")
+    if core_snapshot is not None:
+        # Stable platform header → whole pinned core → variable capability
+        # text → footer. Core precedes the variable sections exactly once.
+        from .base_prompt import base_prompt_parts
 
-    if agent_config.persona:
-        parts.append(f"## Persona\n\n{agent_config.persona}")
+        header, caps_section, footer = base_prompt_parts(enabled_caps)
+        parts.append(header)
+        parts.append(core_snapshot.content)
+        parts.append(caps_section)
+        parts.append(footer)
+    else:
+        # 1. Base system prompt — adaptive to enabled capabilities
+        parts.append(get_base_system_prompt(enabled_caps))
+        # 2-4. Agent identity (D35)
+        if agent_config.soul:
+            parts.append(f"## Soul\n\n{agent_config.soul}")
 
-    if agent_config.task:
-        parts.append(f"## Task\n\n{agent_config.task}")
+        if agent_config.persona:
+            parts.append(f"## Persona\n\n{agent_config.persona}")
 
-    # 5. MEMORY.md (D34 — agent-curated notebook, always loaded)
-    memory_md = _load_memory_md(agent_config)
-    if memory_md:
-        parts.append(f"## MEMORY.md\n\n{memory_md}")
+        if agent_config.task:
+            parts.append(f"## Task\n\n{agent_config.task}")
+
+        # Transient/ephemeral callers compose bounded identity only — no
+        # unbounded notebook read and no parent pin bleed-through.
 
     # 6. Skills (D11b — menu only, not auto-injected)
     # The agent sees available skill names + descriptions, then calls
@@ -256,6 +251,130 @@ def assemble_tool_schemas(
     return schemas
 
 
+def attachment_lines(attachments: list[Any]) -> list[str]:
+    """Render attachment metadata lines shared by stored and live messages —
+    stored rows replay exactly what the live path sent."""
+    lines = ["", "Attachments available through tools:"]
+    for index, attachment in enumerate(attachments, start=1):
+        if isinstance(attachment, dict):
+            attachment_id = attachment.get("id", f"attachment_{index}")
+            attachment_type = attachment.get("type", "file")
+            mime_type = attachment.get("mime_type", "")
+            filename = attachment.get("filename", attachment_id)
+            path = attachment.get("path")
+            url = attachment.get("url")
+        else:
+            attachment_id = f"attachment_{index}"
+            attachment_type = getattr(attachment, "type", "file")
+            mime_type = getattr(attachment, "mime_type", "")
+            filename = getattr(attachment, "filename", "") or attachment_id
+            path = None
+            url = getattr(attachment, "data", None) if attachment_type == "url" else None
+
+        reference = path or url or "unavailable"
+        lines.append(
+            f"- {attachment_id}: {filename} ({attachment_type}, {mime_type}) — {reference}"
+        )
+    return lines
+
+
+_SUPPORTED_STORED_ROLES = {"user", "assistant", "tool_call"}
+
+
+def format_stored_message(msg: Any) -> list[dict[str, Any]]:
+    """Expand one stored Message row to model-message dicts.
+
+    tool_call rows expand to the complete assistant-call/result pair;
+    stored user attachments replay as the same metadata lines the live path
+    produced. Malformed or unsupported records yield [] — replay never
+    invents a valid call from invalid JSON (dict shape, nonempty id/name,
+    dict args all required); a non-dict JSON document is rejected too.
+    """
+    role = getattr(msg, "role", "")
+    if role == "thinking":
+        return []
+    if role not in _SUPPORTED_STORED_ROLES:
+        return []
+    if role == "tool_call":
+        try:
+            tc = json.loads(getattr(msg, "content", "") or "")
+        except (json.JSONDecodeError, TypeError):
+            return []
+        if not isinstance(tc, dict):
+            return []
+        tool_name = tc.get("capability")
+        call_id = tc.get("id")
+        if not (isinstance(tool_name, str) and tool_name):
+            return []
+        if not (isinstance(call_id, str) and call_id):
+            return []
+        # Present-but-null args is malformed; only ABSENT args defaults to {}.
+        if "args" in tc:
+            args = tc["args"]
+            if not isinstance(args, dict):
+                return []
+        else:
+            args = {}
+        result = tc.get("result")
+        status = tc.get("status")
+        reason = tc.get("denied_reason") or tc.get("reason")
+        if status in ("denied", "failed", "timeout", "interrupted"):
+            prefix = {
+                "denied": "Denied",
+                "timeout": "Timed out",
+                "interrupted": "Interrupted",
+            }.get(status, "Error")
+            reason_s = reason if isinstance(reason, str) else ""
+            if result is None:
+                result_str = f"{prefix}: {reason_s}"
+            else:
+                _r = result if isinstance(result, str) else json.dumps(result)
+                result_str = f"{prefix}: {reason_s or _r}"
+        else:
+            # Preserve every JSON value — false/0/[]/{} are real results;
+            # only None means "no result stored".
+            result_str = (
+                result
+                if isinstance(result, str)
+                else ("" if result is None else json.dumps(result))
+            )
+        return [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": call_id,
+                        "type": "function",
+                        "function": {
+                            "name": tool_name,
+                            "arguments": json.dumps(args),
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": call_id,
+                "content": result_str,
+            },
+        ]
+    content = getattr(msg, "content", "")
+    if not isinstance(content, str):
+        return []
+    if role == "assistant" and not content.strip():
+        return []
+    stored_attachments = getattr(msg, "attachments", None)
+    if stored_attachments:
+        try:
+            att = json.loads(stored_attachments)
+        except (json.JSONDecodeError, TypeError):
+            att = None
+        if isinstance(att, list) and att:
+            content = "\n".join([content, *attachment_lines(att)])
+    return [{"role": role, "content": content}]
+
+
 def build_message_history(
     system_prompt: str,
     recent_messages: list[Message],
@@ -271,76 +390,12 @@ def build_message_history(
     history: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
 
     for msg in recent_messages:
-        # Skip thinking messages — they're internal, not a valid LLM role
-        if msg.role == "thinking":
-            continue
-        # Convert tool_call messages to OpenAI format:
-        #   assistant message with tool_calls + tool message with result
-        if msg.role == "tool_call":
-            try:
-                tc = json.loads(msg.content)
-            except (json.JSONDecodeError, TypeError):
-                continue
-            tool_name = tc.get("capability", "")
-            call_id = tc.get("id", "")
-            args = tc.get("args", {})
-            result = tc.get("result", "")
-            # Assistant message announcing the tool call
-            history.append(
-                {
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [
-                        {
-                            "id": call_id,
-                            "type": "function",
-                            "function": {
-                                "name": tool_name,
-                                "arguments": json.dumps(args),
-                            },
-                        }
-                    ],
-                }
-            )
-            # Tool result message
-            result_str = result if isinstance(result, str) else json.dumps(result)
-            history.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": call_id,
-                    "content": result_str,
-                }
-            )
-            continue
-        # Skip empty assistant messages (e.g. failed runs, or placeholders after tool calls)
-        if msg.role == "assistant" and not msg.content.strip():
-            continue
-        history.append({"role": msg.role, "content": msg.content})
+        history.extend(format_stored_message(msg))
 
     # Build the user message with attachment references only. The agent can
     # choose read_file for local attachments or web_fetch for URL attachments.
     if attachments:
-        lines = [user_message, "", "Attachments available through tools:"]
-        for index, attachment in enumerate(attachments, start=1):
-            if isinstance(attachment, dict):
-                attachment_id = attachment.get("id", f"attachment_{index}")
-                attachment_type = attachment.get("type", "file")
-                mime_type = attachment.get("mime_type", "")
-                filename = attachment.get("filename", attachment_id)
-                path = attachment.get("path")
-                url = attachment.get("url")
-            else:
-                attachment_id = f"attachment_{index}"
-                attachment_type = getattr(attachment, "type", "file")
-                mime_type = getattr(attachment, "mime_type", "")
-                filename = getattr(attachment, "filename", "") or attachment_id
-                path = None
-                url = getattr(attachment, "data", None) if attachment_type == "url" else None
-
-            reference = path or url or "unavailable"
-            lines.append(
-                f"- {attachment_id}: {filename} ({attachment_type}, {mime_type}) — {reference}"
-            )
+        lines = [user_message, *attachment_lines(attachments)]
         history.append({"role": "user", "content": "\n".join(lines)})
     else:
         history.append({"role": "user", "content": user_message})

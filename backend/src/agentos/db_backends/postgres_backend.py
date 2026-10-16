@@ -44,6 +44,7 @@ class PostgresBackend(DatabaseBackend):
             capability,
             channel_config,
             contact,
+            core,
             document,
             elicitation,
             execution_manifest,
@@ -54,6 +55,7 @@ class PostgresBackend(DatabaseBackend):
             operator,
             operator_session,
             provider,
+            request_capture,
             run,
             session,
             source,
@@ -84,6 +86,16 @@ class PostgresBackend(DatabaseBackend):
             ("sessions", "summary", "TEXT"),
             ("sessions", "closed", "BOOLEAN DEFAULT FALSE"),
             ("sessions", "conversation_summary", "TEXT"),
+            ("sessions", "conversation_summary_coverage", "TEXT"),
+            ("sessions", "conversation_summary_version", "INTEGER NOT NULL DEFAULT 0"),
+            ("sessions", "core_revision_id", "TEXT"),
+            ("sessions", "active_conversation_summary_id", "TEXT"),
+            ("sessions", "conversation_summary_coverage_known", "BOOLEAN"),
+            ("sessions", "learned_coverage", "TEXT"),
+            ("memory_entries", "source_refs", "TEXT DEFAULT '[]'"),
+            ("memory_entries", "revoked_at", "TIMESTAMPTZ"),
+            ("execution_manifests", "core_revision_id", "TEXT"),
+            ("execution_manifests", "core_identity_source_version_id", "TEXT"),
             ("channel_configs", "mode", "VARCHAR(20) DEFAULT 'polling'"),
             ("runs", "context_tokens", "INTEGER DEFAULT 0"),
             ("runs", "max_context_tokens", "INTEGER DEFAULT 0"),
@@ -100,6 +112,8 @@ class PostgresBackend(DatabaseBackend):
             ("model_calls", "purpose", "VARCHAR(20) NOT NULL DEFAULT 'reasoning'"),
             ("model_calls", "thinking_tokens", "INTEGER"),
             ("model_calls", "detail", "JSONB"),
+            ("sessions", "title_generated", "BOOLEAN DEFAULT FALSE"),
+            ("model_calls", "session_id", "VARCHAR(36)"),
             # W10 correlation columns.
             ("approval_requests", "call_id", "VARCHAR(255)"),
             ("approval_requests", "sub_agent_id", "VARCHAR(36)"),
@@ -149,6 +163,8 @@ class PostgresBackend(DatabaseBackend):
             "ON model_calls(provider_id, model_name)",
             "CREATE INDEX IF NOT EXISTS ix_model_calls_kind_created "
             "ON model_calls(kind, created_at)",
+            "CREATE INDEX IF NOT EXISTS ix_model_calls_session_created "
+            "ON model_calls(session_id, created_at)",
             "CREATE INDEX IF NOT EXISTS ix_audit_run_call_sub "
             "ON audit_records(run_id, call_id, sub_agent_id)",
             "CREATE INDEX IF NOT EXISTS ix_approval_run_call_sub "
@@ -253,6 +269,8 @@ class PostgresBackend(DatabaseBackend):
             "BOOLEAN DEFAULT FALSE",
             "TEXT NOT NULL DEFAULT '[]'",
             "TEXT NOT NULL DEFAULT '{}'",
+            "TEXT DEFAULT '[]'",
+            "INTEGER NOT NULL DEFAULT 0",
             "VARCHAR(20) NOT NULL DEFAULT 'na'",
             "VARCHAR(10) NOT NULL DEFAULT 'chunk'",
         }:

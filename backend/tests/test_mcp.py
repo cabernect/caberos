@@ -328,6 +328,28 @@ async def test_malformed_args_json_returns_false_not_unbound(db, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_connect_failure_notification_stays_on_test_engine(db, monkeypatch):
+    """registry.py binds `async_session_factory` at module import — the
+    factory must resolve the CURRENT engine so a failure notification
+    lands on the test engine and never leaks into the dev database."""
+    server = McpServer(
+        name="leak-check",
+        transport="http",
+        url="https://mcp.test/mcp",
+        args="{not json",
+    )
+    db.add(server)
+    await db.commit()
+
+    ok = await mcp_registry.connect_server(server)
+    assert ok is False
+
+    rows = (await db.scalars(select(Notification).where(Notification.entity_id == server.id))).all()
+    assert len(rows) == 1
+    assert rows[0].notification_type == "mcp_connection_failed"
+
+
+@pytest.mark.asyncio
 async def test_record_oauth_requirement_never_clobbers(db, db_engine):
     """A row that gained a real config between connect and record must keep
     it — the conditional update only fills an empty slot."""

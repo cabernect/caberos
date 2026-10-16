@@ -76,11 +76,16 @@ _backend = get_backend(settings.db_url)
 # Create the engine (backend handles PRAGMAs, connection args, etc.)
 engine = _backend.create_engine(settings.db_url)
 
-async_session_factory = async_sessionmaker(
-    engine,
-    class_=AsyncSession,
-    expire_on_commit=False,
-)
+
+def async_session_factory() -> AsyncSession:
+    """Open a session on the module's CURRENT engine.
+
+    A function — not a sessionmaker — so module-level `from .db import
+    async_session_factory` bindings still resolve the live `engine` global
+    at call time. Test fixtures rebind `engine` to an in-memory engine, and
+    a stale-bound import must not leak writes into the real database.
+    """
+    return async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)()
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:

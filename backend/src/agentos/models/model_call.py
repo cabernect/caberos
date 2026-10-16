@@ -36,12 +36,16 @@ class ModelCall(Base, IdMixin):
         Index("ix_model_calls_run_created", "run_id", "created_at"),
         Index("ix_model_calls_provider_model", "provider_id", "model_name"),
         Index("ix_model_calls_kind_created", "kind", "created_at"),
+        Index("ix_model_calls_session_created", "session_id", "created_at"),
     )
 
     # String reference to runs.id: missing runs do not invalidate historical
     # receipts. Conversation deletion still explicitly removes these rows.
     # The index retains efficient run lookups without FK enforcement.
     run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # Session scope for calls not owned by a single run (session-close
+    # summary/extraction). Lets traces and filters group by conversation.
+    session_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     agent_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     sub_agent_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     turn: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

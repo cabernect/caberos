@@ -164,6 +164,7 @@ function GeneralTab({
   const [maxCost, setMaxCost] = useState(500);
   const [idleTimeout, setIdleTimeout] = useState(60);
   const [maxContext, setMaxContext] = useState<number | null>(null);
+  const [coreMax, setCoreMax] = useState<number | null>(null);
   const [sandboxMode, setSandboxMode] = useState<"strict" | "open">("strict");
   const [thinkingEnabled, setThinkingEnabled] = useState<boolean | null>(null);
   const [thinkingEffort, setThinkingEffort] = useState<string>("medium");
@@ -182,6 +183,7 @@ function GeneralTab({
         setMaxCost(agent.limits.max_cost_per_run);
         setIdleTimeout(agent.limits.session_idle_timeout_min);
         setMaxContext(agent.limits.max_context_tokens);
+        setCoreMax(agent.limits.core_max_tokens ?? 4096);
       }
       setSandboxMode(agent.sandbox_mode || "strict");
       setThinkingEnabled(agent.thinking_enabled ?? null);
@@ -229,6 +231,7 @@ function GeneralTab({
           max_cost_per_run: maxCost,
           session_idle_timeout_min: idleTimeout,
           max_context_tokens: maxContext,
+          core_max_tokens: coreMax ?? 4096,
         },
       });
       onSaved();
@@ -419,6 +422,9 @@ function GeneralTab({
           </Field>
           <Field label="Max context tokens">
             <NumberInput value={maxContext} onChange={setMaxContext} placeholder="auto (model default)" />
+          </Field>
+          <Field label="Core memory ceiling (tokens)">
+            <NumberInput value={coreMax} onChange={(v) => setCoreMax(v ?? 4096)} placeholder="4096" />
           </Field>
         </div>
         <p className="text-[12px] text-[var(--ink-3)]">
@@ -1072,30 +1078,105 @@ function CapabilityGroup({
 
 // --- Memory Tab ---
 
-function MemoryTab({ agentId, onClose }: { agentId: string; onClose: () => void; showSaved: (msg: string) => void }) {
+function MemoryTab({ agentId }: { agentId: string; onClose: () => void; showSaved: (msg: string) => void }) {
+  const [managed, setManaged] = useState("");
   const [content, setContent] = useState("");
+  const [meta, setMeta] = useState<{ hash?: string | null; token_count?: number; max_tokens?: number | null; revision_id?: string | null }>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [cleaning, setCleaning] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [conflict, setConflict] = useState<{
+    message: string;
+    currentCurated?: string;
+    currentHash?: string;
+  } | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [savedCurated, setSavedCurated] = useState("");
+
+  const load = useCallback(async (forAgent: string) => {
+    try {
+      const result = await api.getMemory(forAgent);
+      if (forAgent !== agentIdRef.current) return; // stale response for a prior agent
+      setManaged(result.managed_content || "");
+      const curated = result.curated_content ?? result.content ?? "";
+      setContent(curated);
+      setSavedCurated(curated);
+      setMeta({
+        hash: result.hash,
+        token_count: result.token_count,
+        max_tokens: result.max_tokens,
+        revision_id: result.revision_id,
+      });
+      setConflict(null);
+      setLoadFailed(false);
+    } catch (e) {
+      if (forAgent !== agentIdRef.current) return;
+      // Keep the operator's draft — a failed load must not stomp it.
+      setLoadFailed(true);
+      setConflict({ message: e instanceof Error ? e.message : "Failed to load memory" });
+    } finally {
+      if (forAgent === agentIdRef.current) setLoading(false);
+    }
+  }, []);
+
+  // Current agent id ref — guards a late response for the previous agent
+  // from overwriting freshly loaded state.
+  const agentIdRef = useRef(agentId);
+  agentIdRef.current = agentId;
 
   useEffect(() => {
     if (!agentId) return;
-    (async () => {
-      try {
-        const result = await api.getMemory(agentId);
-        setContent(result.content);
-      } catch {} finally {
-        setLoading(false);
-      }
-    })();
-  }, [agentId]);
+    setLoading(true);
+    setLoadFailed(false);
+    load(agentId);
+  }, [agentId, load]);
+
+  const dirty = content !== savedCurated;
 
   const handleSave = async () => {
     setSaving(true);
+    setNotice(null);
+    setConflict(null);
     try {
-      await api.updateMemory(agentId, content);
-      onClose();
+      // Whole-file hash is the CAS base — the server rejects a stale base
+      // rather than stomping a concurrent edit.
+      await api.updateMemory(agentId, content, meta.hash ?? undefined);
+      setNotice("Saved — a new core revision was published.");
+      await load(agentId);
+    } catch (e) {
+      const detail = (e as ApiError)?.detail as
+        | { conflict?: string; current_hash?: string; current_curated_content?: string }
+        | string
+        | undefined;
+      if (detail && typeof detail === "object") {
+        // Keep the server's CURRENT hash — "Replace my draft" must adopt
+        // the authoritative base or the next save loops the same 409.
+        setConflict({
+          message: detail.conflict || "Save conflict",
+          currentCurated: detail.current_curated_content ?? undefined,
+          currentHash: detail.current_hash ?? undefined,
+        });
+      } else {
+        setConflict({ message: e instanceof Error ? e.message : "Save failed" });
+      }
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleCleanup = async () => {
+    setCleaning(true);
+    setNotice(null);
+    setConflict(null);
+    try {
+      await api.cleanupMemory(agentId);
+      setNotice("Cleanup complete — a new revision was published.");
+      await load(agentId);
+    } catch (e) {
+      setConflict({ message: e instanceof Error ? e.message : "Cleanup failed" });
+    } finally {
+      setCleaning(false);
     }
   };
 
@@ -1104,17 +1185,84 @@ function MemoryTab({ agentId, onClose }: { agentId: string; onClose: () => void;
   return (
     <div className="space-y-3">
       <p className="text-[12px] text-[var(--ink-3)]">
-        MEMORY.md is the agent's living notebook. Not versioned — changes take effect immediately.
+        Core memory is agent-wide and personal — running sessions keep their
+        pinned snapshot; edits apply to future sessions.
       </p>
-      <textarea
-        value={content}
-        onChange={(e) => setContent(e.target.value)}
-        placeholder="# Memory\n\nThe agent's long-term notes go here…"
-        rows={18}
-        className="w-full resize-y rounded-[5px] border px-3 py-2 font-mono text-[12px] leading-[1.6] text-[var(--ink)] outline-none"
-        style={{ borderColor: "var(--border)", background: "var(--surface)" }}
-      />
-      <SaveButton onClick={handleSave} disabled={saving} label="Save" />
+      {managed && (
+        <div>
+          <p className="text-[12px] font-medium text-[var(--ink-2)] mb-1">Managed identity (read-only)</p>
+          <pre
+            className="w-full max-h-40 overflow-y-auto whitespace-pre-wrap break-all rounded-[5px] border px-3 py-2 font-mono text-[11px] leading-[1.5] text-[var(--ink-3)]"
+            style={{ borderColor: "var(--border)", background: "var(--surface-2, var(--surface))" }}
+          >
+            {managed}
+          </pre>
+        </div>
+      )}
+      <div>
+        <p className="text-[12px] font-medium text-[var(--ink-2)] mb-1">Curated memory</p>
+        <textarea
+          value={content}
+          onChange={(e) => setContent(e.target.value)}
+          placeholder="# Memory
+
+Durable preferences and standing facts…"
+          rows={14}
+          className="w-full resize-y rounded-[5px] border px-3 py-2 font-mono text-[12px] leading-[1.6] text-[var(--ink)] outline-none"
+          style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+        />
+      </div>
+      <div className="flex items-center justify-between">
+        <p className="text-[11px] text-[var(--ink-3)]">
+          {meta.token_count != null && meta.max_tokens != null
+            ? `${meta.token_count} / ${meta.max_tokens} tokens`
+            : ""}
+          {meta.hash ? ` · ${meta.hash.slice(0, 12)}` : ""}
+          {meta.revision_id
+            ? ` · rev ${meta.revision_id.slice(0, 12)} — revisions retained; restore via the memory API`
+            : ""}
+        </p>
+        <div className="flex gap-2">
+          <button
+            onClick={handleCleanup}
+            // Cleanup only makes sense against the saved bytes — a dirty
+            // draft hasn't been persisted yet, so it's disabled until saved.
+            disabled={cleaning || saving || dirty || loadFailed}
+            className="rounded-[5px] border px-3 py-1.5 text-[12px] text-[var(--ink-2)] disabled:opacity-50"
+            style={{ borderColor: "var(--border)" }}
+          >
+            {cleaning ? "Cleaning…" : "Clean Up"}
+          </button>
+          <SaveButton onClick={handleSave} disabled={saving || cleaning || loadFailed} label="Save" />
+        </div>
+      </div>
+      {conflict && (
+        <div className="text-[12px] text-[var(--danger,#b91c1c)]">
+          <p>Conflict: {conflict.message}</p>
+          {conflict.currentCurated !== undefined && (
+            <button
+              onClick={() => {
+                // Adopt the server's curated bytes AND its current hash —
+                // stale revision/token metadata is cleared until the next
+                // successful save reloads it.
+                setContent(conflict.currentCurated || "");
+                setSavedCurated("");
+                setMeta((m) => ({
+                  ...m,
+                  hash: conflict.currentHash ?? m.hash,
+                  token_count: undefined,
+                  revision_id: undefined,
+                }));
+                setConflict(null);
+              }}
+              className="mt-1 underline"
+            >
+              Replace my draft with the current version
+            </button>
+          )}
+        </div>
+      )}
+      {notice && <p className="text-[12px] text-[var(--olive,#4d7c0f)]">{notice}</p>}
     </div>
   );
 }

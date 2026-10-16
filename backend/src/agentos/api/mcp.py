@@ -407,7 +407,9 @@ async def start_oauth(
         authorize_url = await start_oauth_flow(server)
         return {"authorize_url": authorize_url}
     except Exception as e:
-        raise HTTPException(status_code=400, detail="Unable to start OAuth flow") from e
+        # Surface the underlying reason — the dashboard shows detail verbatim
+        # and "Unable to start OAuth flow" alone forces a trip to the logs.
+        raise HTTPException(status_code=400, detail=f"Unable to start OAuth flow: {e}") from e
 
 
 @router.get("/oauth/callback")

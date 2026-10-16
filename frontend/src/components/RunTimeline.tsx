@@ -222,8 +222,7 @@ export function RunTimeline({ events, run, providerNames = {}, onViewMessages }:
         </div>
       </div>
       <p className="border-t px-2.5 py-1.5 text-[10px] text-[var(--ink-3)]" style={{ borderColor: "var(--border)" }}>
-        Span bars show recorded or latency-derived placement; per-call request/response bodies are not captured.
-        Unlinked legacy records may describe the same call — they are not merged.
+        Span bars show recorded or latency-derived placement. Request inputs are available when captured and retained; response bodies are not recorded. Unlinked legacy records may describe the same call — they are not merged.
       </p>
     </div>
   );

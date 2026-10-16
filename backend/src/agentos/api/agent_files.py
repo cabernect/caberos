@@ -6,6 +6,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import require_operator
@@ -77,16 +78,79 @@ async def get_memory(
     operator: Operator = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Get the agent's MEMORY.md content."""
-    path = _memory_path(agent_id)
+    """Get the agent's MEMORY.md — whole file, curated portion, hash,
+    token count against the configured ceiling, and current revision."""
+    from ..agent_service import get_active_config
+    from ..memory.core import (
+        CoreConflict,
+        _core_path,
+        _read_disk,
+        _sha256,
+        core_token_count,
+        split_core,
+    )
+    from ..models.core import CoreRevision
+
+    config = await get_active_config(db, agent_id)
+    if config is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    try:
+        path = _core_path(agent_id)
+    except (CoreConflict, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    try:
+        content = _read_disk(path)
+    except CoreConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     if not path.exists():
-        return {"content": "", "exists": False}
-    content = path.read_text(encoding="utf-8", errors="replace")
-    return {"content": content, "exists": True}
+        return {
+            "content": "",
+            "exists": False,
+            "curated_content": "",
+            "managed_content": None,
+            "hash": _sha256(""),
+            "token_count": 0,
+            "max_tokens": config.limits.core_max_tokens,
+            "revision_id": None,
+        }
+    try:
+        recorded_sha, identity_text, curated = split_core(content)
+        managed = None
+        if recorded_sha is not None:
+            if _sha256(identity_text or "") != recorded_sha:
+                raise CoreConflict("Managed identity marker was tampered with")
+            # Managed block = whole content minus its validated curated tail.
+            managed = content[: len(content) - len(curated)] if curated else content
+        else:
+            curated = content
+    except CoreConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    # The reported revision must actually match the disk bytes — a rejected
+    # or unpublished candidate is not the current revision.
+    disk_hash = _sha256(content)
+    revision = await db.scalar(
+        select(CoreRevision).where(
+            CoreRevision.agent_id == agent_id,
+            CoreRevision.content_hash == disk_hash,
+            CoreRevision.published.is_(True),
+        )
+    )
+    return {
+        "content": content,
+        "exists": True,
+        "curated_content": curated,
+        "managed_content": managed,
+        "hash": disk_hash,
+        "token_count": core_token_count(content),
+        "max_tokens": config.limits.core_max_tokens,
+        "revision_id": revision.id if revision else None,
+    }
 
 
 class UpdateMemoryRequest(BaseModel):
     content: str
+    expected_hash: str | None = None
 
 
 @router.put("/{agent_id}/memory")
@@ -96,11 +160,188 @@ async def update_memory(
     operator: Operator = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Update the agent's MEMORY.md content."""
-    path = _memory_path(agent_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(req.content, encoding="utf-8")
-    return {"ok": True, "bytes": len(req.content)}
+    """Update the agent's curated core content through update_core —
+    validated, hash-checked, atomically published. Conflicts report the
+    current hash so an explicit retry can proceed."""
+    from ..agent_service import get_active_config
+    from ..memory.core import CoreConflict, update_core
+
+    config = await get_active_config(db, agent_id)
+    if config is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    try:
+        snapshot = await update_core(db, config, req.content, expected_hash=req.expected_hash)
+        await db.commit()
+    except CoreConflict as exc:
+        if exc.kind == "limit":
+            raise HTTPException(status_code=422, detail=str(exc))
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "conflict": str(exc),
+                "current_hash": exc.current_hash,
+                "current_curated_content": exc.current_curated,
+            },
+        )
+    return {
+        "ok": True,
+        "bytes": len(snapshot.content.encode("utf-8")),
+        "revision_id": snapshot.revision_id,
+        "token_count": snapshot.token_count,
+        "hash": snapshot.content_hash,
+    }
+
+
+@router.post("/{agent_id}/memory/cleanup")
+async def cleanup_memory(
+    agent_id: str,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Explicit operator-triggered core cleanup — exactly one configured-
+    model attempt; on failure the old bytes stay published."""
+    from ..agent_service import get_active_config
+    from ..memory.core import CoreConflict, cleanup_core
+
+    config = await get_active_config(db, agent_id)
+    if config is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    try:
+        snapshot = await cleanup_core(db, config)
+        await db.commit()
+    except CoreConflict as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {
+        "ok": True,
+        "revision_id": snapshot.revision_id,
+        "token_count": snapshot.token_count,
+    }
+
+
+@router.get("/{agent_id}/memory/revisions")
+async def list_memory_revisions(
+    agent_id: str,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """Published core revisions — metadata only (curated previews, hashes)."""
+    from ..models.core import CoreRevision
+
+    rows = (
+        (
+            await db.execute(
+                select(CoreRevision)
+                .where(
+                    CoreRevision.agent_id == agent_id,
+                    CoreRevision.published.is_(True),
+                )
+                .order_by(CoreRevision.created_at.desc(), CoreRevision.id)
+                .limit(50)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        {
+            "id": r.id,
+            "content_hash": r.content_hash,
+            "curated_preview": r.curated_content[:200],
+            "created_at": str(r.created_at),
+        }
+        for r in rows
+    ]
+
+
+class RestoreMemoryRequest(BaseModel):
+    revision_id: str
+    expected_hash: str | None = None
+
+
+@router.post("/{agent_id}/memory/restore")
+async def restore_memory(
+    agent_id: str,
+    req: RestoreMemoryRequest,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Restore a published revision's curated portion under the CURRENT
+    managed identity — goes through the same checked publisher; the
+    already-pinned sessions keep their snapshot (pins are immutable)."""
+    from ..agent_service import get_active_config
+    from ..memory.core import CoreConflict, restore_core
+
+    config = await get_active_config(db, agent_id)
+    if config is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    try:
+        snapshot = await restore_core(db, config, req.revision_id, expected_hash=req.expected_hash)
+        await db.commit()
+    except CoreConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {
+        "ok": True,
+        "revision_id": snapshot.revision_id,
+        "token_count": snapshot.token_count,
+    }
+
+
+@router.get("/{agent_id}/memory/entries")
+async def list_memory_entries(
+    agent_id: str,
+    contact_id: str | None = None,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """Durable memory entries with provenance — scoped listing."""
+    from ..models.memory import MemoryEntry
+
+    stmt = select(MemoryEntry).where(MemoryEntry.agent_id == agent_id)
+    if contact_id:
+        stmt = stmt.where(MemoryEntry.contact_id == contact_id)
+    rows = (
+        (await db.execute(stmt.order_by(MemoryEntry.created_at.desc(), MemoryEntry.id).limit(50)))
+        .scalars()
+        .all()
+    )
+    import json as _j
+
+    return [
+        {
+            "id": e.id,
+            "contact_id": e.contact_id,
+            "key": e.key,
+            "value": e.value,
+            "tags": _j.loads(e.tags or "[]"),
+            "source_refs": _j.loads(e.source_refs or "[]"),
+            "revoked_at": str(e.revoked_at) if e.revoked_at else None,
+            "created_at": str(e.created_at),
+        }
+        for e in rows
+    ]
+
+
+@router.post("/{agent_id}/memory/entries/{entry_id}/undo")
+async def undo_memory_entry(
+    agent_id: str,
+    entry_id: str,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Soft-revoke a durable entry — never hard-deleted; revoked rows stay
+    as provenance but are excluded from recall."""
+    from datetime import UTC, datetime
+
+    from ..models.memory import MemoryEntry
+
+    entry = await db.scalar(
+        select(MemoryEntry).where(MemoryEntry.id == entry_id, MemoryEntry.agent_id == agent_id)
+    )
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    entry.revoked_at = datetime.now(UTC)
+    await db.commit()
+    return {"ok": True, "id": entry.id, "revoked_at": str(entry.revoked_at)}
 
 
 # --- Skills ---
