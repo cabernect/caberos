@@ -33,7 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
 from ..models.skill import Skill, SkillRevision
-from .builtins import BUILTIN_SKILLS, hash_skill_dir
+from .builtins import _IGNORED_NAMES, BUILTIN_SKILLS, hash_skill_dir
 from .loader import _load_skill_from_dir
 
 log = logging.getLogger(__name__)
@@ -249,6 +249,82 @@ async def _index_agent_draft(db: AsyncSession, agent_id: str, skill_dir: Path) -
     return skill
 
 
+async def _snapshot_if_drifted(
+    db: AsyncSession, skill: Skill, skill_dir: Path
+) -> SkillRevision | None:
+    """Record a revision when live bytes differ from the recorded revision.
+
+    The stored snapshot is hashed after copying, so the revision's
+    content_hash always matches its own bytes even if the live dir is
+    being written concurrently (the newer state is picked up next scan).
+    Provenance stays honest: the writer is unknown (a mid-run write_file,
+    a manual edit), so source_run_id is left NULL.
+    """
+    live_hash = hash_skill_dir(skill_dir)
+    current = (
+        await db.get(SkillRevision, skill.current_revision_id)
+        if skill.current_revision_id
+        else None
+    )
+    if current is not None and current.content_hash == live_hash:
+        return None
+    from .validate import validate_skill_dir
+
+    relative = f"{skill.id}/rev-{await _latest_revision_number(db, skill.id) + 1}"
+    target = _store_path_for(relative)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        shutil.copytree(
+            skill_dir,
+            target,
+            symlinks=False,
+            ignore=shutil.ignore_patterns(*_IGNORED_NAMES),
+        )
+    except Exception:
+        shutil.rmtree(target, ignore_errors=True)
+        raise
+    return await _new_revision(
+        db,
+        skill,
+        storage_path=relative,
+        content_hash=hash_skill_dir(target),
+        change_summary="snapshot of live-dir change made outside a tracked edit",
+        validation=validate_skill_dir(target, expected_name=skill.name),
+    )
+
+
+async def snapshot_agent_local_drift(db: AsyncSession, agent_id: str) -> list[SkillRevision]:
+    """Snapshot every drifted agent-local skill dir for one agent.
+
+    Runs at session close and startup reconcile — the checkpoints where
+    bytes written outside a tracked edit session (a mid-run write_file, a
+    manual edit) get pinned to history. Serialized per agent against
+    SkillEditSession publishes via the shared edit lock.
+    """
+    from .service import _edit_lock
+
+    root = Path(settings.workspace_root) / agent_id / "skills"
+    if not root.is_dir():
+        return []
+    out: list[SkillRevision] = []
+    async with _edit_lock(agent_id):
+        for skill_dir in sorted(root.iterdir()):
+            if not skill_dir.is_dir():
+                continue
+            skill = await _index_agent_local(db, agent_id, skill_dir)
+            if skill is None or skill.status != "published":
+                continue
+            revision = await _snapshot_if_drifted(db, skill, skill_dir)
+            if revision is not None:
+                out.append(revision)
+                log.info(
+                    "[skills] agent-local %r drifted → snapshot rev-%d",
+                    skill.name,
+                    revision.revision_number,
+                )
+    return out
+
+
 async def index_workspace_draft_dirs(db: AsyncSession) -> int:
     """Index `workspaces/{agent}/skill-drafts/{name}` dirs as draft rows.
 
@@ -294,12 +370,9 @@ async def reconcile_skills(db: AsyncSession) -> None:
     workspace_root = Path(settings.workspace_root)
     if workspace_root.is_dir():
         for agent_dir in sorted(workspace_root.iterdir()):
-            local_dir = agent_dir / "skills"
-            if not local_dir.is_dir():
-                continue
-            for skill_dir in sorted(local_dir.iterdir()):
-                if skill_dir.is_dir():
-                    await _index_agent_local(db, agent_dir.name, skill_dir)
+            # Indexes each live dir AND snapshots bytes that drifted outside
+            # a tracked edit session — startup catches offline/manual edits.
+            await snapshot_agent_local_drift(db, agent_dir.name)
 
     # Workspace skill-drafts/ dirs → draft rows. Published agent-locals are
     # indexed first so a same-named live copy wins the (scope, owner, name)

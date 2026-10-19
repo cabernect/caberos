@@ -479,6 +479,18 @@ export function Skills() {
                     {skill.builder_session_id && (
                       <span style={{ color: "var(--accent)" }} title="Builder session active">building…</span>
                     )}
+                    <span
+                      title="Recorded activations only — earlier use may be unrecorded"
+                    >
+                      {(skill.activation_count ?? 0) > 0
+                        ? `Used ${skill.activation_count} time${skill.activation_count !== 1 ? "s" : ""}`
+                        : "Not recorded"}
+                    </span>
+                    {(skill.activation_count ?? 0) > 0 && skill.last_used_at && (
+                      <span title="Recorded activations only — earlier use may be unrecorded">
+                        · Last used {new Date(skill.last_used_at).toLocaleDateString()}
+                      </span>
+                    )}
                   </div>
                 </div>
               ))}

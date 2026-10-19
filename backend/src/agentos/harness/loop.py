@@ -159,6 +159,7 @@ class Harness:
         parent_config: AgentConfig | None = None,
         resolved_skills: list[Any] | None = None,
         core_snapshot: Any | None = None,
+        system_prompt_override: str | None = None,
     ) -> RunResult:
         """Execute the agent loop (D19 steps 7-11).
 
@@ -207,7 +208,15 @@ class Harness:
             parent_config=parent_config,
         )
         await capability_catalog.prepare()
-        visible_capability_names = capability_catalog.model_capability_names()
+        restrictions = getattr(syscall_handler, "restrictions", None)
+
+        def visible_capabilities():
+            names = capability_catalog.model_capability_names()
+            if restrictions is not None:
+                names = [name for name in names if name in restrictions.capability_names]
+            return names
+
+        visible_capability_names = visible_capabilities()
 
         # Saved browser logins (W4): operator-managed persistent profiles the
         # agent can't enumerate itself — inject name + domain scope so
@@ -294,6 +303,23 @@ class Harness:
             builder_draft=builder_draft,
             core_snapshot=core_snapshot,
         )
+        if system_prompt_override is not None:
+            system_prompt = system_prompt_override
+        # A successfully rendered forced/slash skill is an activation —
+        # recorded once after assembly, on an isolated session so a failed
+        # write never poisons the run's shared session.
+        if forced_skill_rendered is not None:
+            _hit = next((s for s in (resolved_skills or []) if s.name == skill), None)
+            if _hit is not None:
+                from ..skills.usage import record_skill_activation_isolated
+
+                await record_skill_activation_isolated(
+                    _hit,
+                    getattr(syscall_handler, "_parent_run_id", None) or run_id,
+                    "forced",
+                    sub_agent_id=getattr(syscall_handler, "_sub_agent_id", None),
+                )
+
         tool_schemas = assemble_tool_schemas(
             agent_config,
             capability_names=visible_capability_names,
@@ -548,9 +574,13 @@ class Harness:
 
         # Steps 8-11: the loop
         while result.total_turns < max_turns:
+            if result.total_cost >= max_cost:
+                result.status = "limit_exceeded"
+                result.error = "Run cost limit reached before model dispatch"
+                break
             result.total_turns += 1
             await capability_catalog.prepare(refresh=True)
-            visible_capability_names = capability_catalog.model_capability_names()
+            visible_capability_names = visible_capabilities()
             tool_schemas = assemble_tool_schemas(
                 agent_config,
                 capability_names=visible_capability_names,
@@ -583,7 +613,7 @@ class Harness:
                     agent_id=agent_config.id,
                     sub_agent_id=getattr(syscall_handler, "_sub_agent_id", None),
                     turn=result.total_turns,
-                    purpose="reasoning",
+                    purpose="reflection" if trigger == "reflection" else "reasoning",
                     core_revision_id=getattr(core_snapshot, "revision_id", None)
                     if core_snapshot
                     else None,
@@ -618,13 +648,29 @@ class Harness:
                     capture_ref = getattr(response, "request_capture", None) or (
                         current_capture_scope().get("capture_ref")
                     )
+            except asyncio.CancelledError:
+                await self._record_model_call(
+                    syscall_handler,
+                    run_id=run_id,
+                    agent_config=agent_config,
+                    session_id=getattr(session, "id", None),
+                    turn=result.total_turns,
+                    model_str=model_str,
+                    streamed=streamed_call,
+                    latency_ms=int((time.monotonic() - call_started) * 1000),
+                    status="interrupted",
+                    error="CancelledError",
+                    capture_ref=current_capture_scope().get("capture_ref"),
+                    purpose="reflection" if trigger == "reflection" else "reasoning",
+                )
+                raise
             except Exception as e:
                 # Mid-run context overflow: a tool result or accumulated turns
                 # pushed the request over the window after the pre-loop
                 # compaction ran. Force-compact once and retry the call —
                 # the tail is protected, so if compaction can't shrink it,
                 # there is no recovery and the run must fail.
-                if not overflow_retried and _is_context_overflow(e):
+                if restrictions is None and not overflow_retried and _is_context_overflow(e):
                     overflow_retried = True
                     logger.warning(
                         "Context window exceeded mid-run; forcing compaction and retrying once: %s",
@@ -647,6 +693,8 @@ class Harness:
                     syscall_handler,
                     run_id=run_id,
                     agent_config=agent_config,
+                    session_id=getattr(session, "id", None),
+                    purpose="reflection" if trigger == "reflection" else "reasoning",
                     turn=result.total_turns,
                     model_str=model_str,
                     streamed=streamed_call,
@@ -728,6 +776,8 @@ class Harness:
                 syscall_handler,
                 run_id=run_id,
                 agent_config=agent_config,
+                session_id=getattr(session, "id", None),
+                purpose="reflection" if trigger == "reflection" else "reasoning",
                 turn=result.total_turns,
                 model_str=model_str,
                 streamed=streamed_call,
@@ -745,6 +795,13 @@ class Harness:
 
             # Step 9: Process tool calls
             if response.tool_calls:
+                if (
+                    restrictions is not None
+                    and len(response.tool_calls) > restrictions.max_tool_calls_per_turn
+                ):
+                    result.status = "failed"
+                    result.error = "Restricted execution exceeded the per-turn tool-call limit"
+                    break
                 # Normalize call ids ONCE — the assistant history row and the
                 # ToolCall objects must share the same ids.
                 for tc in response.tool_calls:
@@ -1075,6 +1132,8 @@ class Harness:
         cost_receipt: dict | None = None,
         error: str | None = None,
         capture_ref: Any = None,
+        session_id: str | None = None,
+        purpose: str = "reasoning",
     ) -> None:
         """Write one ModelCall row per model request (v0.2 foundations).
 
@@ -1100,11 +1159,12 @@ class Harness:
             row = ModelCall(
                 id=capture_id or str(uuid.uuid4()),
                 run_id=record_run_id,
+                session_id=session_id,
                 agent_id=agent_config.id,
                 sub_agent_id=sub_agent_id,
                 turn=turn,
                 kind="chat",
-                purpose="reasoning",
+                purpose=purpose,
                 provider_id=agent_config.model.provider_id if agent_config.model else None,
                 model_name=agent_config.model.name if agent_config.model else None,
                 model_str=model_str or None,

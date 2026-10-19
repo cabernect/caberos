@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 # Fix SSL certificate verification for LiteLLM's remote model catalog fetch
 # and httpx requests. On macOS behind a corporate firewall/proxy, the system
@@ -264,6 +265,23 @@ async def lifespan(app: FastAPI):
             await db.commit()
 
         await retry_locked_transaction(_reconcile_runs, db, "startup_reconcile_runs")
+
+        from .models.skill_reflection import SkillReflection
+
+        async def _reconcile_reflections() -> None:
+            await db.execute(
+                update(SkillReflection)
+                .where(
+                    SkillReflection.outcome == "running",
+                    SkillReflection.run_id.in_(
+                        select(Run.id).where(Run.status.in_(("interrupted", "failed", "stopped")))
+                    ),
+                )
+                .values(outcome="failed", error="interrupted", completed_at=datetime.now(UTC))
+            )
+            await db.commit()
+
+        await retry_locked_transaction(_reconcile_reflections, db, "startup_reconcile_reflections")
 
         # Retention — the inbox is append-only otherwise (B47).
         from .notifications import prune_notifications

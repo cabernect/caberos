@@ -23,6 +23,8 @@ from typing import Any
 
 from ...skills.loader import render_skill_dir
 from ...skills.resolution import pinned_dir, resolve_effective_skills
+from ...skills.usage import record_skill_activation_isolated
+from ...skills.usage_queries import scoped_skill_usage
 
 
 async def _resolve(db: Any, agent_id: str, name: str):
@@ -49,10 +51,27 @@ async def skills_load(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     if resolved is None:
         return {"error": f"Skill '{args['name']}' not found"}
 
-    path = await pinned_dir(db, resolved, kwargs.get("run_id"))
-    skill = render_skill_dir(path, resolved.scope)
+    edits = kwargs.get("skill_edits")
+    if edits is not None:
+        skill = await edits.load_skill(resolved)
+    else:
+        path = await pinned_dir(db, resolved, kwargs.get("run_id"))
+        skill = render_skill_dir(path, resolved.scope)
     if skill is None:
         return {"error": f"Skill '{args['name']}' not found"}
+
+    # Successful load → record ONE activation per logical call (idempotent
+    # event_key on call_id). Serialized under db_lock so a concurrent tool
+    # in the same run can't double-flush the shared session.
+    run_id = kwargs.get("run_id")
+    if run_id:
+        await record_skill_activation_isolated(
+            resolved,
+            run_id,
+            "load",
+            call_id=kwargs.get("call_id"),
+            sub_agent_id=kwargs.get("sub_agent_id"),
+        )
     return skill
 
 
@@ -71,6 +90,22 @@ async def skills_read_resource(args: dict[str, Any], **kwargs: Any) -> dict[str,
     resolved = await _resolve(db, kwargs["agent_id"], args["skill"])
     if resolved is None:
         return {"error": f"Skill '{args['skill']}' not found"}
+    edits = kwargs.get("skill_edits")
+    if edits is not None:
+        try:
+            out = await edits.read_resource(args["skill"], args["resource"], args.get("offset", 0))
+        except Exception as exc:
+            return {"error": type(exc).__name__}
+        return {
+            "skill": args["skill"],
+            "resource": args["resource"],
+            "content": out["content"],
+            "size": len(out["content"].encode("utf-8")),
+            "offset": out["offset"],
+            "total_length": out["total_length"],
+            "next_offset": out["next_offset"],
+            "staged": out["staged"],
+        }
 
     skill_dir = (await pinned_dir(db, resolved, kwargs.get("run_id"))).resolve()
     resource_path = (skill_dir / args["resource"]).resolve()
@@ -89,3 +124,56 @@ async def skills_read_resource(args: dict[str, Any], **kwargs: Any) -> dict[str,
         "content": content,
         "size": resource_path.stat().st_size,
     }
+
+
+async def skills_usage(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+    """Inspect recorded activations of a visible skill in the caller's own
+    conversation scope — revision evidence, not effectiveness proof."""
+    db = kwargs["db"]
+    agent_id = kwargs["agent_id"]
+    contact_id = kwargs.get("contact_id")
+    run_id = kwargs.get("run_id")
+    if not contact_id or not run_id:
+        return {"error": "No conversation scope to inspect"}
+    # Trusted scope: the persisted run must really belong to this
+    # agent+contact — never trust model-supplied values.
+    from sqlalchemy import select as _select0
+
+    from ...models.run import Run
+
+    run = await db.scalar(
+        _select0(Run).where(
+            Run.id == run_id, Run.agent_id == agent_id, Run.contact_id == contact_id
+        )
+    )
+    if run is None:
+        return {"error": "No conversation scope to inspect"}
+    resolved = await _resolve(db, agent_id, args["name"])
+    if resolved is None:
+        return {"error": f"Skill '{args['name']}' not found"}
+    skill_id = resolved.skill_id
+    if skill_id is None and resolved.scope == "agent-local":
+        from sqlalchemy import select as _select
+
+        from ...models.skill import Skill
+
+        skill_id = await db.scalar(
+            _select(Skill.id).where(
+                Skill.scope == "agent-local",
+                Skill.owner_agent_id == agent_id,
+                Skill.name == resolved.name,
+            )
+        )
+    if skill_id is None:
+        return {
+            "skill": resolved.name,
+            "activation_count": 0,
+            "last_used_at": None,
+            "coverage": "recorded activations only; older use is unknown",
+            "recent": [],
+        }
+    result = await scoped_skill_usage(
+        db, skill_id=skill_id, agent_id=agent_id, contact_id=contact_id
+    )
+    result["skill"] = resolved.name
+    return result

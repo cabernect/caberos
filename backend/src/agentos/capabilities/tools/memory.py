@@ -164,12 +164,37 @@ async def search_history(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     values, exact quotes).
     """
     from ...memory.episodic import search_scoped_history as _search
+    from ...memory.history_queries import read_frozen_evidence
 
     db = kwargs["db"]
     agent_id = kwargs["agent_id"]
     contact_id = kwargs["contact_id"]
     query = args["query"]
     limit = args.get("limit", 5)
+    history_scope = kwargs.get("history_scope")
+    selectors = ("run_id", "message_id", "offset", "content_offset")
+    if history_scope is not None:
+        if (
+            history_scope["agent_id"] != agent_id
+            or history_scope["contact_id"] != contact_id
+            or not isinstance(query, str)
+        ):
+            raise ValueError("History scope mismatch")
+        page = await read_frozen_evidence(
+            db,
+            **history_scope,
+            query=query,
+            limit=limit,
+            **{name: args[name] for name in selectors if name in args},
+        )
+        return {
+            "query": query,
+            "results": page["rows"],
+            "count": len(page["rows"]),
+            "next_offset": page["next_offset"],
+        }
+    if any(name in args for name in selectors):
+        raise ValueError("History paging requires a frozen evidence scope")
 
     results = await _search(db, agent_id, contact_id, query, limit=limit)
     return {

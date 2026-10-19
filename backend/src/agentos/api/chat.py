@@ -19,7 +19,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import String, cast, func, select, tuple_
+from sqlalchemy import String, and_, cast, func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import require_operator
@@ -426,6 +426,7 @@ async def get_history(
     result = await db.execute(
         select(Message, Run)
         .join(Run, Message.run_id == Run.id)
+        .where(Run.trigger != "reflection")
         .where(Run.agent_id == agent_id)
         .order_by(Message.created_at.desc())
         .limit(limit)
@@ -465,7 +466,7 @@ async def list_sessions(
             Session,
             func.count(Message.id).label("msg_count"),
         )
-        .outerjoin(Run, Run.session_id == Session.id)
+        .outerjoin(Run, and_(Run.session_id == Session.id, Run.trigger != "reflection"))
         .outerjoin(Message, Message.run_id == Run.id)
         .where(Session.agent_id == agent_id)
         .group_by(Session.id)
@@ -481,6 +482,7 @@ async def list_sessions(
             select(Run)
             .where(
                 Run.session_id == sess.id,
+                Run.trigger != "reflection",
                 Run.status.in_(("pending", "running", "awaiting_approval")),
             )
             .order_by(Run.started_at.desc())
@@ -650,7 +652,7 @@ async def get_session_messages(
     # leak into the next page.
     started_txt = cast(Run.started_at, String)
     created_txt = cast(Message.created_at, String)
-    filters = [Run.session_id == session_id, Run.agent_id == agent_id]
+    filters = [Run.session_id == session_id, Run.agent_id == agent_id, Run.trigger != "reflection"]
     if before_id is not None:
         cursor = (
             await db.execute(

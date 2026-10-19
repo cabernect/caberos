@@ -44,6 +44,11 @@ async def delete_runs(db: AsyncSession, run_ids: Sequence[str]) -> int:
     await db.execute(delete(ExecutionManifest).where(ExecutionManifest.run_id.in_(run_ids)))
     await db.execute(delete(ModelCall).where(ModelCall.run_id.in_(run_ids)))
     await db.execute(delete(RunSource).where(RunSource.run_id.in_(run_ids)))
+    from ..models.skill_reflection import SkillReflection
+    from ..models.skill_usage import SkillActivation
+
+    await db.execute(delete(SkillActivation).where(SkillActivation.run_id.in_(run_ids)))
+    await db.execute(delete(SkillReflection).where(SkillReflection.run_id.in_(run_ids)))
     if not settings.database_url:
         # SQLite-only FTS5 index — not FK-constrained, absent on Postgres
         await db.execute(

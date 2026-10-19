@@ -44,6 +44,13 @@ proposals for improvement. The procedure itself can be the subject of a proposed
 revision.
 _Avoid_: Treating a conversation or a skill's prose alone as the workflow.
 
+**Outcome Review**:
+Operator feedback on what a run or session produced, delivered as an ordinary
+user message in the conversation. It is the evidence input to revision, not a
+gate on whether a change may exist.
+_Avoid_: Inventing a review artifact that gates agent-local changes, or
+treating a verdict about output as a verdict about the procedure that made it.
+
 **Core Memory**:
 The bounded, curated information that must accompany every request for an agent:
 identity, durable preferences, and a small set of standing facts. A session uses

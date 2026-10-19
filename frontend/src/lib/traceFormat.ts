@@ -28,6 +28,8 @@ export const TYPE_LABEL: Record<string, string> = {
   schedule_occurrence: "schedule",
   notification: "notification",
   notification_delivery: "delivery",
+  skill_reflection: "skill reflection",
+  skill_revision: "skill revision",
 };
 
 /** Subtle per-kind bar hues — theme vars with hard fallbacks. */
@@ -43,6 +45,8 @@ const KIND_HUE: Record<string, string> = {
   browser_evidence: "var(--chart-5, #8a8577)",
   citation: "var(--ink-3, #a8a29e)",
   artifact_revision: "var(--brand, #6b6d3f)",
+  skill_reflection: "var(--chart-4, #7c8a6a)",
+  skill_revision: "var(--brand, #6b6d3f)",
 };
 
 export function spanHue(type: string): string {

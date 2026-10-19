@@ -236,6 +236,7 @@ async def close_session(
                     Run.agent_id == session.agent_id,
                     Run.contact_id == contact_id,
                     Run.is_test.is_(False),
+                    Run.trigger != "reflection",
                     Run.status.in_(TERMINAL_RUN_STATUSES),
                     Message.subagent_id.is_(None),
                     Message.role.in_(("user", "assistant")),
@@ -259,6 +260,7 @@ async def close_session(
                             Run.agent_id == session.agent_id,
                             Run.contact_id == contact_id,
                             Run.is_test.is_(False),
+                            Run.trigger != "reflection",
                             Run.status.in_(TERMINAL_RUN_STATUSES),
                         )
                         .order_by(Run.started_at, Run.id)
@@ -343,6 +345,29 @@ async def close_session(
         await db.commit()
         if updated.rowcount == 0:
             await db.refresh(session)
+            return
+
+        # Post-close maintenance: pin untracked skill-dir edits to history,
+        # then reflect. Both are best-effort — they must never reopen the
+        # session or roll back the committed close + learning.
+        try:
+            from ..skills.reconcile import snapshot_agent_local_drift
+
+            await snapshot_agent_local_drift(db, session.agent_id)
+            await db.commit()
+        except Exception as exc:
+            import logging
+
+            logging.getLogger(__name__).debug("skill drift snapshot failed: %s", type(exc).__name__)
+        if rows:
+            try:
+                from ..reflection import reflect_session
+
+                await reflect_session(db, agent_config, session, contact_id, frozen_run_ids)
+            except Exception as exc:
+                import logging
+
+                logging.getLogger(__name__).debug("skill reflection failed: %s", type(exc).__name__)
 
 
 SESSION_SUMMARY_PROMPT = (

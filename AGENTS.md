@@ -94,6 +94,13 @@ idle past the agent's live `limits.session_idle_timeout_min` (the legacy
 per-session `idle_timeout_min` column is no longer consulted). In-flight
 closes broadcast `session_activity` SSE frames and set `learning` on the
 sessions list, so the chat view can show internal work running.
+After a successful close commit, `snapshot_agent_local_drift` pins any
+untracked live-dir skill edits to a revision, then `agentos/reflection.py`
+may run one bounded skill-reflection pass (trigger="reflection"): a
+restricted Harness run with inspect/edit authority over frozen session
+evidence and staged agent-local skill edits only — its failure never
+reopens the session or rolls back learning, and its runs stay out of chat
+history and activation counts.
 Memory never expands permissions. The agent-global core is for the
 personal owner's use, not unrelated contacts.
 
@@ -123,6 +130,7 @@ Registered in `capabilities/builtin.py`. Two kinds: `tool` (workspace/shell/web 
 | `skills_list` | tool | no | no | List available skills (name + description only — menu) |
 | `skills_load` | tool | no | no | Load a skill's full content + resource listing |
 | `skills_read_resource` | tool | no | no | Read a resource file from a skill directory (scoped to skill dir) |
+| `skills_usage` | tool | no | no | Recorded activation count/last-used for a visible skill in the caller's own conversation scope |
 | `artifact_create` | tool | no | no | Create a tracked deliverable (docx/xlsx/pptx/pdf) from a structured spec — never raw Office XML; saves under `artifacts/` |
 | `artifact_inspect` | tool | no | no | Reopen + validate an artifact; report structure + tracking state honestly |
 | `artifact_revise` | tool | no | no | Apply structured ops against a base revision — conflict on external edits, never overwrite |
