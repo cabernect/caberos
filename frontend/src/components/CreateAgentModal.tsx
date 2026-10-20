@@ -120,8 +120,7 @@ model:
   name: ""
 # capabilities: [read_file, write_file, web_search]  # omit = all tools; [] = none
 limits:
-  max_turns_per_run: 15
-  max_context_tokens: null
+  max_turns_per_run: 200
   max_cost_per_run: 1.0
 `;
 

@@ -160,9 +160,9 @@ function GeneralTab({
   const [soul, setSoul] = useState("");
   const [persona, setPersona] = useState("");
   const [task, setTask] = useState("");
-  const [maxTurns, setMaxTurns] = useState(15);
+  const [maxTurns, setMaxTurns] = useState(200);
   const [maxCost, setMaxCost] = useState(500);
-  const [idleTimeout, setIdleTimeout] = useState(60);
+  const [idleTimeout, setIdleTimeout] = useState(5);
   const [maxContext, setMaxContext] = useState<number | null>(null);
   const [coreMax, setCoreMax] = useState<number | null>(null);
   const [sandboxMode, setSandboxMode] = useState<"strict" | "open">("strict");
@@ -183,7 +183,7 @@ function GeneralTab({
         setMaxCost(agent.limits.max_cost_per_run);
         setIdleTimeout(agent.limits.session_idle_timeout_min);
         setMaxContext(agent.limits.max_context_tokens);
-        setCoreMax(agent.limits.core_max_tokens ?? 4096);
+        setCoreMax(agent.limits.core_max_tokens ?? 32768);
       }
       setSandboxMode(agent.sandbox_mode || "strict");
       setThinkingEnabled(agent.thinking_enabled ?? null);
@@ -231,7 +231,7 @@ function GeneralTab({
           max_cost_per_run: maxCost,
           session_idle_timeout_min: idleTimeout,
           max_context_tokens: maxContext,
-          core_max_tokens: coreMax ?? 4096,
+          core_max_tokens: coreMax ?? 32768,
         },
       });
       onSaved();
@@ -424,7 +424,7 @@ function GeneralTab({
             <NumberInput value={maxContext} onChange={setMaxContext} placeholder="auto (model default)" />
           </Field>
           <Field label="Core memory ceiling (tokens)">
-            <NumberInput value={coreMax} onChange={(v) => setCoreMax(v ?? 4096)} placeholder="4096" />
+            <NumberInput value={coreMax} onChange={(v) => setCoreMax(v ?? 32768)} placeholder="32768" />
           </Field>
         </div>
         <p className="text-[12px] text-[var(--ink-3)]">

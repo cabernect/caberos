@@ -31,7 +31,8 @@ def test_config_validation():
         capabilities=[CapabilityGrant(name="terminal")],
     )
     assert config.id == "test-agent"
-    assert config.limits.max_turns_per_run == 15
+    assert config.limits.max_turns_per_run == 200
+    assert config.limits.session_idle_timeout_min == 5
     assert config.heartbeat.enabled is False
 
 
