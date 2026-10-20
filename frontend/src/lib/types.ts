@@ -176,6 +176,8 @@ export interface SkillInfo {
   resource_count: number;
   builder_session_id: string | null;
   updated_at: string | null;
+  activation_count: number;
+  last_used_at: string | null;
 }
 
 export interface SkillRevisionInfo {

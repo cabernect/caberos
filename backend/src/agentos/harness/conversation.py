@@ -61,6 +61,7 @@ class Conversation:
             .join(Run, Message.run_id == Run.id)
             .where(
                 Run.session_id == session.id,
+                Run.trigger != "reflection",
                 Message.subagent_id.is_(None),
                 Message.role != "thinking",
             )

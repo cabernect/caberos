@@ -38,11 +38,11 @@ class CapabilityGrant(BaseModel):
 
 
 class Limits(BaseModel):
-    max_turns_per_run: int = 15
+    max_turns_per_run: int = 200
     max_cost_per_run: float = 500.0
-    session_idle_timeout_min: int = 30
+    session_idle_timeout_min: int = 5
     max_context_tokens: int | None = None  # None = use model's actual context window
-    core_max_tokens: int = Field(default=4096, ge=1)
+    core_max_tokens: int = Field(default=32768, ge=1)
 
 
 class Fallback(BaseModel):

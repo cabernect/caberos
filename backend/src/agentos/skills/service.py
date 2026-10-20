@@ -12,10 +12,15 @@ Layout:
     workspace/{agent}/skill-drafts/{name}/    drafts — never scanned by the loader
 """
 
+import asyncio
+import hashlib
 import json
 import logging
+import os
 import shutil
+import tempfile
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import settings
 from ..models.skill import Skill, SkillAssignment, SkillRevision
 from .builtins import hash_skill_dir
+from .resolution import ResolvedSkill
 
 log = logging.getLogger(__name__)
 
@@ -545,3 +551,537 @@ async def delete_draft(db: AsyncSession, skill: Skill) -> None:
         shutil.rmtree(path)
     await db.delete(skill)
     await db.flush()
+
+
+# ---------------------------------------------------------------------------
+# SkillEditSession — generic staged local-skill revision session.
+#
+# A bounded editing surface over one agent's local skills. The ordinary tools
+# (read_file / write_file / skills_load / skills_read_resource) delegate the
+# same-name operation here when the mediator supplies `skill_edits`; nothing
+# lands on disk or in the DB until publish() with a precondition callback.
+# ---------------------------------------------------------------------------
+
+_MAX_CAPTURE_FILES = 200
+_MAX_CAPTURE_BYTES = 5 * 1024 * 1024
+_MAX_EDIT_FILES = 32
+_MAX_EDIT_BYTES = 1024 * 1024
+_MAX_READ_CHARS = 4000
+
+_agent_edit_locks: dict[str, "asyncio.Lock"] = {}
+
+
+def _edit_lock(agent_id: str) -> "asyncio.Lock":
+    lock = _agent_edit_locks.get(agent_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _agent_edit_locks[agent_id] = lock
+    return lock
+
+
+def _safe_name(name: str) -> str:
+    if (
+        not isinstance(name, str)
+        or not name
+        or len(name) > 64
+        or "/" in name
+        or "\\" in name
+        or name.startswith(".")
+        or any(
+            c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+            for c in name
+        )
+    ):
+        raise SkillError(f"Invalid skill name: {name!r}")
+    return name
+
+
+def _resource_rel(value: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or "\\" in value
+        or "\0" in value
+        or ":" in value
+        or value.startswith("/")
+        or any(part in ("", ".", "..") for part in value.split("/"))
+    ):
+        raise SkillError(f"Invalid skill resource path: {value!r}")
+    return value
+
+
+def _lexical_safe(path: Path, root: Path | None = None) -> Path:
+    """Reject symlinked roots/ancestors/descendants BEFORE resolving."""
+    lexical = Path(os.path.abspath(path))
+    if any(p.is_symlink() for p in (lexical, *lexical.parents)):
+        raise SkillError("Symlinked skill path")
+    if root is not None:
+        lexical.relative_to(_lexical_safe(root))
+    return lexical
+
+
+def _capture(path: Path) -> dict[str, bytes] | None:
+    """Captured path->bytes map; None when absent. Enforces caps, no symlinks."""
+    path = _lexical_safe(path)
+    if not path.exists():
+        return None
+    if not path.is_dir():
+        raise SkillError("Skill path is not a directory")
+    from .builtins import _IGNORED_NAMES
+
+    files: dict[str, bytes] = {}
+    total = 0
+    for child in sorted(path.rglob("*")):
+        _lexical_safe(child, root=path)
+        rel = child.relative_to(path).as_posix()
+        if any(part in _IGNORED_NAMES for part in rel.split("/")):
+            continue
+        if child.is_dir():
+            continue
+        if not child.is_file():
+            raise SkillError("Non-regular skill resource")
+        size = child.stat().st_size  # check before reading arbitrarily big files
+        total += size
+        if len(files) >= _MAX_CAPTURE_FILES or total > _MAX_CAPTURE_BYTES:
+            raise SkillError("Skill exceeds inspection limits")
+        body = child.read_bytes()
+        files[rel] = body
+    return files
+
+
+def _tree_hash(files: dict[str, bytes] | None) -> str | None:
+    """Canonical path+bytes digest — aligned with hash_skill_dir semantics."""
+    if files is None:
+        return None
+    digest = hashlib.sha256()
+    for name, body in sorted(files.items()):
+        digest.update(name.encode())
+        digest.update(b"\0")
+        digest.update(body)
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+class SkillEditSession:
+    """Staged local-skill edits bound to a captured effective-skill snapshot.
+
+    `resolved_skills` is the trusted effective list for the actor — edits
+    can only target names visible there, and the bytes loaded/captured come
+    from the resolved source, never from model-supplied paths or ids.
+    """
+
+    def __init__(
+        self,
+        db: AsyncSession,
+        agent_id: str,
+        resolved_skills: list[ResolvedSkill],
+    ) -> None:
+        _safe_name(agent_id)
+        self.db = db
+        self.agent_id = agent_id
+        self._resolved = {s.name: s for s in resolved_skills}
+        # name -> {"source": dict|None, "baseline": dict|None(absent), "staged": {path:bytes}}
+        self._skills: dict[str, dict] = {}
+        self._temps: list[Path] = []
+        self._closed = False
+        self._mu = asyncio.Lock()  # serialize staging/DB sections
+
+    # -- internal ----------------------------------------------------------
+
+    def _root(self) -> Path:
+        return _lexical_safe(Path(settings.workspace_root) / self.agent_id / "skills")
+
+    def _local_target(self, name: str) -> Path:
+        return _lexical_safe(self._root() / _safe_name(name), root=self._root())
+
+    def _local_row(self, name: str) -> Skill | None:
+        return self.db.scalar(
+            select(Skill).where(
+                Skill.scope == "agent-local",
+                Skill.owner_agent_id == self.agent_id,
+                Skill.name == name,
+            )
+        )
+
+    async def _prepare(self, name: str, for_write: bool = False) -> dict:
+        async with self._mu:
+            return await self._prepare_locked(name, for_write=for_write)
+
+    async def _prepare_locked(self, name: str, for_write: bool = False) -> dict:
+        """One-time capture of the same-name baseline + resolved source."""
+        _safe_name(name)
+        if name in self._skills:
+            state = self._skills[name]
+            if for_write and not state.get("inspected"):
+                raise SkillError("Skill must be inspected before writing")
+            return state
+        if for_write:
+            raise SkillError("Skill must be inspected before writing")
+
+        resolved = self._resolved.get(name)
+        target_dir = self._local_target(name)
+        baseline = _capture(target_dir)
+
+        # An existing local row that no longer resolves is stale/hidden —
+        # never silently treated as absent-new, in EVERY source case.
+        row = await self._local_row(name)
+        if row is not None and (resolved is None or row.status != "published"):
+            if row.status == "published" and resolved is not None and row.id == resolved.skill_id:
+                pass  # the row we resolved is this same published row
+            elif (
+                resolved is not None
+                and row.status == "published"
+                and resolved.scope == "agent-local"
+                and resolved.skill_id is None
+            ):
+                pass  # live dir not yet indexed — resolved path IS this dir
+            elif resolved is None:
+                raise SkillError("Skill exists but is not visible")
+        if resolved is None:
+            if row is not None:
+                raise SkillError("Skill exists but is not visible")
+            if baseline is not None:
+                # A local dir exists but the row is gone — not absent-new.
+                raise SkillError("Unresolvable existing local skill")
+            source = None
+            source_identity = None
+        else:
+            src_dir = _lexical_safe(resolved.path)
+            # Constrain the source to its configured root by scope — a
+            # corrupted trusted row must not read arbitrary absolute paths.
+            if resolved.scope == "agent-local":
+                src_dir = _lexical_safe(src_dir, root=self._root())
+            elif resolved.scope in ("global", "built-in"):
+                allowed = [
+                    _lexical_safe(Path(settings.skills_dir)),
+                    _lexical_safe(Path(settings.skills_store_root)),
+                ]
+                src_dir = _lexical_safe(src_dir)
+                if not any(src_dir.is_relative_to(a) for a in allowed):
+                    raise SkillError("Skill source outside configured storage")
+            if src_dir.resolve() == target_dir.resolve():
+                source = baseline
+            else:
+                source = _capture(src_dir)
+            if source is None:
+                raise SkillError("Source skill has no readable directory")
+            source_identity = {
+                "scope": resolved.scope,
+                # agent-local resolution may leave skill_id None — the
+                # stable identity is the (owner, name) row itself.
+                "skill_id": resolved.skill_id or (row.id if row else None),
+                "revision_id": resolved.revision_id,
+                "source_hash": _tree_hash(source),
+            }
+
+        state = {
+            "inspected": True,
+            "baseline": baseline,
+            "source": source,
+            "source_identity": source_identity,
+            "resolved": resolved,
+            "local_revision_id": row.current_revision_id if row else None,
+            "staged": {},
+        }
+        self._skills[name] = state
+        return state
+
+    # -- reads (delegated from tools) --------------------------------------
+
+    async def load_skill(self, resolved: ResolvedSkill) -> dict[str, Any]:
+        """Same shape as skills_load, rendered from the CAPTURED snapshot."""
+        state = await self._prepare(resolved.name)
+        src = state["source"] or {}
+        tmp = Path(tempfile.mkdtemp(prefix="render-"))
+        self._temps.append(tmp)
+        for rel, body in src.items():
+            dest = tmp / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(body)
+        from .loader import render_skill_dir
+
+        rendered = render_skill_dir(tmp, resolved.scope)
+        if rendered is None:
+            raise SkillError("Captured skill is not renderable")
+        rendered["content_hash"] = _tree_hash(src)
+        rendered["source_scope"] = resolved.scope
+        return rendered
+
+    async def read_resource(self, name: str, path: str, offset: int = 0) -> dict[str, Any]:
+        if type(offset) is not int or offset < 0:
+            raise SkillError("Invalid resource offset")
+        state = await self._prepare(name)
+        rel = _resource_rel(path)
+        files = dict(state["source"] if state["source"] is not None else state["baseline"] or {})
+        staged_hit = rel in state["staged"]
+        files.update(state["staged"])
+        if rel not in files:
+            raise SkillError("Skill resource not found")
+        content = files[rel].decode("utf-8", "replace")
+        page = content[offset : offset + _MAX_READ_CHARS]
+        return {
+            "name": name,
+            "resource": rel,
+            "content": page,
+            "offset": offset,
+            "total_length": len(content),
+            "next_offset": offset + len(page) if offset + len(page) < len(content) else None,
+            "staged": staged_hit,
+        }
+
+    async def read_file(self, path: str) -> dict[str, Any]:
+        """Workspace-relative skills/{name}/{resource}; absent-new baseline."""
+        rel = _resource_rel(path)
+        parts = rel.split("/")
+        if parts[0] != "skills" or len(parts) < 3:
+            raise SkillError("Skill edits are confined to skills/{name}/...")
+        name = parts[1]
+        state = await self._prepare(name)
+        rest = "/".join(parts[2:])
+        files = dict(state["source"] or state["baseline"] or {})
+        files.update(state["staged"])
+        if rest not in files:
+            if rest == "SKILL.md" and state["baseline"] is None and state["source"] is None:
+                return {"content": None, "absent": True}  # establishes absent-new baseline
+            raise SkillError("Skill file not found")
+        content = files[rest].decode("utf-8", "replace")
+        page = content[:_MAX_READ_CHARS]
+        return {
+            "content": page,
+            "total_length": len(content),
+            "next_offset": len(page) if len(page) < len(content) else None,
+        }
+
+    # -- staging ------------------------------------------------------------
+
+    async def write_file(self, path: str, content: str) -> dict[str, Any]:
+        rel = _resource_rel(path)
+        parts = rel.split("/")
+        if parts[0] != "skills" or len(parts) < 3:
+            raise SkillError("Skill edits are confined to skills/{name}/...")
+        name = parts[1]
+        if not isinstance(content, str):
+            raise SkillError("Skill files are UTF-8 text")
+        state = await self._prepare(name, for_write=True)
+        rel_rest = "/".join(parts[2:])
+        staged = dict(state["staged"])
+        staged[rel_rest] = content.encode("utf-8")
+        if len(staged) > _MAX_EDIT_FILES or sum(len(v) for v in staged.values()) > _MAX_EDIT_BYTES:
+            raise SkillError("Skill edit exceeds staging limits")
+        state["staged"] = staged
+        return {"staged": True, "path": rel}
+
+    # -- publish ------------------------------------------------------------
+
+    async def publish(
+        self,
+        *,
+        reason: str,
+        source_run_id: str,
+        precondition: Any = None,
+    ) -> dict[str, Any]:
+        """Persist staged edits as immutable revisions; conflict-safe."""
+        revision_ids: list[str] = []
+        conflicts: list[str] = []
+        errors: list[str] = []
+        if precondition is not None and not asyncio.iscoroutinefunction(precondition):
+
+            async def _pre(name: str) -> None:
+                res = precondition(name)
+                if asyncio.iscoroutine(res):
+                    await res
+
+            check = _pre
+        else:
+            check = precondition
+
+        async with _edit_lock(self.agent_id):
+            for name in sorted(self._skills):
+                state = self._skills[name]
+                if not state["staged"]:
+                    continue
+                try:
+                    rid = await self._publish_one(
+                        name, state, reason=reason, source_run_id=source_run_id, check=check
+                    )
+                    if rid:
+                        revision_ids.append(rid)
+                except SkillConflict:
+                    conflicts.append(name)
+                    await self.db.rollback()
+                except Exception as exc:
+                    errors.append(f"{name}: {type(exc).__name__}")
+                    await self.db.rollback()
+        return {"revision_ids": revision_ids, "conflicts": conflicts, "errors": errors}
+
+    async def _publish_one(self, name, state, *, reason, source_run_id, check) -> str | None:
+
+        # Merge staged over the captured baseline/source — a shared source's
+        # own bytes are never touched; the local target gets a full copy.
+        base = dict(state["source"] or state["baseline"] or {})
+        base.update(state["staged"])
+        if _tree_hash(base) == _tree_hash(state["baseline"]):
+            return None  # no change => no new revision
+
+        target = self._local_target(name)
+        maint = _lexical_safe(target.parent.parent / ".skill-edits")
+        maint.mkdir(parents=True, exist_ok=True)
+        work = Path(tempfile.mkdtemp(prefix="edit-", dir=maint))
+        self._temps.append(work)
+        stage = work / "next"
+        backup = work / "previous"
+        store_root = _lexical_safe(Path(settings.skills_store_root))
+        created_stores: list[Path] = []
+        installed = False
+        preserve = False
+        next_hash = _tree_hash(base)
+        expected = _tree_hash(state["baseline"])
+        try:
+            stage.mkdir()
+            for rel, body in base.items():
+                dest = stage / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(body)
+            from .validate import validate_skill_dir
+
+            validation = validate_skill_dir(stage, expected_name=name)
+            if validation["errors"]:
+                raise SkillError("; ".join(validation["errors"]))
+            if check is not None:
+                await check(name)
+            await self._verify_unchanged(name, state)
+
+            skill = await self._local_row(name)
+            _lexical_safe(store_root / (skill.id if skill else "pending"), root=store_root)
+            if skill is None:
+                skill = Skill(
+                    name=name,
+                    scope="agent-local",
+                    owner_agent_id=self.agent_id,
+                    status="published",
+                )
+                self.db.add(skill)
+                await self.db.flush()
+            elif skill.status != "published":
+                raise SkillConflict("local-status")
+
+            # Snapshot any unsnapshotted/drifted pre-edit bytes first — the
+            # old state must be recoverable before ours is installed.
+            if state["baseline"] is not None:
+                latest = (
+                    await self.db.get(SkillRevision, skill.current_revision_id)
+                    if skill.current_revision_id
+                    else None
+                )
+                if latest is None or latest.content_hash != expected:
+                    orig = work / "original"
+                    orig.mkdir()
+                    for rel, body in state["baseline"].items():
+                        (orig / rel).parent.mkdir(parents=True, exist_ok=True)
+                        (orig / rel).write_bytes(body)
+                    prior = await _next_revision(
+                        self.db, skill, orig, "Snapshot before staged edit", source_run_id=None
+                    )
+                    created_stores.append(store_root / prior.storage_path)
+
+            rev = await _next_revision(
+                self.db, skill, stage, reason, validation, source_run_id=source_run_id
+            )
+            created_stores.append(store_root / rev.storage_path)
+
+            if check is not None:
+                await check(name)  # still current after DB prep
+            # Final compare: source identity/hash/status AND local target
+            # hash/status — but skip the local revision pointer (our own
+            # _next_revision just updated it).
+            await self._verify_unchanged(
+                name, state, skip_local_revision=True, created_skill_id=skill.id
+            )
+            if _tree_hash(_capture(target)) != expected:
+                raise SkillConflict("Local skill changed before publication")
+
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.exists():
+                target.rename(backup)
+            stage.rename(target)
+            installed = True
+            await self.db.commit()
+            return rev.id
+        except BaseException:
+            await self.db.rollback()
+            if installed:
+                if _tree_hash(_capture(target)) == next_hash:
+                    target.rename(work / "uncommitted")
+                    if backup.exists():
+                        backup.rename(target)
+                else:
+                    preserve = True
+                    self._temps.remove(work)  # retained for recovery — NOT ours to clean
+                    log.error("Newer edit preserved; backup retained under %s", work)
+            elif backup.exists() and not target.exists():
+                backup.rename(target)
+            for p in created_stores:
+                if p.exists():
+                    shutil.rmtree(p)
+            raise
+        finally:
+            if not preserve and work.exists():
+                shutil.rmtree(work, ignore_errors=True)
+
+    async def _verify_unchanged(
+        self,
+        name: str,
+        state: dict,
+        *,
+        skip_local_revision: bool = False,
+        created_skill_id: str | None = None,
+    ) -> None:
+        """Re-resolve current source identity + local row/target; mismatch =>
+        conflict. `skip_local_revision` only for the post-publish check (our
+        own _next_revision just bumped the local pointer)."""
+        from .resolution import resolve_effective_skills
+
+        current = {r.name: r for r in await resolve_effective_skills(self.db, self.agent_id)}
+        now = current.get(name)
+        ident = state["source_identity"]
+        if created_skill_id is not None and now is not None and now.skill_id == created_skill_id:
+            # The resolution now returns the row THIS publish just made
+            # (incl. a new local shadow over a shared source) — expected.
+            return
+        if ident is None:
+            # A row WE just created in this transaction may now resolve —
+            # that's expected; any other visibility is drift.
+            if now is not None and now.skill_id != created_skill_id:
+                raise SkillConflict("became-visible")
+        else:
+            # Re-resolve the local row for id comparison — resolution can
+            # leave agent-local skill_id None while the row is stable.
+            row_now = await self._local_row(name)
+            now_id = now.skill_id if now and now.skill_id else (row_now.id if row_now else None)
+            if now is None or now.scope != ident["scope"] or now_id != ident["skill_id"]:
+                raise SkillConflict("source-identity")
+            if ident["scope"] != "agent-local" and now.revision_id != ident["revision_id"]:
+                raise SkillConflict("source-revision")
+            if ident["scope"] != "agent-local":
+                src = _capture(_lexical_safe(now.path))
+                if _tree_hash(src) != ident["source_hash"]:
+                    raise SkillConflict("source-content")
+
+        row = await self._local_row(name)
+        if row is not None and row.status != "published":
+            raise SkillConflict("local-status")
+        if not skip_local_revision:
+            if (row.current_revision_id if row else None) != state["local_revision_id"]:
+                raise SkillConflict("local-revision")
+
+    async def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        for p in self._temps:
+            shutil.rmtree(p, ignore_errors=True)
+        self._temps.clear()
+
+
+class SkillConflict(SkillError):
+    """Baseline/source changed between capture and publication."""

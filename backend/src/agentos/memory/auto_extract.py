@@ -79,6 +79,7 @@ async def auto_extract_memory(
                 Run.agent_id == agent_id,
                 Run.contact_id == contact_id,
                 Run.is_test.is_(False),
+                Run.trigger != "reflection",
                 Run.status.in_(TERMINAL_STATUSES),
             )
             .order_by(Run.started_at, Run.id)

@@ -39,7 +39,7 @@ from ..models.mcp import McpServer
 from ..notifications import create_notification
 from .approval_registry import approval_registry
 from .elicitation_registry import elicitation_registry
-from .protocol import SyscallResult, ToolCall
+from .protocol import ExecutionRestrictions, SyscallResult, ToolCall
 
 
 class _SessionWriteLock:
@@ -88,10 +88,17 @@ class SyscallHandler:
     - Running state emission via event_emitter
     """
 
-    def __init__(self, db: AsyncSession, workspace_path: str, sandbox_mode: str = "strict") -> None:
+    def __init__(
+        self,
+        db: AsyncSession,
+        workspace_path: str,
+        sandbox_mode: str = "strict",
+        restrictions: ExecutionRestrictions | None = None,
+    ) -> None:
         self.db = db
         self.workspace_path = workspace_path
         self.sandbox_mode = sandbox_mode
+        self.restrictions = restrictions
         self._event_emitter: Any = None
         self._spawn_context: dict[str, Any] = {}
         self.supports_vision = False
@@ -155,6 +162,11 @@ class SyscallHandler:
             return await self._deny(
                 run_id, call, agent_config, "capability not found", start, sub_agent_id
             )
+        if self.restrictions is not None and call.name not in self.restrictions.capability_names:
+            await _arrive(False)
+            return await self._deny(
+                run_id, call, agent_config, "not permitted in this execution", start, sub_agent_id
+            )
 
         # 2. Check grant
         server_id = None
@@ -212,6 +224,16 @@ class SyscallHandler:
         # None (all tools), which carries require_approval itself.
         grant = _grant_for(agent_config, call.name, server_id)
         needs_approval = grant.require_approval if grant else cap.require_approval
+        if needs_approval and self.restrictions is not None:
+            await _arrive(False)
+            return await self._deny(
+                run_id,
+                call,
+                agent_config,
+                "restricted execution cannot approve actions",
+                start,
+                sub_agent_id,
+            )
         # Approval bypass — global flag (env/persisted) OR this agent's own
         # yolo_mode. agent_config is always the parent AgentConfig, so the
         # flag also covers the agent's sub-agent calls.
@@ -341,6 +363,11 @@ class SyscallHandler:
             "call_id": call.id,
             "sub_agent_id": sub_agent_id,
         }
+        if self.restrictions is not None:
+            if call.name in ("read_file", "write_file", "skills_load", "skills_read_resource"):
+                extra_kwargs["skill_edits"] = self.restrictions.skill_edits
+            if call.name == "search_history":
+                extra_kwargs["history_scope"] = self.restrictions.history_scope
         if call.name == "run_subagent":
             extra_kwargs["parent_config"] = agent_config
             extra_kwargs["_spawn_context"] = getattr(self, "_spawn_context", {})
@@ -368,10 +395,16 @@ class SyscallHandler:
 
         # For skill capabilities, inject agent_id + db + run_id — resolution
         # is DB-backed and governed scopes load via the run's pinned revs.
-        if call.name in ("skills_list", "skills_load", "skills_read_resource"):
+        # skills_usage additionally gets the subject scope (its evidence is
+        # the caller's own conversation) and the write lock skills_load
+        # takes when persisting an activation.
+        if call.name in ("skills_list", "skills_load", "skills_read_resource", "skills_usage"):
             extra_kwargs["agent_id"] = agent_config.id
             extra_kwargs["db"] = self.db
-            extra_kwargs["run_id"] = run_id
+            extra_kwargs["run_id"] = getattr(self, "_parent_run_id", None) or run_id
+            extra_kwargs["db_lock"] = getattr(self, "_db_lock", None)
+            extra_kwargs["session_id"] = getattr(session, "id", None)
+            extra_kwargs["contact_id"] = subject_contact_id
 
         # Browser tools: ownership scope (agent/session/run) so a browser
         # session can only be driven by the run that opened it; db is

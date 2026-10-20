@@ -30,7 +30,11 @@ const { apiMock, crossTabMock, focusMock, prefsMock, adaptersMock } =
       selfTabVisible: vi.fn(),
       anyPeerVisible: vi.fn(),
     },
-    focusMock: { isSuppressed: vi.fn() },
+    focusMock: {
+      isSuppressed: vi.fn(),
+      getFocusedEntities: vi.fn<() => string[]>(() => []),
+      notificationKeys: vi.fn<(n: Notification) => string[]>(() => []),
+    },
     prefsMock: {
       loadNotificationPrefs: vi.fn(),
       surfaceEnabled: vi.fn(),
@@ -49,6 +53,7 @@ vi.mock("./notificationPrefs", () => prefsMock);
 vi.mock("./notifAdapters", () => adaptersMock);
 
 import {
+  markReadForFocusedEntities,
   refreshNotifications,
   useNotifications,
   useNotificationsLoading,
@@ -172,6 +177,50 @@ describe("delivery coordinator", () => {
     );
     expect(apiMock.markNotificationRead).toHaveBeenCalledWith(item.id);
     expect(inbox.result.current.some((n) => n.id === item.id)).toBe(true); // recorded
+  });
+
+  it("focus sweep retro-reads an unread row whose entity is now being viewed", async () => {
+    // Landed while the window was unfocused → not suppressed, stays unread.
+    // When the view registers the entity, the sweep reads it (B40 backfill).
+    const item = notif({ entity_type: "session", entity_id: "s9" });
+    focusMock.notificationKeys.mockReturnValue(["session:s9"]);
+    apiMock.listNotifications.mockResolvedValue([item]); // baseline, pre-watch
+    const inbox = mountInbox();
+    await flush();
+    expect(apiMock.markNotificationRead).not.toHaveBeenCalled();
+
+    markReadForFocusedEntities(["agent:a1", "session:s9"]);
+    await flush();
+    expect(apiMock.markNotificationRead).toHaveBeenCalledWith(item.id);
+    const row = inbox.result.current.find((n) => n.id === item.id);
+    expect(row?.read).toBe(true); // row stays listed; flag flips
+  });
+
+  it("window refocus sweeps unread rows for already-registered entities", async () => {
+    const item = notif({ entity_type: "session", entity_id: "s9" });
+    focusMock.notificationKeys.mockReturnValue(["session:s9"]);
+    focusMock.getFocusedEntities.mockReturnValue(["session:s9"]);
+    apiMock.listNotifications.mockResolvedValue([item]);
+    mountInbox();
+    await flush();
+    expect(apiMock.markNotificationRead).not.toHaveBeenCalled();
+
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await flush();
+    expect(apiMock.markNotificationRead).toHaveBeenCalledWith(item.id);
+  });
+
+  it("focus sweep leaves unrelated unread rows alone", async () => {
+    const item = notif({ entity_type: "session", entity_id: "other" });
+    focusMock.notificationKeys.mockReturnValue(["session:other"]);
+    apiMock.listNotifications.mockResolvedValue([item]);
+    mountInbox();
+    await flush();
+    markReadForFocusedEntities(["session:s9"]);
+    await flush();
+    expect(apiMock.markNotificationRead).not.toHaveBeenCalled();
   });
 
   it("quiet hours suppress pings but keep the row unread", async () => {

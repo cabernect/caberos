@@ -32,7 +32,7 @@ import {
   startCrossTab,
   stopCrossTab,
 } from "./crossTab";
-import { isSuppressed } from "./focusRegistry";
+import { getFocusedEntities, isSuppressed, notificationKeys } from "./focusRegistry";
 import {
   inQuietHours,
   loadNotificationPrefs,
@@ -148,6 +148,31 @@ function markRead(n: Notification) {
   deferredReports.delete(n.id); // read rows never need pings or reports
   const row = notifications.find((x) => x.id === n.id);
   if (row) row.read = true;
+}
+
+/** Retro-read unread rows pointing at currently focused entities — the
+ *  same rule arrival-time suppression applies, applied late: the operator
+ *  was mid-run when the row landed, but they're looking at it now. */
+function sweepReadsForKeys(keys: string[]) {
+  if (!running || !keys.length) return;
+  const focused = new Set(keys);
+  let changed = false;
+  for (const n of notifications) {
+    if (!n.read && notificationKeys(n).some((k) => focused.has(k))) {
+      markRead(n);
+      changed = true;
+    }
+  }
+  if (changed) emit();
+}
+
+/** Called by views when they register their focused entities. */
+export function markReadForFocusedEntities(keys: string[]) {
+  sweepReadsForKeys(keys);
+}
+
+function onWindowFocus() {
+  sweepReadsForKeys(getFocusedEntities());
 }
 
 function showToast(n: Notification) {
@@ -410,6 +435,7 @@ function start() {
   seenIds = new Set();
   startCrossTab();
   leader = isLeader();
+  window.addEventListener("focus", onWindowFocus);
   unsubNotif = onNotification((n) => {
     process(n);
     emit();
@@ -470,6 +496,7 @@ function stop() {
   generation++;
   stopSse();
   cancelFallback();
+  window.removeEventListener("focus", onWindowFocus);
   activeRequest?.ctrl.abort();
   activeRequest = null;
   livePending = new Set();

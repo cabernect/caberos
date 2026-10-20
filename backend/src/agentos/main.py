@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 
 # Fix SSL certificate verification for LiteLLM's remote model catalog fetch
 # and httpx requests. On macOS behind a corporate firewall/proxy, the system
@@ -52,56 +53,176 @@ configure_logging()
 # Background sweeper task handle
 _sweeper_task: asyncio.Task | None = None
 
+# The sweeper sleeps until the next idle deadline instead of polling on a
+# fixed tick. These bounds apply when no deadline is nearer: a floor so a
+# wake can't spin, and a cap so a missed poke self-heals within 5 minutes.
+_SWEEP_MIN_SLEEP_SECONDS = 5.0
+_SWEEP_FALLBACK_SECONDS = 300.0
+# Retry scan for reflections skipped because the agent was busy at close:
+# bounded to recently-closed dashboard sessions so the pass stays cheap.
+_REFLECTION_RETRY_LOOKBACK_DAYS = 7
+_REFLECTION_RETRY_LIMIT = 50
+
 
 async def _session_sweeper() -> None:
-    """Periodic sweeper (Trigger 2): close idle sessions every 5 minutes.
+    """Deadline-driven sweeper (Trigger 2): wake when a session's idle
+    deadline arrives, close what's due, retry skipped reflections, repeat.
 
-    Catches sessions that were abandoned (user never came back) — the case
-    the lazy trigger at run start can't handle. Costs one indexed query
-    per sweep; does real work only when it finds stale sessions.
+    Deadlines derive from persisted ``last_activity_at`` + the agent's live
+    ``limits.session_idle_timeout_min``, so a restart loses nothing —
+    overdue sessions are simply due on the first pass. Producers poke the
+    wake event when deadline-relevant state changes (session created or
+    resumed, run finished, agent config saved).
     """
+    from .memory import episodic
+
+    wake = asyncio.Event()
+    episodic.register_session_wake(wake)
+    try:
+        while True:
+            wake.clear()
+            try:
+                wait_seconds = await _sweep_once()
+            except Exception as e:
+                print(f"[sweeper] Error: {e}")
+                wait_seconds = _SWEEP_FALLBACK_SECONDS
+            try:
+                await asyncio.wait_for(wake.wait(), timeout=wait_seconds)
+            except TimeoutError:
+                pass
+    finally:
+        episodic.register_session_wake(None)
+
+
+async def _sweep_once() -> float:
+    """One sweep pass: close due sessions, retry pending reflections, and
+    return seconds until the next idle deadline."""
+    from .agent_service import get_active_config
     from .db import async_session_factory
+    from .memory.episodic import (
+        close_session,
+        find_idle_sessions,
+        session_idle_age_minutes,
+    )
+    from .models.session import Session
 
-    while True:
-        await asyncio.sleep(300)  # 5 minutes
+    now = datetime.now(UTC)
+
+    # Snapshot tuples only — close attempts run on their OWN DB sessions so
+    # a failing close never starves the rest of the pass.
+    async with async_session_factory() as db:
+        open_sessions = [
+            (s.id, s.agent_id, s.contact_id, s.last_activity_at)
+            for s in await find_idle_sessions(db)
+        ]
+        configs: dict[str, object] = {}
+        for _, aid, _, _ in open_sessions:
+            if aid not in configs:
+                configs[aid] = await get_active_config(db, aid)
+
+    due: list[tuple[str, str, str]] = []
+    next_deadline = _SWEEP_FALLBACK_SECONDS
+    for sid, aid, cid, last_activity in open_sessions:
+        cfg = configs.get(aid)
+        timeout_min = cfg.limits.session_idle_timeout_min if cfg is not None else 30
+        last = last_activity
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=UTC)
+        remaining = timeout_min * 60 - (now - last).total_seconds()
+        if remaining <= 0:
+            due.append((sid, aid, cid))
+        else:
+            next_deadline = min(next_deadline, remaining)
+
+    for sid, aid, cid in due:
         try:
-            from .agent_service import get_active_config
-            from .memory.episodic import (
-                close_session,
-                find_idle_sessions,
-                session_idle_age_minutes,
-            )
-            from .models.session import Session
+            async with async_session_factory() as owned:
+                sess = await owned.get(Session, sid)
+                if sess is None:
+                    continue
+                agent_config = await get_active_config(owned, aid)
+                if agent_config is None:
+                    continue
+                # Re-check under a fresh read — activity may have landed
+                # between the scan and this close attempt.
+                if session_idle_age_minutes(sess) < agent_config.limits.session_idle_timeout_min:
+                    continue
+                await close_session(owned, agent_config, sess, cid)
+        except Exception as exc:
+            # Generic type only — provider bodies may carry private
+            # content; the pass continues with the next candidate.
+            print(f"[sweeper] Idle close failed for session {sid}: {type(exc).__name__}")
+    if due:
+        print("[sweeper] Idle session pass finished")
 
-            # Snapshot tuples, then close each candidate on its OWN session —
-            # a failed close must not starve the rest of the pass.
-            async with async_session_factory() as db:
-                candidates = [
-                    (s.id, s.agent_id, s.contact_id) for s in await find_idle_sessions(db)
-                ]
-            for sid, aid, cid in candidates:
-                try:
-                    async with async_session_factory() as owned:
-                        sess = await owned.get(Session, sid)
-                        if sess is None:
-                            continue
-                        agent_config = await get_active_config(owned, aid)
-                        if agent_config is None:
-                            continue
-                        if (
-                            session_idle_age_minutes(sess)
-                            < agent_config.limits.session_idle_timeout_min
-                        ):
-                            continue
-                        await close_session(owned, agent_config, sess, cid)
-                except Exception as exc:
-                    # Generic type only — provider bodies may carry private
-                    # content; the pass continues with the next candidate.
-                    print(f"[sweeper] Idle close failed for session {sid}: {type(exc).__name__}")
-            if candidates:
-                print("[sweeper] Idle session pass finished")
-        except Exception as e:
-            print(f"[sweeper] Error: {e}")
+    await _retry_pending_reflections()
+    return max(_SWEEP_MIN_SLEEP_SECONDS, next_deadline)
+
+
+async def _retry_pending_reflections() -> None:
+    """Retry closed sessions whose reflection was skipped while the agent
+    was busy — an unclaimed evidence fingerprint is the pending marker, and
+    reflect_session self-gates on claimed evidence, busy agents, and
+    sessions with nothing to reflect on."""
+    from sqlalchemy import select
+
+    from .agent_service import get_active_config
+    from .db import async_session_factory
+    from .memory.episodic import TERMINAL_RUN_STATUSES, terminal_run_ids
+    from .models.contact import Contact
+    from .models.run import Run
+    from .models.session import Session
+    from .reflection import reflect_session
+
+    cutoff = datetime.now(UTC) - timedelta(days=_REFLECTION_RETRY_LOOKBACK_DAYS)
+    async with async_session_factory() as db:
+        meta = [
+            (s.id, s.agent_id, s.contact_id)
+            for s in await db.scalars(
+                select(Session)
+                .join(Contact, Contact.id == Session.contact_id)
+                .where(
+                    Session.closed.is_(True),
+                    Contact.channel == "dashboard_chat",
+                    Session.last_activity_at >= cutoff,
+                )
+                .order_by(Session.last_activity_at.desc())
+                .limit(_REFLECTION_RETRY_LIMIT)
+            )
+        ]
+
+    busy_agents: set[str] = set()
+    checked_agents: set[str] = set()
+    for sid, aid, cid in meta:
+        try:
+            if aid in busy_agents:
+                continue
+            if aid not in checked_agents:
+                async with async_session_factory() as db:
+                    active = await db.scalar(
+                        select(Run.id)
+                        .where(
+                            Run.agent_id == aid,
+                            Run.trigger != "reflection",
+                            Run.is_test.is_(False),
+                            Run.status.not_in(TERMINAL_RUN_STATUSES),
+                        )
+                        .limit(1)
+                    )
+                checked_agents.add(aid)
+                if active is not None:
+                    busy_agents.add(aid)
+                    continue
+            async with async_session_factory() as owned:
+                sess = await owned.get(Session, sid)
+                agent_config = await get_active_config(owned, aid)
+                if sess is None or agent_config is None:
+                    continue
+                await reflect_session(
+                    owned, agent_config, sess, cid, await terminal_run_ids(owned, sess, cid)
+                )
+        except Exception as exc:
+            print(f"[sweeper] Reflection retry failed for session {sid}: {type(exc).__name__}")
 
 
 async def reconcile_pending_approvals(db) -> int:
@@ -264,6 +385,23 @@ async def lifespan(app: FastAPI):
             await db.commit()
 
         await retry_locked_transaction(_reconcile_runs, db, "startup_reconcile_runs")
+
+        from .models.skill_reflection import SkillReflection
+
+        async def _reconcile_reflections() -> None:
+            await db.execute(
+                update(SkillReflection)
+                .where(
+                    SkillReflection.outcome == "running",
+                    SkillReflection.run_id.in_(
+                        select(Run.id).where(Run.status.in_(("interrupted", "failed", "stopped")))
+                    ),
+                )
+                .values(outcome="failed", error="interrupted", completed_at=datetime.now(UTC))
+            )
+            await db.commit()
+
+        await retry_locked_transaction(_reconcile_reflections, db, "startup_reconcile_reflections")
 
         # Retention — the inbox is append-only otherwise (B47).
         from .notifications import prune_notifications

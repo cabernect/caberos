@@ -175,6 +175,9 @@ def _read_pdf(path: str, rel: str, args: dict[str, Any]) -> dict[str, Any]:
 
 async def read_file(args: dict[str, Any], workspace_path: str, **kwargs: Any) -> dict[str, Any]:
     """Read a complete file or an inclusive line range from the workspace."""
+    skill_edits = kwargs.get("skill_edits")
+    if skill_edits is not None:
+        return await skill_edits.read_file(args["path"])
     wm = WorkspaceManager()
     path = wm.validate_path(workspace_path, args["path"], kwargs.get("sandbox_mode", "strict"))
     if not os.path.isfile(path):
@@ -316,6 +319,11 @@ async def read_file(args: dict[str, Any], workspace_path: str, **kwargs: Any) ->
 
 async def write_file(args: dict[str, Any], workspace_path: str, **kwargs: Any) -> dict[str, Any]:
     """Write a file to the workspace (or anywhere if sandbox is open). Returns a unified diff if the file existed."""
+    skill_edits = kwargs.get("skill_edits")
+    if skill_edits is not None:
+        if "content" not in args:
+            return {"error": "write_file requires content"}
+        return await skill_edits.write_file(args["path"], args["content"])
     import difflib
 
     wm = WorkspaceManager()

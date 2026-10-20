@@ -14,7 +14,10 @@ import { ChatSidebar } from "@/components/ChatSidebar";
 import { ChatInputBar, type Attachment, type ChatInputBarHandle, type ContextItem } from "@/components/ChatInputBar";
 import { SettingsOverlay } from "@/components/SettingsOverlay";
 import { useDesktopFileDrop } from "@/lib/desktopFileDrop";
-import { refreshNotifications } from "@/lib/notificationStore";
+import {
+  markReadForFocusedEntities,
+  refreshNotifications,
+} from "@/lib/notificationStore";
 import {
   onSessionActivity,
   primeLearning,
@@ -267,6 +270,9 @@ export function Conversation() {
     if (agentId) keys.push(`agent:${agentId}`);
     if (activeSessionId) keys.push(`session:${activeSessionId}`);
     setFocusedEntities(keys);
+    // Retro-read: notifications that landed while the window was unfocused
+    // stay unread even though the operator is now looking at the entity.
+    markReadForFocusedEntities(keys);
     return () => setFocusedEntities([]);
   }, [agentId, activeSessionId]);
 
@@ -2111,7 +2117,7 @@ function CitationList({ citations }: { citations: NonNullable<Message["citations
       >
         <span className="flex items-center gap-1.5">
           <BookOpen className="h-3.5 w-3.5" style={{ color: "var(--accent)" }} />
-          Sources used <span className="font-normal normal-case text-[var(--ink-3)]">({citations.length})</span>
+          Reference <span className="font-normal normal-case text-[var(--ink-3)]">({citations.length})</span>
         </span>
         <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[var(--ink-3)] transition-transform duration-200 group-open:rotate-180" />
       </summary>

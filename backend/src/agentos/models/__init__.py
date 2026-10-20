@@ -34,6 +34,8 @@ from .run import Message, Run
 from .schedule import Schedule, ScheduleOccurrence, ScheduleRevision
 from .session import Session
 from .skill import Skill, SkillAssignment, SkillRevision
+from .skill_reflection import SkillReflection
+from .skill_usage import SkillActivation
 from .source import RunSource
 from .sub_agent import SubAgent
 from .terminal import TerminalSession
@@ -96,4 +98,6 @@ __all__ = [
     "OperatorAuditLog",
     "OperatorSession",
     "ChannelConfig",
+    "SkillActivation",
+    "SkillReflection",
 ]

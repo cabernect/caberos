@@ -16,7 +16,7 @@ log = logging.getLogger(__name__)
 
 from ..config_schema import AgentConfig  # noqa: E402
 from ..models.run import Message  # noqa: E402
-from .base_prompt import get_base_system_prompt  # noqa: E402
+from .base_prompt import NORMAL_SKILL_MAINTENANCE_POLICY, get_base_system_prompt  # noqa: E402
 
 
 def _load_skill_menu(agent_config: AgentConfig) -> str:
@@ -119,6 +119,7 @@ def assemble_system_prompt(
         skill_menu = _load_skill_menu(agent_config)
     if skill_menu:
         parts.append(f"## Available Skills\n\n{skill_menu}")
+        parts.append(NORMAL_SKILL_MAINTENANCE_POLICY)
 
     # 7. Saved browser logins (operator-managed persistent profiles — W4).
     # The agent can't enumerate these itself — inject name + scope so it can

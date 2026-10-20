@@ -32,7 +32,7 @@ from .tools.memory import (
     memory_update,
     search_history,
 )
-from .tools.skills import skills_list, skills_load, skills_read_resource
+from .tools.skills import skills_list, skills_load, skills_read_resource, skills_usage
 from .tools.subagent import register_subagent_tools
 from .tools.terminal import close_terminal, read_terminal, shell_dialect_note, terminal_run
 from .tools.web import web_fetch, web_search
@@ -861,7 +861,10 @@ def register_builtin_capabilities() -> None:
                 "Search raw message history for exact phrases or details. "
                 "Use this when you need to find exactly what was said in a past "
                 "conversation — error messages, config values, quotes, version numbers. "
-                "This searches verbatim messages, not summaries."
+                "This searches verbatim messages, not summaries. During session-close "
+                "reflection, reads are confined to frozen session evidence; an empty "
+                "query pages that evidence, and run/message selectors and content "
+                "offsets allow targeted original reads."
             ),
             parameters_schema={
                 "type": "object",
@@ -875,6 +878,10 @@ def register_builtin_capabilities() -> None:
                         "description": "Max results (default 5)",
                         "default": 5,
                     },
+                    "run_id": {"type": "string"},
+                    "message_id": {"type": "string"},
+                    "offset": {"type": "integer", "minimum": 0},
+                    "content_offset": {"type": "integer", "minimum": 0},
                 },
                 "required": ["query"],
             },
@@ -946,7 +953,7 @@ def register_builtin_capabilities() -> None:
                 "Read a resource file from a skill directory (templates, checklists, "
                 "data files). Use this after skills_load to read any resource the "
                 "skill body references. The path is scoped to the skill directory — "
-                "it cannot escape."
+                "it cannot escape. Text reads support character offsets for paging."
             ),
             parameters_schema={
                 "type": "object",
@@ -959,6 +966,7 @@ def register_builtin_capabilities() -> None:
                         "type": "string",
                         "description": "The resource filename (from skills_load resources listing)",
                     },
+                    "offset": {"type": "integer", "minimum": 0, "default": 0},
                 },
                 "required": ["skill", "resource"],
             },
@@ -966,6 +974,33 @@ def register_builtin_capabilities() -> None:
             require_approval=False,
             subject_scoped=False,
             execute=skills_read_resource,
+        )
+    )
+
+    registry.register(
+        CapabilityDef(
+            name="skills_usage",
+            effects=frozenset({"read"}),
+            kind="tool",
+            description=(
+                "Inspect recorded activations of a visible skill in your own "
+                "conversation scope to inform revision; counts do not prove effectiveness."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "The skill name (from skills_list)",
+                    },
+                },
+                "required": ["name"],
+                "additionalProperties": False,
+            },
+            egress=False,
+            require_approval=False,
+            subject_scoped=True,
+            execute=skills_usage,
         )
     )
 

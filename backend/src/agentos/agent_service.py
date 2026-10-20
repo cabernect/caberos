@@ -106,7 +106,13 @@ async def save_agent(db: AsyncSession, config: AgentConfig) -> AgentVersion:
         await db.commit()
         return version
 
-    return await retry_locked_transaction(_save_once, db, "save_agent")
+    version = await retry_locked_transaction(_save_once, db, "save_agent")
+    # A limits change (e.g. a shorter idle timeout) can pull open sessions'
+    # deadlines earlier — wake the sweeper so it recomputes now.
+    from .memory.episodic import poke_session_sweeper
+
+    poke_session_sweeper()
+    return version
 
 
 async def list_versions(db: AsyncSession, agent_id: str) -> list[AgentVersion]:

@@ -21,6 +21,5 @@ model:
   name: ""
 # capabilities omitted = all tools enabled
 limits:
-  max_turns_per_run: 15
-  max_context_tokens: null
+  max_turns_per_run: 200
   max_cost_per_run: 1.0

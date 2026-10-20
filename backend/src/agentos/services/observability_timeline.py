@@ -251,7 +251,57 @@ async def build_run_timeline(db: AsyncSession, run: Run) -> list[dict]:
             .all()
         )
 
+    # Reflection outcome + the revisions it produced — same redaction path.
+    from ..models.skill import SkillRevision
+    from ..models.skill_reflection import SkillReflection
+
+    refl = (
+        await db.execute(select(SkillReflection).where(SkillReflection.run_id == run_id))
+    ).scalar_one_or_none()
+    refl_revisions: list[SkillRevision] = []
+    if refl is not None:
+        rev_ids = refl.revision_ids
+        if rev_ids:
+            refl_revisions = list(
+                (
+                    await db.execute(select(SkillRevision).where(SkillRevision.id.in_(rev_ids)))
+                ).scalars()
+            )
+
     events: list[dict] = []
+
+    if refl is not None:
+        events.append(
+            _event(
+                f"{run_id}:skill_reflection",
+                "skill_reflection",
+                at=refl.completed_at or refl.created_at,
+                status=refl.outcome if refl.outcome in ("changed", "no_change") else "failed",
+                data={
+                    "outcome": refl.outcome,
+                    "session_id": refl.session_id,
+                    "source_run_ids": refl.source_run_ids,
+                    "revision_ids": refl.revision_ids,
+                    "error": _safe_text(refl.error),
+                },
+            )
+        )
+        for rev in refl_revisions:
+            events.append(
+                _event(
+                    f"{run_id}:skill_revision:{rev.id}",
+                    "skill_revision",
+                    at=rev.created_at,
+                    status="ok",
+                    data={
+                        "skill_id": rev.skill_id,
+                        "revision_id": rev.id,
+                        "revision_number": rev.revision_number,
+                        "content_hash": rev.content_hash,
+                        "reason": _safe_text(rev.change_summary),
+                    },
+                )
+            )
 
     events.append(
         _event(

@@ -16,6 +16,16 @@ class ToolCall:
     args: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class ExecutionRestrictions:
+    """Trusted per-run narrowing, never additional agent authority."""
+
+    capability_names: frozenset[str]
+    skill_edits: Any = None
+    history_scope: dict[str, Any] | None = None
+    max_tool_calls_per_turn: int = 4
+
+
 @dataclass
 class SyscallResult:
     """Result of a mediated syscall."""

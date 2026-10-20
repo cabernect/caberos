@@ -126,6 +126,8 @@ async def _list_row(db: AsyncSession, skill: Skill, agent_names: dict[str, str])
         "resource_count": resource_count,
         "builder_session_id": skill.builder_session_id,
         "updated_at": skill.updated_at.isoformat() if skill.updated_at else None,
+        "activation_count": 0,
+        "last_used_at": None,
     }
 
 
@@ -261,6 +263,13 @@ async def list_skills(
     rows = (await db.execute(stmt)).scalars().all()
     agent_names = await _agent_names(db)
     skills = [await _list_row(db, s, agent_names) for s in rows]
+    from ..skills.usage_queries import skill_usage_totals
+
+    totals = await skill_usage_totals(db, [s["id"] for s in skills])
+    for row in skills:
+        t = totals.get(row["id"], {})
+        row["activation_count"] = t.get("activation_count", 0)
+        row["last_used_at"] = t.get("last_used_at")
     return {"skills": skills, "count": len(skills)}
 
 

@@ -24,6 +24,7 @@ BUILTIN_SKILLS: frozenset[str] = frozenset(
         "frontend-design",
         "office-documents",
         "skill-creator",
+        "evolve",
     }
 )
 

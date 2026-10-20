@@ -893,6 +893,16 @@ async def test_lazy_close_failure_does_not_starve_or_break_run(
     monkeypatch.setattr(WorkspaceManager, "create_workspace", lambda self, aid: tmp_path / "ws")
     (tmp_path / "ws").mkdir(exist_ok=True)
 
+    # Lazy closes spawn background tasks — the in-memory test engine shares
+    # ONE connection across sessions, so concurrent tasks would corrupt
+    # each other's transactions (a production file DB uses WAL + busy
+    # timeout instead). Defer the spawn and run the same coroutines
+    # sequentially after the run lands.
+    pending = []
+    from agentos.memory import episodic as _ep
+
+    monkeypatch.setattr(_ep, "spawn_close_task", lambda coro: pending.append(coro))
+
     pipe = Pipeline(db, Harness(model=model))
     run = await pipe.handle_inbound(
         InboundMessage(
@@ -907,19 +917,18 @@ async def test_lazy_close_failure_does_not_starve_or_break_run(
         is_test=True,
     )
     assert run.status == "completed"
+    while pending:
+        await pending.pop(0)
 
-    old_fail = await db.get(Session, "old-fail")
-    old_ok = await db.get(Session, "old-ok")
+    old_fail = await db.get(Session, "old-fail", populate_existing=True)
+    old_ok = await db.get(Session, "old-ok", populate_existing=True)
     assert old_fail.closed is False  # failed close stays open
     assert old_ok.closed is True  # a later session still closes
 
 
 @pytest.mark.asyncio
 async def test_sweeper_failure_does_not_abort_pass(db, db_engine, monkeypatch):
-    """_session_sweeper: one failed close doesn't starve the next session
-    or kill the loop; CancelledError still propagates."""
-    import asyncio
-
+    """_sweep_once: one failed close doesn't starve the next session."""
     import agentos.main as main_mod
     from agentos.agent_service import create_agent
 
@@ -933,21 +942,8 @@ async def test_sweeper_failure_does_not_abort_pass(db, db_engine, monkeypatch):
     adapter = FakeAdapter([RuntimeError("provider down"), "summary for sw-ok", EMPTY_EXTRACT])
     _fake_registry(monkeypatch, adapter)
 
-    # Stub asyncio.sleep: first 300s wait falls through instantly (one pass),
-    # every later 300 raises CancelledError — the loop body must run once.
-    calls = []
-
-    async def _sleep(delay):
-        calls.append(delay)
-        if delay == 300 and calls.count(300) > 1:
-            raise asyncio.CancelledError
-        return None
-
-    monkeypatch.setattr(asyncio, "sleep", _sleep)
-
-    task = asyncio.create_task(main_mod._session_sweeper())
-    with pytest.raises(asyncio.CancelledError):
-        await task
+    wait_seconds = await main_mod._sweep_once()
+    assert isinstance(wait_seconds, float) and wait_seconds > 0
 
     async with db_engine.connect() as conn:
         sw_fail = (
@@ -1018,23 +1014,11 @@ async def test_close_failure_emits_failed(db, monkeypatch):
 
 
 async def _run_one_sweep(db_engine, monkeypatch):
-    """Drive one _session_sweeper pass; second 300s sleep cancels the loop."""
-    import asyncio
-
+    """Drive one sweep pass — _sweep_once is the schedulable unit the
+    deadline-driven loop calls each wake."""
     import agentos.main as main_mod
 
-    calls = []
-
-    async def _sleep(delay):
-        calls.append(delay)
-        if delay == 300 and calls.count(300) > 1:
-            raise asyncio.CancelledError
-        return None
-
-    monkeypatch.setattr(asyncio, "sleep", _sleep)
-    task = asyncio.create_task(main_mod._session_sweeper())
-    with pytest.raises(asyncio.CancelledError):
-        await task
+    await main_mod._sweep_once()
 
 
 @pytest.mark.asyncio
