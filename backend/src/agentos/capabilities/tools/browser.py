@@ -20,6 +20,57 @@ def _ids(kwargs: dict[str, Any]) -> tuple[str, str | None, str]:
     return kwargs["agent_id"], kwargs.get("session_id"), kwargs["run_id"]
 
 
+async def _persist_browser_source(url: str, title: str, kwargs: dict[str, Any]) -> None:
+    """Persist a URL the browser actually landed on as a citable source."""
+    from sqlalchemy import func, select
+
+    from ...models.web_source import WebSource
+
+    db = kwargs.get("db")
+    run_id = kwargs.get("run_id")
+    if not db or not run_id or not url:
+        return
+
+    async def _write() -> None:
+        exists = await db.scalar(
+            select(WebSource.id).where(WebSource.run_id == run_id, WebSource.url == url)
+        )
+        if exists is None:
+            rank = (
+                await db.scalar(select(func.count(WebSource.id)).where(WebSource.run_id == run_id))
+                or 0
+            ) + 1
+            db.add(WebSource(run_id=run_id, url=url, title=title, excerpt="", rank=rank))
+            await db.flush()
+
+    db_lock = kwargs.get("db_lock")
+    if db_lock is not None:
+        async with db_lock:
+            await _write()
+    else:
+        await _write()
+        await db.commit()
+
+
+def _observation_url(text: str) -> tuple[str, str]:
+    """Pull url/title out of a serialized Observation first line pair."""
+    url = title = ""
+    for line in text.splitlines()[:2]:
+        if line.startswith("url: "):
+            url = line[5:].strip()
+        elif line.startswith("title: "):
+            title = line[7:].strip()
+    return url, title
+
+
+def _delta_url(text: str) -> str:
+    """Pull the post-navigation URL out of an act delta ('url: old -> new')."""
+    for line in text.splitlines():
+        if line.startswith("url: ") and " -> " in line:
+            return line.split(" -> ", 1)[1].strip()
+    return ""
+
+
 async def browser_open(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     agent_id, session_id, run_id = _ids(kwargs)
     url = args["url"]
@@ -109,6 +160,8 @@ async def browser_open(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         if str(e).startswith("runtime_unavailable"):
             return {"status": "runtime_unavailable", "detail": str(e)}
         raise
+    url, title = _observation_url(result)
+    await _persist_browser_source(url, title, kwargs)
     return {"observation": result}
 
 
@@ -168,6 +221,8 @@ async def browser_act(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         ref=args.get("target", ""),
         value=args.get("value"),
     )
+    if landed := _delta_url(delta):
+        await _persist_browser_source(landed, "", kwargs)
     out: dict[str, Any] = {"delta": delta}
     if session.blocked_navigations:
         out["blocked_navigations"] = list(session.blocked_navigations)

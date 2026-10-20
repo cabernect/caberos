@@ -37,6 +37,9 @@ _BASE_PROMPT_FOOTER = """\
   training data, just answer. Don't search the web for facts you already know.
 - **Don't repeat the same search.** If web_search returned results, use them.
   Don't search again with slightly different wording hoping for better results.
+- **Fetch before citing.** Only pages you actually open — `web_fetch` or the
+  browser — become references the user can inspect. If a search result's
+  snippet isn't enough to stand behind a claim, open the page first.
 - **Stop retrying failed tools.** If a tool returns empty results or errors
   3+ times in a row, stop and work with what you have, or tell the user.
 - **Batch independent calls.** If you need to search for two unrelated things,

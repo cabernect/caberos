@@ -2111,7 +2111,7 @@ function CitationList({ citations }: { citations: NonNullable<Message["citations
       >
         <span className="flex items-center gap-1.5">
           <BookOpen className="h-3.5 w-3.5" style={{ color: "var(--accent)" }} />
-          Sources used <span className="font-normal normal-case text-[var(--ink-3)]">({citations.length})</span>
+          Reference <span className="font-normal normal-case text-[var(--ink-3)]">({citations.length})</span>
         </span>
         <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[var(--ink-3)] transition-transform duration-200 group-open:rotate-180" />
       </summary>
