@@ -331,9 +331,17 @@ class Pipeline:
         # holds the SQLite write lock for that whole duration (B31).
         await self.db.commit()
 
+        # Session create/resume just moved a deadline — wake the idle
+        # scheduler so it recomputes instead of sleeping to the old one.
+        from .memory.episodic import poke_session_sweeper
+
+        poke_session_sweeper()
+
         # Lazy session close: only for dashboard sessions (channel sessions are
         # persistent — they stay open so the conversation continues across
-        # messages even after long idle periods).
+        # messages even after long idle periods). Discovery is awaited inline
+        # (cheap SELECTs); each close runs as a background task so the run
+        # never waits on other sessions' maintenance.
         if not is_channel:
             await self._close_idle_sessions(
                 message.bot_id, contact.id, exclude_session_id=session.id
@@ -924,6 +932,11 @@ class Pipeline:
                         _asyncio.create_task(_bg_title())
 
                 await self.db.commit()
+                # Run went terminal + last_activity moved — wake the idle
+                # scheduler (deadline refresh + skipped-reflection retry).
+                from .memory.episodic import poke_session_sweeper
+
+                poke_session_sweeper()
 
             except Exception:
                 # Pipeline exception — mark run as failed. Rollback first: a
@@ -960,6 +973,9 @@ class Pipeline:
                     # itself hit a busy SQLite during a storm, orphaning the
                     # run as 'running' (B31).
                     await _rlt(_mark_failed, fail_db, f"mark_failed:{rid}")
+                from .memory.episodic import poke_session_sweeper
+
+                poke_session_sweeper()
                 raise
 
         return run
@@ -1021,6 +1037,10 @@ class Pipeline:
                 if session.closed:
                     session.closed = False
                     session.status = "active"
+                    # A resume is activity — without the bump the stale
+                    # timestamp reads as past-due and the sweeper could
+                    # close the session before its new run registers.
+                    session.last_activity_at = datetime.now(UTC)
                     await self.db.flush()
                 return session
             # Fall through to auto-resume if session not found
@@ -1044,6 +1064,7 @@ class Pipeline:
                 if session.status != "active":
                     session.status = "active"
                     session.closed = False
+                    session.last_activity_at = datetime.now(UTC)
                     await self.db.flush()
                 return session
 
@@ -1079,17 +1100,13 @@ class Pipeline:
     ) -> None:
         """Lazy trigger (Trigger 1): close idle sessions for this agent+contact.
 
-        Called at run start. Finds other sessions that are idle beyond their
-        timeout and not yet closed, and fires session_close_extract() on them.
+        Called at run start. Discovery is awaited inline; each candidate
+        close runs as its own background task so the incoming run never
+        waits on other sessions' summary, learning, or reflection work.
         """
         from .agent_service import get_active_config
         from .db import async_session_factory
-        from .memory.episodic import (
-            close_session,
-            find_idle_sessions,
-            session_idle_age_minutes,
-        )
-        from .models.session import Session
+        from .memory.episodic import find_idle_sessions, spawn_close_task
 
         try:
             # Snapshot tuples only — close attempts run on their OWN DB
@@ -1109,22 +1126,28 @@ class Pipeline:
                     continue
                 if exclude_session_id and sid == exclude_session_id:
                     continue
-                try:
-                    async with async_session_factory() as owned:
-                        sess = await owned.get(Session, sid)
-                        if sess is None:
-                            continue
-                        agent_config = await get_active_config(owned, aid)
-                        if agent_config is None:
-                            continue
-                        if (
-                            session_idle_age_minutes(sess)
-                            < agent_config.limits.session_idle_timeout_min
-                        ):
-                            continue
-                        await close_session(owned, agent_config, sess, cid)
-                except Exception as exc:
-                    logger.warning("Idle session close failed for %s: %s", sid, type(exc).__name__)
+                spawn_close_task(self._close_one_idle(sid, aid, cid))
         except Exception:
             # Non-critical — never block the run on lazy learning.
             pass
+
+    async def _close_one_idle(self, sid: str, aid: str, cid: str) -> None:
+        """Close one idle session on its own DB session."""
+        from .agent_service import get_active_config
+        from .db import async_session_factory
+        from .memory.episodic import close_session, session_idle_age_minutes
+        from .models.session import Session
+
+        try:
+            async with async_session_factory() as owned:
+                sess = await owned.get(Session, sid)
+                if sess is None:
+                    return
+                agent_config = await get_active_config(owned, aid)
+                if agent_config is None:
+                    return
+                if session_idle_age_minutes(sess) < agent_config.limits.session_idle_timeout_min:
+                    return
+                await close_session(owned, agent_config, sess, cid)
+        except Exception as exc:
+            logger.warning("Idle session close failed for %s: %s", sid, type(exc).__name__)

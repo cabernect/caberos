@@ -162,6 +162,75 @@ async def search_session_summaries(
 
 TERMINAL_RUN_STATUSES = ("completed", "failed", "stopped", "interrupted")
 
+# Wake channel for the deadline-driven idle sweeper (main.py registers the
+# event at startup). Producers poke it when deadline-relevant state changes:
+# new/resumed session, run terminal transition, agent config save.
+_SCHEDULER_WAKE: "asyncio.Event | None" = None
+
+
+def register_session_wake(event: "asyncio.Event | None") -> None:
+    global _SCHEDULER_WAKE
+    _SCHEDULER_WAKE = event
+
+
+def poke_session_sweeper() -> None:
+    """Wake the idle-session scheduler early so it recomputes deadlines.
+
+    No-op when no sweeper is registered (tests, worker contexts). The
+    deadline state itself is persisted, so a missed poke only delays the
+    pass to the next scheduled wake — never loses it.
+    """
+    ev = _SCHEDULER_WAKE
+    if ev is None:
+        return
+    try:
+        ev.set()
+    except RuntimeError:
+        # Poked from a foreign loop — the sweeper's own loop will still see
+        # the persisted state on its next timed wake.
+        pass
+
+
+# Backgrounded lazy closes — strong refs so the loop can't GC an in-flight
+# close, plus a drain hook so tests can await the pass deterministically.
+_CLOSE_TASKS: "set[asyncio.Task]" = set()
+
+
+def spawn_close_task(coro) -> "asyncio.Task":
+    task = asyncio.create_task(coro)
+    _CLOSE_TASKS.add(task)
+    task.add_done_callback(_CLOSE_TASKS.discard)
+    return task
+
+
+async def drain_close_tasks() -> None:
+    """Await all in-flight lazy closes — tests use this after a run start.
+    Loops because the discovery task spawns the per-session closes."""
+    while _CLOSE_TASKS:
+        await asyncio.gather(*_CLOSE_TASKS, return_exceptions=True)
+
+
+async def terminal_run_ids(db: AsyncSession, session: Session, contact_id: str) -> list[str]:
+    """Ordered terminal non-test, non-reflection run ids for the session —
+    the frozen evidence set shared by close-time learning and reflection."""
+    from ..models.run import Run
+
+    return list(
+        await db.scalars(
+            select(Run.id)
+            .where(
+                Run.session_id == session.id,
+                Run.agent_id == session.agent_id,
+                Run.contact_id == contact_id,
+                Run.is_test.is_(False),
+                Run.trigger != "reflection",
+                Run.status.in_(TERMINAL_RUN_STATUSES),
+            )
+            .order_by(Run.started_at, Run.id)
+        )
+    )
+
+
 # Per-session close serialization — a WeakValueDictionary so closed-session
 # entries don't accumulate; a lock is dropped once the session settles.
 _CLOSE_LOCKS: "weakref.WeakValueDictionary[str, asyncio.Lock]" = weakref.WeakValueDictionary()
@@ -252,20 +321,7 @@ async def close_session(
                 # Freeze the terminal-run set BEFORE any model call — a run
                 # completing mid-close must not leak into the learner's
                 # sources or scratch clearing.
-                frozen_run_ids = list(
-                    await db.scalars(
-                        select(Run.id)
-                        .where(
-                            Run.session_id == session.id,
-                            Run.agent_id == session.agent_id,
-                            Run.contact_id == contact_id,
-                            Run.is_test.is_(False),
-                            Run.trigger != "reflection",
-                            Run.status.in_(TERMINAL_RUN_STATUSES),
-                        )
-                        .order_by(Run.started_at, Run.id)
-                    )
-                )
+                frozen_run_ids = await terminal_run_ids(db, session, contact_id)
                 # Commit before the model calls — no provider awaits while a
                 # write transaction holds the SQLite writer lock (B31).
                 await db.commit()
@@ -495,10 +551,25 @@ async def find_idle_sessions(
     db: AsyncSession,
     idle_minutes: int | None = None,
 ) -> list[Session]:
-    """Non-closed sessions idle past `idle_minutes`; None returns all open
-    sessions. The agent's live `limits.session_idle_timeout_min` is the
-    authoritative threshold — callers apply it after loading agent config."""
-    result = await db.execute(select(Session).where(Session.closed == False))  # noqa: E712
+    """Open sessions with no in-flight run — a session with active work is
+    never idle regardless of clock age. `idle_minutes` additionally requires
+    quiet past the threshold; None returns every open, non-busy session.
+    The agent's live `limits.session_idle_timeout_min` is the authoritative
+    threshold — callers apply it after loading agent config."""
+    from ..models.run import Run
+
+    result = await db.execute(
+        select(Session).where(
+            Session.closed == False,  # noqa: E712
+            ~select(Run.id)
+            .where(
+                Run.session_id == Session.id,
+                Run.is_test.is_(False),
+                Run.status.not_in(TERMINAL_RUN_STATUSES),
+            )
+            .exists(),
+        )
+    )
     sessions = list(result.scalars().all())
     if idle_minutes is None:
         return sessions

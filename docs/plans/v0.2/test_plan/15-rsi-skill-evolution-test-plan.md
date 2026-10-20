@@ -12,7 +12,10 @@ skill revisions, and drift snapshots. Plan doc: `15-rsi-skill-evolution.md`.
   capabilities (an approval-gated `write_file` means reflection can never
   edit; that is also a test point).
 - Set `limits.session_idle_timeout_min` low (1–2 min) so sessions close
-  quickly — close is the reflection trigger.
+  quickly — close is the reflection trigger. The sweeper is
+  deadline-driven: a session closes at `last_activity + timeout` (worst
+  case one 300s fallback wake if a wake-up poke is missed), not on a fixed
+  5-minute tick.
 - Keep the Traces page and Skills page open.
 - `evolve` must resolve — check the Skills page lists it (built-in or an
   agent-local shadow).

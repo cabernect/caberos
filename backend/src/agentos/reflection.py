@@ -150,6 +150,18 @@ async def reflect_session(db, agent_config, session, contact_id, source_run_ids)
     )
     if busy is not None:
         return None
+    # Fast claim check — an already-reflected evidence batch exits before
+    # the resolution work below. The unique constraint stays as the race
+    # backstop; this just keeps retry scans cheap.
+    fingerprint = hashlib.sha256(json.dumps(parent_ids, separators=(",", ":")).encode()).hexdigest()
+    claimed = await db.scalar(
+        select(SkillReflection.id).where(
+            SkillReflection.session_id == session_id,
+            SkillReflection.source_fingerprint == fingerprint,
+        )
+    )
+    if claimed is not None:
+        return None
     # Reject lexical symlinks before live resolution can hash their targets.
     local_root = Path(settings.workspace_root) / agent_id / "skills"
     for path in (local_root, *local_root.parents):
@@ -171,7 +183,6 @@ async def reflect_session(db, agent_config, session, contact_id, source_run_ids)
         "message_ids": [row.id for row in rows],
     }
     run_id, activity_id = str(uuid.uuid4()), str(uuid.uuid4())
-    fingerprint = hashlib.sha256(json.dumps(parent_ids, separators=(",", ":")).encode()).hexdigest()
     db.add(
         Run(
             id=run_id,

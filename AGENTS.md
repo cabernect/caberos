@@ -89,18 +89,30 @@ session-scoped extraction over every terminal non-test run's parent
 user/assistant rows, then a conditional `closed` write. Provider, parse, or
 core-conflict failures leave the session open with originals and scratch
 retained; explicit dashboard resume reopens a closed session like a channel
-resume. Close is triggered by the sweeper or lazy trigger once a session is
-idle past the agent's live `limits.session_idle_timeout_min` (the legacy
-per-session `idle_timeout_min` column is no longer consulted). In-flight
-closes broadcast `session_activity` SSE frames and set `learning` on the
-sessions list, so the chat view can show internal work running.
+resume. A session becomes eligible for close once idle past the agent's
+live `limits.session_idle_timeout_min` — a session with an in-flight run
+is never idle, so a long-running task can't be swept out from under
+itself (the legacy per-session `idle_timeout_min` column is no longer
+consulted). The sweeper is
+deadline-driven: each pass computes the nearest `last_activity_at +
+timeout` across open sessions and sleeps until then (bounded by a 300s
+fallback), so the configured timeout is the real close time, not a polling
+cadence. New/resumed sessions, finished runs, and config saves poke the
+sweeper's wake event to recompute early; the lazy run-start path closes
+other idle sessions as background tasks so an incoming run never waits on
+their maintenance. In-flight closes broadcast `session_activity` SSE
+frames and set `learning` on the sessions list, so the chat view can show
+internal work running.
 After a successful close commit, `snapshot_agent_local_drift` pins any
 untracked live-dir skill edits to a revision, then `agentos/reflection.py`
 may run one bounded skill-reflection pass (trigger="reflection"): a
 restricted Harness run with inspect/edit authority over frozen session
 evidence and staged agent-local skill edits only — its failure never
 reopens the session or rolls back learning, and its runs stay out of chat
-history and activation counts.
+history and activation counts. A reflection skipped while the agent was
+busy leaves its evidence fingerprint unclaimed; each sweep pass retries
+recently closed sessions (7-day lookback, capped) once the agent is idle,
+so a skip defers rather than drops the pass.
 Memory never expands permissions. The agent-global core is for the
 personal owner's use, not unrelated contacts.
 
