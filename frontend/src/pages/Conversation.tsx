@@ -1,9 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { ArrowDown, PanelLeft, AlertCircle, BookOpen, ChevronDown, Paperclip, Loader2, MessageSquare } from "lucide-react";
+import { ArrowDown, PanelLeft, PanelRight, Plus, Search, Globe, FileText, CalendarClock, Sparkles, AlertCircle, BookOpen, ChevronDown, Paperclip, Loader2, MessageSquare } from "lucide-react";
 import { api, workspaceBackend, type PreviewSource } from "@/lib/api";
-import type { Agent, Message, Provider, SessionInfo } from "@/lib/types";
-import { PreviewPanel } from "@/components/previews/PreviewPanel";
+import type { Agent, Citation, Message, Provider, SessionInfo } from "@/lib/types";
+import { WorkspacePanel } from "@/components/WorkspacePanel";
+import { type SelectedModel } from "@/components/ModelPicker";
 import { useObjectUrl } from "@/components/previews/useObjectUrl";
 import { AttachmentCard } from "@/components/AttachmentCard";
 import { ToolCallBlock, FileChips, collectFileRefs, type ToolCallData, type SubAgentStreamData, type FileRef } from "@/components/ToolCallBlock";
@@ -11,6 +12,7 @@ import { Markdown } from "@/components/Markdown";
 import { ThinkingBlock } from "@/components/ThinkingBlock";
 import { ProcessSteps } from "@/components/ProcessSteps";
 import { ChatSidebar } from "@/components/ChatSidebar";
+import { StatusWord } from "@/components/ui/status-word";
 import { ChatInputBar, type Attachment, type ChatInputBarHandle, type ContextItem } from "@/components/ChatInputBar";
 import { SettingsOverlay } from "@/components/SettingsOverlay";
 import { useDesktopFileDrop } from "@/lib/desktopFileDrop";
@@ -92,6 +94,7 @@ interface StreamingResponse {
   thinking: string;          // current turn's thinking (accumulating)
   items: StreamItem[];       // ordered list of completed thinking blocks + tool calls
   text: string;
+  awaitingModel: boolean;    // a model call is dispatched, nothing streamed back yet — the between-turns gap
   toolCalls: Map<string, ToolCallData>;
   thinkingStartTime: number | null;
   thinkingEndTime: number | null;
@@ -118,6 +121,7 @@ function createStreamingResponse(): StreamingResponse {
     thinking: "",
     items: [],
     text: "",
+    awaitingModel: false,
     toolCalls: new Map(),
     thinkingStartTime: Date.now(),
     thinkingEndTime: null,
@@ -156,6 +160,8 @@ export function Conversation() {
   const [contextBreakdown, setContextBreakdown] = useState<{ system_prompt: number; conversation: number; tools: number } | undefined>(undefined);
   const [hasModelSelected, setHasModelSelected] = useState(false);
   const [previewSource, setPreviewSource] = useState<PreviewSource | null>(null);
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const [composerModel, setComposerModel] = useState<SelectedModel | null>(null);
   const {
     width: previewWidth,
     dragging: previewDragging,
@@ -249,6 +255,17 @@ export function Conversation() {
     }
   }, [searchParams, sessions]);
 
+  // Deep-link: ?prompt=<text> prefills the composer (e.g. starter ideas from
+  // onboarding). Fires once per prompt value, then clears itself from the URL.
+  const [appliedPrompt, setAppliedPrompt] = useState<string | null>(null);
+  useEffect(() => {
+    const prompt = searchParams.get("prompt");
+    if (prompt && prompt !== appliedPrompt) {
+      setAppliedPrompt(prompt);
+      inputBarRef.current?.prefill(prompt);
+    }
+  }, [searchParams, appliedPrompt]);
+
   // YOLO mode banner — global flag fetched once; the per-agent flag lives on
   // `agent` and is kept live by the CustomEvent from SettingsOverlay's toggle.
   useEffect(() => {
@@ -262,6 +279,24 @@ export function Conversation() {
     window.addEventListener("caberos:yolo-mode", onYolo);
     return () => window.removeEventListener("caberos:yolo-mode", onYolo);
   }, []);
+
+  // Composer YOLO toggle — same write path as SettingsOverlay: optimistic
+  // per-agent flag, revert on failure, CustomEvent so other surfaces sync.
+  const toggleYolo = async () => {
+    if (!agent || yoloMode) return; // global override can't be undone per-agent
+    const next = !agent.yolo_mode;
+    setAgent((prev) => (prev ? { ...prev, yolo_mode: next } : prev));
+    try {
+      await api.updateAgent(agent.id, { yolo_mode: next });
+      window.dispatchEvent(
+        new CustomEvent("caberos:yolo-mode", {
+          detail: { agentId: agent.id, enabled: next },
+        }),
+      );
+    } catch {
+      setAgent((prev) => (prev ? { ...prev, yolo_mode: !next } : prev));
+    }
+  };
 
   // W9 — declare what the operator is looking at so matching notifications
   // suppress their pings (inbox still records, auto-read).
@@ -447,11 +482,15 @@ export function Conversation() {
 
     switch (event) {
       case "typing":
+        // A new turn's model call was dispatched — the gap between turns.
+        updateStreamingForSession(sessionId, (prev) =>
+          prev ? { ...prev, awaitingModel: true } : prev,
+        );
         break;
 
       case "thinking":
         updateStreamingForSession(sessionId, (prev) =>
-          prev ? { ...prev, thinking: prev.thinking + data.content } : prev,
+          prev ? { ...prev, thinking: prev.thinking + data.content, awaitingModel: false } : prev,
         );
         break;
 
@@ -469,7 +508,7 @@ export function Conversation() {
             items = [...items, { type: "thinking" as const, id: `thinking-${items.length}`, data: { content: thinking, durationSec } }];
             thinking = "";
           }
-          return { ...prev, items, thinking, text: prev.text + data.content };
+          return { ...prev, items, thinking, text: prev.text + data.content, awaitingModel: false };
         });
         break;
 
@@ -521,7 +560,8 @@ export function Conversation() {
               elicitation_id: data.id,
             });
           }
-          return { ...prev, toolCalls: newToolCalls };
+          // Now waiting on the operator, not the model.
+          return { ...prev, toolCalls: newToolCalls, awaitingModel: false };
         });
         break;
 
@@ -566,7 +606,7 @@ export function Conversation() {
           const newItems = exists
             ? items.map(i => i.type === "tool" && i.id === data.id ? { ...i, data: toolData } : i)
             : [...items, { type: "tool" as const, id: data.id, data: toolData }];
-          return { ...prev, toolCalls: newToolCalls, items: newItems, thinking, text };
+          return { ...prev, toolCalls: newToolCalls, items: newItems, thinking, text, awaitingModel: false };
         });
         break;
 
@@ -591,6 +631,9 @@ export function Conversation() {
             text: "",
             items: newItems,
             thinkingStartTime: Date.now(),  // reset for next turn
+            // Turn boundary → next turn's model call starts here (or
+            // message_complete clears this for the final turn).
+            awaitingModel: true,
             turnCosts: [
               ...prev.turnCosts,
               {
@@ -636,6 +679,7 @@ export function Conversation() {
             text: "",
             items: newItems,
             completed: true,
+            awaitingModel: false,
             thinkingEndTime: prev.thinkingEndTime || Date.now(),
           };
         });
@@ -1175,9 +1219,42 @@ export function Conversation() {
   // --- File preview (W3) — shared right-side panel ---
   const openPreview = useCallback((source: PreviewSource) => {
     setPreviewSource(source);
+    setWorkspaceOpen(true);
   }, []);
 
-  const closePreview = useCallback(() => setPreviewSource(null), []);
+  const closeWorkspace = useCallback(() => {
+    setWorkspaceOpen(false);
+    setPreviewSource(null);
+  }, []);
+
+  // Workspace paths this session's runs produced — "changed in this
+  // chat" markers in the workspace tree.
+  const changedPaths = useMemo(() => {
+    const s = new Set<string>();
+    const add = (calls: ToolCallData[]) => {
+      for (const ref of collectFileRefs(calls)) {
+        if (ref.source.path) s.add(ref.source.path);
+      }
+    };
+    for (const msg of messages) {
+      if (msg.role !== "tool_call") continue;
+      try {
+        add([JSON.parse(msg.content) as ToolCallData]);
+      } catch {
+        /* malformed tool_call payload — skip */
+      }
+    }
+    if (streaming) add([...streaming.toolCalls.values()]);
+    return s;
+  }, [messages, streaming]);
+
+  const allCitations = useMemo(
+    () =>
+      messages.flatMap(
+        (m) => (m as { citations?: Citation[] }).citations ?? [],
+      ),
+    [messages],
+  );
 
   // Returns success so the composer can keep the draft + tray on failure.
   const handleSend = async (
@@ -1393,7 +1470,7 @@ export function Conversation() {
   return (
     <div
       className="flex h-screen overflow-hidden"
-      style={{ background: "var(--surface)" }}
+      style={{ background: "var(--ground)" }}
       onDragEnter={handleViewDragEnter}
       onDragLeave={handleViewDragLeave}
       onDragOver={handleViewDragOver}
@@ -1405,60 +1482,112 @@ export function Conversation() {
         activeSessionId={activeSessionId}
         runningSessionIds={runningSessionIds}
         collapsed={sidebarCollapsed}
+        agentName={agent?.name}
         onNewChat={handleNewChat}
         onSelectSession={handleSelectSession}
         onDeleteSession={handleDeleteSession}
         onOpenSettings={() => setSettingsOpen(true)}
-        onBackToAgents={() => navigate("/")}
+        onBackToAgents={() => navigate("/agents")}
+        onCollapse={() => setSidebarCollapsed(true)}
       />
 
-      {/* Main */}
-      <div className="flex min-w-0 flex-1 flex-col">
-        {/* Header */}
-        <div
-          className="flex items-center gap-2 px-4 py-2"
-          style={{
-            background: "var(--sidebar)",
-            borderBottom: "1px solid var(--border)",
-          }}
-        >
-          <span
-            className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[13px] font-medium text-[var(--ink-2)]"
+      {/* Collapsed icon rail — expand, new chat, search + session list. */}
+      {sidebarCollapsed && (
+        <div className="flex w-12 shrink-0 flex-col items-center gap-1.5 border-r border-line bg-ground py-3">
+          <button
+            onClick={() => setSidebarCollapsed(false)}
+            className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-[9px] border border-line bg-surface text-ink-muted transition-colors hover:text-ink"
+            title="Show sidebar"
+            aria-label="Show sidebar"
           >
-            {headerTitle}
+            <PanelLeft className="h-4 w-4" />
+          </button>
+          <button
+            onClick={handleNewChat}
+            className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-[9px] bg-ink text-surface transition-opacity hover:opacity-85"
+            title="New chat"
+            aria-label="New chat"
+          >
+            <Plus className="h-4 w-4" />
+          </button>
+          <button
+            onClick={() => setSidebarCollapsed(false)}
+            className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-[9px] border border-line bg-surface text-ink-muted transition-colors hover:text-ink"
+            title="Search chats"
+            aria-label="Search chats"
+          >
+            <Search className="h-4 w-4" />
+          </button>
+          <button
+            onClick={() => setSidebarCollapsed(false)}
+            className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-[9px] border border-line bg-surface text-ink-muted transition-colors hover:text-ink"
+            title="Show chat list"
+            aria-label="Show chat list"
+          >
+            <MessageSquare className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
+      {/* Main */}
+      <div className="relative flex min-w-0 flex-1 flex-col">
+        {/* Header — agent tile + session title + run state */}
+        <div className="flex items-center gap-3 border-b border-line bg-ground px-5 py-2.5">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-accent-tint text-[15px] font-semibold text-accent">
+            {(agent?.name ?? agentId ?? "?").charAt(0).toUpperCase()}
           </span>
-          {activeSessionId && learningSessions.has(activeSessionId) && (
-            <span
-              className="flex shrink-0 items-center gap-1 text-[11px] text-[var(--accent)]"
-              title="Closing this session — summarizing and saving durable memory"
-            >
-              <Loader2 className="h-3 w-3 animate-spin" />
-              Learning
-            </span>
-          )}
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <span className="truncate text-[15px] font-semibold leading-[20px] text-ink">
+                {headerTitle}
+              </span>
+              {isStreaming && <StatusWord status="running" />}
+              {activeSessionId && learningSessions.has(activeSessionId) && (
+                <span
+                  className="flex shrink-0 items-center gap-1 text-[11px] text-accent"
+                  title="Closing this session — summarizing and saving durable memory"
+                >
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Learning
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-1.5 truncate text-[12px] leading-[16px] text-ink-muted">
+              <StatusWord status={isStreaming ? "running" : "idle"} />
+              <span>·</span>
+              <span className="truncate">Working in workspace</span>
+            </div>
+          </div>
           {sessionElapsed && (
             <span
-              className="text-[11px] tabular-nums text-[var(--ink-3)]"
+              className="shrink-0 font-mono text-[12px] tabular-nums text-ink-faint"
               title="Session elapsed time"
             >
               {sessionElapsed}
             </span>
           )}
+          {/* Model chip — reflects the composer's picker selection
+              (mockup's header chip is a display, not a control). */}
+          {(composerModel?.name || agent?.model) && (
+            <span
+              className="shrink-0 rounded-[8px] border border-line bg-surface px-2 py-1 font-mono text-[11px] text-ink-muted"
+              title="Model — change it in the composer"
+            >
+              {composerModel?.name ?? agent?.model}
+            </span>
+          )}
           <button
-            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-            className="flex h-7 w-7 items-center justify-center rounded text-[var(--ink-2)] transition"
-            style={{ border: "none", background: "none", cursor: "pointer" }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = "var(--border)";
-              e.currentTarget.style.color = "var(--ink)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = "none";
-              e.currentTarget.style.color = "var(--ink-2)";
-            }}
-            title={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
+            onClick={() =>
+              workspaceOpen ? closeWorkspace() : setWorkspaceOpen(true)
+            }
+            className={`flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-[8px] border transition-colors ${
+              workspaceOpen
+                ? "border-accent/40 bg-accent-tint text-accent"
+                : "border-line bg-surface text-ink-muted hover:text-ink"
+            }`}
+            title={workspaceOpen ? "Hide workspace" : "Show workspace"}
           >
-            <PanelLeft className="h-4 w-4" />
+            <PanelRight className="h-4 w-4" />
           </button>
         </div>
 
@@ -1475,7 +1604,7 @@ export function Conversation() {
           onScroll={handleScroll}
           className="relative flex-1 overflow-y-auto"
         >
-          <div className="mx-auto w-full max-w-[672px] px-6 py-6">
+          <div className="mx-auto w-full max-w-[672px] px-6 pb-[170px] pt-6">
             {loadingOlder && (
               <div className="flex items-center justify-center gap-2 pb-4 text-[12px] text-[var(--ink-2)]">
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -1483,13 +1612,62 @@ export function Conversation() {
               </div>
             )}
             {messages.length === 0 && !isStreaming && (
-              <div className="flex h-full flex-col items-center justify-center pt-32 text-center">
-                <h2 className="text-[18px] font-semibold text-[var(--ink)]">
+              <div className="flex h-full flex-col items-center justify-center px-6 text-center">
+                <span className="flex h-14 w-14 items-center justify-center rounded-[16px] bg-accent-tint text-[22px] font-semibold text-accent">
+                  {(agent?.name ?? agentId ?? "?").charAt(0).toUpperCase()}
+                </span>
+                <h2 className="mt-3 text-[18px] font-semibold text-ink">
                   {agent?.name || agentId}
                 </h2>
-                <p className="mt-2 text-[14px] text-[var(--ink-2)]">
+                <p className="mt-1.5 max-w-[420px] text-[13px] leading-[1.5] text-ink-muted">
                   {agent?.soul || "Start a conversation to begin."}
                 </p>
+                <button
+                  onClick={() => setSettingsOpen(true)}
+                  className="mt-2 cursor-pointer text-[12px] font-medium text-accent hover:underline"
+                >
+                  View full persona
+                </button>
+                <div className="mt-6 grid w-full max-w-[520px] grid-cols-2 gap-2 max-sm:grid-cols-1">
+                  {(
+                    [
+                      {
+                        icon: <Globe className="h-4 w-4" />,
+                        label: "Research a topic on the web",
+                        prompt:
+                          "Research this topic on the web and summarize the key points: ",
+                      },
+                      {
+                        icon: <FileText className="h-4 w-4" />,
+                        label: "Read a file and summarize it",
+                        prompt:
+                          "Read this file from the workspace and summarize it: ",
+                      },
+                      {
+                        icon: <CalendarClock className="h-4 w-4" />,
+                        label: "Set up a daily brief",
+                        prompt:
+                          "Set up a daily brief — every morning, gather ",
+                      },
+                      {
+                        icon: <Sparkles className="h-4 w-4" />,
+                        label: "Draft a new skill",
+                        prompt: "Help me draft a new skill that ",
+                      },
+                    ]
+                  ).map((s) => (
+                    <button
+                      key={s.label}
+                      onClick={() => inputBarRef.current?.prefill(s.prompt)}
+                      className="flex cursor-pointer items-center gap-2.5 rounded-[12px] border border-line bg-surface px-3.5 py-3 text-left text-[13px] font-medium text-ink transition-colors hover:border-accent/40 hover:bg-accent-tint/40"
+                    >
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] bg-sunken text-ink-muted">
+                        {s.icon}
+                      </span>
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
 
@@ -1561,6 +1739,7 @@ export function Conversation() {
                     steps={steps}
                     subagentMessages={subagentMsgs}
                     onPreview={openPreview}
+                    agentInitial={(agent?.name ?? agentId ?? "?").charAt(0).toUpperCase()}
                   />
                 );
                 // Run ended on tool calls (no reply follows) — emit its
@@ -1670,7 +1849,7 @@ export function Conversation() {
                 handleJumpToLatest();
               }
             }}
-            className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full px-3 py-1.5 text-[12px] font-medium shadow-lg transition-shadow focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
+            className="absolute bottom-[170px] left-1/2 -translate-x-1/2 rounded-full px-3 py-1.5 text-[12px] font-medium shadow-lg transition-shadow focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
             style={{
               background: "var(--white)",
               border: "1px solid var(--border)",
@@ -1689,7 +1868,7 @@ export function Conversation() {
           <div
             className="flex items-center gap-2 px-4 py-3 text-[13px] text-[var(--ink-2)]"
             style={{
-              background: "var(--sidebar)",
+              background: "var(--surface)",
               borderTop: "1px solid var(--border)",
             }}
           >
@@ -1711,7 +1890,7 @@ export function Conversation() {
               <div
                 className="flex items-center justify-between gap-3 px-4 py-3"
                 style={{
-                  background: "var(--sidebar)",
+                  background: "var(--surface)",
                   borderTop: "1px solid var(--border)",
                 }}
               >
@@ -1740,7 +1919,12 @@ export function Conversation() {
           })()
         )}
 
-        {/* Input bar — hidden for channel sessions (read-only view) */}
+        {/* Floating composer — overlaps the chat surface. One continuous
+            gradient (transparent → ground at 48px → solid ground below)
+            fades scrolled text into the page with no seam. Channel
+            sessions render a read-only notice in the same slot. */}
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 bg-[linear-gradient(to_bottom,transparent_0px,var(--ground)_48px)]">
+          <div className="pointer-events-auto relative mt-12 px-4 pb-3">
         {(() => {
           const activeSession = sessions.find((s) => s.id === activeSessionId);
           if (activeSession?.channel) {
@@ -1761,6 +1945,11 @@ export function Conversation() {
             <ChatInputBar
               ref={inputBarRef}
               agentId={agentId || ""}
+              agentName={agent?.name}
+              yoloMode={yoloMode || agent?.yolo_mode === true}
+              yoloLocked={yoloMode}
+              onToggleYolo={toggleYolo}
+              model={composerModel}
               defaultProviderId={agent?.provider_id || null}
               defaultModelName={agent?.model || null}
               defaultThinkingEnabled={agent?.thinking_enabled ?? null}
@@ -1770,7 +1959,10 @@ export function Conversation() {
                 (isStreaming && !activeElicitation) ||
                 compacting
               }
-              onModelChange={setHasModelSelected}
+              onModelChange={(m) => {
+                setComposerModel(m);
+                setHasModelSelected(Boolean(m));
+              }}
               onSend={handleSend}
               onStop={handleStop}
               activeElicitation={activeElicitation}
@@ -1784,12 +1976,14 @@ export function Conversation() {
             />
           );
         })()}
+          </div>
+        </div>
       </div>
 
-      {/* Shared file preview — resizable right panel (W3). On narrow
-          screens it becomes a full-width overlay instead of crushing
-          the chat below 300px. */}
-      {previewSource && (
+      {/* Workspace panel — Run | Workspace | Sources tabs over a file
+          tree + shared preview (W13). Resizable; full-width overlay on
+          narrow screens. */}
+      {workspaceOpen && (
         <div
           className="relative shrink-0 max-md:fixed max-md:inset-0 max-md:z-40"
           style={{ width: `min(100%, ${previewWidth}px)` }}
@@ -1799,12 +1993,21 @@ export function Conversation() {
             className={`absolute -left-1 top-0 z-10 h-full w-2 cursor-col-resize transition-colors hover:bg-[var(--accent)]/40 max-md:hidden ${previewDragging ? "bg-[var(--accent)]/40" : ""}`}
             role="separator"
             aria-orientation="vertical"
-            aria-label="Resize preview"
+            aria-label="Resize workspace panel"
           />
-          <PreviewPanel
+          <WorkspacePanel
             agentId={agentId || ""}
-            source={previewSource}
-            onClose={closePreview}
+            agentName={agent?.name ?? agentId ?? ""}
+            sessionId={activeSessionId}
+            selected={previewSource}
+            onSelect={setPreviewSource}
+            changedPaths={changedPaths}
+            citations={allCitations}
+            runStatus={
+              sessions.find((s) => s.id === activeSessionId)
+                ?.active_run_status ?? (isStreaming ? "running" : null)
+            }
+            onClose={closeWorkspace}
           />
         </div>
       )}
@@ -1919,6 +2122,11 @@ function StreamingMessage({
         </div>
       )}
 
+      {/* Between-turns affordance: a model call is in flight, nothing
+          streamed back yet — otherwise the gap after a completed tool
+          call reads as dead air. */}
+      {streaming.awaitingModel && !streaming.completed && <TypingIndicator />}
+
       {/* Output files the run produced — at the end of the run, not buried
           inside collapsed tool-call steps. */}
       {fileRefs.length > 0 && <FileChips refs={fileRefs} onPreview={onPreview} />}
@@ -1934,7 +2142,7 @@ function StreamingMessage({
         </div>
       )}
 
-      {!hasContent && !streaming.thinking && <TypingIndicator />}
+      {!hasContent && !streaming.thinking && !streaming.awaitingModel && <TypingIndicator />}
 
       {streaming.turnCosts.length > 0 && (
         <div className="mt-2 flex items-center gap-2 font-mono text-[11px]" style={{ color: "var(--ink-3)" }}>
@@ -1994,11 +2202,7 @@ function MessageRow({
           </div>
         )}
         <div
-          className="max-w-[75%] rounded-lg px-3.5 py-2.5 text-[14px] leading-[1.65]"
-          style={{
-            background: "var(--accent)",
-            color: "var(--white)",
-          }}
+          className="max-w-[75%] rounded-lg px-3.5 py-2.5 text-[14px] leading-[1.65] bg-ink text-surface"
         >
           {message.content}
         </div>
@@ -2108,39 +2312,62 @@ function MessageRow({
 
 function CitationList({ citations }: { citations: NonNullable<Message["citations"]> }) {
   return (
-    <details
-      className="group mt-3 rounded-md border p-3"
-      style={{ borderColor: "var(--border)", background: "var(--sidebar)" }}
-    >
-      <summary
-        className="flex cursor-pointer list-none items-center justify-between gap-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--ink-2)] [&::-webkit-details-marker]:hidden"
-      >
-        <span className="flex items-center gap-1.5">
-          <BookOpen className="h-3.5 w-3.5" style={{ color: "var(--accent)" }} />
-          Reference <span className="font-normal normal-case text-[var(--ink-3)]">({citations.length})</span>
+    <details className="group mt-3 rounded-[10px] border border-line bg-surface px-3.5 py-2.5">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-2 [&::-webkit-details-marker]:hidden">
+        <span className="flex items-center gap-2">
+          <BookOpen className="h-3.5 w-3.5 text-ink-faint" />
+          <span className="text-[13px] font-medium text-ink">
+            Sources · {citations.length}
+          </span>
         </span>
-        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[var(--ink-3)] transition-transform duration-200 group-open:rotate-180" />
+        <ChevronDown className="h-4 w-4 shrink-0 text-ink-faint transition-transform duration-200 group-open:rotate-180" />
       </summary>
-      <div className="mt-2 space-y-2">
+      <div className="mt-2 space-y-1.5 border-t border-line pt-2.5">
         {citations.map((citation, index) => {
           const location = citation.page_number
             ? `page ${citation.page_number}`
             : citation.sheet_name || citation.heading_path.at(-1) || citation.source_location;
+          let domain = citation.source_path;
+          try {
+            domain = new URL(citation.source_path).hostname.replace(/^www\./, "");
+          } catch {
+            /* not a URL — keep the raw path */
+          }
+          const label = citation.title || domain;
           return (
-            <details key={citation.id} className="rounded border px-2.5 py-2" style={{ borderColor: "var(--border)" }}>
-              <summary className="cursor-pointer text-xs font-medium text-[var(--ink)]">
-                [{index + 1}] {citation.title || citation.source_path}{location ? ` · ${location}` : ""}
+            <details
+              key={citation.id}
+              className="group/item rounded-md border border-line bg-surface px-2.5 py-2"
+            >
+              <summary className="flex cursor-pointer list-none items-center gap-2 [&::-webkit-details-marker]:hidden">
+                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-accent-tint font-mono text-[10px] font-semibold text-accent">
+                  {index + 1}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-xs font-medium text-ink">
+                    {label}
+                    {location ? <span className="text-ink-faint"> · {location}</span> : null}
+                  </span>
+                  <a
+                    href={citation.source_type === "web" ? citation.source_path : undefined}
+                    target="_blank"
+                    rel="noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    className={`block truncate font-mono text-[10px] text-ink-faint ${
+                      citation.source_type === "web"
+                        ? "underline-offset-2 hover:text-accent hover:underline"
+                        : ""
+                    }`}
+                  >
+                    {domain !== label ? `${domain} — ` : ""}{citation.source_path}
+                  </a>
+                </span>
+                <ChevronDown className="h-3.5 w-3.5 shrink-0 text-ink-faint transition-transform duration-200 group-open/item:rotate-180" />
               </summary>
-              <p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-[var(--ink-2)]">{citation.excerpt}</p>
-              {citation.source_type === "web" && (
-                <a
-                  href={citation.source_path}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="mt-2 block truncate text-xs text-[var(--accent)] underline-offset-2 hover:underline"
-                >
-                  {citation.source_path}
-                </a>
+              {citation.excerpt && (
+                <p className="mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-all border-t border-line pt-2 text-xs leading-5 text-ink-muted">
+                  {citation.excerpt}
+                </p>
               )}
             </details>
           );

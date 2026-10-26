@@ -213,6 +213,23 @@ class CatalogSnapshot:
         models = provider.get("models")
         return deepcopy(models) if isinstance(models, dict) else {}
 
+    def providers(self) -> dict:
+        """Catalog provider ids → {name, model count} for picker UIs."""
+        loaded = self._load()
+        if not loaded:
+            return {}
+        result = {}
+        for provider_id, provider in loaded[1].items():
+            if not isinstance(provider, dict):
+                continue
+            models = provider.get("models")
+            name = provider.get("name")
+            result[provider_id] = {
+                "name": name if isinstance(name, str) and name.strip() else provider_id,
+                "models": len(models) if isinstance(models, dict) else 0,
+            }
+        return result
+
     def status(self) -> dict:
         loaded = self._load()
         active = self._active()

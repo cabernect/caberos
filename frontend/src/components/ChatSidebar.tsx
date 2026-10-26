@@ -1,6 +1,16 @@
 import { useState } from "react";
-import { Plus, Settings, Trash2, ArrowLeft, Loader2 } from "lucide-react";
+import {
+  ArrowLeft,
+  Loader2,
+  PanelLeft,
+  Plus,
+  Search,
+  Settings,
+  Trash2,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
+import { formatClock } from "@/lib/time";
+import { modShortcut } from "@/lib/platform";
 import { useLearningSessions } from "@/lib/sessionActivity";
 import type { SessionInfo } from "@/lib/types";
 
@@ -9,11 +19,15 @@ interface ChatSidebarProps {
   activeSessionId: string | null;
   runningSessionIds: Set<string>;
   collapsed: boolean;
+  /** Agent display name for the "← Agents / {name}" breadcrumb. */
+  agentName?: string;
   onNewChat: () => void;
   onSelectSession: (id: string) => void;
   onDeleteSession: (id: string) => void;
   onOpenSettings: () => void;
   onBackToAgents: () => void;
+  /** Collapse the sidebar to the icon rail. */
+  onCollapse: () => void;
 }
 
 export function ChatSidebar({
@@ -21,54 +35,95 @@ export function ChatSidebar({
   activeSessionId,
   runningSessionIds,
   collapsed,
+  agentName,
   onNewChat,
   onSelectSession,
   onDeleteSession,
   onOpenSettings,
   onBackToAgents,
+  onCollapse,
 }: ChatSidebarProps) {
+  const [query, setQuery] = useState("");
+
   if (collapsed) return null;
 
+  const filtered = query.trim()
+    ? sessions.filter((s) =>
+        s.title.toLowerCase().includes(query.trim().toLowerCase()),
+      )
+    : sessions;
+
   return (
-    <aside
-      className="chat-sidebar flex flex-col overflow-hidden border-r transition-all duration-200"
-      style={{
-        width: 260,
-        minWidth: 260,
-        background: "var(--sidebar)",
-        borderColor: "var(--caberos-sidebar-border)",
-      }}
-    >
-      {/* Top: New Chat */}
-      <div className="chat-sidebar-header px-3 py-3" style={{ borderBottom: "1px solid var(--sidebar-divider)" }}>
+    <aside className="chat-sidebar flex w-[260px] min-w-[260px] flex-col overflow-hidden border-r border-line bg-ground">
+      {/* Breadcrumb: ← Agents / {name} + collapse toggle (top-right) */}
+      <div className="flex items-center justify-between px-3.5 pb-1 pt-3.5">
         <button
-          onClick={onNewChat}
-          className="flex w-full items-center gap-2 rounded-[6px] px-3 py-2 text-[13px] font-medium transition"
-          style={{
-            background: "var(--ink)",
-            color: "var(--white)",
-            border: "1px solid var(--ink)",
-            cursor: "pointer",
-          }}
-          onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.85")}
-          onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
+          onClick={onBackToAgents}
+          className="flex cursor-pointer items-center gap-1.5 text-left text-[13px] text-ink-muted transition-colors hover:text-ink"
         >
-          <Plus className="h-4 w-4" />
-          <span>New Chat</span>
+          <ArrowLeft className="h-3.5 w-3.5" />
+          <span>
+            Agents
+            {agentName && (
+              <span className="text-ink">
+                {" / "}
+                <span className="font-medium">{agentName}</span>
+              </span>
+            )}
+          </span>
+        </button>
+        <button
+          onClick={onCollapse}
+          className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-[7px] text-ink-faint transition-colors hover:bg-surface hover:text-ink"
+          title="Hide sidebar"
+          aria-label="Hide sidebar"
+        >
+          <PanelLeft className="h-4 w-4" />
         </button>
       </div>
 
+      {/* New chat */}
+      <div className="px-3 pb-2.5 pt-2">
+        <button
+          onClick={onNewChat}
+          className="flex w-full cursor-pointer items-center gap-2 rounded-[8px] bg-ink px-3 py-2 text-[13px] font-medium text-surface transition-opacity hover:opacity-85"
+        >
+          <Plus className="h-4 w-4" />
+          <span>New chat</span>
+        </button>
+      </div>
+
+      {/* Search chats */}
+      <div className="px-3 pb-1">
+        <div className="flex h-[32px] items-center gap-2 rounded-[8px] border border-line bg-surface px-2.5">
+          <Search className="h-3.5 w-3.5 shrink-0 text-ink-faint" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search chats"
+            className="min-w-0 flex-1 bg-transparent text-[13px] text-ink outline-none placeholder:text-ink-faint"
+          />
+          <kbd className="shrink-0 font-mono text-[10px] text-ink-faint">{modShortcut("/")}</kbd>
+        </div>
+      </div>
+
       {/* Session list */}
-      <nav className="flex-1 overflow-y-auto px-2 py-3">
-        {sessions.length === 0 ? (
-          <p className="px-2 py-4 text-center text-[13px] text-[var(--ink-3)]">
-            No conversations yet.
-            <br />
-            Start a new chat!
+      <nav className="flex-1 overflow-y-auto px-2 py-2">
+        {filtered.length === 0 ? (
+          <p className="px-2 py-4 text-center text-[13px] text-ink-faint">
+            {sessions.length === 0 ? (
+              <>
+                No conversations yet.
+                <br />
+                Start a new chat!
+              </>
+            ) : (
+              "No chats match."
+            )}
           </p>
         ) : (
           <SessionList
-            sessions={sessions}
+            sessions={filtered}
             activeSessionId={activeSessionId}
             runningSessionIds={runningSessionIds}
             onSelect={onSelectSession}
@@ -77,39 +132,14 @@ export function ChatSidebar({
         )}
       </nav>
 
-      {/* Bottom: Settings + Back to Agents */}
-      <div className="chat-sidebar-footer px-2 py-2" style={{ borderTop: "1px solid var(--sidebar-divider)" }}>
+      {/* Footer: Chat settings */}
+      <div className="border-t border-line px-2 py-2">
         <button
           onClick={onOpenSettings}
-          className="flex w-full items-center gap-2.5 rounded-[5px] px-2.5 py-2 text-[13px] text-[var(--ink-2)] transition"
-          style={{ border: "none", background: "none", cursor: "pointer" }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = "var(--border)";
-            e.currentTarget.style.color = "var(--ink)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "none";
-            e.currentTarget.style.color = "var(--ink-2)";
-          }}
+          className="flex w-full cursor-pointer items-center gap-2.5 rounded-[6px] px-2.5 py-2 text-[13px] text-ink-muted transition-colors hover:bg-sunken hover:text-ink"
         >
           <Settings className="h-4 w-4 shrink-0" />
-          <span>Settings</span>
-        </button>
-        <button
-          onClick={onBackToAgents}
-          className="flex w-full items-center gap-2.5 rounded-[5px] px-2.5 py-2 text-[13px] text-[var(--ink-2)] transition"
-          style={{ border: "none", background: "none", cursor: "pointer" }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = "var(--border)";
-            e.currentTarget.style.color = "var(--ink)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "none";
-            e.currentTarget.style.color = "var(--ink-2)";
-          }}
-        >
-          <ArrowLeft className="h-4 w-4 shrink-0" />
-          <span>Back to Agents</span>
+          <span>Chat settings</span>
         </button>
       </div>
     </aside>
@@ -135,9 +165,7 @@ function SessionList({
     <div className="space-y-4 pb-2">
       {groups.map(([label, items]) => (
         <div key={label}>
-          <div
-            className="mb-1 px-2 font-mono text-[11px] uppercase tracking-[0.06em] text-[var(--ink-3)]"
-          >
+          <div className="mb-1 px-2 text-[11px] font-medium uppercase tracking-[0.06em] text-ink-faint">
             {label}
           </div>
           {items.map((s) => (
@@ -184,19 +212,14 @@ function SessionItem({
       onMouseLeave={() => setHovering(false)}
       onClick={onSelect}
       className={cn(
-        "group flex cursor-pointer items-center gap-2 truncate rounded-[5px] px-2.5 py-1.5 text-[13px] transition",
+        "group flex cursor-pointer items-center gap-2 truncate rounded-[8px] px-2.5 py-1.5 text-[13px] transition-colors",
         active
-          ? "bg-[var(--accent-bg)] font-medium text-[var(--ink)]"
-          : "text-[var(--ink-2)] hover:bg-[var(--border)] hover:text-[var(--ink)]",
+          ? "border border-line bg-surface font-medium text-ink"
+          : "border border-transparent text-ink-muted hover:bg-sunken hover:text-ink",
       )}
     >
       {channelLabel && (
-        <span
-          className={cn(
-            "shrink-0 rounded px-1 py-0.5 text-[9px] font-semibold uppercase",
-            "bg-[var(--accent)]/15 text-[var(--accent)]",
-          )}
-        >
+        <span className="shrink-0 rounded bg-accent-tint px-1 py-0.5 text-[9px] font-semibold uppercase text-accent">
           {channelLabel}
         </span>
       )}
@@ -204,17 +227,18 @@ function SessionItem({
         {channelLabel ? session.title : `· ${session.title}`}
       </span>
       {running && !hovering && (
-        <Loader2
-          className="h-3.5 w-3.5 shrink-0 animate-spin"
-          style={{ color: "var(--accent)" }}
-        />
+        <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-accent" />
       )}
       {!running && learning && !hovering && (
         <Loader2
-          className="h-3.5 w-3.5 shrink-0 animate-spin opacity-60"
-          style={{ color: "var(--ink-3)" }}
+          className="h-3.5 w-3.5 shrink-0 animate-spin text-ink-faint opacity-60"
           aria-label="Learning from this session"
         />
+      )}
+      {!running && !learning && !hovering && (
+        <span className="shrink-0 text-[10px] tabular-nums text-ink-faint">
+          {formatClock(session.last_activity_at)}
+        </span>
       )}
       {hovering && (
         <button
@@ -222,7 +246,7 @@ function SessionItem({
             e.stopPropagation();
             onDelete();
           }}
-          className="shrink-0 text-[var(--ink-3)] transition hover:text-[var(--danger)]"
+          className="shrink-0 cursor-pointer text-ink-faint transition-colors hover:text-danger"
         >
           <Trash2 className="h-3.5 w-3.5" />
         </button>

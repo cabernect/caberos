@@ -26,21 +26,23 @@ _LEXICAL_K = 50
 
 
 async def _lexical_candidates(
-    db: AsyncSession, query: str, agent_id: str | None, k: int
+    db: AsyncSession, query: str, agent_id: str | None, k: int, all_scopes: bool = False
 ) -> list[tuple[str, float]]:
     """FTS5 rank over retrievable units (children + legacy flat chunks)."""
     fts_query = fts5_match_query(query, operator="AND")
     if not fts_query:
         return []
+    scope_clause = "" if all_scopes else "AND (d.agent_id IS NULL OR d.agent_id = :agent_id) "
+    fts_scope_clause = (
+        "" if all_scopes else "AND (fts.agent_id IS NULL OR fts.agent_id = :agent_id) "
+    )
     if db.get_bind().dialect.name == "postgresql":
         result = await db.execute(
             text(
                 "SELECT c.id, ts_rank(c.search_vector, plainto_tsquery('simple', :query)) "
                 "FROM document_chunks c JOIN documents d ON d.id = c.document_id "
                 "WHERE c.search_vector @@ plainto_tsquery('simple', :query) "
-                "AND c.kind != 'parent' "
-                "AND (d.agent_id IS NULL OR d.agent_id = :agent_id) "
-                "ORDER BY 2 DESC LIMIT :k"
+                "AND c.kind != 'parent' " + scope_clause + "ORDER BY 2 DESC LIMIT :k"
             ),
             {"query": " ".join(query.split()), "agent_id": agent_id, "k": k},
         )
@@ -51,9 +53,7 @@ async def _lexical_candidates(
                 "FROM document_chunks_fts fts "
                 "JOIN document_chunks dc ON dc.id = fts.chunk_id "
                 "WHERE document_chunks_fts MATCH :query "
-                "AND dc.kind != 'parent' "
-                "AND (fts.agent_id IS NULL OR fts.agent_id = :agent_id) "
-                "ORDER BY rank LIMIT :k"
+                "AND dc.kind != 'parent' " + fts_scope_clause + "ORDER BY rank LIMIT :k"
             ),
             {"query": fts_query, "agent_id": agent_id, "k": k},
         )
@@ -83,8 +83,13 @@ async def retrieve(
     agent_id: str | None = None,
     include_trace: bool = False,
     run_id: str | None = None,
+    all_scopes: bool = False,
 ) -> dict[str, Any]:
-    """Run the full retrieval pipeline; always returns a trace."""
+    """Run the full retrieval pipeline; always returns a trace.
+
+    all_scopes=True searches every scope (operator vault view) — never use it
+    for agent-facing retrieval, which must stay within shared+own scope.
+    """
     profile = await get_active_profile(db)
     config = json.loads(profile.config_json or "{}")
     fusion = config.get("fusion", "lexical")
@@ -94,7 +99,7 @@ async def retrieve(
     limit = max(1, min(limit, 20))
 
     degraded: list[str] = []
-    lexical = await _lexical_candidates(db, query, agent_id, _LEXICAL_K)
+    lexical = await _lexical_candidates(db, query, agent_id, _LEXICAL_K, all_scopes)
 
     semantic: list[tuple[str, float]] = []
     semantic_scanned = 0
@@ -131,7 +136,12 @@ async def retrieve(
                     )
                     if vectors:
                         semantic = await adapter_for(generation.adapter).search(
-                            db, generation.id, pack_f32(vectors[0]), agent_id, _SEMANTIC_K
+                            db,
+                            generation.id,
+                            pack_f32(vectors[0]),
+                            agent_id,
+                            _SEMANTIC_K,
+                            all_scopes=all_scopes,
                         )
                         semantic_scanned = len(semantic)
                 except EmbeddingUnavailable as error:

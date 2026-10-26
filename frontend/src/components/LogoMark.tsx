@@ -2,15 +2,17 @@ interface LogoMarkProps {
   className?: string;
   /** Override fill color; defaults to currentColor */
   color?: string;
+  style?: React.CSSProperties;
 }
 
 /** CaberOS spiral logo mark (traced from brand artwork). */
-export function LogoMark({ className, color }: LogoMarkProps) {
+export function LogoMark({ className, color, style }: LogoMarkProps) {
   return (
     <svg
       viewBox="0 0 439.000000 426.000000"
       fill={color ?? "currentColor"}
       className={className}
+      style={style}
       aria-hidden="true"
     >
       <g transform="translate(0.000000,426.000000) scale(0.100000,-0.100000)">

@@ -45,6 +45,7 @@ vi.mock("./pages/Channels", () => ({ Channels: () => null }));
 vi.mock("./pages/Observability", () => ({ Observability: () => null }));
 vi.mock("./pages/Traces", () => ({ Traces: () => null }));
 vi.mock("./pages/Notifications", () => ({ Notifications: () => null }));
+vi.mock("./pages/Today", () => ({ Today: () => null }));
 
 vi.mock("@/lib/crossTab", () => ({
   startCrossTab: vi.fn(),

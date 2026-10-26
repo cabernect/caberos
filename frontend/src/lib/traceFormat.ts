@@ -72,7 +72,7 @@ export function spanLabel(
   providerNames: Record<string, string>,
 ): string {
   const event = row.event;
-  if (event === null) return "Run";
+  if (event === null) return row.postRun ? "post-run" : "Run";
   const d = event.data || {};
   if (event.type === "model_call") {
     const providerId = typeof d.provider_id === "string" ? d.provider_id : null;
@@ -94,7 +94,7 @@ export function spanSearchText(
   providerNames: Record<string, string>,
 ): string {
   const event = row.event;
-  if (event === null) return "run";
+  if (event === null) return row.postRun ? "post-run maintenance after run end" : "run";
   const d = event.data || {};
   const providerId = typeof d.provider_id === "string" ? d.provider_id : "";
   return [
@@ -110,6 +110,7 @@ export function spanSearchText(
     String(d.kind ?? ""),
     event.call_id ?? "",
     event.sub_agent_id ?? "",
+    row.outsideWindow ? "post-run" : "",
   ]
     .join(" ")
     .toLowerCase();

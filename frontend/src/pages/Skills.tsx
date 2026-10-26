@@ -6,17 +6,25 @@ import {
   Search, Package, Plus, Globe, Download, History, Archive,
   Ban, RotateCcw, Link2, X,
 } from "lucide-react";
-import { DashboardSidebar, type NavKey } from "@/components/DashboardSidebar";
-import { PageHeader } from "@/components/PageHeader";
+import { DashboardSidebar, NAV_ROUTES, type NavKey } from "@/components/DashboardSidebar";
+import { PageIntro } from "@/components/guidance/PageIntro";
+import { INTRO_BY_KEY } from "@/components/guidance/tourStops";
+import { PageHeader } from "@/components/ui/page-header";
+import { FilterPills } from "@/components/ui/filter-pills";
+import { IconTile } from "@/components/ui/icon-tile";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Button } from "@/components/ui/button";
+import { Toggle } from "@/components/ui/toggle";
 import { api, skillBackend } from "@/lib/api";
 import { useConfirm } from "@/lib/confirmHook";
 import { useResizableWidth } from "@/lib/useResizableWidth";
 import type {
-  Agent, SkillCandidate, SkillDetail, SkillInfo, SkillScope,
+  Agent, SkillCandidate, SkillDetail, SkillInfo,
 } from "@/lib/types";
 import { PreviewPanel } from "@/components/previews/PreviewPanel";
 import { formatBytes } from "@/components/previews/renderers";
 import { Markdown } from "@/components/Markdown";
+import { Select } from "@/components/ui/select";
 
 type ViewKey = "all" | "built-in" | "global" | "agent-local" | "drafts" | "archived";
 type DetailTab = "overview" | "instructions" | "resources" | "history" | "usage";
@@ -25,16 +33,10 @@ const VIEWS: { key: ViewKey; label: string }[] = [
   { key: "all", label: "All" },
   { key: "built-in", label: "Built-in" },
   { key: "global", label: "Global" },
-  { key: "agent-local", label: "Agent Skills" },
+  { key: "agent-local", label: "Agent" },
   { key: "drafts", label: "Drafts" },
   { key: "archived", label: "Archived" },
 ];
-
-const SCOPE_STYLE: Record<SkillScope, { label: string; color: string }> = {
-  "built-in": { label: "built-in", color: "#6b7280" },
-  global: { label: "global", color: "#2563eb" },
-  "agent-local": { label: "agent", color: "#7c3aed" },
-};
 
 const STATUS_STYLE: Record<string, string> = {
   published: "var(--success)",
@@ -43,7 +45,7 @@ const STATUS_STYLE: Record<string, string> = {
   archived: "var(--ink-3)",
 };
 
-const MAIN_MIN_WIDTH = 420;
+const MAIN_MIN_WIDTH = 520;
 
 export function Skills() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -55,6 +57,7 @@ export function Skills() {
   const [search, setSearch] = useState("");
   const [view, setView] = useState<ViewKey>("all");
   const [agentFilter, setAgentFilter] = useState<string>("");
+  const [viewCounts, setViewCounts] = useState<Partial<Record<ViewKey, number>>>({});
 
   // Detail drawer
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -67,7 +70,7 @@ export function Skills() {
     width: drawerWidth,
     dragging: drawerDragging,
     startResize: startDrawerResize,
-  } = useResizableWidth({ initial: 560, min: 380, max: 1100, storageKey: "caberos.skillDrawer.width" });
+  } = useResizableWidth({ initial: 460, min: 380, max: 1100, storageKey: "caberos.skillDrawer.width" });
 
   // Content region (main pane + drawer) — measured independently of the
   // docked drawer so there's no feedback loop.
@@ -88,6 +91,7 @@ export function Skills() {
 
   // Dialogs
   const [showCreate, setShowCreate] = useState(false);
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
   const [showImportUrl, setShowImportUrl] = useState(false);
   const [publishTarget, setPublishTarget] = useState<SkillDetail | null>(null);
   const [candidates, setCandidates] = useState<SkillCandidate[] | null>(null);
@@ -109,10 +113,10 @@ export function Skills() {
 
   const loadSeq = useRef(0);
 
-  const loadSkills = useCallback(async () => {
+  const loadSkills = useCallback(async (silent = false) => {
     const seq = ++loadSeq.current;
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const data = await api.listSkills(
         view,
         view === "agent-local" && agentFilter ? agentFilter : undefined,
@@ -121,11 +125,24 @@ export function Skills() {
       if (seq !== loadSeq.current) return;
       setSkills(data.skills);
       setError(null);
+      // Refresh tab counts alongside the visible list (search narrows the
+      // list but counts stay global).
+      Promise.all(
+        VIEWS.map(async (v) => {
+          const r = await api.listSkills(v.key);
+          return [v.key, r.count] as const;
+        }),
+      )
+        .then((entries) => {
+          if (seq !== loadSeq.current) return;
+          setViewCounts(Object.fromEntries(entries));
+        })
+        .catch(() => {});
     } catch (e) {
       if (seq !== loadSeq.current) return;
       setError(e instanceof Error ? e.message : "Failed to load skills");
     } finally {
-      if (seq === loadSeq.current) setLoading(false);
+      if (!silent && seq === loadSeq.current) setLoading(false);
     }
   }, [view, agentFilter, search]);
 
@@ -158,13 +175,14 @@ export function Skills() {
   };
 
   const refreshDetail = async () => {
-    if (!selectedId) return;
-    try {
-      setDetail(await api.skillDetail(selectedId));
-    } catch {
-      /* detail gone */
+    if (selectedId) {
+      try {
+        setDetail(await api.skillDetail(selectedId));
+      } catch {
+        /* detail gone */
+      }
     }
-    await loadSkills();
+    await loadSkills(true);
   };
 
   const loadFiles = async (revision?: number) => {
@@ -191,12 +209,7 @@ export function Skills() {
   };
 
   const handleNavigate = (page: NavKey) => {
-    const routes: Record<string, string> = {
-      agents: "/agents", settings: "/settings", vault: "/vault",
-      scheduler: "/scheduler", mcps: "/mcps", channels: "/channels",
-      observability: "/observability", traces: "/traces",
-    };
-    if (page !== "skills" && routes[page]) navigate(routes[page]);
+    navigate(NAV_ROUTES[page]);
   };
 
   // --- imports ---
@@ -219,7 +232,7 @@ export function Skills() {
         errs,
     );
     if (view === "drafts") {
-      await loadSkills();
+      await loadSkills(true);
     } else {
       setView("drafts");
     }
@@ -269,7 +282,7 @@ export function Skills() {
     try {
       await api.deleteSkill(skill.id);
       if (selectedId === skill.id) closeDetail();
-      await loadSkills();
+      await loadSkills(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Delete failed");
     }
@@ -306,17 +319,29 @@ export function Skills() {
     }
   };
 
-  const scopeBadge = (s: SkillInfo) => {
-    const st = SCOPE_STYLE[s.scope] ?? SCOPE_STYLE["built-in"];
+  const scopeChip = (s: SkillInfo) => {
+    const label =
+      s.scope === "agent-local" && s.owner_name
+        ? `Agent · ${s.owner_name}`
+        : s.scope === "built-in"
+          ? "Built-in"
+          : "Global";
     return (
       <span
-        className="rounded px-1.5 py-0.5 text-[11px] font-medium"
-        style={{ background: "var(--surface)", border: "1px solid var(--border)", color: st.color }}
+        className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${
+          s.scope === "agent-local" ? "bg-accent-tint text-accent" : "bg-sunken text-ink-muted"
+        }`}
       >
-        {st.label}
-        {s.scope === "agent-local" && s.owner_name ? ` · ${s.owner_name}` : ""}
+        {label}
       </span>
     );
+  };
+
+  const usedByLabel = (s: SkillInfo) => {
+    if (s.assigned_names.length) return `Used by ${s.assigned_names.join(", ")}`;
+    if ((s.activation_count ?? 0) > 0)
+      return `Used ${s.activation_count} time${s.activation_count !== 1 ? "s" : ""}`;
+    return "No recorded use";
   };
 
   const statusBadge = (s: SkillInfo) =>
@@ -330,7 +355,7 @@ export function Skills() {
     ) : null;
 
   return (
-    <div className="flex h-screen overflow-hidden" style={{ background: "var(--surface)" }}>
+    <div className="flex h-screen overflow-hidden" style={{ background: "var(--ground)" }}>
       <DashboardSidebar
         active="skills"
         onNavigate={handleNavigate}
@@ -341,161 +366,190 @@ export function Skills() {
 
       <div ref={contentRef} className="relative flex min-w-0 flex-1">
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* Header */}
         <PageHeader
-          icon={Sparkles}
+          breadcrumbs={[{ label: "Capabilities" }, { label: "Skills" }]}
           title="Skills"
-          description={`${skills.length} skill${skills.length !== 1 ? "s" : ""} · versioned, scoped library`}
-        >
-          <div className="ml-auto flex items-center gap-2">
-            <input ref={fileInputRef} type="file" accept=".zip" onChange={handleZipImport} style={{ display: "none" }} />
-            <button onClick={() => setShowImportUrl(true)} style={btn("secondary")}>
-              <Link2 className="h-4 w-4" /> From URL
-            </button>
-            <button onClick={() => fileInputRef.current?.click()} style={btn("secondary")}>
-              <Upload className="h-4 w-4" /> Import .zip
-            </button>
-            <button onClick={() => setShowCreate(true)} style={btn("primary")}>
-              <Plus className="h-4 w-4" /> Create Skill
-            </button>
-          </div>
-        </PageHeader>
+          subtitle={`${viewCounts.all ?? skills.length} skills · versioned, scoped library — control what each agent knows how to do.`}
+          actions={
+            <div className="relative">
+              <input ref={fileInputRef} type="file" accept=".zip" onChange={handleZipImport} className="hidden" />
+              <Button onClick={() => setAddMenuOpen(!addMenuOpen)}>
+                <Plus />Add skill<ChevronDown className="h-3.5 w-3.5 opacity-70" />
+              </Button>
+              {addMenuOpen && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setAddMenuOpen(false)} />
+                  <div className="absolute right-0 top-full z-20 mt-1.5 min-w-[170px] overflow-hidden rounded-lg border border-line bg-surface py-1 shadow-lg">
+                    {(
+                      [
+                        { icon: Sparkles, label: "Create skill", act: () => setShowCreate(true) },
+                        { icon: Upload, label: "Import .zip", act: () => fileInputRef.current?.click() },
+                        { icon: Link2, label: "From URL", act: () => setShowImportUrl(true) },
+                      ] as const
+                    ).map(({ icon: Ic, label, act }) => (
+                      <button
+                        key={label}
+                        onClick={() => {
+                          setAddMenuOpen(false);
+                          act();
+                        }}
+                        className="flex w-full cursor-pointer items-center gap-2 border-none bg-transparent px-3 py-2 text-left text-[12.5px] text-ink-2 transition-colors hover:bg-sunken hover:text-ink"
+                      >
+                        <Ic className="h-3.5 w-3.5" /> {label}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          }
+        />
 
-        {notice && (
-          <div className="mx-8 mt-4 rounded-lg px-4 py-3 text-[13px]" style={{ background: "color-mix(in srgb, var(--success) 10%, transparent)", color: "var(--success)" }}>
-            {notice}
-            <button onClick={() => setNotice(null)} style={{ float: "right", background: "none", border: "none", cursor: "pointer", color: "inherit" }}><X className="h-3.5 w-3.5" /></button>
-          </div>
-        )}
-        {error && (
-          <div className="mx-8 mt-4 rounded-lg px-4 py-3 text-[13px]" style={{ background: "color-mix(in srgb, var(--danger) 10%, transparent)", color: "var(--danger)" }}>
-            {error}
-            <button onClick={() => setError(null)} style={{ float: "right", background: "none", border: "none", cursor: "pointer", color: "inherit" }}><X className="h-3.5 w-3.5" /></button>
-          </div>
-        )}
-
-        {/* View tabs + search + agent filter */}
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-3 px-8 py-4">
-          <div className="flex shrink-0 gap-1 rounded-lg p-1" style={{ background: "var(--sidebar)", border: "1px solid var(--border-soft)" }}>
-            {VIEWS.map((v) => (
-              <button
-                key={v.key}
-                onClick={() => setView(v.key)}
-                className="whitespace-nowrap rounded-[6px] px-3 py-1.5 text-[12px] font-medium transition"
-                style={{
-                  background: view === v.key ? "var(--accent)" : "transparent",
-                  color: view === v.key ? "var(--white)" : "var(--ink-3)",
-                  border: "none",
-                  cursor: "pointer",
-                  boxShadow: view === v.key ? "0 1px 2px rgba(0,0,0,0.08)" : "none",
-                }}
-              >
-                {v.label}
-              </button>
-            ))}
-          </div>
-          <div className="relative min-w-[160px] flex-1">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2" style={{ color: "var(--ink-3)" }} />
-            <input
-              type="text" value={search} onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search skills..."
-              className="w-full rounded-lg py-2 pl-10 pr-4 text-[13px]"
-              style={{ background: "var(--surface)", border: "1px solid var(--ink-3)", color: "var(--ink)" }}
-            />
-          </div>
-          {view === "agent-local" && (
-            <select
-              value={agentFilter}
-              onChange={(e) => setAgentFilter(e.target.value)}
-              className="rounded-lg px-3 py-2 text-[13px]"
-              style={{ background: "var(--surface)", border: "1px solid var(--ink-3)", color: "var(--ink)" }}
-            >
-              <option value="">All agents</option>
-              {agents.map((a) => (
-                <option key={a.id} value={a.id}>{a.name}</option>
-              ))}
-            </select>
-          )}
+        <div className="px-6 pt-4">
+          <PageIntro def={INTRO_BY_KEY.skills} />
         </div>
 
-        {/* Grid */}
-        <div className="flex-1 overflow-y-auto px-8 pb-8">
-          {loading ? (
-            <p className="py-20 text-center text-[14px] text-[var(--ink-3)]">Loading skills...</p>
-          ) : skills.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-20">
-              <Package className="h-12 w-12 mb-3" style={{ color: "var(--ink-3)" }} />
-              <p className="text-[14px] text-[var(--ink-3)]">
-                {view === "drafts" ? "No drafts" : "No skills in this view"}
-              </p>
+        {/* Notices + filter row — pinned below the header */}
+        <div className="px-6 pb-4">
+          {notice && (
+            <div className="mb-3 flex items-center justify-between rounded-lg bg-accent-tint px-4 py-2.5 text-[13px] text-accent">
+              {notice}
+              <button onClick={() => setNotice(null)} className="text-ink-faint hover:text-ink"><X className="h-3.5 w-3.5" /></button>
             </div>
+          )}
+          {error && (
+            <div className="mb-3 flex items-center justify-between rounded-lg bg-danger-tint px-4 py-2.5 text-[13px] text-danger">
+              {error}
+              <button onClick={() => setError(null)} className="text-ink-faint hover:text-ink"><X className="h-3.5 w-3.5" /></button>
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center gap-3">
+            <FilterPills
+              pills={VIEWS.map((v) => ({ key: v.key, label: v.label, count: viewCounts[v.key] }))}
+              active={view}
+              onChange={(k) => setView(k as ViewKey)}
+              variant="segmented"
+            />
+            <div className="ml-auto flex items-center gap-2">
+              {view === "agent-local" && (
+                <Select
+                  value={agentFilter}
+                  onChange={setAgentFilter}
+                  options={[
+                    { value: "", label: "All agents" },
+                    ...agents.map((a) => ({ value: a.id, label: a.name })),
+                  ]}
+                  className="rounded-lg border border-line bg-surface px-3 py-2 text-[13px] text-ink"
+                  panelClassName="text-[13px]"
+                />
+              )}
+              <div className="relative w-[240px]">
+                <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-faint" />
+                <input
+                  type="text" value={search} onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search skills"
+                  className="w-full rounded-lg border border-line bg-surface py-2 pl-9 pr-3 text-[13px] text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-6 pb-6">
+          {loading ? (
+            <p className="py-20 text-center text-[14px] text-ink-faint">Loading skills…</p>
+          ) : skills.length === 0 ? (
+            <EmptyState
+              icon={Package}
+              title={view === "drafts" ? "No drafts" : "No skills in this view"}
+              action={<Button onClick={() => setShowCreate(true)}><Plus />Create skill</Button>}
+            >
+              {view === "drafts"
+                ? "Drafts appear here when a builder session or an import creates one."
+                : "Create a skill or import one to grow the library."}
+            </EmptyState>
           ) : (
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(230px,1fr))] gap-4">
-              {skills.map((skill) => (
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+              {skills.map((skill) => {
+                const enabled = skill.status === "published";
+                const toggleable = skill.status === "published" || skill.status === "disabled";
+                return (
                 <div
                   key={skill.id}
-                  className="group cursor-pointer rounded-xl p-5 transition-shadow hover:shadow-md"
-                  style={{ background: "var(--sidebar)", border: "1px solid var(--border-soft)" }}
+                  className="group cursor-pointer rounded-xl border border-line bg-surface p-4 transition hover:border-ink-faint/50"
                   onClick={() => openDetail(skill.id)}
                 >
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <Sparkles className="h-5 w-5 shrink-0" style={{ color: "var(--accent)" }} />
-                      <h3 className="truncate text-[14px] font-semibold text-[var(--ink)]">{skill.name}</h3>
+                  <div className="flex items-start gap-3">
+                    <IconTile icon={Sparkles} tone="accent" size="md" />
+                    <div className="min-w-0 flex-1">
+                      <h3 className="truncate font-mono text-[13px] font-semibold text-ink">{skill.name}</h3>
+                      {skill.builder_session_id && (
+                        <span className="text-[11px] text-accent" title="Builder session active">building…</span>
+                      )}
                     </div>
                     {(skill.status === "draft" ||
                       (skill.scope !== "built-in" && skill.status !== "published")) && (
                       <button
                         onClick={(e) => { e.stopPropagation(); handleDelete(skill); }}
-                        className="flex h-7 w-7 cursor-pointer items-center justify-center rounded border-0 bg-transparent text-[var(--ink-3)] opacity-0 transition group-hover:opacity-100 hover:bg-[var(--border)] hover:text-[var(--ink)]"
+                        className="flex h-7 w-7 items-center justify-center rounded-md text-ink-faint opacity-0 transition group-hover:opacity-100 hover:bg-danger-tint hover:text-danger"
                         title={skill.status === "draft" ? "Delete draft" : "Purge skill"}
                       >
-                        <Trash2 className="h-4 w-4" />
+                        <Trash2 className="h-3.5 w-3.5" />
                       </button>
+                    )}
+                    {toggleable ? (
+                      <Toggle
+                        checked={enabled}
+                        onCheckedChange={(v) => handleStatus(skill, v ? "published" : "disabled")}
+                        aria-label={enabled ? `Disable ${skill.name}` : `Enable ${skill.name}`}
+                      />
+                    ) : (
+                      statusBadge(skill)
                     )}
                   </div>
 
-                  <p className="mt-2 text-[13px] leading-relaxed line-clamp-2" style={{ color: "var(--ink-2)" }}>
+                  <p className="mt-2 line-clamp-2 text-[13px] leading-relaxed text-ink-muted">
                     {skill.description || "No description"}
                   </p>
 
-                  <div className="mt-4 flex flex-wrap items-center gap-2 text-[12px]" style={{ color: "var(--ink-3)" }}>
-                    {scopeBadge(skill)}
-                    {statusBadge(skill)}
+                  <div className="mt-3 flex items-center gap-2 border-t border-line pt-3 text-[12px] text-ink-faint">
+                    {scopeChip(skill)}
                     {skill.current_revision != null && (
-                      <span className="rounded px-1.5 py-0.5" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
-                        rev {skill.current_revision}
-                      </span>
+                      <span className="font-mono text-[11px]">rev {skill.current_revision}</span>
                     )}
-                    <span className="flex items-center gap-1">
+                    <span className="flex items-center gap-1 font-mono text-[11px]">
                       <FileText className="h-3 w-3" />
                       {skill.resource_count}
                     </span>
-                    {skill.scope === "global" && skill.availability === "selected" && (
-                      <span title={skill.assigned_names.join(", ")} className="flex items-center gap-1">
-                        <Globe className="h-3 w-3" /> {skill.assigned_names.length} agent{skill.assigned_names.length !== 1 ? "s" : ""}
-                      </span>
-                    )}
-                    {skill.builder_session_id && (
-                      <span style={{ color: "var(--accent)" }} title="Builder session active">building…</span>
-                    )}
-                    <span
-                      title="Recorded activations only — earlier use may be unrecorded"
-                    >
-                      {(skill.activation_count ?? 0) > 0
-                        ? `Used ${skill.activation_count} time${skill.activation_count !== 1 ? "s" : ""}`
-                        : "Not recorded"}
+                    <span className="ml-auto truncate" title={
+                      (skill.assigned_names.length
+                        ? `Available to: ${skill.assigned_names.join(", ")}`
+                        : "Recorded activations only — earlier use may be unrecorded") +
+                      (skill.last_used_at
+                        ? ` · Last used ${new Date(skill.last_used_at).toLocaleDateString()}`
+                        : "")
+                    }>
+                      {usedByLabel(skill)}
                     </span>
-                    {(skill.activation_count ?? 0) > 0 && skill.last_used_at && (
-                      <span title="Recorded activations only — earlier use may be unrecorded">
-                        · Last used {new Date(skill.last_used_at).toLocaleDateString()}
-                      </span>
-                    )}
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
+
+          {/* Draft-with-agent banner */}
+          <div className="mt-4 flex items-center gap-3 rounded-xl border border-dashed border-line bg-surface px-4 py-3.5">
+            <IconTile icon={Sparkles} tone="accent" size="sm" />
+            <p className="min-w-0 flex-1 text-[13px] text-ink-muted">
+              <span className="font-medium text-ink">Describe a skill, let an agent draft it.</span>{" "}
+              Uses skill-creator and saves it as a draft you can review.
+            </p>
+            <Button variant="secondary" onClick={() => setShowCreate(true)}>
+              <Sparkles />Draft with an agent
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -522,35 +576,47 @@ export function Skills() {
           />
           <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
             <div className="min-w-0">
-              <p className="truncate text-[14px] font-semibold text-[var(--ink)]">{detail.name}</p>
-              <p className="text-[11px] text-[var(--ink-3)]">
+              <p className="truncate font-mono text-[14px] font-semibold text-[var(--ink)]">{detail.name}</p>
+              <p className="text-[11px] capitalize text-[var(--ink-3)]">
                 {detail.scope}
                 {detail.owner_name ? ` · ${detail.owner_name}` : ""}
-                {detail.current_revision != null ? ` · rev ${detail.current_revision}` : ""}
-                {detail.status !== "published" ? ` · ${detail.status}` : ""}
+                {detail.current_revision != null ? ` · Revision ${detail.current_revision}` : ""}
+                {` · ${detail.status}`}
+                {detail.validation.errors.length === 0 && detail.validation.warnings.length === 0 && (
+                  <span className="text-[var(--success)]"> · ● Valid</span>
+                )}
               </p>
             </div>
-            <button onClick={closeDetail} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--ink-3)" }}>
-              <X className="h-4 w-4" />
-            </button>
+            <div className="flex shrink-0 items-center gap-2">
+              {(detail.status === "published" || detail.status === "disabled") && (
+                <span className="text-[11px] text-[var(--ink-3)]">{detail.status === "published" ? "Enabled" : "Disabled"}</span>
+              )}
+              {(detail.status === "published" || detail.status === "disabled") && (
+                <Toggle
+                  checked={detail.status === "published"}
+                  onCheckedChange={(v) => handleStatus(detail, v ? "published" : "disabled")}
+                  size="sm"
+                  aria-label={detail.status === "published" ? "Disable skill" : "Enable skill"}
+                  title={detail.status === "published" ? "Disable skill" : "Enable skill"}
+                />
+              )}
+              <button onClick={closeDetail} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--ink-3)" }}>
+                <X className="h-4 w-4" />
+              </button>
+            </div>
           </div>
 
-          {/* Tab bar */}
-          <div className="flex gap-1 overflow-x-auto border-b border-[var(--border)] px-3 py-2">
-            {(["overview", "instructions", "resources", "history", "usage"] as DetailTab[]).map((t) => (
-              <button
-                key={t}
-                onClick={() => setDetailTab(t)}
-                className="shrink-0 whitespace-nowrap rounded-[6px] px-2.5 py-1 text-[12px] font-medium capitalize"
-                style={{
-                  background: detailTab === t ? "var(--sidebar)" : "transparent",
-                  color: detailTab === t ? "var(--ink)" : "var(--ink-3)",
-                  border: "none", cursor: "pointer",
-                }}
-              >
-                {t}
-              </button>
-            ))}
+          {/* Tab bar — same segmented pill track as the rest of the app */}
+          <div className="border-b border-line px-4 py-2.5">
+            <FilterPills
+              pills={(["overview", "instructions", "resources", "history", "usage"] as DetailTab[]).map((t) => ({
+                key: t,
+                label: t[0].toUpperCase() + t.slice(1),
+              }))}
+              active={detailTab}
+              onChange={(k) => setDetailTab(k as DetailTab)}
+              variant="segmented"
+            />
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto">
@@ -576,21 +642,22 @@ export function Skills() {
               <div>
                 <div className="flex items-center gap-2 border-b border-[var(--border)] px-4 py-2">
                   {detail.revisions.length > 0 && (
-                    <select
-                      value={filesRevision ?? detail.current_revision ?? ""}
-                      onChange={(e) => loadFiles(e.target.value ? Number(e.target.value) : undefined)}
-                      className="rounded px-2 py-1 text-[12px]"
-                      style={{ background: "var(--sidebar)", border: "1px solid var(--border)", color: "var(--ink)" }}
-                    >
-                      <option value="">
-                        {detail.scope === "agent-local" ? "live copy" : "current"}
-                      </option>
-                      {detail.revisions.map((r) => (
-                        <option key={r.revision_number} value={r.revision_number}>
-                          rev {r.revision_number}
-                        </option>
-                      ))}
-                    </select>
+                    <Select
+                      value={String(filesRevision ?? detail.current_revision ?? "")}
+                      onChange={(v) => loadFiles(v ? Number(v) : undefined)}
+                      options={[
+                        {
+                          value: "",
+                          label: detail.scope === "agent-local" ? "live copy" : "current",
+                        },
+                        ...detail.revisions.map((r) => ({
+                          value: String(r.revision_number),
+                          label: `rev ${r.revision_number}`,
+                        })),
+                      ]}
+                      className="rounded border border-line bg-surface px-2 py-1 text-[12px] text-ink"
+                      align="left" panelClassName="text-[12px]"
+                    />
                   )}
                   <span className="text-[11px] text-[var(--ink-3)]">{files?.length ?? "…"} files</span>
                 </div>
@@ -711,24 +778,75 @@ function OverviewTab({
   onResumeBuilder: () => void;
 }) {
   const v = detail.validation;
+  const toolNames = detail.allowed_tools.split(/[,\s]+/).filter(Boolean);
+  const toolGroups: [string, string[]][] = [];
+  for (const name of toolNames) {
+    const group = name.startsWith("browser_") ? "Browser" : name.startsWith("web_") ? "Web" : "Other";
+    const existing = toolGroups.find(([g]) => g === group);
+    if (existing) existing[1].push(name);
+    else toolGroups.push([group, [name]]);
+  }
   return (
     <div className="flex flex-col gap-4 p-4">
       <div>
-        <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-[var(--ink-3)]">Description</p>
-        <p className="text-[13px] text-[var(--ink)]">{detail.description || "—"}</p>
+        <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-[var(--ink-3)]">What it's for</p>
+        <p className="text-[13px] leading-relaxed text-[var(--ink)]">{detail.description || "—"}</p>
       </div>
+
+      {detail.assigned_names.length > 0 && (
+        <div>
+          <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-[var(--ink-3)]">Used by</p>
+          <div className="flex flex-wrap gap-1.5">
+            {detail.assigned_names.map((n) => (
+              <span
+                key={n}
+                className="rounded-full bg-ground px-2.5 py-1 text-[12px] font-medium text-ink-2"
+              >
+                {n}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {toolGroups.length > 0 && (
+        <div>
+          <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-[var(--ink-3)]">
+            Tools it can use · {toolNames.length}
+          </p>
+          <div className="flex flex-col gap-1.5">
+            {toolGroups.map(([group, names]) => (
+              <div key={group} className="flex items-baseline gap-2">
+                <span className="w-14 shrink-0 text-[12px] text-[var(--ink-3)]">{group}</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {names.map((n) => (
+                    <span
+                      key={n}
+                      className="rounded-md bg-ground px-2 py-0.5 font-mono text-[11px] text-ink-2"
+                    >
+                      {n}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {detail.compatibility && (
+        <div>
+          <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-[var(--ink-3)]">Requirements</p>
+          <p className="text-[12px] text-[var(--ink-2)]">{detail.compatibility}</p>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-3 text-[12px]">
         <Field label="Scope" value={detail.scope + (detail.owner_name ? ` (${detail.owner_name})` : "")} />
         <Field label="Status" value={detail.status} />
         <Field label="Revision" value={detail.current_revision != null ? `#${detail.current_revision}` : "—"} />
         <Field label="Availability" value={detail.scope === "global" ? detail.availability : "—"} />
-        {detail.availability === "selected" && (
-          <Field label="Assigned" value={detail.assigned_names.join(", ") || "none"} />
-        )}
-        {detail.allowed_tools && <Field label="allowed-tools" value={detail.allowed_tools} />}
         {detail.license && <Field label="License" value={detail.license} />}
-        {detail.compatibility && <Field label="Compatibility" value={detail.compatibility} />}
       </div>
 
       {/* Validation */}
@@ -993,14 +1111,15 @@ function CreateDialog({
       </label>
       <label className="mb-3 block text-[12px] text-[var(--ink-2)]">
         Host agent (builder session)
-        <select
-          value={agentId} onChange={(e) => setAgentId(e.target.value)}
-          className="mt-1 w-full rounded-lg px-3 py-2 text-[13px]"
-          style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)" }}
-        >
-          <option value="">No builder session</option>
-          {agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-        </select>
+        <Select
+          value={agentId} onChange={setAgentId}
+          options={[
+            { value: "", label: "No builder session" },
+            ...agents.map((a) => ({ value: a.id, label: a.name })),
+          ]}
+          className="mt-1 w-full rounded-lg border border-line bg-surface px-3 py-2 text-[13px] text-ink"
+          align="left" panelClassName="text-[13px]"
+        />
       </label>
       {agentId && (
         <label className="mb-4 flex items-center gap-2 text-[12px] text-[var(--ink-2)]">
@@ -1122,13 +1241,12 @@ function PublishDialog({
       {!isPromote && scope === "agent-local" && (
         <label className="mb-3 block text-[12px] text-[var(--ink-2)]">
           Owner agent
-          <select
-            value={ownerId} onChange={(e) => setOwnerId(e.target.value)}
-            className="mt-1 w-full rounded-lg px-3 py-2 text-[13px]"
-            style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)" }}
-          >
-            {agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-          </select>
+          <Select
+            value={ownerId} onChange={setOwnerId}
+            options={agents.map((a) => ({ value: a.id, label: a.name }))}
+            className="mt-1 w-full rounded-lg border border-line bg-surface px-3 py-2 text-[13px] text-ink"
+            align="left" panelClassName="text-[13px]"
+          />
         </label>
       )}
       {(isPromote || scope === "global") && (

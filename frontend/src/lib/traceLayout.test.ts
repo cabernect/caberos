@@ -87,4 +87,56 @@ describe("trace layout", () => {
     expect(layout.byId.get("bad")?.durationMs).toBeNull();
     expect(layout.byId.get("invalid")?.timing).toBe("unknown");
   });
+
+  it("collects post-run ledgered work under a synthetic section row", () => {
+    const layout = buildTraceLayout([
+      event("gen", { type: "model_call", at: "2026-01-01T00:00:05Z", data: { latency_ms: 3310 } }),
+      event("notif", { type: "notification", at: "2026-01-01T00:00:09Z" }),
+      event("del1", { type: "notification_delivery", at: "2026-01-01T00:00:12Z", parent_id: "notif" }),
+      event("del2", { type: "notification_delivery", at: "2026-01-01T00:00:13Z", parent_id: "notif" }),
+      event("auxgen", { type: "model_call", at: "2026-01-01T00:00:30Z", data: { latency_ms: 4700 } }),
+    ], run);
+    const section = layout.rows.find((row) => row.postRun);
+    expect(section).toBeDefined();
+    expect(section!.parentId).toBe(layout.rootId);
+    // deliveries keep their true event parent but display under the section
+    expect(section!.children).toEqual(["del1", "del2", "auxgen"]);
+    expect(layout.byId.get("del1")?.parentId).toBe(section!.id);
+    expect(layout.byId.get("del1")?.event?.parent_id).toBe("notif");
+    expect(layout.byId.get("notif")?.children).toEqual([]);
+    expect(section!.postRunCount).toBe(3);
+    // in-run work renders before the section; nothing outside the section follows it
+    expect(layout.rows.map((row) => row.id)).toEqual([
+      layout.rootId, "gen", "notif", section!.id, "del1", "del2", "auxgen",
+    ]);
+  });
+
+  it("keeps a fully-post-run subtree nested under the section", () => {
+    const layout = buildTraceLayout([
+      event("env", { type: "notification", at: "2026-01-01T00:00:20Z" }),
+      event("c1", { type: "notification_delivery", at: "2026-01-01T00:00:21Z", parent_id: "env" }),
+      event("c2", { type: "notification_delivery", at: "2026-01-01T00:00:22Z", parent_id: "env" }),
+    ], run);
+    const section = layout.rows.find((row) => row.postRun)!;
+    expect(section.children).toEqual(["env"]);
+    expect(layout.byId.get("env")?.children).toEqual(["c1", "c2"]);
+    expect(section.postRunCount).toBe(3);
+  });
+
+  it("adds no section when nothing was ledgered outside the window", () => {
+    const layout = buildTraceLayout([
+      event("gen", { type: "model_call", at: "2026-01-01T00:00:05Z", data: { latency_ms: 1000 } }),
+      event("notif", { type: "notification", at: "2026-01-01T00:00:10.4Z" }),
+    ], run);
+    expect(layout.rows.some((row) => row.postRun)).toBe(false);
+    expect(layout.byId.get("notif")?.outsideWindow).toBeUndefined();
+  });
+
+  it("adds no section while the run window is still open", () => {
+    const layout = buildTraceLayout([
+      event("gen", { type: "model_call", at: "2026-01-01T00:00:30Z", data: { latency_ms: 4000 } }),
+    ], { ...run, completed_at: null });
+    expect(layout.rows.some((row) => row.postRun)).toBe(false);
+    expect(layout.byId.get("gen")?.outsideWindow).toBeUndefined();
+  });
 });

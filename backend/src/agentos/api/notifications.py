@@ -7,7 +7,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import notifications as notif
@@ -61,15 +61,36 @@ class EmitRequest(BaseModel):
 @router.get("", response_model=list[NotificationOut])
 async def list_notifications(
     unread_only: bool = False,
+    before: str | None = None,
+    before_id: str | None = None,
+    limit: int = 100,
     db: AsyncSession = Depends(get_db),
     _operator=Depends(require_operator),
 ):
     # julianday normalizes the stored string — plain ORDER BY breaks when rows
     # mix ISO variants ("T"+offset vs space separator), sorting all T-rows
     # above all space-rows regardless of actual time.
-    query = select(Notification).order_by(func.julianday(Notification.created_at).desc()).limit(100)
+    limit = min(max(limit, 1), 200)
+    query = (
+        select(Notification)
+        .order_by(func.julianday(Notification.created_at).desc(), Notification.id.desc())
+        .limit(limit)
+    )
     if unread_only:
         query = query.where(Notification.read.is_(False))
+    if before:
+        # Cursor: strictly older than (before, before_id) — the id tie-breaks
+        # rows sharing an identical timestamp so no page is skipped or doubled.
+        ts = func.julianday(before)
+        query = query.where(
+            or_(
+                func.julianday(Notification.created_at) < ts,
+                and_(
+                    func.julianday(Notification.created_at) == ts,
+                    Notification.id < (before_id or ""),
+                ),
+            )
+        )
     result = await db.execute(query)
     return list(result.scalars().all())
 

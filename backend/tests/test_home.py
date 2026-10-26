@@ -1,0 +1,281 @@
+"""GET /api/home — Today page aggregate (W13)."""
+
+from datetime import UTC, datetime, timedelta
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+
+from agentos.agent_service import create_agent
+from agentos.api import home
+from agentos.auth import require_operator
+from agentos.config_schema import AgentConfig, ModelConfig
+from agentos.db import get_db
+from agentos.main import app
+from agentos.models.agent import Agent
+from agentos.models.approval import ApprovalRequest
+from agentos.models.channel_config import ChannelConfig
+from agentos.models.contact import Contact
+from agentos.models.document import Document
+from agentos.models.mcp import McpServer
+from agentos.models.notification import Notification
+from agentos.models.operator import Operator
+from agentos.models.provider import Provider
+from agentos.models.run import Run
+from agentos.models.session import Session
+from agentos.models.skill import Skill
+
+
+@pytest.fixture
+async def client(db, monkeypatch):
+    # The endpoint counts the process-global live channel registry — pin it
+    # so test order/concurrent channel state can't leak in.
+    monkeypatch.setattr(home, "list_active_channels", lambda: [])
+
+    async def fake_operator():
+        return Operator(id="test-operator", username="test", password_hash="x")
+
+    app.dependency_overrides[require_operator] = fake_operator
+    app.dependency_overrides[get_db] = lambda: db
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as http:
+        yield http
+    app.dependency_overrides.clear()
+
+
+async def _run(db, agent_id, status, session_id="sess-1", **kw):
+    db.add(
+        Run(
+            id=kw.pop("id", f"run-{status}-{agent_id}"),
+            session_id=session_id,
+            contact_id="contact-1",
+            agent_id=agent_id,
+            status=status,
+            trigger=kw.pop("trigger", "user_message"),
+            **kw,
+        )
+    )
+
+
+@pytest.fixture
+async def seeded(db):
+    db.add(Contact(id="contact-1", channel="test", bot_id="a1", external_user_id="u"))
+    db.add(Session(id="sess-1", contact_id="contact-1", agent_id="a1"))
+    # configured + idle
+    await create_agent(
+        db,
+        AgentConfig(id="a1", name="Caber", model=ModelConfig(provider_id="p1", name="m1")),
+    )
+    # no model → needs_setup
+    await create_agent(db, AgentConfig(id="a2", name="Scout", model=ModelConfig()))
+    # paused (disabled)
+    db.add(Agent(id="a3", name="Paused", enabled=False))
+    db.add(Provider(id="p1", name="OpenAI", type="openai"))
+    db.add(McpServer(id="m1", name="Filesystem", transport="stdio", command="fs"))
+    db.add(
+        ChannelConfig(
+            id="c1",
+            platform="telegram",
+            agent_id="a1",
+            encrypted_bot_token="enc",
+            enabled=True,
+        )
+    )
+    db.add(Skill(id="s1", name="pdf", scope="global", owner_agent_id=None, status="published"))
+    db.add(Skill(id="s2", name="draft", scope="global", owner_agent_id=None, status="draft"))
+    db.add(
+        Document(
+            id="d1",
+            agent_id="a1",
+            source_path="notes.md",
+            storage_path="knowledge/a1/notes.md",
+            display_name="notes.md",
+            mime_type="text/markdown",
+            size_bytes=12,
+            content_hash="h1",
+        )
+    )
+    await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_home_empty_install(client):
+    resp = await client.get("/api/home")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["counts"]["agents_total"] == 0
+    assert body["agents"] == []
+    assert body["needs_you"] == []
+    assert body["happened"] == []
+    assert body["egress"]["providers"] == []
+
+
+@pytest.mark.asyncio
+async def test_home_counts_and_agent_status(client, seeded):
+    resp = await client.get("/api/home")
+    body = resp.json()
+
+    counts = body["counts"]
+    assert counts["agents_total"] == 3
+    assert counts["agents_running"] == 0
+    assert counts["mcps_total"] == 1
+    assert counts["mcps_connected"] == 0
+    assert counts["skills_published"] == 1
+    assert counts["channels_total"] == 1
+    assert counts["channels_active"] == 0
+    assert counts["vault_documents"] == 1
+
+    status_by_id = {a["id"]: a["status"] for a in body["agents"]}
+    assert status_by_id == {"a1": "idle", "a2": "needs_setup", "a3": "paused"}
+
+
+@pytest.mark.asyncio
+async def test_home_running_agent_wins(client, seeded, db):
+    await _run(db, "a1", "running")
+    await db.commit()
+
+    body = (await client.get("/api/home")).json()
+    status_by_id = {a["id"]: a["status"] for a in body["agents"]}
+    # running outranks everything — even an unconfigured agent shows its live run
+    assert status_by_id["a1"] == "running"
+    assert body["counts"]["agents_running"] == 1
+    # recency ordering: the live agent leads the list
+    assert body["agents"][0]["id"] == "a1"
+
+
+@pytest.mark.asyncio
+async def test_home_needs_you_verifies_pending_approval(client, seeded, db):
+    # stale: notification for a run whose approval is already decided
+    await _run(db, "a1", "completed", id="run-done")
+    db.add(
+        ApprovalRequest(
+            id="ap-1",
+            run_id="run-done",
+            capability_name="terminal",
+            status="approved",
+        )
+    )
+    db.add(
+        Notification(
+            id="n-stale",
+            notification_type="approval_required",
+            severity="warning",
+            title="Approval required",
+            message="old",
+            entity_id="run-done",
+            read=False,
+        )
+    )
+    # live: pending approval still waiting
+    await _run(db, "a1", "awaiting_approval", id="run-pending")
+    db.add(
+        ApprovalRequest(
+            id="ap-2",
+            run_id="run-pending",
+            capability_name="terminal",
+            status="pending",
+        )
+    )
+    db.add(
+        Notification(
+            id="n-live",
+            notification_type="approval_required",
+            severity="warning",
+            title="Approval required",
+            message="waiting",
+            entity_id="run-pending",
+            read=False,
+        )
+    )
+    # read notification never surfaces
+    db.add(
+        Notification(
+            id="n-read",
+            notification_type="run_failed",
+            severity="error",
+            title="Run failed",
+            message="x",
+            read=True,
+        )
+    )
+    await db.commit()
+
+    items = (await client.get("/api/home")).json()["needs_you"]
+    ids = {i["notification_id"] for i in items}
+    assert ids == {"n-live"}
+
+
+@pytest.mark.asyncio
+async def test_home_happened_groups_terminal_runs(client, seeded, db):
+    await _run(db, "a1", "completed", id="r1")
+    await _run(db, "a1", "completed", id="r2")
+    await _run(db, "a1", "failed", id="r3")
+    # test + reflection runs are excluded
+    await _run(db, "a1", "completed", id="r4", is_test=True)
+    await _run(db, "a1", "completed", id="r5", trigger="reflection")
+    await db.commit()
+
+    happened = (await client.get("/api/home")).json()["happened"]
+    by_outcome = {(g["agent_id"], g["outcome"]): g["count"] for g in happened}
+    assert by_outcome == {("a1", "completed"): 2, ("a1", "failed"): 1}
+
+
+@pytest.mark.asyncio
+async def test_agent_activity_rollup(client, seeded, db):
+    """GET /api/agents/activity — per-agent sessions, sparkline, running."""
+    # a1: 2 sessions this week, one running run
+    db.add(
+        Session(
+            id="sess-2",
+            contact_id="contact-1",
+            agent_id="a1",
+            started_at=datetime.now(UTC) - timedelta(days=3),
+        )
+    )
+    db.add(
+        Session(
+            id="sess-3",
+            contact_id="contact-1",
+            agent_id="a1",
+            started_at=datetime.now(UTC) - timedelta(days=10),
+        )
+    )
+    await _run(db, "a1", "running")
+    await db.commit()
+
+    body = (await client.get("/api/agents/activity")).json()
+
+    per = body["agents"]
+    assert per["a1"]["sessions"] == 3  # seeded sess-1 + the two above
+    assert sum(per["a1"]["sessions_7d"]) == 2  # 10-day-old session is outside window
+    assert per["a1"]["sessions_7d"][3] == 1  # 3 days ago bucket
+    assert per["a1"]["running"] == 1
+    assert per["a2"]["sessions"] == 0
+    assert per["a2"]["sessions_7d"] == [0] * 7
+    assert body["sessions_this_week"] == 2  # sess-1 (now) + sess-2 (3d ago)
+    assert body["sessions_prev_week"] == 1
+    assert body["running_now"] == 1
+    assert body["running_names"] == ["Caber"]
+
+
+@pytest.mark.asyncio
+async def test_home_egress_lists_surfaces(client, seeded):
+    body = (await client.get("/api/home")).json()
+    egress = body["egress"]
+    assert egress["providers"] == [{"id": "p1", "name": "OpenAI", "type": "openai"}]
+    assert egress["mcps"] == []  # configured but not connected
+    assert egress["channels"][0]["platform"] == "telegram"
+    assert egress["channels"][0]["connected"] is False
+    assert egress["channels"][0]["agent_name"] == "Caber"
+
+
+async def test_home_active_channel_status(client, seeded, monkeypatch):
+    """A live channel in the registry counts as active + connected."""
+    monkeypatch.setattr(
+        home,
+        "list_active_channels",
+        lambda: [{"platform": "telegram", "agent_id": "a1", "connected": True}],
+    )
+    body = (await client.get("/api/home")).json()
+    assert body["counts"]["channels_active"] == 1
+    ch = next(c for c in body["egress"]["channels"] if c["platform"] == "telegram")
+    assert ch["connected"] is True

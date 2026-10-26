@@ -515,6 +515,80 @@ async def test_responses_stream_extracts_reasoning_tokens(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_responses_reasoning_request_asks_for_summary(monkeypatch):
+    """Without reasoning.summary the Responses API reports reasoning tokens in
+    usage but emits zero summary deltas — thinking never reaches the UI."""
+    captured: dict = {}
+
+    class _RecordingTransport:
+        async def responses(self, **kwargs):
+            captured.update(kwargs)
+            return _responses_response(0)
+
+    adapter = LiteLLMAdapter(db=None, transport=_RecordingTransport())
+
+    async def load_provider(_id):
+        return _RESPONSES_PROVIDER
+
+    monkeypatch.setattr(adapter, "_load_provider", load_provider)
+    await adapter.complete(
+        agent_model=ModelConfig(
+            provider_id="p", name="m", thinking_enabled=True, thinking_effort="high"
+        ),
+        messages=[{"role": "user", "content": "hi"}],
+    )
+    assert captured["reasoning"] == {"effort": "high", "summary": "auto"}
+
+
+@pytest.mark.asyncio
+async def test_responses_stream_reasoning_request_asks_for_summary(monkeypatch):
+    captured: dict = {}
+
+    class _RecordingTransport:
+        async def responses(self, **kwargs):
+            captured.update(kwargs)
+            return _responses_stream(0)
+
+    adapter = LiteLLMAdapter(db=None, transport=_RecordingTransport())
+
+    async def load_provider(_id):
+        return _RESPONSES_PROVIDER
+
+    monkeypatch.setattr(adapter, "_load_provider", load_provider)
+    async for _kind, _payload in adapter.complete_stream(
+        agent_model=ModelConfig(
+            provider_id="p", name="m", thinking_enabled=True, thinking_effort="high"
+        ),
+        messages=[{"role": "user", "content": "hi"}],
+    ):
+        pass
+    assert captured["reasoning"] == {"effort": "high", "summary": "auto"}
+
+
+@pytest.mark.asyncio
+async def test_responses_reasoning_disabled_omits_summary(monkeypatch):
+    """effort=none produces no reasoning — a summary request would be noise."""
+    captured: dict = {}
+
+    class _RecordingTransport:
+        async def responses(self, **kwargs):
+            captured.update(kwargs)
+            return _responses_response(0)
+
+    adapter = LiteLLMAdapter(db=None, transport=_RecordingTransport())
+
+    async def load_provider(_id):
+        return _RESPONSES_PROVIDER
+
+    monkeypatch.setattr(adapter, "_load_provider", load_provider)
+    await adapter.complete(
+        agent_model=ModelConfig(provider_id="p", name="m", thinking_enabled=False),
+        messages=[{"role": "user", "content": "hi"}],
+    )
+    assert captured["reasoning"] == {"effort": "none"}
+
+
+@pytest.mark.asyncio
 async def test_missing_reasoning_tokens_stays_none(monkeypatch):
     adapter = LiteLLMAdapter(
         db=None,
@@ -942,7 +1016,7 @@ async def test_opencode_gpt_uses_responses_reasoning(monkeypatch):
     assert result.content == "done"
     assert captured["model"] == "openai/gpt-5.2"
     assert captured["api_base"] == "https://opencode.ai/zen/v1"
-    assert captured["reasoning"] == {"effort": "high"}
+    assert captured["reasoning"] == {"effort": "high", "summary": "auto"}
     assert "reasoning_effort" not in captured
 
 

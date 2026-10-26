@@ -203,6 +203,55 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return resp.json() as Promise<T>;
 }
 
+async function downloadFile(path: string, filename: string): Promise<void> {
+  const base = await baseReady;
+  const resp = await fetch(`${base}${path}`, {
+    credentials: "include",
+    headers: authHeaders(),
+  });
+  if (!resp.ok) throw await apiError(resp);
+  const url = URL.createObjectURL(await resp.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function _runsQs(params?: RunFilters): URLSearchParams {
+  const qs = new URLSearchParams();
+  const keys: (keyof RunFilters)[] = [
+    "agent_id",
+    "session_id",
+    "status",
+    "trigger",
+    "provider_id",
+    "model",
+    "purpose",
+    "kind",
+    "schedule_id",
+    "channel",
+    "capability",
+    "tool_status",
+    "browser_profile",
+    "artifact_format",
+    "retrieval_mode",
+    "effect",
+    "since",
+    "until",
+  ];
+  for (const key of keys) {
+    const v = params?.[key];
+    if (v !== undefined && v !== "") qs.set(key, String(v));
+  }
+  if (params?.is_test !== undefined) qs.set("is_test", String(params.is_test));
+  if (params?.retrieval_degraded !== undefined)
+    qs.set("retrieval_degraded", String(params.retrieval_degraded));
+  if (params?.limit !== undefined) qs.set("limit", String(params.limit));
+  if (params?.offset !== undefined) qs.set("offset", String(params.offset));
+  return qs;
+}
+
 export interface BrowserRuntimeInfo {
   status: string;
   binary?: string;
@@ -269,6 +318,76 @@ async function* streamSseFrames(
   }
 }
 
+// -- Today home aggregate (W13) ----------------------------------------------
+
+export interface HomeAgent {
+  id: string;
+  name: string;
+  status: "running" | "idle" | "paused" | "needs_setup";
+  last_run_at: string | null;
+}
+
+export interface NeedsYouItem {
+  notification_id: string;
+  kind: string;
+  title: string;
+  detail: string;
+  action_path: string | null;
+  agent_id: string | null;
+  agent_name: string | null;
+  created_at: string;
+}
+
+export interface HappenedGroup {
+  agent_id: string;
+  agent_name: string;
+  outcome: "completed" | "failed" | "stopped";
+  count: number;
+  window_start: string;
+  window_end: string;
+}
+
+export interface HomeData {
+  counts: {
+    agents_running: number;
+    agents_total: number;
+    mcps_connected: number;
+    mcps_total: number;
+    skills_published: number;
+    channels_active: number;
+    channels_total: number;
+    vault_documents: number;
+  };
+  agents: HomeAgent[];
+  needs_you: NeedsYouItem[];
+  happened: HappenedGroup[];
+  egress: {
+    providers: { id: string; name: string; type: string }[];
+    mcps: { id: string; name: string }[];
+    channels: {
+      platform: string;
+      agent_id: string;
+      agent_name: string;
+      connected: boolean;
+    }[];
+  };
+}
+
+export interface AgentActivity {
+  sessions: number;
+  sessions_7d: number[];
+  running: number;
+  last_activity_at: string | null;
+}
+
+export interface AgentActivityData {
+  agents: Record<string, AgentActivity>;
+  sessions_this_week: number;
+  sessions_prev_week: number;
+  running_now: number;
+  running_names: string[];
+}
+
 export const api = {
   get baseURL() {
     return resolvedBase;
@@ -303,9 +422,24 @@ export const api = {
       },
     ),
   me: () => request<Operator>("/api/auth/me"),
+  setupCredentials: (data: { username?: string; new_password: string }) =>
+    request<Operator>("/api/auth/setup-credentials", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  changePassword: (data: { old_password: string; new_password: string }) =>
+    request<{ status: string }>("/api/auth/change-password", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  // Today home aggregate — one payload for the landing page + sidebar badges
+  getHome: (signal?: AbortSignal) => request<HomeData>("/api/home", { signal }),
 
   // Agents
   listAgents: () => request<Agent[]>("/api/agents"),
+  getAgentActivity: (signal?: AbortSignal) =>
+    request<AgentActivityData>("/api/agents/activity", { signal }),
   getAgent: (id: string) => request<Agent>(`/api/agents/${id}`),
   listCapabilities: () => request<CapabilityInfo[]>("/api/agents/capabilities"),
   createAgent: (data: {
@@ -821,6 +955,19 @@ export const api = {
       `/api/notifications${unreadOnly ? "?unread_only=true" : ""}`,
       { signal },
     ),
+  // Cursor-paginated history: pass the oldest loaded item's created_at + id.
+  listNotificationsPage: (
+    opts: { before?: string; beforeId?: string; limit?: number; unreadOnly?: boolean } = {},
+    signal?: AbortSignal,
+  ) => {
+    const params = new URLSearchParams();
+    if (opts.unreadOnly) params.set("unread_only", "true");
+    if (opts.before) params.set("before", opts.before);
+    if (opts.beforeId) params.set("before_id", opts.beforeId);
+    if (opts.limit != null) params.set("limit", String(opts.limit));
+    const qs = params.toString();
+    return request<Notification[]>(`/api/notifications${qs ? `?${qs}` : ""}`, { signal });
+  },
   markNotificationRead: (id: string) =>
     request<{ updated: boolean }>(`/api/notifications/${id}/read`, {
       method: "POST",
@@ -935,14 +1082,22 @@ export const api = {
 
   // Providers
   listProviders: () => request<Provider[]>("/api/providers"),
-  createProvider: (data: Partial<Provider> & { api_key?: string }) =>
+  createProvider: (
+    data: Partial<Provider> & {
+      api_key?: string;
+      credentials?: Record<string, string>;
+    },
+  ) =>
     request<Provider>("/api/providers", {
       method: "POST",
       body: JSON.stringify(data),
     }),
   updateProvider: (
     id: string,
-    data: Partial<Provider> & { api_key?: string },
+    data: Partial<Provider> & {
+      api_key?: string;
+      credentials?: Record<string, string>;
+    },
   ) =>
     request<Provider>(`/api/providers/${id}`, {
       method: "PUT",
@@ -950,6 +1105,13 @@ export const api = {
     }),
   deleteProvider: (id: string) =>
     request<{ status: string }>(`/api/providers/${id}`, { method: "DELETE" }),
+  /** Real 1-token probe against the provider (D40) — validates the
+   * credential + model routing; every probe lands on the model-call ledger. */
+  validateProviderModel: (id: string, modelName: string) =>
+    request<{ valid: boolean; error?: string }>(`/api/providers/${id}/validate`, {
+      method: "POST",
+      body: JSON.stringify({ model_name: modelName }),
+    }),
   listModels: (id: string) =>
     request<ProviderModelsResponse>(`/api/providers/${id}/models`),
   refreshProviderModels: (id: string) =>
@@ -967,6 +1129,34 @@ export const api = {
       {
         method: "DELETE",
       },
+    ),
+  listCatalogModels: (id: string, catalogProvider?: string) =>
+    request<{
+      catalog_provider_id: string | null;
+      providers: { id: string; name: string; models: number }[];
+      models: {
+        id: string;
+        name: string;
+        context_window_tokens: number | null;
+        supports_thinking?: boolean | null;
+        supports_vision?: boolean | null;
+      }[];
+    }>(
+      `/api/providers/${id}/catalog-models${catalogProvider ? `?catalog_provider=${encodeURIComponent(catalogProvider)}` : ""}`,
+    ),
+  setModelMetadata: (
+    id: string,
+    modelName: string,
+    body: {
+      fields?: Record<string, unknown>;
+      catalog_provider_id?: string;
+      catalog_model_id?: string;
+      clear_catalog_mapping?: boolean;
+    },
+  ) =>
+    request<{ resolved: Record<string, unknown>; revision: number }>(
+      `/api/providers/${id}/models/${encodeURIComponent(modelName)}/metadata`,
+      { method: "PUT", body: JSON.stringify(body) },
     ),
 
   // Approvals
@@ -1152,7 +1342,8 @@ export const api = {
     ),
 
   // Schedules (v0.2 W8)
-  listSchedules: () => request<Schedule[]>("/api/schedules"),
+  listSchedules: (archived = false) =>
+    request<Schedule[]>(`/api/schedules${archived ? "?archived=true" : ""}`),
   getSchedule: (id: string) => request<Schedule>(`/api/schedules/${id}`),
   createSchedule: (data: SchedulePayload) =>
     request<Schedule>("/api/schedules", {
@@ -1172,18 +1363,16 @@ export const api = {
     request<Schedule>(`/api/schedules/${id}/resume`, { method: "POST" }),
   duplicateSchedule: (id: string) =>
     request<Schedule>(`/api/schedules/${id}/duplicate`, { method: "POST" }),
-  deleteSchedule: (id: string) =>
-    request<{ id: string; archived: boolean }>(`/api/schedules/${id}`, {
-      method: "DELETE",
-    }),
+  deleteSchedule: (id: string, hard = false) =>
+    request<{ id: string; archived?: boolean; deleted?: boolean }>(
+      `/api/schedules/${id}${hard ? "?hard=true" : ""}`,
+      { method: "DELETE" },
+    ),
+  unarchiveSchedule: (id: string) =>
+    request<Schedule>(`/api/schedules/${id}/unarchive`, { method: "POST" }),
   runScheduleNow: (id: string) =>
     request<{ run_id: string | null; status: string; error: string | null }>(
       `/api/schedules/${id}/run-now`,
-      { method: "POST" },
-    ),
-  testRunSchedule: (id: string) =>
-    request<{ run_id: string | null; status: string; error: string | null }>(
-      `/api/schedules/${id}/test-run`,
       { method: "POST" },
     ),
   previewSchedule: (trigger: ScheduleTrigger, count = 5) =>
@@ -1219,6 +1408,11 @@ export const api = {
     request<{ id: string; deleted: boolean }>(`/api/mcp/servers/${id}`, {
       method: "DELETE",
     }),
+  updateMcpTool: (serverId: string, toolId: string, body: { require_approval: boolean }) =>
+    request<{ id: string; capability_name: string; require_approval: boolean }>(
+      `/api/mcp/servers/${serverId}/tools/${toolId}`,
+      { method: "PATCH", body: JSON.stringify(body) },
+    ),
   listMcpServerTools: (id: string) =>
     request<McpToolInfo[]>(`/api/mcp/servers/${id}/tools`),
   getMcpServerBlastRadius: (id: string) =>
@@ -1321,6 +1515,7 @@ export const api = {
     bot_token: string;
     webhook_secret?: string;
     mode?: string;
+    allowed_chat_ids?: string[] | null;
   }) =>
     request<ChannelInfo>("/api/channels", {
       method: "POST",
@@ -1333,6 +1528,8 @@ export const api = {
       webhook_secret?: string;
       enabled?: boolean;
       mode?: string;
+      agent_id?: string;
+      allowed_chat_ids?: string[] | null;
     },
   ) =>
     request<ChannelInfo>(`/api/channels/${id}`, {
@@ -1352,38 +1549,15 @@ export const api = {
 
   // Observability (Ticket 09)
   listRuns: (params?: RunFilters) => {
-    const qs = new URLSearchParams();
-    const keys: (keyof RunFilters)[] = [
-      "agent_id",
-      "status",
-      "trigger",
-      "provider_id",
-      "model",
-      "purpose",
-      "kind",
-      "schedule_id",
-      "channel",
-      "capability",
-      "tool_status",
-      "browser_profile",
-      "artifact_format",
-      "retrieval_mode",
-      "effect",
-      "since",
-      "until",
-    ];
-    for (const key of keys) {
-      const v = params?.[key];
-      if (v !== undefined && v !== "") qs.set(key, String(v));
-    }
-    if (params?.is_test !== undefined)
-      qs.set("is_test", String(params.is_test));
-    if (params?.retrieval_degraded !== undefined)
-      qs.set("retrieval_degraded", String(params.retrieval_degraded));
-    if (params?.limit !== undefined) qs.set("limit", String(params.limit));
-    if (params?.offset !== undefined) qs.set("offset", String(params.offset));
-    const q = qs.toString();
+    const q = _runsQs(params).toString();
     return request<RunSummary[]>(`/api/runs${q ? `?${q}` : ""}`);
+  },
+  exportRunsXlsx: (params?: RunFilters) => {
+    const q = _runsQs(params).toString();
+    return downloadFile(
+      `/api/runs/export.xlsx${q ? `?${q}` : ""}`,
+      "caberos-traces.xlsx",
+    );
   },
   getRunDetail: (runId: string) => request<RunDetail>(`/api/runs/${runId}`),
   listAudit: (params?: {
@@ -1449,6 +1623,11 @@ export const api = {
   getHealth: () => request<HealthStatus>("/api/health"),
   getDashboardStats: (days = 7) =>
     request<DashboardStats>(`/api/stats?days=${days}`),
+  exportStatsXlsx: (days = 7) =>
+    downloadFile(
+      `/api/stats/export.xlsx?days=${days}`,
+      "caberos-observability.xlsx",
+    ),
 
   // Global settings
   getYoloMode: () => request<{ yolo_mode: boolean }>("/api/settings/yolo"),
@@ -1482,6 +1661,11 @@ export const api = {
     }>("/api/browser/runtime/install", { method: "POST" }),
   removeBrowserRuntime: () =>
     request<{ status: string }>("/api/browser/runtime", { method: "DELETE" }),
+  openBrowserTestWindow: () =>
+    request<{ status: string; binary: string; auto_close_seconds: number }>(
+      "/api/browser/runtime/test-window",
+      { method: "POST" },
+    ),
   listBrowserProfiles: () =>
     request<
       {

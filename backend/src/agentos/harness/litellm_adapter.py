@@ -168,11 +168,20 @@ class LiteLLMAdapter:
         if provider.encrypted_key:
             api_key = decrypt(provider.encrypted_key)
 
+        extra_params = json.loads(provider.extra_params) if provider.extra_params else {}
+        if provider.encrypted_credentials:
+            # Named credentials (azure api_version, bedrock aws_*) merge
+            # under explicit extra_params so every call site that applies
+            # extras — chat, responses, streams, probes, aux calls — gets
+            # them without each site knowing this column exists.
+            creds = json.loads(decrypt(provider.encrypted_credentials))
+            extra_params = {**creds, **extra_params}
+
         config: dict[str, Any] = {
             "api_key": api_key,
             "base_url": provider.base_url,
             "org_id": provider.org_id,
-            "extra_params": json.loads(provider.extra_params) if provider.extra_params else {},
+            "extra_params": extra_params,
             "type": provider.type,
         }
         self._provider_cache[provider_id] = config
@@ -190,6 +199,10 @@ class LiteLLMAdapter:
             "model_str": model_str,
             "api_key": provider["api_key"] or None,
             "base_url": api_base or provider["base_url"] or None,
+            # Extras already carry decrypted credentials — aux callers
+            # (compaction summaries) merge them so azure/bedrock work
+            # off the main dispatch path too.
+            "extra_params": provider["extra_params"],
             # Aux calls (compaction summaries) must use the same endpoint —
             # reasoning models reject even plain calls on chat completions
             # when params like max_tokens are sent.
@@ -427,14 +440,9 @@ class LiteLLMAdapter:
         kwargs.update(provider["extra_params"])
         if agent_model.max_tokens:
             kwargs["max_output_tokens"] = agent_model.max_tokens
-        if agent_model.thinking_enabled is not None:
-            kwargs["reasoning"] = {
-                "effort": (
-                    agent_model.thinking_effort or "medium"
-                    if agent_model.thinking_enabled
-                    else "none"
-                )
-            }
+        reasoning = self._responses_reasoning(agent_model)
+        if reasoning is not None:
+            kwargs["reasoning"] = reasoning
         # Runtime-owned native input/tools recomputed from the sanitized
         # counted originals always win over provider extras.
         self._reassert_runtime(
@@ -501,14 +509,9 @@ class LiteLLMAdapter:
         kwargs.update(provider["extra_params"])
         if agent_model.max_tokens:
             kwargs["max_output_tokens"] = agent_model.max_tokens
-        if agent_model.thinking_enabled is not None:
-            kwargs["reasoning"] = {
-                "effort": (
-                    agent_model.thinking_effort or "medium"
-                    if agent_model.thinking_enabled
-                    else "none"
-                )
-            }
+        reasoning = self._responses_reasoning(agent_model)
+        if reasoning is not None:
+            kwargs["reasoning"] = reasoning
         self._reassert_runtime(
             kwargs,
             model=model_str,
@@ -629,6 +632,20 @@ class LiteLLMAdapter:
                 if value is not None:
                     return int(value)
         return None
+
+    @staticmethod
+    def _responses_reasoning(agent_model: ModelConfig) -> dict[str, str] | None:
+        """Responses API reasoning params. When thinking is on, summary is
+        required — without it the API reports reasoning tokens in usage but
+        emits no reasoning deltas/items, so thinking never reaches the UI."""
+        if agent_model.thinking_enabled is None:
+            return None
+        if not agent_model.thinking_enabled:
+            return {"effort": "none"}
+        return {
+            "effort": agent_model.thinking_effort or "medium",
+            "summary": "auto",
+        }
 
     @staticmethod
     def _apply_thinking_kwargs(

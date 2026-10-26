@@ -1,8 +1,8 @@
-/** W11 catalog UX — ModelSelector seams (per-instance fetches, emit
+/** W11 catalog UX — ModelPicker seams (per-instance fetches, emit
  * signature, provenance limits, availability text). */
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ModelSelector } from "./ModelSelector";
+import { ModelPicker } from "./ModelPicker";
 import { api } from "@/lib/api";
 import type { ModelInfo, Provider } from "@/lib/types";
 
@@ -15,6 +15,7 @@ const provider: Provider = {
   org_id: null,
   extra_params: {},
   custom_models: [],
+  credential_fields: [],
 };
 
 const model = (over: Partial<ModelInfo> = {}): ModelInfo => ({
@@ -23,7 +24,7 @@ const model = (over: Partial<ModelInfo> = {}): ModelInfo => ({
   ...over,
 });
 
-describe("ModelSelector", () => {
+describe("ModelPicker", () => {
   afterEach(() => vi.restoreAllMocks());
 
   function stubProviders(models: ModelInfo[]) {
@@ -37,7 +38,7 @@ describe("ModelSelector", () => {
   it("reads the local listing on mount and again on every open", async () => {
     stubProviders([model()]);
     render(
-      <ModelSelector
+      <ModelPicker
         defaultProviderId="prov-1"
         defaultModelName="gpt-6"
         onChange={() => {}}
@@ -54,7 +55,7 @@ describe("ModelSelector", () => {
     ]);
     const onChange = vi.fn();
     render(
-      <ModelSelector
+      <ModelPicker
         defaultProviderId="prov-1"
         defaultModelName="other"
         onChange={onChange}
@@ -80,7 +81,7 @@ describe("ModelSelector", () => {
       }),
     ]);
     render(
-      <ModelSelector
+      <ModelPicker
         defaultProviderId="prov-1"
         defaultModelName="gone"
         onChange={() => {}}
@@ -107,7 +108,7 @@ describe("ModelSelector", () => {
       });
 
     render(
-      <ModelSelector
+      <ModelPicker
         defaultProviderId="prov-1"
         defaultModelName="gone"
         onChange={() => {}}
@@ -132,12 +133,12 @@ describe("ModelSelector", () => {
     const on2 = vi.fn();
     render(
       <>
-        <ModelSelector
+        <ModelPicker
           defaultProviderId="prov-1"
           defaultModelName="gpt-6"
           onChange={on1}
         />
-        <ModelSelector
+        <ModelPicker
           defaultProviderId="prov-1"
           defaultModelName="gpt-6"
           onChange={on2}
@@ -165,7 +166,7 @@ describe("ModelSelector", () => {
       })
       .mockRejectedValueOnce(new Error("500"));
     render(
-      <ModelSelector
+      <ModelPicker
         defaultProviderId="prov-1"
         defaultModelName="keep"
         onChange={() => {}}
@@ -183,7 +184,7 @@ describe("ModelSelector", () => {
   it("keeps the selected model even when it is unknown", async () => {
     stubProviders([]);
     render(
-      <ModelSelector
+      <ModelPicker
         defaultProviderId="prov-1"
         defaultModelName="custom-model-x"
         onChange={() => {}}
@@ -203,7 +204,7 @@ describe("ModelSelector", () => {
       .mockResolvedValue({ discovery: "dynamic", models: v2, revision: "r2" });
     const onChange = vi.fn();
     render(
-      <ModelSelector
+      <ModelPicker
         defaultProviderId="prov-1"
         defaultModelName="gpt-6"
         onChange={onChange}
@@ -233,7 +234,7 @@ describe("ModelSelector", () => {
       .mockResolvedValueOnce(response)
       .mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
     const onChange = vi.fn();
-    render(<ModelSelector defaultProviderId="prov-1" defaultModelName="gpt-6" onChange={onChange} />);
+    render(<ModelPicker defaultProviderId="prov-1" defaultModelName="gpt-6" onChange={onChange} />);
     await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByText(/gpt-6/));
     await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
@@ -258,7 +259,7 @@ describe("ModelSelector", () => {
       }),
     ]);
     render(
-      <ModelSelector
+      <ModelPicker
         defaultProviderId="prov-1"
         defaultModelName="other"
         onChange={() => {}}

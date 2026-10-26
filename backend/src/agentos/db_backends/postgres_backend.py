@@ -72,6 +72,7 @@ class PostgresBackend(DatabaseBackend):
         patches = [
             ("messages", "attachments", "TEXT"),
             ("providers", "custom_models", "TEXT NOT NULL DEFAULT '[]'"),
+            ("providers", "encrypted_credentials", "TEXT"),
             ("messages", "subagent_id", "VARCHAR(36)"),
             ("mcp_servers", "require_approval", "BOOLEAN DEFAULT TRUE"),
             ("mcp_servers", "oauth_config", "TEXT"),

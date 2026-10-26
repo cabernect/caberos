@@ -4,6 +4,7 @@ On startup, all enabled ChannelConfig rows are loaded and instantiated.
 The registry is keyed by (platform, agent_id) for delivery lookups.
 """
 
+import json
 import logging
 from typing import Any
 
@@ -65,6 +66,13 @@ async def _instantiate_channel(config: ChannelConfig) -> Channel | None:
             agent_id=config.agent_id,
             webhook_secret=config.webhook_secret,
         )
+        if config.extra_config:
+            try:
+                extra = json.loads(config.extra_config)
+                if isinstance(extra.get("allowed_chat_ids"), list):
+                    channel.allowed_chat_ids = {str(cid) for cid in extra["allowed_chat_ids"]}
+            except (TypeError, ValueError):
+                pass
         _active_channels[(config.platform, config.agent_id)] = channel
         log.info(
             "Loaded channel: %s → agent %s (mode=%s)", config.platform, config.agent_id, config.mode

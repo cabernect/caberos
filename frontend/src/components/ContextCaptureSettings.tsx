@@ -8,32 +8,56 @@ type Policy = {
   pinned: Record<string, boolean>;
 };
 
+const FIELDS = [
+  {
+    key: "retention_days",
+    label: "Retention window",
+    hint: "Captured bodies older than this are deleted.",
+    unit: "days",
+  },
+  {
+    key: "max_bytes",
+    label: "Total cap",
+    hint: "Oldest captures expire first past this size.",
+    unit: "MiB",
+  },
+  {
+    key: "max_payload_bytes",
+    label: "Per-request cap",
+    hint: "Bodies larger than this are stored truncated.",
+    unit: "KiB",
+  },
+] as const;
+
+type FieldKey = (typeof FIELDS)[number]["key"];
+
 /** Installation-wide request-capture retention — one policy for every
- * agent on this installation. Collapsed by default; the policy is only
- * fetched when the operator expands the section. */
+ * agent on this installation. */
 export function ContextCaptureSettings() {
-  const [open, setOpen] = useState(false);
   const [policy, setPolicy] = useState<Policy | null>(null);
-  const [days, setDays] = useState("");
-  const [mib, setMib] = useState("");
-  const [perBodyKib, setPerBodyKib] = useState("");
+  const [values, setValues] = useState<Record<FieldKey, string>>({
+    retention_days: "",
+    max_bytes: "",
+    max_payload_bytes: "",
+  });
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (!open || policy !== null) return;
     let alive = true;
     api
       .getContextCapturePolicy()
       .then((p) => {
         if (!alive) return;
         setPolicy(p);
-        setDays(String(p.retention_days));
         // Keep fractional MiB/KiB — floor would silently shrink a stored
         // byte budget on the next save.
-        setMib(String(p.max_bytes / 1048576));
-        setPerBodyKib(String(p.max_payload_bytes / 1024));
+        setValues({
+          retention_days: String(p.retention_days),
+          max_bytes: String(p.max_bytes / 1048576),
+          max_payload_bytes: String(p.max_payload_bytes / 1024),
+        });
       })
       .catch((e) => {
         if (alive) setError(e instanceof Error ? e.message : "Failed to load");
@@ -41,7 +65,7 @@ export function ContextCaptureSettings() {
     return () => {
       alive = false;
     };
-  }, [open, policy]);
+  }, []);
 
   const save = async () => {
     setSaving(true);
@@ -49,9 +73,9 @@ export function ContextCaptureSettings() {
     setSaved(false);
     try {
       // Number() — strict: "1.5", "1junk", "" all reject.
-      const daysN = Number(days);
-      const mibN = Number(mib);
-      const kibN = Number(perBodyKib);
+      const daysN = Number(values.retention_days);
+      const mibN = Number(values.max_bytes);
+      const kibN = Number(values.max_payload_bytes);
       if (!Number.isSafeInteger(daysN) || daysN < 1)
         throw new Error("Retention days must be a positive whole number");
       if (!Number.isFinite(mibN) || mibN <= 0)
@@ -75,99 +99,107 @@ export function ContextCaptureSettings() {
     }
   };
 
-  const inputCls =
-    "w-24 rounded-[5px] border px-2 py-1 text-[12px] outline-none";
-  const inputStyle = {
-    borderColor: "var(--border)",
-    background: "var(--surface)",
-  } as const;
-
   return (
     <div>
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        className="text-[13px] font-medium text-[var(--ink)]"
-      >
-        {open ? "▾" : "▸"} Request capture retention
-      </button>
-      {open && (
-        <div className="mt-3 space-y-2">
-          <p className="text-[11px] text-[var(--ink-3)]">
-            Applies to every agent on this installation. Lowering limits can
-            expire captured request bodies — conversations and receipts are
-            never deleted.
-          </p>
-          {policy === null && error === null && (
-            <p className="text-[11px] text-[var(--ink-3)]">Loading…</p>
-          )}
-          {policy !== null && (
-            <div className="flex flex-wrap items-end gap-3">
-              <label className="block">
-                <span className="mb-1 block text-[12px] font-medium text-[var(--ink-2)]">
-                  Retention (days)
-                </span>
-                <input
-                  type="number"
-                  min={1}
-                  value={days}
-                  title={policy.pinned.retention_days ? "Pinned by environment" : undefined}
-                  disabled={policy.pinned.retention_days}
-                  onChange={(e) => setDays(e.target.value)}
-                  className={inputCls}
-                  style={inputStyle}
-                />
-              </label>
-              <label className="block">
-                <span className="mb-1 block text-[12px] font-medium text-[var(--ink-2)]">
-                  Total cap (MiB)
-                </span>
-                <input
-                  type="number"
-                  min={1}
-                  value={mib}
-                  title={policy.pinned.max_bytes ? "Pinned by environment" : undefined}
-                  disabled={policy.pinned.max_bytes}
-                  onChange={(e) => setMib(e.target.value)}
-                  className={inputCls}
-                  style={inputStyle}
-                />
-              </label>
-              <label className="block">
-                <span className="mb-1 block text-[12px] font-medium text-[var(--ink-2)]">
-                  Per-request cap (KiB)
-                </span>
-                <input
-                  type="number"
-                  min={1}
-                  value={perBodyKib}
-                  title={policy.pinned.max_payload_bytes ? "Pinned by environment" : undefined}
-                  disabled={policy.pinned.max_payload_bytes}
-                  onChange={(e) => setPerBodyKib(e.target.value)}
-                  className={inputCls}
-                  style={inputStyle}
-                />
-              </label>
-              <button
-                onClick={save}
-                disabled={saving}
-                className="rounded-[6px] px-4 py-2 text-[13px] font-medium transition"
-                style={{
-                  background: "var(--ink)",
-                  color: "var(--white)",
-                  border: "1px solid var(--ink)",
-                  cursor: saving ? "not-allowed" : "pointer",
-                  opacity: saving ? 0.5 : 1,
-                }}
-              >
-                Save
-              </button>
-            </div>
-          )}
-          {error && <p className="text-[11px] text-[var(--danger,#b91c1c)]">{error}</p>}
-          {saved && <p className="text-[11px] text-[var(--olive,#4d7c0f)]">Saved.</p>}
-        </div>
+      <p className="text-[12px] text-[var(--ink-3)]">
+        Applies to every agent on this installation. Lowering limits can
+        expire captured request bodies — conversations and receipts are
+        never deleted.
+      </p>
+
+      {policy === null && error === null && (
+        <p className="mt-3 text-[12px] text-[var(--ink-3)]">Loading…</p>
+      )}
+
+      {policy !== null && (
+        <>
+          <div
+            className="mt-3 divide-y border-t"
+            style={{ borderColor: "var(--border-soft)" }}
+          >
+            {FIELDS.map((f) => {
+              const pinned = policy.pinned[f.key];
+              return (
+                <div
+                  key={f.key}
+                  className="flex items-center justify-between gap-4 py-3"
+                  style={{ borderColor: "var(--border-soft)" }}
+                >
+                  <div className="min-w-0">
+                    <p className="flex items-center gap-2 text-[13px] font-medium text-[var(--ink)]">
+                      {f.label}
+                      {pinned && (
+                        <span
+                          className="rounded-full px-1.5 py-0.5 text-[10px] font-medium"
+                          style={{
+                            background: "var(--warning-tint)",
+                            color: "var(--warning)",
+                          }}
+                        >
+                          Pinned by environment
+                        </span>
+                      )}
+                    </p>
+                    <p className="mt-0.5 text-[12px] text-[var(--ink-3)]">
+                      {f.hint}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <input
+                      type="number"
+                      min={1}
+                      aria-label={`${f.label} (${f.unit})`}
+                      value={values[f.key]}
+                      disabled={pinned}
+                      onChange={(e) =>
+                        setValues((v) => ({ ...v, [f.key]: e.target.value }))
+                      }
+                      className="w-[76px] rounded-md border px-2 py-1.5 text-center text-[13px] disabled:opacity-50"
+                      style={{
+                        borderColor: "var(--border)",
+                        background: "var(--white)",
+                        color: "var(--ink)",
+                      }}
+                    />
+                    <span className="w-8 text-[12px] text-[var(--ink-3)]">
+                      {f.unit}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="mt-3 flex items-center justify-end gap-3">
+            {error && (
+              <p className="text-[12px]" style={{ color: "var(--danger)" }}>
+                {error}
+              </p>
+            )}
+            {saved && (
+              <p className="text-[12px]" style={{ color: "var(--success)" }}>
+                Saved.
+              </p>
+            )}
+            <button
+              onClick={save}
+              disabled={saving}
+              className="rounded-md px-4 py-1.5 text-[13px] font-medium transition hover:opacity-90 disabled:opacity-50"
+              style={{
+                background: "var(--ink)",
+                color: "var(--white)",
+                border: "1px solid var(--ink)",
+              }}
+            >
+              Save
+            </button>
+          </div>
+        </>
+      )}
+
+      {policy === null && error !== null && (
+        <p className="mt-3 text-[12px]" style={{ color: "var(--danger)" }}>
+          {error}
+        </p>
       )}
     </div>
   );

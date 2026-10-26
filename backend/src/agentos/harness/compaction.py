@@ -234,6 +234,7 @@ async def generate_summary(
     model_str: str,
     api_key: str | None = None,
     base_url: str | None = None,
+    extra_params: dict | None = None,
     use_responses: bool = False,
     accounting: Any | None = None,
     provider_id: str | None = None,
@@ -312,6 +313,11 @@ async def generate_summary(
                 kwargs["api_key"] = api_key
             if base_url:
                 kwargs["api_base"] = base_url
+            # Provider extras (azure api_version, bedrock aws_*) — never
+            # let them reroute the counted request fields.
+            for k, v in (extra_params or {}).items():
+                if k not in ("model", "input", "messages", "tools", "stream"):
+                    kwargs[k] = v
             with capture_scope(
                 purpose="compaction",
                 agent_id=agent_id,
@@ -338,6 +344,9 @@ async def generate_summary(
             kwargs["api_key"] = api_key
         if base_url:
             kwargs["api_base"] = base_url
+        for k, v in (extra_params or {}).items():
+            if k not in ("model", "input", "messages", "tools", "stream"):
+                kwargs[k] = v
 
         with capture_scope(
             purpose="compaction",
@@ -580,6 +589,7 @@ async def compact_context(
     previous_summary: str | None = None,
     api_key: str | None = None,
     base_url: str | None = None,
+    extra_params: dict | None = None,
     force: bool = False,
     use_responses: bool = False,
     input_budget: int | None = None,
@@ -736,6 +746,7 @@ async def compact_context(
             model_str=model_str,
             api_key=api_key,
             base_url=base_url,
+            extra_params=extra_params,
             use_responses=use_responses,
             accounting=accounting,
             provider_id=(model_cfg.provider_id if model_cfg else None),

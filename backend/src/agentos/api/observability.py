@@ -15,7 +15,8 @@ import logging
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -392,6 +393,7 @@ def _utc(value: datetime | None) -> datetime | None:
 @router.get("/runs")
 async def list_runs(
     agent_id: str | None = Query(None),
+    session_id: str | None = Query(None),
     status: str | None = Query(None),
     trigger: str | None = Query(None),
     is_test: bool | None = Query(None),
@@ -424,6 +426,8 @@ async def list_runs(
     stmt = select(Run).order_by(Run.started_at.desc()).limit(limit).offset(offset)
     if agent_id:
         stmt = stmt.where(Run.agent_id == agent_id)
+    if session_id:
+        stmt = stmt.where(Run.session_id == session_id)
     if status is not None:
         statuses = [s.strip() for s in status.split(",") if s.strip()]
         if not statuses:
@@ -485,6 +489,99 @@ async def list_runs(
         )
         for r in runs
     ]
+
+
+def _truthy(v: str | None) -> bool | None:
+    if v is None:
+        return None
+    return v.strip().lower() in ("1", "true", "yes")
+
+
+def _xlsx_response(filename: str, sheets: list[tuple[str, list[list[Any]]]]) -> StreamingResponse:
+    from io import BytesIO
+
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    for i, (name, rows) in enumerate(sheets):
+        ws = wb.active if i == 0 else wb.create_sheet()
+        ws.title = name
+        for row in rows:
+            ws.append(row)
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/runs/export.xlsx")
+async def export_runs_xlsx(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    _op=Depends(require_operator),
+) -> StreamingResponse:
+    """Export runs as .xlsx — same filters as GET /api/runs, capped at 2000 rows."""
+    qp = request.query_params
+    runs = await list_runs(
+        agent_id=qp.get("agent_id"),
+        session_id=qp.get("session_id"),
+        status=qp.get("status"),
+        trigger=qp.get("trigger"),
+        is_test=_truthy(qp.get("is_test")),
+        provider_id=qp.get("provider_id"),
+        model=qp.get("model"),
+        purpose=qp.get("purpose"),
+        kind=qp.get("kind"),
+        schedule_id=qp.get("schedule_id"),
+        channel=qp.get("channel"),
+        capability=qp.get("capability"),
+        tool_status=qp.get("tool_status"),
+        browser_profile=qp.get("browser_profile"),
+        artifact_format=qp.get("artifact_format"),
+        retrieval_mode=qp.get("retrieval_mode"),
+        retrieval_degraded=_truthy(qp.get("retrieval_degraded")),
+        effect=qp.get("effect"),
+        since=datetime.fromisoformat(qp["since"]) if qp.get("since") else None,
+        until=datetime.fromisoformat(qp["until"]) if qp.get("until") else None,
+        limit=2000,
+        offset=int(qp.get("offset") or 0),
+        db=db,
+        _op=_op,
+    )
+    rows: list[list[Any]] = [
+        [
+            "Run ID",
+            "Agent",
+            "Status",
+            "Trigger",
+            "Tokens in",
+            "Tokens out",
+            "Cost (USD)",
+            "Latency (ms)",
+            "Started",
+            "Error",
+        ]
+    ]
+    for r in runs:
+        rows.append(
+            [
+                r.id,
+                r.agent_name or r.agent_id,
+                r.status,
+                r.trigger,
+                r.tokens_in,
+                r.tokens_out,
+                r.cost,
+                r.latency_ms,
+                r.started_at.isoformat() if r.started_at else None,
+                r.error,
+            ]
+        )
+    return _xlsx_response("caberos-traces.xlsx", [("Runs", rows)])
 
 
 @router.get("/runs/{run_id}")
@@ -1002,6 +1099,45 @@ async def get_dashboard_stats(
         time_series=time_series,
         by_agent=by_agent,
         recent_runs=recent_runs,
+    )
+
+
+@router.get("/stats/export.xlsx")
+async def export_stats_xlsx(
+    days: int = Query(7, ge=1, le=90),
+    db: AsyncSession = Depends(get_db),
+    _op=Depends(require_operator),
+) -> StreamingResponse:
+    """Export dashboard stats as .xlsx — KPI, daily series, and per-agent sheets."""
+    stats = await get_dashboard_stats(days=days, db=db, _op=_op)
+    overview: list[list[Any]] = [
+        ["Metric", "Value"],
+        ["Days", days],
+        ["Total runs", stats.total_runs],
+        ["Total cost (USD)", stats.total_cost],
+        ["Total tokens", stats.total_tokens],
+        ["Error count", stats.error_count],
+        ["Error rate (%)", round(stats.error_rate, 2)],
+        ["Avg latency (ms)", round(stats.avg_latency_ms, 1)],
+    ]
+    daily: list[list[Any]] = [["Date", "Runs", "Errors", "Tokens", "Cost (USD)"]]
+    for p in stats.time_series:
+        daily.append([p.date, p.runs, p.errors, p.tokens, p.cost])
+    by_agent: list[list[Any]] = [["Agent", "Runs", "Errors", "Tokens", "Cost (USD)", "Last active"]]
+    for a in stats.by_agent:
+        by_agent.append(
+            [
+                a.agent_name or a.agent_id,
+                a.run_count,
+                a.error_count,
+                a.total_tokens,
+                a.total_cost,
+                a.last_active.isoformat() if a.last_active else None,
+            ]
+        )
+    return _xlsx_response(
+        "caberos-observability.xlsx",
+        [("Overview", overview), ("Daily", daily), ("By agent", by_agent)],
     )
 
 

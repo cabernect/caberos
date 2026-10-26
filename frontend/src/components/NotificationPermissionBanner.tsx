@@ -78,44 +78,36 @@ export function NotificationPermissionBanner() {
 
   return (
     <div
-      className="pointer-events-auto fixed bottom-5 left-1/2 z-[95] flex w-[min(430px,90vw)] -translate-x-1/2 items-start gap-3 rounded-[8px] border p-3 shadow-lg"
-      style={{ background: "var(--white)", borderColor: "var(--accent)" }}
+      className="pointer-events-auto fixed right-6 top-[104px] z-[90] flex items-center gap-3 rounded-lg border py-2.5 pl-3.5 pr-2.5 shadow-md"
+      style={{ background: "var(--white)", borderColor: "var(--border)" }}
       role="dialog"
       aria-label="Enable notifications"
     >
-      <BellRing className="mt-0.5 h-4 w-4 shrink-0" style={{ color: "var(--accent)" }} />
-      <div className="min-w-0 flex-1">
-        <p className="text-[13px] font-medium text-[var(--ink)]">
-          Enable {os === "system" ? "desktop" : "browser"} notifications?
-        </p>
-        <p className="mt-0.5 text-[12px] text-[var(--ink-2)]">
-          Get alerts when you’re not looking at CaberOS. The inbox keeps
-          everything either way — this only controls pings.
-        </p>
-        <div className="mt-2 flex gap-2">
-          <button
-            type="button"
-            onClick={() => void enable()}
-            className="rounded-[5px] px-3 py-1 text-[12px] font-medium text-white"
-            style={{ background: "var(--accent)", border: "none", cursor: "pointer" }}
-          >
-            Enable
-          </button>
-          <button
-            type="button"
-            onClick={() => void dismiss()}
-            className="rounded-[5px] px-3 py-1 text-[12px] text-[var(--ink-2)]"
-            style={{ background: "none", border: "none", cursor: "pointer" }}
-          >
-            Not now
-          </button>
-        </div>
-      </div>
+      <BellRing className="h-4 w-4 shrink-0" style={{ color: "var(--accent)" }} />
+      <p className="whitespace-nowrap text-[13px] font-medium text-[var(--ink)]">
+        Enable {os === "system" ? "desktop" : "browser"} notifications?
+      </p>
+      <button
+        type="button"
+        onClick={() => void enable()}
+        className="rounded-[5px] px-3 py-1.5 text-[12px] font-medium text-white"
+        style={{ background: "var(--accent)", border: "none", cursor: "pointer" }}
+      >
+        Enable
+      </button>
+      <button
+        type="button"
+        onClick={() => void dismiss()}
+        className="rounded-[5px] px-2 py-1.5 text-[12px] text-[var(--ink-2)]"
+        style={{ background: "none", border: "none", cursor: "pointer" }}
+      >
+        Not now
+      </button>
       <button
         type="button"
         aria-label="Dismiss"
         onClick={() => void dismiss()}
-        className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--ink-3)] hover:bg-[var(--border)]"
+        className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-[var(--ink-3)] transition hover:bg-[var(--border)] hover:text-[var(--ink)]"
         style={{ border: "none", background: "none", cursor: "pointer" }}
       >
         <X className="h-3.5 w-3.5" />

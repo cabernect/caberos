@@ -12,11 +12,13 @@ const NO_IO_TEXT =
 function Pill({ children, tone }: { children: string; tone?: "warn" | "muted" }) {
   return (
     <span
-      className="rounded-[3px] px-1.5 py-0.5 text-[9px]"
+      className="rounded-full px-2 py-0.5 text-[10px] font-medium"
       style={{
-        background: "var(--surface)",
-        border: "1px solid var(--border)",
-        color: tone === "warn" ? "var(--warning, #b08968)" : "var(--ink-3)",
+        background:
+          tone === "warn"
+            ? "color-mix(in oklab, var(--warning, #b08968) 14%, transparent)"
+            : "var(--ground)",
+        color: tone === "warn" ? "var(--warning, #b08968)" : "var(--ink-2)",
       }}
     >
       {children}
@@ -32,13 +34,17 @@ function KeyValue({ data }: { data: Record<string, unknown> }) {
     return <p className="text-[11px] italic text-[var(--ink-3)]">No data recorded.</p>;
   return (
     <div>
-      <dl className="space-y-1">
+      <dl>
         {entries.map(([k, v]) => (
-          <div key={k} className="flex flex-col gap-0.5">
-            <dt className="text-[9px] uppercase tracking-wide text-[var(--ink-3)]">{k}</dt>
-            <dd className="min-w-0 text-[11px] text-[var(--ink)]">
+          <div
+            key={k}
+            className="flex items-baseline justify-between gap-3 border-b py-1.5 last:border-b-0"
+            style={{ borderColor: "var(--border)" }}
+          >
+            <dt className="shrink-0 text-[11px] text-[var(--ink-2)]">{k}</dt>
+            <dd className="min-w-0 text-right font-mono text-[11px] text-[var(--ink)]">
               {typeof v === "object" ? (
-                <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-[4px] p-1.5 font-mono text-[10px]" style={{ background: "var(--surface)" }}>
+                <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-[4px] p-1.5 text-left text-[10px]" style={{ background: "var(--ground)" }}>
                   {JSON.stringify(v, null, 1)}
                 </pre>
               ) : (
@@ -50,7 +56,7 @@ function KeyValue({ data }: { data: Record<string, unknown> }) {
       </dl>
       <details className="mt-2">
         <summary className="cursor-pointer text-[10px] text-[var(--ink-3)] select-none">JSON</summary>
-        <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-[4px] p-1.5 font-mono text-[10px]" style={{ background: "var(--surface)" }}>
+        <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-[4px] p-1.5 font-mono text-[10px]" style={{ background: "var(--ground)" }}>
           {JSON.stringify(data, null, 1)}
         </pre>
       </details>
@@ -269,7 +275,7 @@ export function TraceInspector({
 }) {
   const [tab, setTab] = useState<Tab>("overview");
   const event = row.event;
-  const isRoot = event === null;
+  const isRoot = event === null && !row.postRun;
   const isModel = event?.type === "model_call";
   const { input, output } = ioFor(row);
   const d = event?.data ?? {};
@@ -283,47 +289,53 @@ export function TraceInspector({
 
   return (
     <div
-      className="flex min-w-0 flex-col rounded-[6px] border"
-      style={{ borderColor: "var(--border)", background: "var(--white)" }}
+      className="flex min-w-0 flex-col overflow-hidden rounded-lg border"
+      style={{ borderColor: "var(--border)", background: "var(--surface)" }}
       data-testid="trace-inspector"
     >
       {/* Header */}
-      <div className="border-b px-3 py-2" style={{ borderColor: "var(--border)" }}>
-        <p className="truncate text-[12px] font-semibold text-[var(--ink)]">
+      <div className="border-b px-4 pb-3 pt-3.5" style={{ borderColor: "var(--border)" }}>
+        <p className="truncate text-[13px] font-semibold text-[var(--ink)]">
           {spanLabel(row, providerNames)}
         </p>
-        <div className="mt-1 flex flex-wrap items-center gap-1">
+        <div className="mt-1.5 flex flex-wrap items-center gap-1">
           {event?.status && <Pill>{event.status}</Pill>}
           {event?.redacted && <Pill tone="warn">redacted</Pill>}
           {event?.truncated && <Pill>truncated</Pill>}
           {(row.timing === "derived" || event?.estimated_time) && <Pill tone="warn">{timingLabel(row)}</Pill>}
-          {row.timing === "unknown" && <Pill>unknown time</Pill>}
+          {row.timing === "unknown" && !row.postRun && <Pill>unknown time</Pill>}
+          {(row.outsideWindow || row.postRun) && <Pill tone="warn">after run end</Pill>}
         </div>
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 border-b px-2 py-1" style={{ borderColor: "var(--border)" }}>
-        {tabs.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setTab(t.key)}
-            aria-pressed={tab === t.key}
-            className="rounded-[4px] px-2 py-1 text-[11px]"
-            style={{
-              background: tab === t.key ? "var(--accent, #6b6d3f)" : "transparent",
-              color: tab === t.key ? "var(--accent-text, var(--accent-foreground, white))" : "var(--ink-2)",
-              border: "none",
-              cursor: "pointer",
-            }}
-          >
-            {t.label}
-          </button>
-        ))}
+      <div className="border-b px-4 pb-2.5 pt-2.5" style={{ borderColor: "var(--border)" }}>
+        <div
+          className="inline-flex gap-0.5 rounded-md p-0.5"
+          style={{ background: "var(--ground)" }}
+        >
+          {tabs.map((t) => (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              aria-pressed={tab === t.key}
+              className="rounded-[5px] px-2.5 py-1 text-[11px] font-medium transition-colors"
+              style={{
+                background: tab === t.key ? "var(--accent, #6b6d3f)" : "transparent",
+                color: tab === t.key ? "var(--accent-text, var(--accent-foreground, white))" : "var(--ink-2)",
+                border: "none",
+                cursor: "pointer",
+              }}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      <div className="flex-1 overflow-auto px-3 py-2">
+      <div className="flex-1 overflow-auto px-4 pb-3 pt-1.5">
         {tab === "overview" && (
-          <div className="space-y-1.5 text-[11px]">
+          <div className="text-[11px]">
             {isRoot && run && (
               <>
                 <Row k="Status" v={run.status} />
@@ -368,6 +380,21 @@ export function TraceInspector({
                     View run messages
                   </button>
                 )}
+              </>
+            )}
+            {row.postRun && (
+              <>
+                <Row k="Type" v="post-run maintenance" />
+                <Row
+                  k="Records"
+                  v={String(row.postRunCount ?? row.children.length)}
+                />
+                <p className="mt-1.5 text-[10px] text-[var(--ink-3)]">
+                  Session-close housekeeping ledgered to this run —
+                  notification delivery, title and summary calls. These
+                  steps ran after the run ended and sit outside its
+                  recorded window.
+                </p>
               </>
             )}
             {!isRoot && event && (
@@ -449,15 +476,23 @@ the captured request when retention allows."
           ))}
 
         {tab === "metadata" &&
-          (isRoot ? (
+          (row.event === null ? (
             <KeyValue
-              data={{
-                id: run?.id,
-                agent: run?.agent_name ?? run?.agent_id,
-                session: run?.session_id,
-                is_test: run?.is_test,
-                manifest: run?.manifest,
-              }}
+              data={
+                row.postRun
+                  ? {
+                      section: "post-run maintenance",
+                      records: row.postRunCount ?? row.children.length,
+                      placement: "ledgered after run completed_at",
+                    }
+                  : {
+                      id: run?.id,
+                      agent: run?.agent_name ?? run?.agent_id,
+                      session: run?.session_id,
+                      is_test: run?.is_test,
+                      manifest: run?.manifest,
+                    }
+              }
             />
           ) : (
             <KeyValue
@@ -478,10 +513,19 @@ the captured request when retention allows."
 }
 
 function Row({ k, v }: { k: string; v: string }) {
+  const empty = v === "—" || v.toLowerCase() === "not reported" || v === "Unknown time";
   return (
-    <div className="flex gap-2">
-      <span className="w-32 shrink-0 text-[10px] uppercase tracking-wide text-[var(--ink-3)]">{k}</span>
-      <span className="min-w-0 break-all text-[var(--ink)]">{v}</span>
+    <div
+      className="flex items-baseline justify-between gap-3 border-b py-1.5 last:border-b-0"
+      style={{ borderColor: "var(--border)" }}
+    >
+      <span className="shrink-0 text-[11px] text-[var(--ink-2)]">{k}</span>
+      <span
+        className="min-w-0 break-all text-right font-mono text-[11px]"
+        style={{ color: empty ? "var(--ink-3)" : "var(--ink)" }}
+      >
+        {v}
+      </span>
     </div>
   );
 }
@@ -498,7 +542,7 @@ function Honest({ text, onViewMessages }: { text: string; onViewMessages?: () =>
         <button
           onClick={onViewMessages}
           className="mt-2 rounded-[4px] px-2 py-1 text-[11px]"
-          style={{ border: "1px solid var(--border)", background: "var(--white)", color: "var(--ink-2)", cursor: "pointer" }}
+          style={{ border: "1px solid var(--border)", background: "var(--surface)", color: "var(--ink-2)", cursor: "pointer" }}
         >
           View run messages
         </button>

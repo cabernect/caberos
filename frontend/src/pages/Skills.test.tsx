@@ -58,7 +58,7 @@ afterEach(() => {
 });
 
 describe("Skills list activation labels", () => {
-  it("shows 'Not recorded' when a skill has no activations", async () => {
+  it("shows 'No recorded use' when a skill has no activations", async () => {
     render(
       <MemoryRouter>
         <ThemeProvider>
@@ -66,10 +66,10 @@ describe("Skills list activation labels", () => {
         </ThemeProvider>
       </MemoryRouter>,
     );
-    expect(await screen.findByText("Not recorded")).toBeTruthy();
+    expect(await screen.findByText("No recorded use")).toBeTruthy();
   });
 
-  it("shows activation count and last used when recorded", async () => {
+  it("shows activation count when recorded; last-used moves to the tooltip", async () => {
     vi.spyOn(api, "listSkills").mockResolvedValue({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
       skills: [
@@ -84,7 +84,8 @@ describe("Skills list activation labels", () => {
         </ThemeProvider>
       </MemoryRouter>,
     );
-    expect(await screen.findByText("Used 7 times")).toBeTruthy();
-    expect(screen.getByText(/Last used/)).toBeTruthy();
+    const label = await screen.findByText("Used 7 times");
+    expect(label).toBeTruthy();
+    expect(label.getAttribute("title")).toMatch(/Last used/);
   });
 });

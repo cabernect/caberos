@@ -1,8 +1,15 @@
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plug, Plus, Trash2, RefreshCw, ChevronDown, ChevronRight, Key, Search, Store, AlertTriangle } from "lucide-react";
-import { DashboardSidebar, type NavKey } from "@/components/DashboardSidebar";
-import { PageHeader } from "@/components/PageHeader";
+import { Plug, Plus, Trash2, RefreshCw, Key, Search, Store, AlertTriangle, X, MoreHorizontal, Play } from "lucide-react";
+import { DashboardSidebar, NAV_ROUTES, type NavKey } from "@/components/DashboardSidebar";
+import { PageIntro } from "@/components/guidance/PageIntro";
+import { INTRO_BY_KEY } from "@/components/guidance/tourStops";
+import { PageHeader } from "@/components/ui/page-header";
+import { FilterPills } from "@/components/ui/filter-pills";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Button } from "@/components/ui/button";
+import { Toggle } from "@/components/ui/toggle";
+import { Select } from "@/components/ui/select";
 import { api } from "@/lib/api";
 import { useConfirm } from "@/lib/confirmHook";
 import { openUrl } from "@/lib/openUrl";
@@ -18,10 +25,12 @@ export function Mcps() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [servers, setServers] = useState<McpServerInfo[]>([]);
   const [loading, setLoading] = useState(true);
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [tools, setTools] = useState<Record<string, McpToolInfo[]>>({});
   const [showAdd, setShowAdd] = useState(false);
   const [tab, setTab] = useState<Tab>("mine");
+  const [search, setSearch] = useState("");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [usedBy, setUsedBy] = useState<Record<string, string[]>>({});
+  const [menuFor, setMenuFor] = useState<string | null>(null);
   const navigate = useNavigate();
   const { confirm, toast } = useConfirm();
 
@@ -29,6 +38,15 @@ export function Mcps() {
     try {
       const list = await api.listMcpServers();
       setServers(list);
+      // Blast radius — which agents can reach each server's tools.
+      for (const s of list) {
+        api
+          .getMcpServerBlastRadius(s.id)
+          .then((b) =>
+            setUsedBy((prev) => ({ ...prev, [s.id]: b.map((r) => r.agent_name) })),
+          )
+          .catch(() => {});
+      }
     } catch {
       // ignore
     } finally {
@@ -48,33 +66,7 @@ export function Mcps() {
   };
 
   const handleNavigate = (page: NavKey) => {
-    if (page === "agents") navigate("/agents");
-    if (page === "settings") navigate("/settings");
-    if (page === "vault") navigate("/vault");
-    if (page === "skills") navigate("/skills");
-    if (page === "scheduler") navigate("/scheduler");
-    if (page === "mcps") return;
-    if (page === "channels") navigate("/channels");
-    if (page === "observability") navigate("/observability");
-    if (page === "traces") navigate("/traces");
-  };
-
-  const toggleExpand = async (serverId: string) => {
-    const next = new Set(expanded);
-    if (next.has(serverId)) {
-      next.delete(serverId);
-    } else {
-      next.add(serverId);
-      if (!tools[serverId]) {
-        try {
-          const t = await api.listMcpServerTools(serverId);
-          setTools((prev) => ({ ...prev, [serverId]: t }));
-        } catch {
-          // ignore
-        }
-      }
-    }
-    setExpanded(next);
+    navigate(NAV_ROUTES[page]);
   };
 
   const handleDelete = async (serverId: string, serverName: string) => {
@@ -93,15 +85,6 @@ export function Mcps() {
     }
   };
 
-  const handleConnect = async (serverId: string) => {
-    try {
-      await api.connectMcpServer(serverId);
-      await fetchServers();
-    } catch {
-      // ignore
-    }
-  };
-
   const handleEnabledChange = async (serverId: string, enabled: boolean) => {
     try {
       await api.updateMcpServer(serverId, { enabled });
@@ -111,31 +94,8 @@ export function Mcps() {
     }
   };
 
-  const handleToolEnabledChange = async (
-    server: McpServerInfo,
-    toolName: string,
-    enabled: boolean,
-  ) => {
-    const all = (tools[server.id] ?? []).map((t) => t.tool_name);
-    if (all.length === 0) return;
-    // Current effective set: the filter if present, else every tool.
-    const current = new Set(server.tool_filter ?? all);
-    if (enabled) current.add(toolName);
-    else current.delete(toolName);
-    // Everything on → clear the filter entirely (null = unfiltered).
-    const next = all.every((n) => current.has(n))
-      ? null
-      : all.filter((n) => current.has(n));
-    try {
-      await api.updateMcpServer(server.id, { tool_filter: next });
-      fetchServers();
-    } catch (error) {
-      toast(error instanceof Error ? error.message : "Could not update the tool filter.");
-    }
-  };
-
   return (
-    <div className="flex h-screen overflow-hidden" style={{ background: "var(--surface)" }}>
+    <div className="flex h-screen overflow-hidden" style={{ background: "var(--ground)" }}>
       <DashboardSidebar
         active="mcps"
         onNavigate={handleNavigate}
@@ -146,104 +106,172 @@ export function Mcps() {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <PageHeader
-          icon={Plug}
-          title="MCP Servers"
-          description="Connect external services via Model Context Protocol"
+          breadcrumbs={[{ label: "Capabilities" }, { label: "MCPs" }]}
+          title="MCP servers"
+          subtitle="Connect external tools, and decide exactly what each one may do."
+          actions={
+            tab === "mine" ? (
+              <Button onClick={() => setShowAdd(true)}>
+                <Plus />
+                Add server
+              </Button>
+            ) : undefined
+          }
         />
 
-        {/* Body */}
-        <div className="flex-1 overflow-y-auto px-8 py-6">
-          <div className="mx-auto max-w-3xl">
-            {/* Tab toggle */}
-            <div className="mb-4 flex gap-1 border-b" style={{ borderColor: "var(--border)" }}>
-              <TabButton active={tab === "mine"} onClick={() => setTab("mine")} icon={<Plug className="h-3.5 w-3.5" />}>
-                My Servers
-              </TabButton>
-              <TabButton active={tab === "browse"} onClick={() => setTab("browse")} icon={<Store className="h-3.5 w-3.5" />}>
-                Browse Catalog
-              </TabButton>
-            </div>
+        <div className="px-8 pt-4">
+          <PageIntro def={INTRO_BY_KEY.mcps} />
+        </div>
 
-            {tab === "mine" ? (
-              <>
-                {/* Add button */}
-                <div className="mb-4 flex justify-end">
-                  <button
-                    onClick={() => setShowAdd(!showAdd)}
-                    className="flex items-center gap-1.5 rounded-[6px] px-3 py-2 text-[13px] font-medium transition"
-                    style={{
-                      background: showAdd ? "var(--surface)" : "var(--accent)",
-                      color: showAdd ? "var(--ink)" : "#fff",
-                      border: "1px solid var(--border)",
-                      cursor: "pointer",
-                    }}
-                  >
-                    <Plus className="h-4 w-4" />
-                    {showAdd ? "Cancel" : "Add Server"}
-                  </button>
-                </div>
-
-                {/* Add form */}
-                {showAdd && (
-                  <AddServerForm
-                    onAdded={() => {
-                      setShowAdd(false);
-                      fetchServers();
-                    }}
-                  />
-                )}
-
-                {/* Server list */}
-                {loading ? (
-                  <div className="flex h-32 items-center justify-center">
-                    <p className="text-[14px] text-[var(--ink-3)]">Loading…</p>
-                  </div>
-                ) : servers.length === 0 ? (
-                  <div className="flex h-64 flex-col items-center justify-center">
-                    <Plug className="h-12 w-12" style={{ color: "var(--ink-3)" }} />
-                    <p className="mt-4 text-[14px] text-[var(--ink-2)]">No MCP servers configured</p>
-                    <p className="mt-1 text-[12px] text-[var(--ink-3)]">
-                      Browse the catalog or add a server manually
-                    </p>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {servers.map((server) => (
-                      <ServerCard
-                        key={server.id}
-                        server={server}
-                        expanded={expanded.has(server.id)}
-                        tools={tools[server.id]}
-                        onToggle={() => toggleExpand(server.id)}
-                        onDelete={() => handleDelete(server.id, server.name)}
-                        onConnect={() => handleConnect(server.id)}
-                        onEnabledChange={(enabled) => handleEnabledChange(server.id, enabled)}
-                        onToolEnabledChange={(toolName, enabled) =>
-                          handleToolEnabledChange(server, toolName, enabled)
-                        }
-                        onCredentialChanged={fetchServers}
-                      />
-                    ))}
-                  </div>
-                )}
-              </>
-            ) : (
-              <CatalogBrowser
-                installedNames={new Set(servers.map((s) => s.name))}
-                onInstalled={async () => {
-                  await fetchServers();
-                  setTab("mine");
-                }}
-              />
+        {/* Filter row — pinned below the header */}
+        <div className="px-8 pb-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <FilterPills
+              pills={[
+                { key: "mine", label: "My servers", count: servers.length },
+                { key: "browse", label: "Browse catalog" },
+              ]}
+              active={tab}
+              onChange={(k) => setTab(k as Tab)}
+              variant="segmented"
+            />
+            {(tab === "browse" || servers.length > 0) && (
+              <div className="relative ml-auto w-[280px]">
+                <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-faint" />
+                <input
+                  type="text"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder={tab === "mine" ? "Search servers" : "Search catalog…"}
+                  className="w-full rounded-lg border border-line bg-surface py-2 pl-9 pr-3 text-[13px] text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
+                />
+              </div>
             )}
           </div>
         </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto px-8 pb-6">
+          {tab === "mine" ? (
+            loading ? (
+              <p className="py-20 text-center text-[14px] text-ink-faint">Loading…</p>
+            ) : servers.length === 0 ? (
+              <div className="mx-auto max-w-3xl">
+                <EmptyState
+                  icon={Plug}
+                  title="No MCP servers configured"
+                  action={
+                    <Button variant="secondary" onClick={() => setTab("browse")}>
+                      <Store />Browse catalog
+                    </Button>
+                  }
+                >
+                  Browse the catalog or add a server manually.
+                </EmptyState>
+              </div>
+            ) : (
+              (() => {
+                const q = search.trim().toLowerCase();
+                const visible = q
+                  ? servers.filter((s) => s.name.toLowerCase().includes(q))
+                  : servers;
+                const connected = visible.filter((s) => s.connected);
+                const other = visible.filter((s) => !s.connected);
+                const selected =
+                  servers.find((s) => s.id === selectedId) ??
+                  connected[0] ??
+                  visible[0] ??
+                  null;
+                if (visible.length === 0)
+                  return (
+                    <p className="py-12 text-center text-[13px] text-ink-faint">
+                      No servers match “{search}”.
+                    </p>
+                  );
+                const renderCard = (server: McpServerInfo) => (
+                  <ServerRow
+                    key={server.id}
+                    server={server}
+                    selected={selected?.id === server.id}
+                    usedBy={usedBy[server.id]}
+                    menuOpen={menuFor === server.id}
+                    onSelect={() => setSelectedId(server.id)}
+                    onMenu={(open) => setMenuFor(open ? server.id : null)}
+                    onDelete={() => {
+                      setMenuFor(null);
+                      handleDelete(server.id, server.name);
+                    }}
+                    onEnabledChange={(enabled) => handleEnabledChange(server.id, enabled)}
+                  />
+                );
+                return (
+                  <div className="flex items-start gap-6">
+                    <div className="min-w-0 flex-1">
+                      {connected.length > 0 && (
+                        <>
+                          <p className="mb-2 text-[11px] font-medium uppercase tracking-wider text-ink-faint">
+                            Connected · {connected.length}
+                          </p>
+                          <div className="mb-5 space-y-2.5">{connected.map(renderCard)}</div>
+                        </>
+                      )}
+                      {other.length > 0 && (
+                        <>
+                          <p className="mb-2 text-[11px] font-medium uppercase tracking-wider text-ink-faint">
+                            Available · {other.length}
+                          </p>
+                          <div className="space-y-2.5">{other.map(renderCard)}</div>
+                        </>
+                      )}
+                    </div>
+                    {selected && (
+                      <ServerDetail
+                        key={selected.id}
+                        server={selected}
+                        usedBy={usedBy[selected.id]}
+                        onDelete={() => handleDelete(selected.id, selected.name)}
+                        onChanged={fetchServers}
+                      />
+                    )}
+                  </div>
+                );
+              })()
+            )
+          ) : (
+            <CatalogBrowser
+              search={search}
+              installedNames={new Set(servers.map((s) => s.name))}
+              onInstalled={async () => {
+                setSearch("");
+                await fetchServers();
+                setTab("mine");
+              }}
+            />
+          )}
+        </div>
       </div>
+
+      <AddServerModal
+        open={showAdd}
+        onClose={() => setShowAdd(false)}
+        onAdded={() => {
+          setShowAdd(false);
+          fetchServers();
+        }}
+      />
     </div>
   );
 }
 
-function AddServerForm({ onAdded }: { onAdded: () => void }) {
+function AddServerModal({
+  open,
+  onClose,
+  onAdded,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onAdded: () => void;
+}) {
   const [mode, setMode] = useState<"form" | "json">("form");
   const [name, setName] = useState("");
   const [transport, setTransport] = useState("stdio");
@@ -254,6 +282,15 @@ function AddServerForm({ onAdded }: { onAdded: () => void }) {
   const [jsonText, setJsonText] = useState("");
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -297,12 +334,12 @@ function AddServerForm({ onAdded }: { onAdded: () => void }) {
       const parsed = JSON.parse(jsonText);
       // Support two JSON formats:
       // 1. CaberOS format: { name, transport, command, args, url, ... }
-      // 2. Claude Desktop format: { "mcpServers": { "name": { "command": ..., "args": [...] } } }
+      // 2. Standard mcpServers format: { "mcpServers": { "name": { "command": ..., "args": [...] } } }
       //    or just { "name": { "command": ..., "args": [...] } }
       let data: Record<string, unknown>;
 
       if (parsed.mcpServers && typeof parsed.mcpServers === "object") {
-        // Claude Desktop config — take the first server
+        // Standard mcpServers config — take the first server
         const entries = Object.entries(parsed.mcpServers);
         if (entries.length === 0) {
           setError("No servers found in mcpServers object");
@@ -340,7 +377,7 @@ function AddServerForm({ onAdded }: { onAdded: () => void }) {
             data.transport = serverConfig.url ? "http" : "stdio";
           }
         } else {
-          setError("Unrecognized JSON format. Use CaberOS format ({ name, command, args }) or Claude Desktop format ({ mcpServers: { ... } })");
+          setError("Unrecognized JSON format. Use CaberOS format ({ name, command, args }) or standard format ({ mcpServers: { ... } })");
           setAdding(false);
           return;
         }
@@ -359,46 +396,51 @@ function AddServerForm({ onAdded }: { onAdded: () => void }) {
     }
   };
 
+  if (!open) return null;
+
   return (
     <div
-      className="mb-4 rounded-xl p-4"
-      style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/25"
+      onClick={onClose}
     >
-      <div className="mb-3 flex items-center justify-between">
-        <h3 className="text-[14px] font-semibold text-[var(--ink)]">Add MCP Server</h3>
-        {/* Mode toggle */}
-        <div className="flex gap-1 rounded-[5px] p-0.5" style={{ background: "var(--surface)" }}>
+      <div
+        className="w-full max-w-lg overflow-hidden rounded-xl border border-line bg-surface shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-line px-5 py-3.5">
+          <div>
+            <h2 className="text-[15px] font-semibold text-ink">Add MCP server</h2>
+            <p className="mt-0.5 text-[12px] text-ink-3">
+              Fill the form, or paste a CaberOS / standard JSON config.
+            </p>
+          </div>
           <button
-            type="button"
-            onClick={() => { setMode("form"); setError(null); }}
-            className="rounded-[4px] px-2.5 py-1 text-[11px] font-mono transition"
-            style={{
-              background: mode === "form" ? "var(--white)" : "none",
-              color: mode === "form" ? "var(--ink)" : "var(--ink-3)",
-              border: "none",
-              cursor: "pointer",
-            }}
+            onClick={onClose}
+            className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md border-none bg-transparent text-ink-muted transition-colors hover:bg-sunken hover:text-ink"
           >
-            Form
-          </button>
-          <button
-            type="button"
-            onClick={() => { setMode("json"); setError(null); }}
-            className="rounded-[4px] px-2.5 py-1 text-[11px] font-mono transition"
-            style={{
-              background: mode === "json" ? "var(--white)" : "none",
-              color: mode === "json" ? "var(--ink)" : "var(--ink-3)",
-              border: "none",
-              cursor: "pointer",
-            }}
-          >
-            JSON
+            <X className="h-4 w-4" />
           </button>
         </div>
-      </div>
 
-      {mode === "form" ? (
-        <form onSubmit={handleSubmit}>
+        {/* Mode toggle */}
+        <div className="px-5 pt-4">
+          <FilterPills
+            pills={[
+              { key: "form", label: "Form" },
+              { key: "json", label: "Paste JSON" },
+            ]}
+            active={mode}
+            onChange={(k) => {
+              setMode(k as "form" | "json");
+              setError(null);
+            }}
+            variant="segmented"
+          />
+        </div>
+
+        <div className="max-h-[55vh] overflow-y-auto p-5">
+          {mode === "form" ? (
+        <form id="mcp-add-form" onSubmit={handleSubmit}>
           <div className="space-y-3">
             <div>
               <label className="mb-1 block font-mono text-[11px] uppercase tracking-wider text-[var(--ink-3)]">Name</label>
@@ -413,15 +455,16 @@ function AddServerForm({ onAdded }: { onAdded: () => void }) {
             </div>
             <div>
               <label className="mb-1 block font-mono text-[11px] uppercase tracking-wider text-[var(--ink-3)]">Transport</label>
-              <select
+              <Select
                 value={transport}
-                onChange={(e) => setTransport(e.target.value)}
-                className="w-full rounded-[5px] border px-3 py-2 text-[13px]"
-                style={{ borderColor: "var(--border)", background: "var(--surface)", color: "var(--ink)" }}
-              >
-                <option value="stdio">stdio (local process)</option>
-                <option value="http">http (remote server)</option>
-              </select>
+                onChange={setTransport}
+                options={[
+                  { value: "stdio", label: "stdio (local process)" },
+                  { value: "http", label: "http (remote server)" },
+                ]}
+                className="w-full rounded-[5px] border border-[var(--border)] bg-surface px-3 py-2 text-[13px] text-ink"
+                align="left" panelClassName="text-[13px]"
+              />
             </div>
             {transport === "stdio" ? (
               <>
@@ -476,30 +519,17 @@ function AddServerForm({ onAdded }: { onAdded: () => void }) {
             {error && (
               <p className="text-[12px]" style={{ color: "var(--danger)" }}>{error}</p>
             )}
-            <button
-              type="submit"
-              disabled={adding}
-              className="rounded-[6px] px-4 py-2 text-[13px] font-medium transition"
-              style={{
-                background: adding ? "var(--surface)" : "var(--accent)",
-                color: adding ? "var(--ink-3)" : "#fff",
-                cursor: adding ? "not-allowed" : "pointer",
-                border: "none",
-              }}
-            >
-              {adding ? "Adding…" : "Add Server"}
-            </button>
           </div>
         </form>
-      ) : (
-        <form onSubmit={handleJsonSubmit}>
+          ) : (
+        <form id="mcp-add-json" onSubmit={handleJsonSubmit}>
           <div className="space-y-3">
             <div>
               <label className="mb-1 block font-mono text-[11px] uppercase tracking-wider text-[var(--ink-3)]">
                 Server config (JSON)
               </label>
               <p className="mb-2 text-[11px] text-[var(--ink-3)]">
-                Paste a CaberOS config or Claude Desktop config. Examples:
+                Paste a CaberOS config or standard MCP config. Examples:
               </p>
               <pre
                 className="mb-2 rounded-[4px] p-2 font-mono text-[10px] overflow-x-auto"
@@ -514,7 +544,7 @@ function AddServerForm({ onAdded }: { onAdded: () => void }) {
   "env_template": { "API_KEY": "{{credential_value}}" }
 }
 
-// Claude Desktop format:
+// Standard format:
 {
   "mcpServers": {
     "my-server": {
@@ -537,461 +567,491 @@ function AddServerForm({ onAdded }: { onAdded: () => void }) {
             {error && (
               <p className="text-[12px]" style={{ color: "var(--danger)" }}>{error}</p>
             )}
-            <button
-              type="submit"
-              disabled={adding}
-              className="rounded-[6px] px-4 py-2 text-[13px] font-medium transition"
-              style={{
-                background: adding ? "var(--surface)" : "var(--accent)",
-                color: adding ? "var(--ink-3)" : "#fff",
-                cursor: adding ? "not-allowed" : "pointer",
-                border: "none",
-              }}
-            >
-              {adding ? "Adding…" : "Add Server"}
-            </button>
           </div>
         </form>
+          )}
+        </div>
+
+        <div className="flex items-center justify-end gap-2 border-t border-line px-5 py-3.5">
+          <Button variant="outline" size="sm" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            type="submit"
+            form={mode === "form" ? "mcp-add-form" : "mcp-add-json"}
+            disabled={adding}
+          >
+            {adding ? "Adding…" : "Add server"}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+type Perm = "allow" | "ask" | "block";
+
+function ServerRow({
+  server,
+  selected,
+  usedBy,
+  menuOpen,
+  onSelect,
+  onMenu,
+  onDelete,
+  onEnabledChange,
+}: {
+  server: McpServerInfo;
+  selected: boolean;
+  usedBy?: string[];
+  menuOpen: boolean;
+  onSelect: () => void;
+  onMenu: (open: boolean) => void;
+  onDelete: () => void;
+  onEnabledChange: (enabled: boolean) => void;
+}) {
+  const subtitle =
+    usedBy && usedBy.length > 0
+      ? `Used by ${usedBy.join(", ")}`
+      : !server.enabled
+        ? "Not enabled"
+        : !server.connected && server.auth_type === "api_key"
+          ? "Needs an API key to connect"
+          : !server.connected && server.auth_type === "oauth"
+            ? "Sign in to sync tools"
+            : server.connected
+              ? "No agents use this yet"
+              : "Not connected";
+  return (
+    <div
+      onClick={onSelect}
+      className={`relative flex cursor-pointer items-center gap-3 rounded-xl border px-4 py-3 transition-colors ${
+        selected ? "border-accent bg-surface" : "border-line bg-surface hover:border-ink-faint"
+      }`}
+    >
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] bg-accent-tint text-[15px] font-semibold text-accent">
+        {server.name.charAt(0).toUpperCase()}
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline gap-2">
+          <span className="truncate text-[14px] font-medium text-ink">{server.name}</span>
+          <span className="font-mono text-[10px] uppercase tracking-wider text-ink-faint">
+            {server.transport}
+          </span>
+        </div>
+        <p className="mt-0.5 truncate text-[12px] text-ink-muted">{subtitle}</p>
+      </div>
+      <div className="hidden shrink-0 text-right md:block">
+        <p className="font-mono text-[11px] text-ink-muted">
+          {server.tool_filter === null
+            ? `${server.tool_count} tools`
+            : `${server.tool_filter.length} of ${server.tool_count} tools`}
+        </p>
+        <p
+          className={`mt-0.5 flex items-center justify-end gap-1 font-mono text-[11px] ${
+            server.connected ? "text-accent" : "text-ink-faint"
+          }`}
+        >
+          <span
+            className={`h-1.5 w-1.5 rounded-full ${server.connected ? "bg-accent" : "bg-ink-faint"}`}
+          />
+          {server.connected ? "healthy" : "not connected"}
+        </p>
+      </div>
+      <Toggle
+        checked={server.enabled}
+        onCheckedChange={onEnabledChange}
+        size="sm"
+        aria-label={server.enabled ? "Disable server" : "Enable server"}
+        title={server.enabled ? "Disable server" : "Enable server"}
+      />
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          onMenu(!menuOpen);
+        }}
+        className="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md border-none bg-transparent text-ink-muted transition-colors hover:bg-sunken hover:text-ink"
+        title="Server actions"
+      >
+        <MoreHorizontal className="h-4 w-4" />
+      </button>
+      {menuOpen && (
+        <>
+          <div
+            className="fixed inset-0 z-10 cursor-default"
+            onClick={(e) => {
+              e.stopPropagation();
+              onMenu(false);
+            }}
+          />
+          <div className="absolute right-3 top-full z-20 mt-1 min-w-[140px] overflow-hidden rounded-lg border border-line bg-surface py-1 shadow-lg">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete();
+              }}
+              className="flex w-full cursor-pointer items-center gap-2 border-none bg-transparent px-3 py-2 text-left text-[12px] font-medium text-danger transition-colors hover:bg-sunken"
+            >
+              <Trash2 className="h-3.5 w-3.5" /> Remove
+            </button>
+          </div>
+        </>
       )}
     </div>
   );
 }
 
-function ServerCard({
+function ServerDetail({
   server,
-  expanded,
-  tools,
-  onToggle,
+  usedBy,
   onDelete,
-  onConnect,
-  onEnabledChange,
-  onToolEnabledChange,
-  onCredentialChanged,
+  onChanged,
 }: {
   server: McpServerInfo;
-  expanded: boolean;
-  tools?: McpToolInfo[];
-  onToggle: () => void;
+  usedBy?: string[];
   onDelete: () => void;
-  onConnect: () => Promise<void>;
-  onEnabledChange: (enabled: boolean) => void;
-  onToolEnabledChange: (toolName: string, enabled: boolean) => void;
-  onCredentialChanged: () => void;
+  onChanged: () => void;
 }) {
-  const statusColor = server.connected ? "var(--accent)" : "var(--ink-3)";
-  const statusText = server.connected ? "connected" : server.enabled ? "disconnected" : "disabled";
-  const needsApiKey = server.auth_type === "api_key" && !server.connected && server.enabled;
-  const needsOAuth = server.auth_type === "oauth" && !server.connected && server.enabled;
+  const [tools, setTools] = useState<McpToolInfo[] | null>(null);
+  const [showAll, setShowAll] = useState(false);
   const [showCredForm, setShowCredForm] = useState(false);
   const [oauthLoading, setOauthLoading] = useState(false);
-  const [connecting, setConnecting] = useState(false);
+  const [testing, setTesting] = useState(false);
   const { toast } = useConfirm();
 
+  useEffect(() => {
+    let live = true;
+    api
+      .listMcpServerTools(server.id)
+      .then((t) => {
+        if (live) setTools(t);
+      })
+      .catch(() => {
+        if (live) setTools([]);
+      });
+    return () => {
+      live = false;
+    };
+  }, [server.id]);
+
+  const needsApiKey = server.auth_type === "api_key" && !server.connected && server.enabled;
+  const needsOAuth = server.auth_type === "oauth" && !server.connected && server.enabled;
+  const inFilter = (t: McpToolInfo) =>
+    server.tool_filter === null || server.tool_filter.includes(t.tool_name);
+  const permOf = (t: McpToolInfo): Perm =>
+    !inFilter(t) ? "block" : t.require_approval ? "ask" : "allow";
+
+  const setPerm = async (tool: McpToolInfo, perm: Perm) => {
+    try {
+      const allNames = (tools ?? []).map((t) => t.tool_name);
+      const current = new Set(server.tool_filter ?? allNames);
+      if (perm === "block") {
+        current.delete(tool.tool_name);
+        await api.updateMcpServer(server.id, {
+          tool_filter: allNames.filter((n) => current.has(n)),
+        });
+      } else {
+        current.add(tool.tool_name);
+        const next = allNames.every((n) => current.has(n))
+          ? null
+          : allNames.filter((n) => current.has(n));
+        await api.updateMcpServer(server.id, { tool_filter: next });
+        const res = await api.updateMcpTool(server.id, tool.id, {
+          require_approval: perm === "ask",
+        });
+        setTools((prev) =>
+          prev
+            ? prev.map((t) =>
+                t.id === tool.id ? { ...t, require_approval: res.require_approval } : t,
+              )
+            : prev,
+        );
+      }
+      onChanged();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Could not update tool permission.");
+    }
+  };
+
+  const setNewToolDefault = async (ask: boolean) => {
+    try {
+      await api.updateMcpServer(server.id, { require_approval: ask });
+      onChanged();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Could not update the default.");
+    }
+  };
+
+  const handleTest = async () => {
+    setTesting(true);
+    try {
+      await api.connectMcpServer(server.id);
+      onChanged();
+      toast("Reconnected — handshake completed.");
+    } catch (e) {
+      onChanged();
+      toast(e instanceof Error ? e.message : "Connection failed.");
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const startOAuth = async () => {
+    setOauthLoading(true);
+    try {
+      const { authorize_url } = await api.startMcpOAuth(server.id);
+      if (authorize_url) await openUrl(authorize_url);
+      const poll = setInterval(async () => {
+        try {
+          const status = await api.getMcpOAuthStatus(server.id);
+          if (status.status === "completed" || status.status === "none") {
+            clearInterval(poll);
+            setOauthLoading(false);
+            onChanged();
+          } else if (status.status === "error") {
+            clearInterval(poll);
+            setOauthLoading(false);
+            toast(`OAuth failed: ${status.error}`);
+          }
+        } catch {
+          // ignore poll errors
+        }
+      }, 2000);
+      const timeout = setTimeout(() => {
+        clearInterval(poll);
+        setOauthLoading(false);
+        toast("OAuth timed out — authorization wasn't completed in 5 minutes.");
+      }, 300000);
+      (window as any)._oauthCleanup = () => {
+        clearInterval(poll);
+        clearTimeout(timeout);
+        setOauthLoading(false);
+      };
+    } catch (e) {
+      setOauthLoading(false);
+      toast(e instanceof Error ? e.message : "Failed to start OAuth flow");
+    }
+  };
+
+  const statusText = server.connected
+    ? "connected"
+    : server.enabled
+      ? "not connected"
+      : "disabled";
+  const shownTools = tools ? (showAll ? tools : tools.slice(0, 6)) : null;
+
   return (
-    <div
-      className="rounded-xl"
-      style={{ border: "1px solid var(--border-soft)", background: "var(--sidebar)" }}
-    >
-      {/* Header row */}
-      <div className="flex items-center gap-3 p-4">
-        <button
-          onClick={onToggle}
-          className="rounded-[4px] p-0.5 transition"
-          style={{ background: "none", border: "none", cursor: "pointer" }}
-        >
-          {expanded ? (
-            <ChevronDown className="h-4 w-4" style={{ color: "var(--ink-2)" }} />
-          ) : (
-            <ChevronRight className="h-4 w-4" style={{ color: "var(--ink-2)" }} />
-          )}
-        </button>
-        <div className="flex-1">
-          <span className="text-[14px] font-medium" style={{ color: "var(--ink)" }}>
-            {server.name}
-          </span>
-          <span
-            className="ml-2 font-mono text-[10px] uppercase tracking-wider"
-            style={{ color: "var(--ink-3)" }}
-          >
+    <div className="sticky top-0 w-[380px] shrink-0 rounded-xl border border-line bg-surface">
+      {/* Header */}
+      <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
+        <div className="min-w-0">
+          <h3 className="truncate text-[15px] font-semibold text-ink">{server.name}</h3>
+          <p className="font-mono text-[10px] uppercase tracking-wider text-ink-faint">
             {server.transport}
-          </span>
+          </p>
         </div>
-        {/* Enable/disable toggle */}
-        <button
-          onClick={() => onEnabledChange(!server.enabled)}
-          className="relative inline-flex h-4 w-7 items-center rounded-full transition"
-          style={{
-            background: server.enabled ? "var(--accent)" : "#D1D1D1",
-            border: "none",
-            cursor: "pointer",
-          }}
-          title={server.enabled ? "Disable server" : "Enable server"}
-        >
-          <span
-            className="inline-block h-3 w-3 rounded-full bg-white transition"
-            style={{ transform: server.enabled ? "translateX(14px)" : "translateX(2px)" }}
-          />
-        </button>
-        <span
-          className="flex items-center gap-1 font-mono text-[11px]"
-          style={{ color: statusColor }}
-        >
-          <span
-            className="inline-block h-2 w-2 rounded-full"
-            style={{ background: statusColor }}
-          />
-          {statusText}
-        </span>
-        <span className="font-mono text-[11px]" style={{ color: "var(--ink-3)" }}>
-          {server.tool_filter === null
-            ? `${server.tool_count} tools`
-            : `${server.tool_filter.length}/${server.tool_count} tools`}
-        </span>
-        {/* Actions */}
-        {needsApiKey && (
-          <button
-            onClick={() => {
-              setShowCredForm(!showCredForm);
-              if (!expanded) onToggle();
-            }}
-            className="flex items-center gap-1 rounded-[4px] px-2 py-1 text-[11px] font-medium transition"
-            style={{
-              background: "var(--accent)",
-              color: "#fff",
-              border: "none",
-              cursor: "pointer",
-            }}
-            title="Configure API key"
-          >
-            <Key className="h-3 w-3" />
-            Set Key
-          </button>
-        )}
-        {needsOAuth && (oauthLoading ? (
-          <div className="flex items-center gap-1 rounded-[4px] px-2 py-1 text-[11px] font-medium" style={{ background: "var(--surface)", color: "var(--ink-3)" }}>
-            <Key className="h-3 w-3" />
-            <span>Waiting…</span>
-            <button
-              type="button"
-              onClick={() => {
-                if ((window as any)._oauthCleanup) (window as any)._oauthCleanup();
-              }}
-              className="ml-1 text-[10px] underline"
-              style={{ color: "var(--danger)", cursor: "pointer" }}
-            >
-              Cancel
-            </button>
-          </div>
-        ) : (
-          <button
-            type="button"
-            onClick={async () => {
-              setOauthLoading(true);
-              try {
-                const { authorize_url } = await api.startMcpOAuth(server.id);
-                await openUrl(authorize_url);
-                const poll = setInterval(async () => {
-                  try {
-                    const status = await api.getMcpOAuthStatus(server.id);
-                    if (status.status === "completed") {
-                      clearInterval(poll);
-                      setOauthLoading(false);
-                      onCredentialChanged();
-                    } else if (status.status === "error") {
-                      clearInterval(poll);
-                      setOauthLoading(false);
-                      toast(`OAuth failed: ${status.error}`);
-                    } else if (status.status === "none") {
-                      clearInterval(poll);
-                      setOauthLoading(false);
-                      onCredentialChanged();
-                    }
-                  } catch {
-                    // ignore poll errors
-                  }
-                }, 2000);
-                const timeout = setTimeout(() => {
-                  clearInterval(poll);
-                  setOauthLoading(false);
-                  toast("OAuth timed out — you didn't complete the authorization in 5 minutes. Click 'Connect OAuth' to try again.");
-                }, 300000);
-                (window as any)._oauthCleanup = () => {
-                  clearInterval(poll);
-                  clearTimeout(timeout);
-                  setOauthLoading(false);
-                };
-              } catch (e) {
-                setOauthLoading(false);
-                toast(e instanceof Error ? e.message : "Failed to start OAuth flow");
-              }
-            }}
-            className="flex items-center gap-1 rounded-[4px] px-2 py-1 text-[11px] font-medium transition"
-            style={{ background: "var(--accent)", color: "#fff", border: "none", cursor: "pointer" }}
-            title="Connect with OAuth"
-          >
-            <Key className="h-3 w-3" />
-            Connect OAuth
-          </button>
-        ))}
         {server.enabled && (
-          <button
-            onClick={async () => {
-              setConnecting(true);
-              try {
-                await onConnect();
-              } finally {
-                setConnecting(false);
-              }
-            }}
-            disabled={connecting}
-            className="rounded-[4px] p-1 transition"
-            style={{ background: "none", border: "1px solid var(--border)", cursor: connecting ? "not-allowed" : "pointer" }}
-            title="Reconnect"
-          >
-            <RefreshCw
-              className={`h-3.5 w-3.5 ${connecting ? "animate-spin" : ""}`}
-              style={{ color: "var(--ink-2)" }}
-            />
-          </button>
+          <Button variant="outline" size="sm" onClick={handleTest} disabled={testing}>
+            <Play className="h-3.5 w-3.5" />
+            {testing ? "Testing…" : "Test"}
+          </Button>
         )}
-        <button
-          onClick={onDelete}
-          className="rounded-[4px] p-1 transition"
-          style={{ background: "none", border: "1px solid var(--border)", cursor: "pointer" }}
-          title="Remove"
-        >
-          <Trash2 className="h-3.5 w-3.5" style={{ color: "var(--danger)" }} />
-        </button>
       </div>
 
-      {/* Connection error alert */}
-      {server.connect_error && !server.connected && server.enabled && (
-        <div
-          className="flex items-center gap-2 px-4 py-2"
-          style={{
-            background: "rgba(239,68,68,0.05)",
-            borderTop: "1px solid rgba(239,68,68,0.15)",
-            borderBottom: "1px solid rgba(239,68,68,0.15)",
-          }}
-        >
-          <AlertTriangle className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--danger)" }} />
-          <span className="flex-1 text-[12px]" style={{ color: "var(--danger)" }}>
-            {server.connect_error}
-          </span>
-          {needsOAuth && (
+      <div className="max-h-[calc(100vh-300px)] overflow-y-auto px-4 py-3">
+        {/* Status */}
+        <p className="flex items-center gap-1.5 text-[12px] text-ink-2">
+          <span
+            className={`h-1.5 w-1.5 rounded-full ${server.connected ? "bg-accent" : "bg-ink-faint"}`}
+          />
+          {statusText} · {server.tool_count} tools
+        </p>
+        <p className="mt-1 text-[12px] text-ink-muted">
+          {usedBy && usedBy.length > 0
+            ? `Used by ${usedBy.join(", ")}`
+            : "No agents use this yet"}
+        </p>
+        {server.command && (
+          <p className="mt-1 truncate font-mono text-[11px] text-ink-faint" title={`${server.command} ${(server.args ?? []).join(" ")}`}>
+            {server.command}
+            {server.args && server.args.length > 0 ? " " + server.args.join(" ") : ""}
+          </p>
+        )}
+        {server.url && (
+          <p className="mt-1 truncate font-mono text-[11px] text-ink-faint" title={server.url}>
+            {server.url}
+          </p>
+        )}
+
+        {/* Connection error */}
+        {server.connect_error && !server.connected && server.enabled && (
+          <div className="mt-3 flex items-center gap-2 rounded-md border border-danger/20 bg-danger-tint px-3 py-2">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-danger" />
+            <span className="flex-1 text-[12px] text-danger">{server.connect_error}</span>
             <button
-              onClick={async () => {
-                setOauthLoading(true);
-                try {
-                  const { authorize_url } = await api.startMcpOAuth(server.id);
-                  if (authorize_url) await openUrl(authorize_url);
-                } catch (e) {
-                  setOauthLoading(false);
-                  toast(e instanceof Error ? e.message : "Failed to start OAuth flow");
-                }
-              }}
-              disabled={oauthLoading}
-              className="flex items-center gap-1 rounded-[4px] px-2 py-1 text-[11px] font-medium transition"
-              style={{
-                background: "var(--danger)",
-                color: "#fff",
-                border: "none",
-                cursor: oauthLoading ? "not-allowed" : "pointer",
-              }}
+              onClick={handleTest}
+              disabled={testing}
+              className="flex items-center gap-1 rounded border border-line bg-transparent px-2 py-1 text-[11px] text-ink-2 transition-colors hover:bg-sunken disabled:cursor-not-allowed"
             >
-              <Key className="h-3 w-3" />
-              {oauthLoading ? "Waiting…" : "Re-authenticate"}
+              <RefreshCw className={`h-3 w-3 ${testing ? "animate-spin" : ""}`} />
+              Retry
             </button>
-          )}
-          <button
-            onClick={async () => {
-              setConnecting(true);
-              try {
-                await onConnect();
-              } finally {
-                setConnecting(false);
-              }
-            }}
-            disabled={connecting}
-            className="flex items-center gap-1 rounded-[4px] px-2 py-1 text-[11px] font-medium transition"
-            style={{
-              background: "none",
-              color: "var(--ink-2)",
-              border: "1px solid var(--border)",
-              cursor: connecting ? "not-allowed" : "pointer",
-            }}
-          >
-            <RefreshCw className={`h-3 w-3 ${connecting ? "animate-spin" : ""}`} />
-            Retry
-          </button>
-        </div>
-      )}
-
-      {/* Credential form (shown when user clicks "Set Key") */}
-      {showCredForm && (
-        <CredentialForm
-          serverId={server.id}
-          envTemplate={server.env_template}
-          onSaved={() => {
-            setShowCredForm(false);
-            onCredentialChanged();
-          }}
-          onCancel={() => setShowCredForm(false)}
-        />
-      )}
-
-      {/* Expanded — tools list */}
-      {expanded && (
-        <div className="border-t px-4 py-3" style={{ borderColor: "var(--border)" }}>
-          {server.command && (
-            <div className="mb-3">
-              <span className="font-mono text-[10px] uppercase tracking-wider text-[var(--ink-3)]">Command</span>
-              <p className="font-mono text-[12px]" style={{ color: "var(--ink-2)" }}>
-                {server.command}
-                {server.args && server.args.length > 0 ? " " + server.args.join(" ") : ""}
-              </p>
-            </div>
-          )}
-          {server.url && (
-            <div className="mb-3">
-              <span className="font-mono text-[10px] uppercase tracking-wider text-[var(--ink-3)]">URL</span>
-              <p className="font-mono text-[12px]" style={{ color: "var(--ink-2)" }}>{server.url}</p>
-            </div>
-          )}
-
-          {/* Tools */}
-          <div>
-            <span className="mb-2 block font-mono text-[10px] uppercase tracking-wider text-[var(--ink-3)]">
-              {server.tool_filter === null
-                ? `Tools (${tools?.length ?? 0})`
-                : `Tools (${tools?.filter((t) => server.tool_filter!.includes(t.tool_name)).length ?? 0}/${tools?.length ?? 0} enabled)`}
-            </span>
-            {!tools ? (
-              <p className="text-[12px] text-[var(--ink-3)]">Loading tools…</p>
-            ) : tools.length === 0 ? (
-              <p className="text-[12px] text-[var(--ink-3)]">
-                No tools discovered. Make sure the server is connected.
-              </p>
-            ) : (
-              <div className="space-y-1.5">
-                {tools.map((tool) => (
-                  <ToolRow
-                    key={tool.id}
-                    tool={tool}
-                    enabled={
-                      server.tool_filter === null ||
-                      server.tool_filter.includes(tool.tool_name)
-                    }
-                    onToggle={(enabled) => onToolEnabledChange(tool.tool_name, enabled)}
-                  />
-                ))}
-              </div>
-            )}
           </div>
+        )}
 
-          {/* Credentials section */}
+        {/* Auth actions */}
+        {(needsApiKey || needsOAuth) && (
+          <div className="mt-3">
+            {needsApiKey && !showCredForm && (
+              <button
+                onClick={() => setShowCredForm(true)}
+                className="flex cursor-pointer items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[12px] font-medium text-white transition-opacity hover:opacity-90"
+              >
+                <Key className="h-3.5 w-3.5" /> Set API key
+              </button>
+            )}
+            {needsOAuth &&
+              (oauthLoading ? (
+                <span className="flex items-center gap-1.5 rounded-md border border-line px-3 py-1.5 text-[12px] text-ink-muted">
+                  <Key className="h-3.5 w-3.5" /> Waiting for sign-in…
+                  <button
+                    onClick={() => (window as any)._oauthCleanup?.()}
+                    className="ml-1 cursor-pointer border-none bg-transparent text-[11px] text-danger underline"
+                  >
+                    Cancel
+                  </button>
+                </span>
+              ) : (
+                <button
+                  onClick={startOAuth}
+                  className="flex cursor-pointer items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[12px] font-medium text-white transition-opacity hover:opacity-90"
+                >
+                  <Key className="h-3.5 w-3.5" /> Connect OAuth
+                </button>
+              ))}
+          </div>
+        )}
+        {showCredForm && needsApiKey && (
+          <div className="mt-3 overflow-hidden rounded-md border border-line">
+            <CredentialForm
+              serverId={server.id}
+              envTemplate={server.env_template}
+              onSaved={() => {
+                setShowCredForm(false);
+                onChanged();
+              }}
+              onCancel={() => setShowCredForm(false)}
+            />
+          </div>
+        )}
+        <div className="mt-3">
           <CredentialManager
             serverId={server.id}
             hasCredentials={server.has_credentials}
             envTemplate={server.env_template}
-            onChanged={onCredentialChanged}
+            onChanged={onChanged}
           />
         </div>
-      )}
-    </div>
-  );
-}
 
-function ToolRow({
-  tool,
-  enabled,
-  onToggle,
-}: {
-  tool: McpToolInfo;
-  enabled: boolean;
-  onToggle: (enabled: boolean) => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const maxLen = 80;
-  const isLong = tool.description.length > maxLen;
-  const shortDesc = isLong ? tool.description.slice(0, maxLen) + "…" : tool.description;
-
-  return (
-    <div
-      className="flex items-start gap-2 rounded-[5px] px-3 py-2"
-      style={{ background: "var(--surface)", opacity: enabled ? 1 : 0.55 }}
-    >
-      <div className="flex-1">
-        <div className="flex items-center gap-2">
-          <span className="font-mono text-[12px] font-medium" style={{ color: "var(--ink)" }}>
-            {tool.capability_name}
-          </span>
-          {tool.egress && (
-            <span
-              className="rounded-full px-1.5 py-0.5 font-mono text-[9px] uppercase"
-              style={{ background: "var(--surface)", color: "var(--ink-3)" }}
-            >
-              egress
-            </span>
+        {/* Tool permissions */}
+        <div className="mt-4">
+          <div className="flex items-center justify-between">
+            <p className="font-mono text-[10px] uppercase tracking-wider text-ink-faint">
+              Tool permissions
+            </p>
+            <Select
+              value={server.require_approval ? "ask" : "allow"}
+              onChange={(v) => setNewToolDefault(v === "ask")}
+              options={[
+                { value: "allow", label: "future tools: allow" },
+                { value: "ask", label: "future tools: ask" },
+              ]}
+              title="The starting permission for tools this server discovers later"
+              className="cursor-pointer rounded-md border border-line bg-surface px-1.5 py-0.5 text-[10px] font-medium text-ink-muted focus:border-accent focus:outline-none"
+              panelClassName="text-[11px]"
+            />
+          </div>
+          <p className="mt-0.5 text-[11px] leading-[15px] text-ink-faint">
+            Allow runs freely · Ask pauses for your approval · Block hides the tool
+          </p>
+          {tools === null ? (
+            <p className="py-3 text-[12px] text-ink-faint">Loading tools…</p>
+          ) : tools.length === 0 ? (
+            <p className="py-3 text-[12px] text-ink-faint">
+              No tools discovered yet. Connect the server to list its tools.
+            </p>
+          ) : (
+            <>
+              <div className="mt-1 divide-y divide-line rounded-lg border border-line px-3">
+                {shownTools!.map((tool) => (
+                  <ToolPermissionRow
+                    key={tool.id}
+                    tool={tool}
+                    perm={permOf(tool)}
+                    onChange={(p) => setPerm(tool, p)}
+                  />
+                ))}
+              </div>
+              {tools.length > 6 && (
+                <button
+                  onClick={() => setShowAll(!showAll)}
+                  className="mt-1.5 cursor-pointer border-none bg-transparent text-[11px] font-medium text-accent"
+                >
+                  {showAll ? "Show fewer" : `+ ${tools.length - 6} more tools`}
+                </button>
+              )}
+            </>
           )}
         </div>
-        <p
-          className="mt-0.5 text-[11px]"
-          style={{ color: "var(--ink-2)", cursor: isLong ? "pointer" : "default" }}
-          onClick={() => isLong && setExpanded(!expanded)}
-        >
-          {expanded ? tool.description : shortDesc}
-          {isLong && (
-            <span className="ml-1 font-mono text-[10px]" style={{ color: "var(--ink-3)" }}>
-              {expanded ? "[-]" : "[+]"}
-            </span>
-          )}
-        </p>
       </div>
-      <button
-        onClick={() => onToggle(!enabled)}
-        className="relative mt-0.5 inline-flex h-4 w-7 shrink-0 items-center rounded-full transition"
-        style={{
-          background: enabled ? "var(--accent)" : "#D1D1D1",
-          border: "none",
-          cursor: "pointer",
-        }}
-        title={enabled ? "Disable tool" : "Enable tool"}
-      >
-        <span
-          className="inline-block h-3 w-3 rounded-full bg-white transition"
-          style={{ transform: enabled ? "translateX(14px)" : "translateX(2px)" }}
-        />
-      </button>
+
+      {/* Footer */}
+      <div className="border-t border-line px-4 py-3">
+        <button
+          onClick={onDelete}
+          className="flex cursor-pointer items-center gap-1.5 border-none bg-transparent text-[12px] font-medium text-danger transition-opacity hover:opacity-80"
+        >
+          <Trash2 className="h-3.5 w-3.5" /> Remove server
+        </button>
+      </div>
     </div>
   );
 }
 
-function TabButton({
-  active,
-  onClick,
-  icon,
-  children,
+function ToolPermissionRow({
+  tool,
+  perm,
+  onChange,
 }: {
-  active: boolean;
-  onClick: () => void;
-  icon: React.ReactNode;
-  children: React.ReactNode;
+  tool: McpToolInfo;
+  perm: Perm;
+  onChange: (p: Perm) => void;
 }) {
   return (
-    <button
-      onClick={onClick}
-      className="flex items-center gap-1.5 border-b-2 px-3 py-2 text-[13px] font-medium transition"
-      style={{
-        borderColor: active ? "var(--accent)" : "transparent",
-        color: active ? "var(--ink)" : "var(--ink-3)",
-        background: "none",
-        cursor: "pointer",
-      }}
-    >
-      {icon}
-      {children}
-    </button>
+    <div className="flex items-center gap-3 py-2.5">
+      <div className="min-w-0 flex-1">
+        <p className="truncate font-mono text-[12px] font-medium text-ink">{tool.tool_name}</p>
+        <p className="truncate text-[11px] text-ink-muted" title={tool.description}>
+          {tool.description}
+        </p>
+      </div>
+      {tool.egress && (
+        <span className="shrink-0 rounded-full bg-ground px-1.5 py-0.5 font-mono text-[9px] uppercase text-ink-faint">
+          egress
+        </span>
+      )}
+      <Select
+        value={perm}
+        onChange={(v) => onChange(v as Perm)}
+        options={[
+          { value: "allow", label: "Allow" },
+          { value: "ask", label: "Ask" },
+          { value: "block", label: "Block" },
+        ]}
+        className="shrink-0 cursor-pointer rounded-md border border-line bg-surface px-2 py-1 text-[11px] font-medium text-ink-2 focus:border-accent focus:outline-none"
+      />
+    </div>
   );
 }
 
@@ -1036,7 +1096,7 @@ function CredentialForm({
   return (
     <div
       className="border-t px-4 py-3"
-      style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+      style={{ borderColor: "var(--border)", background: "var(--ground)" }}
     >
       <form onSubmit={handleSave} className="space-y-2">
         <div className="flex items-center gap-2">
@@ -1189,7 +1249,7 @@ function CredentialManager({
             <div
               key={c.id}
               className="flex items-center gap-2 rounded-[5px] px-3 py-2"
-              style={{ background: "var(--surface)" }}
+              style={{ background: "var(--ground)" }}
             >
               <span className="font-mono text-[11px]" style={{ color: "var(--ink-2)" }}>
                 {c.credential_type}
@@ -1261,30 +1321,41 @@ const AUTH_LABELS: Record<string, string> = {
 };
 
 function CatalogBrowser({
+  search,
   installedNames,
   onInstalled,
 }: {
+  search: string;
   installedNames: Set<string>;
   onInstalled: () => void;
 }) {
   const [entries, setEntries] = useState<McpCatalogEntry[]>([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
   const [category, setCategory] = useState<string | null>(null);
   const [installing, setInstalling] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
+  // Debounce — the toolbar input types faster than the catalog query should fire.
+  const [debouncedSearch, setDebouncedSearch] = useState(search);
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 250);
+    return () => clearTimeout(t);
+  }, [search]);
+
   const fetchCatalog = useCallback(async () => {
     setLoading(true);
     try {
-      const list = await api.listMcpCatalog(category ?? undefined, search || undefined);
+      const list = await api.listMcpCatalog(
+        category ?? undefined,
+        debouncedSearch || undefined,
+      );
       setEntries(list);
     } catch {
       // ignore
     } finally {
       setLoading(false);
     }
-  }, [category, search]);
+  }, [category, debouncedSearch]);
 
   useEffect(() => {
     fetchCatalog();
@@ -1310,27 +1381,6 @@ function CatalogBrowser({
 
   return (
     <div>
-      {/* Search bar */}
-      <div className="mb-4 flex gap-2">
-        <div className="relative flex-1">
-          <Search
-            className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2"
-            style={{ color: "var(--ink-3)" }}
-          />
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search MCP servers…"
-            className="w-full rounded-[6px] border py-2 pl-9 pr-3 text-[13px]"
-            style={{
-              borderColor: "var(--border)",
-              background: "var(--white)",
-              color: "var(--ink)",
-            }}
-          />
-        </div>
-      </div>
-
       {/* Category filter */}
       {categories.length > 0 && (
         <div className="mb-4 flex flex-wrap gap-1.5">
@@ -1369,75 +1419,46 @@ function CatalogBrowser({
           <p className="text-[14px] text-[var(--ink-3)]">No servers found</p>
         </div>
       ) : (
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-3">
           {entries.map((entry) => {
             const isInstalled = installedNames.has(entry.name);
             return (
               <div
                 key={entry.name}
-                className="flex flex-col rounded-xl p-4 transition-shadow hover:shadow-md"
-                style={{
-                  border: "1px solid var(--border)",
-                  background: "var(--sidebar)",
-                }}
+                className="flex flex-col rounded-xl border border-line bg-surface p-4 transition-colors hover:border-ink-faint"
               >
                 {/* Header */}
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex-1">
-                    <span className="text-[14px] font-medium" style={{ color: "var(--ink)" }}>
-                      {entry.name}
-                    </span>
-                    <span
-                      className="ml-2 font-mono text-[9px] uppercase tracking-wider"
-                      style={{ color: "var(--ink-3)" }}
-                    >
+                <div className="flex items-center gap-3">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] bg-accent-tint text-[15px] font-semibold text-accent">
+                    {entry.name.charAt(0).toUpperCase()}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-[14px] font-medium text-ink">{entry.name}</p>
+                    <p className="truncate font-mono text-[10px] uppercase tracking-wider text-ink-faint">
                       {entry.vendor}
-                    </span>
+                    </p>
                   </div>
                   <span
-                    className="rounded-full px-2 py-0.5 font-mono text-[9px] uppercase"
-                    style={{
-                      background: "var(--surface)",
-                      color: entry.auth_type === "none" ? "#6A8216" : "var(--ink-3)",
-                    }}
+                    className={`shrink-0 rounded-full px-2 py-0.5 font-mono text-[9px] uppercase ${
+                      entry.auth_type === "none" ? "bg-accent-tint text-accent" : "bg-ground text-ink-muted"
+                    }`}
                   >
                     {AUTH_LABELS[entry.auth_type] ?? entry.auth_type}
                   </span>
                 </div>
 
                 {/* Description */}
-                <p className="mt-1.5 flex-1 text-[12px]" style={{ color: "var(--ink-2)" }}>
+                <p className="mt-3 line-clamp-3 min-h-[48px] flex-1 text-[12px] leading-[16px] text-ink-2">
                   {entry.description}
                 </p>
 
-                {/* Category + transport */}
-                <div className="mt-2 flex items-center gap-2">
-                  <span
-                    className="font-mono text-[10px] uppercase tracking-wider"
-                    style={{ color: "var(--ink-3)" }}
-                  >
-                    {CATEGORY_LABELS[entry.category] ?? entry.category}
+                {/* Footer */}
+                <div className="mt-3 flex items-center justify-between border-t border-line pt-3">
+                  <span className="font-mono text-[10px] uppercase tracking-wider text-ink-faint">
+                    {CATEGORY_LABELS[entry.category] ?? entry.category} · {entry.transport}
                   </span>
-                  <span style={{ color: "var(--ink-3)" }}>·</span>
-                  <span
-                    className="font-mono text-[10px] uppercase tracking-wider"
-                    style={{ color: "var(--ink-3)" }}
-                  >
-                    {entry.transport}
-                  </span>
-                </div>
-
-                {/* Install button */}
-                <div className="mt-3">
                   {isInstalled ? (
-                    <span
-                      className="inline-block rounded-[5px] px-3 py-1.5 text-[12px] font-medium"
-                      style={{
-                        background: "var(--surface)",
-                        color: "var(--accent)",
-                        border: "1px solid color-mix(in srgb, var(--accent) 40%, transparent)",
-                      }}
-                    >
+                    <span className="flex items-center gap-1 text-[12px] font-medium text-accent">
                       Installed
                     </span>
                   ) : entry.installable === false ? (
@@ -1445,8 +1466,7 @@ function CatalogBrowser({
                       href={entry.homepage}
                       target="_blank"
                       rel="noreferrer"
-                      className="inline-block rounded-[5px] border px-3 py-1.5 text-[12px] font-medium"
-                      style={{ borderColor: "var(--border)", color: "var(--ink-2)" }}
+                      className="rounded-md border border-line px-3 py-1.5 text-[12px] font-medium text-ink-2 transition-colors hover:bg-sunken"
                     >
                       Setup required
                     </a>
@@ -1454,13 +1474,11 @@ function CatalogBrowser({
                     <button
                       onClick={() => handleInstall(entry.name)}
                       disabled={installing === entry.name}
-                      className="rounded-[5px] px-3 py-1.5 text-[12px] font-medium transition"
-                      style={{
-                        background: installing === entry.name ? "var(--surface)" : "var(--accent)",
-                        color: installing === entry.name ? "var(--ink-3)" : "#fff",
-                        border: "none",
-                        cursor: installing === entry.name ? "not-allowed" : "pointer",
-                      }}
+                      className={`rounded-md px-3 py-1.5 text-[12px] font-medium transition-opacity ${
+                        installing === entry.name
+                          ? "cursor-not-allowed bg-ground text-ink-muted"
+                          : "cursor-pointer bg-accent text-white hover:opacity-90"
+                      }`}
                     >
                       {installing === entry.name ? "Installing…" : "Install"}
                     </button>

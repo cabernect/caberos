@@ -3,16 +3,21 @@ import { X, Upload, FileText } from "lucide-react";
 import { api } from "@/lib/api";
 import type { ModelInfo, Provider } from "@/lib/types";
 import { ModelSelect } from "@/components/ModelSelect";
+import { Button } from "@/components/ui/button";
+import { FilterPills } from "@/components/ui/filter-pills";
+import { Select } from "@/components/ui/select";
 
 interface CreateAgentModalProps {
   open: boolean;
   onClose: () => void;
   onCreated: (id: string) => void;
   providers: Provider[];
+  /** Which tab the dialog opens on (default "form"). */
+  initialMode?: "form" | "yaml";
 }
 
-export function CreateAgentModal({ open, onClose, onCreated, providers }: CreateAgentModalProps) {
-  const [mode, setMode] = useState<"form" | "yaml">("form");
+export function CreateAgentModal({ open, onClose, onCreated, providers, initialMode = "form" }: CreateAgentModalProps) {
+  const [mode, setMode] = useState<"form" | "yaml">(initialMode);
   const [name, setName] = useState("");
   const [providerId, setProviderId] = useState("");
   const [modelName, setModelName] = useState("");
@@ -38,6 +43,11 @@ export function CreateAgentModal({ open, onClose, onCreated, providers }: Create
       .catch(() => setModels([]))
       .finally(() => setLoadingModels(false));
   }, [providerId]);
+
+  // Opening via "Import" vs "New agent" selects the starting tab
+  useEffect(() => {
+    if (open) setMode(initialMode);
+  }, [open, initialMode]);
 
   if (!open) return null;
 
@@ -124,65 +134,56 @@ limits:
   max_cost_per_run: 1.0
 `;
 
+  const inputCls =
+    "w-full rounded-md border border-line bg-ground px-3 py-2 text-[13px] text-ink outline-none transition focus:border-accent placeholder:text-ink-faint";
+
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center"
-      style={{ background: "rgba(0,0,0,0.25)" }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/25"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-lg rounded-lg border shadow-xl"
-        style={{ background: "var(--white)", borderColor: "var(--border)" }}
+        className="w-full max-w-lg overflow-hidden rounded-xl border border-line bg-surface shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div
-          className="flex items-center justify-between px-6 py-4"
-          style={{ borderBottom: "1px solid var(--border)" }}
-        >
-          <h2 className="text-[16px] font-semibold text-[var(--ink)]">Create New Agent</h2>
+        <div className="flex items-center justify-between border-b border-line px-5 py-3.5">
+          <div>
+            <h2 className="text-[15px] font-semibold text-ink">
+              {mode === "form" ? "New agent" : "Import agent"}
+            </h2>
+            <p className="mt-0.5 text-[12px] text-ink-3">
+              {mode === "form"
+                ? "Name it, pick a model, describe who it is."
+                : "Bring in an agent defined as YAML."}
+            </p>
+          </div>
           <button
             onClick={onClose}
-            className="flex h-7 w-7 items-center justify-center rounded text-[var(--ink-2)] transition hover:bg-[var(--border)] hover:text-[var(--ink)]"
-            style={{ border: "none", background: "none", cursor: "pointer" }}
+            className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md border-none bg-transparent text-ink-muted transition-colors hover:bg-sunken hover:text-ink"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        {/* Tab switcher */}
-        <div className="flex gap-1 px-6 pt-4">
-          <button
-            onClick={() => { setMode("form"); setError(""); }}
-            className="rounded-[5px] px-3 py-1.5 text-[12px] font-medium transition"
-            style={{
-              background: mode === "form" ? "var(--ink)" : "none",
-              color: mode === "form" ? "var(--white)" : "var(--ink-2)",
-              border: "1px solid var(--border)",
-              cursor: "pointer",
+        {/* Segmented tab switcher */}
+        <div className="px-5 pt-4">
+          <FilterPills
+            pills={[
+              { key: "form", label: "Form" },
+              { key: "yaml", label: "Import YAML" },
+            ]}
+            active={mode}
+            onChange={(k) => {
+              setMode(k as "form" | "yaml");
+              setError("");
             }}
-          >
-            Form
-          </button>
-          <button
-            onClick={() => { setMode("yaml"); setError(""); }}
-            className="rounded-[5px] px-3 py-1.5 text-[12px] font-medium transition"
-            style={{
-              background: mode === "yaml" ? "var(--ink)" : "none",
-              color: mode === "yaml" ? "var(--white)" : "var(--ink-2)",
-              border: "1px solid var(--border)",
-              cursor: "pointer",
-            }}
-          >
-            Import YAML
-          </button>
+            variant="segmented"
+          />
         </div>
 
-        <div className="max-h-[55vh] space-y-4 overflow-y-auto p-6">
+        <div className="max-h-[55vh] space-y-4 overflow-y-auto p-5">
           {error && (
-            <div
-              className="rounded-[5px] px-3 py-2 text-[12px]"
-              style={{ background: "rgba(239,68,68,0.1)", color: "var(--danger)" }}
-            >
+            <div className="rounded-md bg-danger-tint px-3 py-2 text-[12px] text-danger">
               {error}
             </div>
           )}
@@ -194,29 +195,22 @@ limits:
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="e.g. Research Assistant"
-                  className="w-full rounded-[5px] border px-3 py-2 text-[13px] text-[var(--ink)] outline-none"
-                  style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+                  className={inputCls}
                   autoFocus
                 />
               </Field>
 
               <div className="grid grid-cols-2 gap-4">
                 <Field label="Provider">
-                  <select
+                  <Select
                     value={providerId}
-                    onChange={(e) => setProviderId(e.target.value)}
-                    className="w-full rounded-[5px] border px-3 py-2 text-[13px] text-[var(--ink)] outline-none"
-                    style={{ borderColor: "var(--border)", background: "var(--surface)" }}
-                  >
-                    <option value="">— Select —</option>
-                    {providers.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={setProviderId}
+                    options={providers.map((p) => ({ value: p.id, label: p.name }))}
+                    className={inputCls}
+                    align="left" panelClassName="text-[13px]"
+                  />
                   {providers.length === 0 && (
-                    <p className="mt-1 text-[11px] text-[var(--accent)]">
+                    <p className="mt-1 text-[11px] text-accent">
                       No providers configured. Add one in Settings → Providers first.
                     </p>
                   )}
@@ -233,58 +227,55 @@ limits:
                 </Field>
               </div>
 
-              <Field label="Soul (identity, values, principles)">
+              <Field label="Soul" hint="Identity, values, principles">
                 <textarea
                   value={soul}
                   onChange={(e) => setSoul(e.target.value)}
                   placeholder="What this agent believes in, its core values..."
                   rows={3}
-                  className="w-full resize-none rounded-[5px] border px-3 py-2 text-[13px] text-[var(--ink)] outline-none"
-                  style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+                  className={`${inputCls} resize-none`}
                 />
               </Field>
 
-              <Field label="Persona (tone, communication style)">
+              <Field label="Persona" hint="Tone, communication style">
                 <textarea
                   value={persona}
                   onChange={(e) => setPersona(e.target.value)}
                   placeholder="How this agent talks, its personality..."
                   rows={3}
-                  className="w-full resize-none rounded-[5px] border px-3 py-2 text-[13px] text-[var(--ink)] outline-none"
-                  style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+                  className={`${inputCls} resize-none`}
                 />
               </Field>
 
-              <Field label="Task (mission, instructions)">
+              <Field label="Task" hint="Mission, instructions">
                 <textarea
                   value={task}
                   onChange={(e) => setTask(e.target.value)}
                   placeholder="What this agent should do, its mission..."
                   rows={3}
-                  className="w-full resize-none rounded-[5px] border px-3 py-2 text-[13px] text-[var(--ink)] outline-none"
-                  style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+                  className={`${inputCls} resize-none`}
                 />
               </Field>
             </>
           ) : (
             <>
               <div className="flex items-center gap-2">
-                <button
+                <Button
+                  variant="outline"
+                  size="sm"
                   onClick={() => fileInputRef.current?.click()}
-                  className="flex items-center gap-1.5 rounded-[5px] border px-3 py-1.5 text-[12px] font-medium text-[var(--ink-2)] transition hover:bg-[var(--border)]"
-                  style={{ borderColor: "var(--border)", background: "none", cursor: "pointer" }}
                 >
                   <Upload className="h-3.5 w-3.5" />
                   Upload .yaml file
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
                   onClick={() => setYamlText(YAML_TEMPLATE)}
-                  className="flex items-center gap-1.5 rounded-[5px] border px-3 py-1.5 text-[12px] font-medium text-[var(--ink-2)] transition hover:bg-[var(--border)]"
-                  style={{ borderColor: "var(--border)", background: "none", cursor: "pointer" }}
                 >
                   <FileText className="h-3.5 w-3.5" />
                   Load template
-                </button>
+                </Button>
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -300,13 +291,12 @@ limits:
                   onChange={(e) => setYamlText(e.target.value)}
                   placeholder="Paste agent YAML here, or upload a file / load a template..."
                   rows={16}
-                  className="w-full resize-none rounded-[5px] border px-3 py-2 font-mono text-[12px] text-[var(--ink)] outline-none"
-                  style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+                  className={`${inputCls} resize-none font-mono text-[12px]`}
                   autoFocus
                 />
               </Field>
 
-              <p className="text-[11px] text-[var(--ink-3)]">
+              <p className="text-[11px] leading-[16px] text-ink-3">
                 The YAML must include <code className="font-mono">id</code> and <code className="font-mono">name</code>.
                 Leave <code className="font-mono">capabilities</code> empty to enable all tools, or list specific ones to restrict.
                 If an agent with the same <code className="font-mono">id</code> already exists, it will be updated.
@@ -315,41 +305,38 @@ limits:
           )}
         </div>
 
-        <div
-          className="flex justify-end gap-2 px-6 py-4"
-          style={{ borderTop: "1px solid var(--border)" }}
-        >
-          <button
-            onClick={onClose}
-            className="rounded-[6px] px-4 py-2 text-[13px] font-medium text-[var(--ink-2)] transition"
-            style={{ border: "1px solid var(--border)", background: "none", cursor: "pointer" }}
-          >
+        <div className="flex items-center justify-end gap-2 border-t border-line px-5 py-3.5">
+          <Button variant="outline" size="sm" onClick={onClose}>
             Cancel
-          </button>
-          <button
+          </Button>
+          <Button
+            size="sm"
             onClick={mode === "form" ? handleCreate : handleImportYaml}
             disabled={saving || (mode === "form" ? !name.trim() : !yamlText.trim())}
-            className="rounded-[6px] px-4 py-2 text-[13px] font-medium transition"
-            style={{
-              background: "var(--ink)",
-              color: "var(--white)",
-              border: "1px solid var(--ink)",
-              cursor: saving ? "not-allowed" : "pointer",
-              opacity: saving || (mode === "form" ? !name.trim() : !yamlText.trim()) ? 0.5 : 1,
-            }}
           >
-            {saving ? "Creating…" : mode === "form" ? "Create Agent" : "Import Agent"}
-          </button>
+            {saving ? "Creating…" : mode === "form" ? "Create agent" : "Import agent"}
+          </Button>
         </div>
       </div>
     </div>
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
   return (
     <div>
-      <label className="mb-1 block text-[12px] font-medium text-[var(--ink-2)]">{label}</label>
+      <label className="mb-1.5 flex items-baseline justify-between text-[12px] font-medium text-ink-2">
+        {label}
+        {hint && <span className="text-[11px] font-normal text-ink-3">{hint}</span>}
+      </label>
       {children}
     </div>
   );

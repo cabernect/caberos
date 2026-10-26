@@ -44,6 +44,9 @@ class ChannelCreate(BaseModel):
     mode: str = "polling"  # "polling" or "webhook"
     extra_config: dict[str, Any] | None = None
     approval_policy: str = "deny"  # auto_approve, operator, deny
+    # Inbound allow-list: null/omitted = anyone may message the agent; a list
+    # (even empty) = only these chat IDs reach the pipeline.
+    allowed_chat_ids: list[str] | None = None
 
 
 class ChannelUpdate(BaseModel):
@@ -54,6 +57,10 @@ class ChannelUpdate(BaseModel):
     enabled: bool | None = None
     mode: str | None = None
     approval_policy: str | None = None
+    agent_id: str | None = None  # move the channel to a different agent
+    # Use model_fields_set to distinguish "absent" (keep) from explicit null
+    # (remove the allow-list — anyone may message).
+    allowed_chat_ids: list[str] | None = None
 
 
 class ChannelOut(BaseModel):
@@ -67,6 +74,7 @@ class ChannelOut(BaseModel):
     has_token: bool
     extra_config: dict[str, Any] | None = None
     approval_policy: str = "deny"
+    allowed_chat_ids: list[str] | None = None
 
 
 class ChannelTest(BaseModel):
@@ -104,6 +112,10 @@ async def create_channel(
     if existing.scalar_one_or_none():
         raise HTTPException(409, f"Channel {req.platform} already configured for this agent")
 
+    extra = dict(req.extra_config or {})
+    if req.allowed_chat_ids is not None:
+        extra["allowed_chat_ids"] = [str(c) for c in req.allowed_chat_ids]
+
     config = ChannelConfig(
         id=str(uuid.uuid4()),
         platform=req.platform,
@@ -112,7 +124,7 @@ async def create_channel(
         webhook_secret=req.webhook_secret,
         enabled=req.enabled,
         mode=req.mode,
-        extra_config=json.dumps(req.extra_config) if req.extra_config else None,
+        extra_config=json.dumps(extra) if extra else None,
         approval_policy=req.approval_policy,
     )
     db.add(config)
@@ -138,6 +150,8 @@ async def update_channel(
     if config is None:
         raise HTTPException(404, "Channel not found")
 
+    old_agent_id = config.agent_id
+
     if req.bot_token is not None:
         config.encrypted_bot_token = encrypt(req.bot_token)
     if req.webhook_secret is not None:
@@ -148,11 +162,34 @@ async def update_channel(
         config.mode = req.mode
     if req.approval_policy is not None:
         config.approval_policy = req.approval_policy
+    if req.agent_id is not None and req.agent_id != config.agent_id:
+        # The registry keys channels by (platform, agent_id) — a duplicate
+        # row would shadow the existing channel for the target agent.
+        existing = await db.execute(
+            select(ChannelConfig).where(
+                ChannelConfig.platform == config.platform,
+                ChannelConfig.agent_id == req.agent_id,
+            )
+        )
+        if existing.scalar_one_or_none() is not None:
+            raise HTTPException(409, f"Channel {config.platform} already configured for that agent")
+        config.agent_id = req.agent_id
+    if "allowed_chat_ids" in req.model_fields_set:
+        extra = json.loads(config.extra_config) if config.extra_config else {}
+        if req.allowed_chat_ids is None:
+            extra.pop("allowed_chat_ids", None)
+        else:
+            extra["allowed_chat_ids"] = [str(c) for c in req.allowed_chat_ids]
+        config.extra_config = json.dumps(extra) if extra else None
 
     await db.commit()
     await db.refresh(config)
 
-    # Reload the channel in the registry (stops old polling, starts new)
+    # Reload the channel in the registry. If the agent moved, the old
+    # (platform, old_agent) key must be torn down separately — reload only
+    # pops the current key.
+    if req.agent_id is not None and req.agent_id != old_agent_id:
+        await remove_channel(config.platform, old_agent_id)
     await reload_channel(config)
 
     return _config_to_out(config)
@@ -258,6 +295,8 @@ async def webhook_receiver(
     inbound = await channel.receive(raw_payload)
     if inbound is None:
         return {"status": "ignored", "reason": "non-text message or unsupported payload"}
+    if not channel.chat_allowed(inbound.external_user_id):
+        return {"status": "ignored", "reason": "chat not in allow list"}
 
     # Send typing indicator (if supported)
     await channel.send_typing(inbound.external_user_id)
@@ -322,4 +361,5 @@ def _config_to_out(config: ChannelConfig) -> ChannelOut:
         has_token=bool(config.encrypted_bot_token),
         extra_config=extra,
         approval_policy=config.approval_policy or "deny",
+        allowed_chat_ids=extra.get("allowed_chat_ids") if extra else None,
     )

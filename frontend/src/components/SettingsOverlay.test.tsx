@@ -100,9 +100,10 @@ describe("SettingsOverlay capabilities", () => {
     const toolRow = (await screen.findByText("mcp.playwright.browser_evaluate")).closest(
       "div.flex.items-center.justify-between",
     )!;
-    const select = toolRow.querySelector("select")!;
+    const select = toolRow.querySelector('button[aria-haspopup="listbox"]')!;
 
-    fireEvent.change(select, { target: { value: "none" } });
+    fireEvent.click(select);
+    fireEvent.click(screen.getByRole("option", { name: "Not permitted" }));
 
     await waitFor(() => expect(updateAgent).toHaveBeenCalled());
     const saved = updateAgent.mock.calls.at(-1)?.[1]?.capabilities ?? [];
@@ -131,11 +132,12 @@ describe("SettingsOverlay capabilities", () => {
     const toolRow = (await screen.findByText("mcp.playwright.browser_evaluate")).closest(
       "div.flex.items-center.justify-between",
     )!;
-    const select = toolRow.querySelector("select")!;
+    const select = toolRow.querySelector('button[aria-haspopup="listbox"]')!;
     // The deny renders as Not permitted under the granted server.
-    expect(select).toHaveValue("none");
+    expect(select).toHaveTextContent("Not permitted");
 
-    fireEvent.change(select, { target: { value: "on_demand" } });
+    fireEvent.click(select);
+    fireEvent.click(screen.getByRole("option", { name: "On demand" }));
 
     await waitFor(() => expect(updateAgent).toHaveBeenCalled());
     const saved = updateAgent.mock.calls.at(-1)?.[1]?.capabilities ?? [];

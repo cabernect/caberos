@@ -3,7 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { api } from "./lib/api";
-import type { Agent, Provider } from "./lib/types";
+import type { Agent, Operator, Provider } from "./lib/types";
 import { ConfirmProvider } from "./lib/confirm";
 import { useConfirm } from "./lib/confirmHook";
 import { Login } from "./pages/Login";
@@ -18,10 +18,13 @@ import { Channels } from "./pages/Channels";
 import { Observability } from "./pages/Observability";
 import { Traces } from "./pages/Traces";
 import { Notifications } from "./pages/Notifications";
+import { Today } from "./pages/Today";
+import { CommandPalette } from "./components/CommandPalette";
+import { BootShell } from "./components/BootChrome";
+import { Button } from "./components/ui/button";
 import { UpdateChecker } from "./components/UpdateChecker";
-import { SetupGuide } from "./components/SetupGuide";
+import { GuidanceHost } from "./components/guidance/GuidanceHost";
 import { NotificationToasts } from "./components/NotificationToasts";
-import { NotificationPermissionBanner } from "./components/NotificationPermissionBanner";
 import { ThemeProvider } from "./lib/theme";
 
 export default function App() {
@@ -37,7 +40,7 @@ function AppContent() {
   const [gatewayAttempt, setGatewayAttempt] = useState(0);
   const [gatewayError, setGatewayError] = useState<string | null>(null);
   const [authed, setAuthed] = useState<boolean | null>(null);
-  const [setupData, setSetupData] = useState<{ providers: Provider[]; agents: Agent[] } | null>(null);
+  const [setupData, setSetupData] = useState<{ operator: Operator | null; providers: Provider[]; agents: Agent[] } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -87,10 +90,8 @@ function AppContent() {
       return;
     }
     let cancelled = false;
-    Promise.all([api.listProviders(), api.listAgents()]).then(([providers, agents]) => {
-      if (!cancelled) setSetupData({ providers, agents });
-    }).catch(() => {
-      if (!cancelled) setSetupData({ providers: [], agents: [] });
+    refreshSetupData().then((data) => {
+      if (!cancelled) setSetupData(data);
     });
     return () => { cancelled = true; };
   }, [authed]);
@@ -98,6 +99,7 @@ function AppContent() {
   if (gatewayReady !== true) {
     return (
       <GatewayStatus
+        key={gatewayAttempt}
         retrying={gatewayReady === false}
         error={gatewayError}
         onRetry={() => {
@@ -109,21 +111,18 @@ function AppContent() {
   }
 
   if (authed === null) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-[var(--color-background)]">
-        <p className="text-sm text-[var(--color-secondary)]">Loading...</p>
-      </div>
-    );
+    return <BootShell />;
   }
 
   return (
     <>
     <ConfirmProvider>
     <QuitConfirmationBridge />
+    <div className="screen-in">
     <BrowserRouter>
       <Routes>
-        <Route path="/login" element={authed ? <Navigate to="/agents" /> : <Login />} />
-        <Route path="/" element={<Navigate to="/agents" />} />
+        <Route path="/login" element={authed ? <Navigate to="/" /> : <Login />} />
+        <Route path="/" element={authed ? <Today /> : <Navigate to="/login" />} />
         <Route path="/agents" element={authed ? <AgentList /> : <Navigate to="/login" />} />
         <Route
           path="/agents/:id/chat"
@@ -179,20 +178,40 @@ function AppContent() {
         />
       </Routes>
       {setupData && authed && (
-        <SetupGuide
-          setupIncomplete={
-            !setupData.providers.some((provider) => provider.has_key) ||
-            !setupData.agents.some((agent) => agent.name.toLowerCase() === "caber" && agent.provider_id && agent.model)
-          }
+        <GuidanceHost
+          operator={setupData.operator}
+          providers={setupData.providers}
+          agents={setupData.agents}
+          onSetupRefresh={() => {
+            void refreshSetupData().then(setSetupData);
+          }}
         />
       )}
       {authed && <NotificationToasts />}
-      {authed && <NotificationPermissionBanner />}
+      {authed && <CommandPalette />}
     </BrowserRouter>
+    </div>
     </ConfirmProvider>
     <UpdateChecker />
     </>
   );
+}
+
+async function refreshSetupData(): Promise<{
+  operator: Operator | null;
+  providers: Provider[];
+  agents: Agent[];
+}> {
+  try {
+    const [operator, providers, agents] = await Promise.all([
+      api.me(),
+      api.listProviders(),
+      api.listAgents(),
+    ]);
+    return { operator, providers, agents };
+  } catch {
+    return { operator: null, providers: [], agents: [] };
+  }
 }
 
 function QuitConfirmationBridge() {
@@ -235,47 +254,141 @@ function GatewayStatus({
   error?: string | null;
   onRetry: () => void;
 }) {
+  const [elapsed, setElapsed] = useState(0);
+  const [showDetails, setShowDetails] = useState(false);
+  const [logPath, setLogPath] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const isDesktop =
+    typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+  useEffect(() => {
+    const timer = setInterval(() => setElapsed((e) => e + 1), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const failed = Boolean(error);
+  const slow = !failed && elapsed >= 12;
+
+  const openLogFolder = async () => {
+    try {
+      const path = await api.gatewayLogPath();
+      const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
+      await revealItemInDir(path);
+    } catch {
+      // Best-effort — the diagnostics copy below still carries the path.
+    }
+  };
+
+  const copyDiagnostics = async () => {
+    const lines = [
+      `CaberOS ${__APP_VERSION__}`,
+      `Platform: ${navigator.userAgent}`,
+      `Shell: ${isDesktop ? "desktop" : "web"}`,
+      `Phase: ${failed ? "failed" : slow ? "slow-start" : "starting"}`,
+      `Elapsed: ${elapsed}s`,
+      error ? `Error: ${error}` : null,
+      logPath ? `Log: ${logPath}` : null,
+      `Time: ${new Date().toISOString()}`,
+    ].filter(Boolean);
+    try {
+      await navigator.clipboard.writeText(lines.join("\n"));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard may be unavailable — the error text stays visible.
+    }
+  };
+
+  const phase = failed ? "failed" : slow ? "slow" : "starting";
+
   return (
-    <div
-      className="flex min-h-screen items-center justify-center bg-[var(--color-background)] px-6"
-      role="status"
-      aria-live="polite"
-    >
-      <div className="flex flex-col items-center text-center">
-        <div className="relative h-12 w-12" aria-hidden="true">
-          <div className="absolute inset-0 rounded-full border-2 border-[var(--border)]" />
-          <div className="absolute inset-0 animate-spin rounded-full border-2 border-transparent border-t-[var(--accent)]" />
-        </div>
-        <h1 className="mt-6 text-lg font-semibold text-[var(--ink)]">Starting CaberOS</h1>
-        <p className="mt-2 text-sm text-[var(--ink-2)]">
-          {retrying ? "Starting the local gateway…" : "Preparing your workspace…"}
+    <BootShell failed={failed} spinning={!failed}>
+      <div
+        key={phase}
+        className="rise-in mt-8 flex flex-col items-center text-center"
+        role="status"
+        aria-live="polite"
+      >
+        <h1 className="text-[22px] font-semibold text-ink">
+          {failed ? "CaberOS couldn't start" : slow ? "Still starting…" : "Starting CaberOS"}
+        </h1>
+        <p className="mt-2 max-w-sm text-[14px] text-[var(--ink-2)]">
+          {failed
+            ? "The local engine didn't respond. Try again, or check the details."
+            : slow
+              ? "This is taking longer than usual. You don't need to do anything yet."
+              : "Getting your agents ready."}
         </p>
-        {error ? (
-          <p className="mt-3 max-w-md rounded-md border border-[var(--border)] bg-[var(--color-surface)] px-3 py-2 font-mono text-xs text-[var(--ink-2)]">
+
+        {failed && error && (
+          <p className="mt-5 w-full max-w-md rounded-xl border border-line bg-surface px-4 py-3 text-left font-mono text-[12px] text-[var(--ink-2)]">
             {error}
           </p>
-        ) : (
-          <p className="mt-2 max-w-sm text-xs text-[var(--ink-3)]">
-            CaberOS will continue automatically when the gateway is ready.
+        )}
+
+        {failed && (
+          <p className="mt-2 max-w-sm text-[12px] text-[var(--ink-3)]">
+            Free the port and relaunch CaberOS — or if another CaberOS window is
+            already running, close this one and use it.
           </p>
         )}
-        {error && (
-          <p className="mt-2 max-w-sm text-xs text-[var(--ink-3)]">
-            Free the port and relaunch CaberOS — or if another CaberOS window is already running,
-            close this one and use it.
-          </p>
-        )}
-        {retrying && (
+
+        <div className="mt-7 flex items-center gap-2.5">
+          {failed ? (
+            <>
+              <Button onClick={onRetry}>Try again</Button>
+              {isDesktop && (
+                <Button variant="outline" onClick={() => void openLogFolder()}>
+                  Open log folder
+                </Button>
+              )}
+            </>
+          ) : slow ? (
+            <>
+              <Button variant="outline" onClick={() => setShowDetails((v) => !v)}>
+                {showDetails ? "Hide details" : "Show details"}
+              </Button>
+              {retrying && (
+                <Button variant="outline" onClick={onRetry}>
+                  Retry now
+                </Button>
+              )}
+            </>
+          ) : null}
+        </div>
+
+        {(failed || (slow && showDetails)) && (
           <button
             type="button"
-            onClick={onRetry}
-            className="mt-8 rounded-md border px-4 py-2 text-sm font-medium transition-colors"
-            style={{ borderColor: "var(--border)", color: "var(--ink-2)" }}
+            className="mt-3 text-[12px] font-medium text-accent hover:underline"
+            onClick={() => {
+              if (!logPath) void api.gatewayLogPath().then(setLogPath).catch(() => {});
+              void copyDiagnostics();
+            }}
           >
-            Retry now
+            {copied ? "Copied" : "Copy diagnostics"}
           </button>
         )}
+
+        {slow && showDetails && (
+          <div className="mt-5 w-full max-w-md rounded-xl border border-line bg-surface px-4 py-3 text-left text-[12px] text-[var(--ink-2)]">
+            <p>CaberOS checks the local engine every 1.5 seconds and continues automatically.</p>
+            {logPath ? (
+              <p className="mt-1.5 break-all font-mono text-[11px] text-[var(--ink-3)]">{logPath}</p>
+            ) : (
+              <button
+                type="button"
+                className="mt-1.5 font-medium text-accent hover:underline"
+                onClick={() => void api.gatewayLogPath().then(setLogPath).catch(() => {})}
+              >
+                Show log path
+              </button>
+            )}
+          </div>
+        )}
       </div>
-    </div>
+    </BootShell>
   );
 }
+
+

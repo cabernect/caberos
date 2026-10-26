@@ -52,6 +52,14 @@ class Channel(ABC):
         self.bot_token = bot_token
         self.agent_id = agent_id
         self.webhook_secret = webhook_secret
+        # Inbound allow-list: None = anyone may message the agent; a set
+        # (possibly empty) = only these chat IDs reach the pipeline. Populated
+        # by the registry from ChannelConfig.extra_config["allowed_chat_ids"].
+        self.allowed_chat_ids: set[str] | None = None
+
+    def chat_allowed(self, chat_id: str) -> bool:
+        """True when this chat may reach the agent under the allow-list."""
+        return self.allowed_chat_ids is None or chat_id in self.allowed_chat_ids
 
     @abstractmethod
     async def receive(self, raw_payload: dict[str, Any]) -> Any:

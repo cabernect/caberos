@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect, useImperativeHandle, useCallback, forwardRef } from "react";
-import { Paperclip, FileText, Image as ImageIcon, Link, Wrench, ArrowUp, HelpCircle, Check, Sparkles, Square } from "lucide-react";
-import { ModelSelector } from "@/components/ModelSelector";
+import { Paperclip, FileText, Image as ImageIcon, Link, Wrench, ArrowUp, HelpCircle, Check, Sparkles, Square, Flame } from "lucide-react";
+import { ModelPicker, type SelectedModel } from "@/components/ModelPicker";
 import { ThinkingToggle } from "@/components/ThinkingToggle";
 import { AttachmentCard } from "@/components/AttachmentCard";
+import { Markdown } from "@/components/Markdown";
 import { api } from "@/lib/api";
 import { fileHash, formatAttachmentSize, moveItem } from "@/lib/attachmentUtils";
 import type { SkillInfo } from "@/lib/types";
@@ -50,15 +51,24 @@ export interface ActiveElicitation {
 
 interface ChatInputBarProps {
   agentId: string;
+  /** Display name for the "Ask {name} anything…" placeholder. */
+  agentName?: string;
+  /** YOLO mode — tools run without approval. Effective per-agent + global. */
+  yoloMode?: boolean;
+  /** Locked on by the global override — per-agent toggle can't undo it. */
+  yoloLocked?: boolean;
+  onToggleYolo?: () => void;
+  /** Selected model — the composer's own selector emits via onModelChange. */
+  model?: SelectedModel | null;
   defaultProviderId: string | null;
   defaultModelName: string | null;
   defaultThinkingEnabled?: boolean | null;
   defaultThinkingEffort?: string | null;
   disabled?: boolean;
-  onModelChange?: (hasModel: boolean) => void;
+  onModelChange?: (model: SelectedModel | null) => void;
   onSend: (
     text: string,
-    modelOverride: { provider_id: string; name: string } | null,
+    model: { provider_id: string; name: string } | null,
     context: ContextItem[],
     attachments?: Attachment[],
     skill?: string,
@@ -76,6 +86,11 @@ interface ChatInputBarProps {
 
 export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(function ChatInputBar({
   agentId,
+  agentName,
+  yoloMode,
+  yoloLocked,
+  onToggleYolo,
+  model: controlledModel,
   defaultProviderId,
   defaultModelName,
   defaultThinkingEnabled,
@@ -93,13 +108,8 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
   contextBreakdown,
 }, ref) {
   const [text, setText] = useState("");
-  const [modelOverride, setModelOverride] = useState<{
-    provider_id: string;
-    name: string;
-    supports_vision?: boolean;
-    supports_thinking?: boolean;
-    thinking_efforts?: string[];
-  } | null>(null);
+  // Model is selected in the header chip (W13) — composer only reads it.
+  const model = controlledModel ?? null;
   const [thinkingEnabled, setThinkingEnabled] = useState<boolean | null>(defaultThinkingEnabled ?? null);
   const [thinkingEffort, setThinkingEffort] = useState<string>(defaultThinkingEffort || "medium");
   const [contextItems, setContextItems] = useState<ContextItem[]>([]);
@@ -109,6 +119,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
   const [showContextMenu, setShowContextMenu] = useState(false);
   const [showUrlInput, setShowUrlInput] = useState(false);
   const [urlValue, setUrlValue] = useState("");
+  const attachAreaRef = useRef<HTMLDivElement>(null);
   const [selectedOptions, setSelectedOptions] = useState<Set<number>>(new Set());
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [skillIndex, setSkillIndex] = useState(0);
@@ -118,21 +129,17 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
 
   const isElicitation = !!activeElicitation;
 
-  // Notify parent whether a model is available (default or user-selected)
+  // Default config still counts as "a model" for thinking param fallback.
   const hasDefaultModel = !!(defaultProviderId && defaultModelName);
-  const hasModel = hasDefaultModel || !!modelOverride;
-  useEffect(() => {
-    onModelChange?.(hasModel);
-  }, [hasModel, onModelChange]);
 
   // Sync thinking effort when the model changes — the default "medium"
   // may not be in the new model's supported effort list
   useEffect(() => {
-    const efforts = modelOverride?.thinking_efforts;
+    const efforts = model?.thinking_efforts;
     if (efforts && efforts.length > 0 && !efforts.includes(thinkingEffort)) {
       setThinkingEffort(efforts[0]);
     }
-  }, [modelOverride, thinkingEffort]);
+  }, [model, thinkingEffort]);
 
   // Sync thinking from agent defaults whenever they change (e.g. after
   // saving in Settings). The user can still override per-message by
@@ -213,6 +220,21 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
     return () => revokePreviewUrls(attachmentsRef.current);
   }, [revokePreviewUrls]);
 
+  // Outside press closes the attach menu / URL input — keeps the paperclip
+  // a real toggle (no invisible overlay eating clicks on the trigger).
+  useEffect(() => {
+    if (!showContextMenu && !showUrlInput) return;
+    const onDown = (e: MouseEvent) => {
+      if (attachAreaRef.current && !attachAreaRef.current.contains(e.target as Node)) {
+        setShowContextMenu(false);
+        setShowUrlInput(false);
+        setUrlValue("");
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [showContextMenu, showUrlInput]);
+
   const handleSend = async () => {
     if (isElicitation) {
       // Elicitation mode — send as elicitation response
@@ -246,8 +268,8 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
     // Attach thinking params to the model override.
     // When using the default model (no override), still send an override
     // with the default provider/model so thinking params reach the backend.
-    const baseModel = modelOverride
-      ? modelOverride
+    const baseModel = model
+      ? model
       : hasDefaultModel
         ? { provider_id: defaultProviderId!, name: defaultModelName! }
         : null;
@@ -600,10 +622,6 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
       onDragOver={handleDragOver}
       onDrop={handleDrop}
       className="relative px-4 py-3"
-      style={{
-        borderTop: "1px solid var(--border)",
-        background: "var(--sidebar)",
-      }}
     >
       {/* Elicitation panel — shown when agent asks a question */}
       {isElicitation && activeElicitation && (
@@ -615,8 +633,8 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
             style={{ borderBottom: "1px solid var(--border)" }}
           >
             <HelpCircle className="mt-0.5 h-4 w-4 shrink-0" style={{ color: "var(--warning)" }} />
-            <div className="text-[13px] leading-[1.5]" style={{ color: "var(--ink)" }}>
-              {activeElicitation.question}
+            <div className="markdown-body text-[13px] leading-[1.5]" style={{ color: "var(--ink)" }}>
+              <Markdown>{activeElicitation.question}</Markdown>
             </div>
           </div>
 
@@ -674,48 +692,20 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
       )}
 
       {/* Vision warning — image attached but selected model doesn't support vision */}
-      {!isElicitation && modelOverride && modelOverride.supports_vision === false &&
+      {!isElicitation && model && model.supports_vision === false &&
         attachments.some((a) => a.type === "image") && (
         <div className="mx-auto mb-2 flex max-w-[672px] items-center gap-2 rounded-[5px] border px-3 py-1.5 text-[12px]"
           style={{ borderColor: "var(--warning)", background: "var(--surface)", color: "var(--ink-2)" }}
         >
           <ImageIcon className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--warning)" }} />
           <span>
-            <strong>{modelOverride.name}</strong> may not support image input.
+            <strong>{model.name}</strong> may not support image input.
             The image will be sent as text metadata instead.
           </span>
         </div>
       )}
 
-      {/* Model selector + thinking controls + context indicator — above the input bar */}
-      {!isElicitation && (
-        <div className="mx-auto flex max-w-[672px] items-center gap-1.5 pb-1.5">
-          <ModelSelector
-            defaultProviderId={defaultProviderId}
-            defaultModelName={defaultModelName}
-            onChange={setModelOverride}
-          />
-          {/* Thinking toggle — only show when the selected model supports thinking */}
-          {modelOverride?.supports_thinking && (
-            <ThinkingToggle
-              enabled={thinkingEnabled}
-              effort={thinkingEffort}
-              efforts={modelOverride.thinking_efforts || ["low", "medium", "high"]}
-              onToggle={(enabled) => setThinkingEnabled(enabled)}
-              onEffortChange={setThinkingEffort}
-            />
-          )}
-          {contextTokens != null && maxContextTokens != null && maxContextTokens > 0 && (
-            <ContextCircle
-              contextTokens={contextTokens}
-              cachedTokens={cachedTokens}
-              maxContextTokens={maxContextTokens}
-              compacted={compacted}
-              breakdown={contextBreakdown}
-            />
-          )}
-        </div>
-      )}
+
 
       {/* Attachment tray (W3c) — cards with thumbnails, size, kind,
           reorder, remove. Attachments and context chips share index
@@ -754,10 +744,10 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
         </div>
       )}
 
-      <div className="relative mx-auto flex max-w-[672px] items-end gap-2">
+      <div className="relative mx-auto flex max-w-[672px] flex-wrap items-center gap-x-2 rounded-[16px] border border-line bg-surface/85 px-3 pb-2.5 pt-2.5 shadow-[0_1px_8px_-2px_rgba(0,0,0,0.08)] backdrop-blur-xl">
         {/* Attach button + context menu — hidden during elicitation */}
         {!isElicitation && (
-        <div className="relative shrink-0">
+        <div ref={attachAreaRef} className="relative order-2 shrink-0">
           {/* Hidden file inputs */}
           <input
             ref={imageInputRef}
@@ -777,18 +767,11 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
           />
           <button
             onClick={() => setShowContextMenu((open) => !open)}
-            className="flex h-8 w-8 items-center justify-center rounded-[5px] border text-[var(--ink-2)] transition"
+            className="flex h-8 w-8 items-center justify-center rounded-[8px] text-ink-faint transition-colors hover:bg-sunken hover:text-ink"
             style={{
-              borderColor: showContextMenu ? "var(--accent)" : "var(--border)",
-              background: showContextMenu ? "var(--surface)" : "none",
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.borderColor = "var(--ink-3)";
-              e.currentTarget.style.color = "var(--ink)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.borderColor = showContextMenu ? "var(--accent)" : "var(--border)";
-              e.currentTarget.style.color = "var(--ink-2)";
+              background: showContextMenu ? "var(--sunken)" : "none",
+              border: "none",
+              cursor: "pointer",
             }}
             title="Add attachment"
             aria-label="Add attachment"
@@ -798,21 +781,16 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
             <Paperclip className="h-3.5 w-3.5" />
           </button>
           {showContextMenu && (
-            <>
-              <div
-                className="fixed inset-0 z-40"
-                onClick={() => setShowContextMenu(false)}
-              />
-              <div
-                className="absolute bottom-full left-0 z-50 mb-2 min-w-[236px] rounded-lg border p-1.5 shadow-lg"
-                style={{
-                  borderColor: "var(--border)",
-                  background: "var(--white)",
-                  boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
-                }}
-                role="menu"
-                aria-label="Add attachment"
-              >
+            <div
+              className="absolute bottom-full left-0 z-50 mb-2 min-w-[236px] rounded-lg border p-1.5 shadow-lg"
+              style={{
+                borderColor: "var(--border)",
+                background: "var(--white)",
+                boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
+              }}
+              role="menu"
+              aria-label="Add attachment"
+            >
                 <div className="px-2.5 pb-1.5 pt-1 text-[11px] font-medium uppercase tracking-wide" style={{ color: "var(--ink-3)" }}>
                   Add attachment
                 </div>
@@ -834,23 +812,17 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
                   description="Read a webpage with the agent"
                   onClick={() => { setShowUrlInput(true); setShowContextMenu(false); }}
                 />
-              </div>
-            </>
+            </div>
           )}
           {showUrlInput && (
-            <>
-              <div
-                className="fixed inset-0 z-40"
-                onClick={() => { setShowUrlInput(false); setUrlValue(""); }}
-              />
-              <div
-                className="absolute bottom-full left-0 z-50 mb-2 w-[280px] rounded-lg border p-3 shadow-lg"
-                style={{
-                  borderColor: "var(--border)",
-                  background: "var(--white)",
-                  boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
-                }}
-              >
+            <div
+              className="absolute bottom-full left-0 z-50 mb-2 w-[280px] rounded-lg border p-3 shadow-lg"
+              style={{
+                borderColor: "var(--border)",
+                background: "var(--white)",
+                boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
+              }}
+            >
                 <div className="mb-2 flex items-center justify-between">
                   <div>
                     <div className="text-[13px] font-medium" style={{ color: "var(--ink)" }}>Add web URL</div>
@@ -890,8 +862,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
                     Add
                   </button>
                 </div>
-              </div>
-            </>
+            </div>
           )}
         </div>
         )}
@@ -961,19 +932,72 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
             ? (activeElicitation?.multiSelect
               ? "Add your own answer or select options above…"
               : "Or type your own answer…")
-            : "Ask…"
+            : `Ask ${agentName || "the agent"} anything, or type / for skills…`
           }
           rows={1}
-          className="max-h-[120px] flex-1 resize-none rounded-[5px] py-1.5 px-3 font-sans text-[13px] leading-[1.6] outline-none transition"
-          style={{
-            background: "var(--white)",
-            border: "1px solid var(--border)",
-            color: "var(--ink)",
-          }}
-          onFocus={(e) => (e.currentTarget.style.borderColor = "var(--accent)")}
-          onBlur={(e) => (e.currentTarget.style.borderColor = "var(--border)")}
+          className="order-1 max-h-[140px] w-full resize-none py-1 font-sans text-[13px] leading-[1.6] outline-none placeholder:text-ink-faint"
+          style={{ color: "var(--ink)" }}
         />
 
+        {/* Toolbar row — model/thinking controls + send hint + send,
+            laid out below the full-width textarea via flex order. */}
+        {!isElicitation && onToggleYolo && (
+          <button
+            type="button"
+            onClick={onToggleYolo}
+            disabled={yoloLocked}
+            title={
+              yoloLocked
+                ? "YOLO mode is forced on for all agents — turn off the global override in Settings → General"
+                : yoloMode
+                  ? "YOLO mode on — tools execute immediately without approval. Click to restore approval gates."
+                  : "YOLO mode — skip approval gates for this agent. Tools execute immediately without confirmation."
+            }
+            className={`order-3 flex items-center gap-1.5 rounded-[8px] border px-2.5 py-1.5 text-[12px] font-medium transition-colors ${
+              yoloMode
+                ? "border-danger/50 bg-danger-tint text-danger"
+                : "border-line bg-surface text-ink-muted hover:text-ink"
+            } ${yoloLocked ? "cursor-not-allowed opacity-70" : "cursor-pointer"}`}
+          >
+            <Flame className="h-3.5 w-3.5" />
+            YOLO
+          </button>
+        )}
+        {!isElicitation && (
+          <div className="order-3 flex items-center gap-1.5">
+            {model?.supports_thinking && (
+              <ThinkingToggle
+                enabled={thinkingEnabled}
+                effort={thinkingEffort}
+                efforts={model.thinking_efforts || ["low", "medium", "high"]}
+                onToggle={(enabled) => setThinkingEnabled(enabled)}
+                onEffortChange={setThinkingEffort}
+              />
+            )}
+            {contextTokens != null && maxContextTokens != null && maxContextTokens > 0 && (
+              <ContextCircle
+                contextTokens={contextTokens}
+                cachedTokens={cachedTokens}
+                maxContextTokens={maxContextTokens}
+                compacted={compacted}
+                breakdown={contextBreakdown}
+              />
+            )}
+          </div>
+        )}
+        {/* Right cluster — picker + send share one flex item in the outer
+            wrap so send pins to the row's right edge; the send keyhint lives
+            on the button tooltip to keep everything on one line at 672px. */}
+        <div className="order-4 ml-auto flex min-w-0 items-center gap-2">
+        {!isElicitation && (
+          <div className="flex min-w-0 items-center">
+            <ModelPicker
+              defaultProviderId={defaultProviderId}
+              defaultModelName={defaultModelName}
+              onChange={(m) => onModelChange?.(m)}
+            />
+          </div>
+        )}
         {/* Send / Stop — stop button replaces send while a run is active */}
         {(() => {
           // Show stop button when a run is active (disabled && not elicitation)
@@ -982,7 +1006,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
             return (
               <button
                 onClick={onStop}
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[5px] border transition"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[12px] border transition"
                 style={{
                   background: "var(--danger, #dc2626)",
                   color: "var(--white)",
@@ -1009,7 +1033,8 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
           <button
             onClick={handleSend}
             disabled={!canSend}
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[5px] border transition"
+            title="Send · ↵ (⇧↵ new line)"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[12px] border transition"
             style={{
               background: "var(--ink)",
               color: "var(--white)",
@@ -1032,6 +1057,13 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
           </button>
           );
         })()}
+        </div>
+      </div>
+
+      {/* Keyhint — lives under the card so the toolbar row can stay a
+          single line at the composer's fixed 672px width. */}
+      <div className="mx-auto mt-1.5 flex max-w-[672px] select-none justify-end text-[10px] text-ink-faint">
+        ↵ send · ⇧↵ new line
       </div>
 
       {/* Drag-and-drop overlay */}

@@ -437,9 +437,14 @@ async def search(
     operator: Operator = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Search the shared Vault — full retrieval trace for operators."""
+    """Search the whole Vault across all scopes — operator-only view."""
     return await retrieve(
-        db, request.query, request.limit, None, include_trace=request.include_trace
+        db,
+        request.query,
+        request.limit,
+        None,
+        include_trace=request.include_trace,
+        all_scopes=True,
     )
 
 
