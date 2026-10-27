@@ -409,16 +409,76 @@ class TestLifecycle:
         assert not ddir.exists()
         assert (skills_env / "skills-store" / draft.id / "rev-1" / "SKILL.md").is_file()
 
-    async def test_global_name_collision_rejected(self, db, skills_env):
-        a = await service.import_draft(
+    async def test_promote_clash_on_existing_global_rejected(self, db, skills_env, skills_agent):
+        """Promoting a live agent-local row into an occupied global name is
+        ambiguous (two published lineages) — still a 409, not a merge."""
+        g = await service.import_draft(
             db, name="dup", source_dir=write_skill(skills_env / "a", "dup")
         )
-        await service.publish(db, a, scope="global")
-        b = await service.import_draft(
-            db, name="dup", source_dir=write_skill(skills_env / "b", "dup")
-        )
+        await service.publish(db, g, scope="global")
+        local = await service.create_draft(db, name="dup", owner_agent_id=skills_agent.id)
+        ldir = service.draft_dir(local)
+        (ldir / "SKILL.md").write_text("---\nname: dup\ndescription: local\n---\n\nlocal\n")
+        await service.publish(db, local, scope="agent-local")
         with pytest.raises(SkillError, match="already exists"):
-            await service.publish(db, b, scope="global")
+            await service.promote(db, local)
+
+    async def test_agent_local_publish_merges_same_name_draft(self, db, skills_env, skills_agent):
+        """An ownerless draft + a published agent-local row can coexist —
+        the draft is a working copy of that lineage, so publishing it
+        agent-local lands a new revision on the existing row."""
+        live = await service.create_draft(db, name="dup-local", owner_agent_id=skills_agent.id)
+        ldir = service.draft_dir(live)
+        (ldir / "SKILL.md").write_text("---\nname: dup-local\ndescription: v1\n---\n\nv1\n")
+        rev1 = await service.publish(db, live, scope="agent-local")
+        await db.commit()
+        assert rev1.skill_id == live.id
+
+        draft = await service.create_draft(db, name="dup-local", owner_agent_id=None)
+        ddir = service.draft_dir(draft)
+        (ddir / "SKILL.md").write_text("---\nname: dup-local\ndescription: v2\n---\n\nv2\n")
+
+        rev2 = await service.publish(db, draft, scope="agent-local", owner_agent_id=skills_agent.id)
+        await db.commit()
+
+        assert rev2.skill_id == live.id
+        assert rev2.revision_number == 2
+        assert await db.scalar(select(Skill).where(Skill.id == draft.id)) is None
+        assert not ddir.exists()
+        live_dir = service.live_local_dir(live)
+        assert "v2" in (live_dir / "SKILL.md").read_text()
+
+    async def test_agent_local_publish_clash_on_archived_409s(self, db, skills_env, skills_agent):
+        live = await service.create_draft(db, name="arch-local", owner_agent_id=skills_agent.id)
+        ldir = service.draft_dir(live)
+        (ldir / "SKILL.md").write_text("---\nname: arch-local\ndescription: v1\n---\n\nv1\n")
+        await service.publish(db, live, scope="agent-local")
+        await service.set_status(db, live, "archived")
+
+        draft = await service.create_draft(db, name="arch-local", owner_agent_id=None)
+        ddir = service.draft_dir(draft)
+        (ddir / "SKILL.md").write_text("---\nname: arch-local\ndescription: v2\n---\n\nv2\n")
+        with pytest.raises(SkillError, match="already exists"):
+            await service.publish(db, draft, scope="agent-local", owner_agent_id=skills_agent.id)
+
+    async def test_global_publish_merges_same_name_draft(self, db, skills_env):
+        live = await service.import_draft(
+            db, name="dup-g", source_dir=write_skill(skills_env / "a", "dup-g")
+        )
+        await service.publish(db, live, scope="global")
+        await db.commit()
+
+        draft = await service.import_draft(
+            db,
+            name="dup-g",
+            source_dir=write_skill(skills_env / "b", "dup-g", "v2 content"),
+        )
+        rev2 = await service.publish(db, draft, scope="global")
+        await db.commit()
+
+        assert rev2.skill_id == live.id
+        assert rev2.revision_number == 2
+        assert await db.scalar(select(Skill).where(Skill.id == draft.id)) is None
 
     async def test_purge_blocked_by_active_run_pin(self, db, skills_env, skills_agent):
         g = await service.import_draft(

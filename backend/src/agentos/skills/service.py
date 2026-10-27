@@ -288,22 +288,47 @@ async def publish(
     if source is None or not source.is_dir():
         raise SkillError("nothing to publish — source directory is missing")
 
-    if scope == "global":
-        # NULL owner_agent_id defeats the (name, scope, owner) unique
-        # constraint in SQLite — enforce global-name uniqueness here.
-        clash = await db.scalar(
-            select(Skill).where(
-                Skill.scope == "global",
-                Skill.name == skill.name,
-                Skill.id != skill.id,
-            )
+    # NULL owner_agent_id defeats the (name, scope, owner) unique
+    # constraint in SQLite, so name uniqueness is enforced here — for
+    # global rows (always NULL owner) and for the effective agent-local
+    # owner alike.
+    owner = owner_agent_id or skill.owner_agent_id
+    clash = await db.scalar(
+        select(Skill).where(
+            Skill.name == skill.name,
+            Skill.scope == scope,
+            Skill.id != skill.id,
+            Skill.owner_agent_id.is_(None) if scope == "global" else Skill.owner_agent_id == owner,
         )
-        if clash is not None:
+    )
+    if clash is not None:
+        # A draft carrying an occupied name is a working copy of that
+        # lineage — land its content as the existing row's next revision.
+        if skill.status == "draft" and clash.status == "published":
+            return await _publish_draft_as_revision(
+                db,
+                draft=skill,
+                target=clash,
+                source=source,
+                scope=scope,
+                availability=availability,
+                agent_ids=agent_ids,
+                change_summary=change_summary,
+                validation=validation,
+                source_run_id=source_run_id,
+            )
+        if scope == "global":
             raise SkillError(
                 f"a global skill named '{skill.name}' already exists — "
                 "rename or publish a revision of that skill instead",
                 status_code=409,
             )
+        raise SkillError(
+            f"an agent-local skill named '{skill.name}' already exists for "
+            f"this agent (status: {clash.status}) — restore it or rename "
+            "the draft",
+            status_code=409,
+        )
 
     # Promoting a live agent-local copy to global retires the workspace dir —
     # its bytes are snapshotted into the new revision, and leaving the dir
@@ -338,6 +363,44 @@ async def publish(
         shutil.rmtree(was_draft_dir)
     if retired_live_dir is not None and retired_live_dir.is_dir():
         shutil.rmtree(retired_live_dir)
+    await db.flush()
+    return revision
+
+
+async def _publish_draft_as_revision(
+    db: AsyncSession,
+    *,
+    draft: Skill,
+    target: Skill,
+    source: Path,
+    scope: str,
+    availability: str,
+    agent_ids: list[str] | None,
+    change_summary: str | None,
+    validation: dict | None,
+    source_run_id: str | None,
+) -> SkillRevision:
+    """Land a same-name draft's content as the target row's next revision.
+
+    The published row keeps its identity — revision history, assignments
+    and run pins stay on the right lineage — while the draft row and its
+    dir are retired.
+    """
+    revision = await _next_revision(db, target, source, change_summary, validation, source_run_id)
+    if scope == "global":
+        target.availability = availability
+        await db.execute(
+            SkillAssignment.__table__.delete().where(SkillAssignment.skill_id == target.id)
+        )
+        if availability == "selected":
+            for agent_id in agent_ids or []:
+                db.add(SkillAssignment(skill_id=target.id, agent_id=agent_id))
+    else:
+        _copy_to_live_local(target, source)
+    path = draft_dir(draft)
+    if path.is_dir():
+        shutil.rmtree(path)
+    await db.delete(draft)
     await db.flush()
     return revision
 

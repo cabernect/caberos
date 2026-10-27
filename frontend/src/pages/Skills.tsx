@@ -734,9 +734,16 @@ export function Skills() {
           skill={publishTarget}
           agents={agents}
           onClose={() => setPublishTarget(null)}
-          onPublished={async () => {
+          onPublished={async (id) => {
             setPublishTarget(null);
-            await refreshDetail();
+            // A same-name draft publishes as a revision of the existing
+            // row — its own id is gone, so follow the surviving lineage.
+            if (id && id !== publishTarget.id) {
+              await openDetail(id);
+              await loadSkills(true);
+            } else {
+              await refreshDetail();
+            }
           }}
         />
       )}
@@ -1179,7 +1186,7 @@ function PublishDialog({
   skill: SkillDetail;
   agents: Agent[];
   onClose: () => void;
-  onPublished: () => void;
+  onPublished: (id?: string) => void;
 }) {
   const isPromote = skill.status === "published" && skill.scope === "agent-local";
   const [scope, setScope] = useState<"global" | "agent-local">(isPromote ? "global" : "global");
@@ -1189,6 +1196,29 @@ function PublishDialog({
   const [summary, setSummary] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [allSkills, setAllSkills] = useState<SkillInfo[] | null>(null);
+
+  useEffect(() => {
+    api.listSkills("all").then((r) => setAllSkills(r.skills)).catch(() => {});
+  }, []);
+
+  // A same-name published row in the target scope+owner means this draft
+  // publishes as a new revision of that lineage rather than a new skill.
+  const clash = useMemo(() => {
+    if (!allSkills) return null;
+    const targetScope = isPromote ? "global" : scope;
+    const owner = targetScope === "agent-local" ? ownerId : null;
+    return (
+      allSkills.find(
+        (s) =>
+          s.id !== skill.id &&
+          s.name === skill.name &&
+          s.scope === targetScope &&
+          s.status === "published" &&
+          (targetScope === "global" || s.owner_agent_id === owner),
+      ) ?? null
+    );
+  }, [allSkills, isPromote, scope, ownerId, skill]);
 
   const submit = async () => {
     setBusy(true);
@@ -1201,14 +1231,15 @@ function PublishDialog({
       };
       if (isPromote) {
         await api.promoteSkill(skill.id, body);
+        onPublished(skill.id);
       } else {
-        await api.publishSkill(skill.id, {
+        const res = await api.publishSkill(skill.id, {
           ...body,
           scope,
           owner_agent_id: scope === "agent-local" ? ownerId || undefined : undefined,
         });
+        onPublished(res.id);
       }
-      onPublished();
     } catch (e) {
       setErr(e instanceof Error ? e.message : "publish failed");
       setBusy(false);
@@ -1287,6 +1318,20 @@ function PublishDialog({
             </div>
           )}
         </div>
+      )}
+      {clash && (
+        <p
+          className="mb-3 rounded-lg px-3 py-2 text-[12px]"
+          style={{
+            background: "var(--warning-tint)",
+            color: "var(--warning)",
+            border: "1px solid var(--border)",
+          }}
+        >
+          {isPromote
+            ? `A global skill named "${clash.name}" already exists — promoting will be rejected until it's resolved.`
+            : `A published ${clash.scope === "global" ? "global" : `agent-local skill for ${clash.owner_name ?? "this agent"}`} named "${clash.name}" already exists — publishing adds this as revision ${(clash.current_revision ?? 0) + 1} of that skill.`}
+        </p>
       )}
       <input
         value={summary} onChange={(e) => setSummary(e.target.value)}

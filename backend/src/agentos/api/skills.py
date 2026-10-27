@@ -750,7 +750,13 @@ async def publish_skill(
         await _notify_skill_publish_failed(skill.id, skill.name, str(e))
         raise HTTPException(status_code=e.status_code, detail=str(e)) from e
     await db.commit()
-    return {"published": True, "revision": revision.revision_number, "id": skill.id}
+    # revision.skill_id, not skill.id — a same-name draft merges into the
+    # existing lineage row and its own row is retired.
+    return {
+        "published": True,
+        "revision": revision.revision_number,
+        "id": revision.skill_id,
+    }
 
 
 async def _notify_skill_publish_failed(skill_id: str, skill_name: str, error: str) -> None:
