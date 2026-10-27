@@ -2202,7 +2202,7 @@ function MessageRow({
           </div>
         )}
         <div
-          className="max-w-[75%] rounded-lg px-3.5 py-2.5 text-[14px] leading-[1.65] bg-ink text-surface"
+          className="max-w-[75%] rounded-lg px-3.5 py-2.5 text-[14px] leading-[1.65] bg-ink text-surface dark:bg-[var(--accent-tint)] dark:text-ink"
         >
           {message.content}
         </div>

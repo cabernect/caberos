@@ -86,7 +86,7 @@ export function ChatSidebar({
       <div className="px-3 pb-2.5 pt-2">
         <button
           onClick={onNewChat}
-          className="flex w-full cursor-pointer items-center gap-2 rounded-[8px] bg-ink px-3 py-2 text-[13px] font-medium text-surface transition-opacity hover:opacity-85"
+          className="flex w-full cursor-pointer items-center gap-2 rounded-[8px] bg-ink px-3 py-2 text-[13px] font-medium text-surface transition-opacity hover:opacity-85 dark:bg-accent dark:text-[var(--accent-foreground)]"
         >
           <Plus className="h-4 w-4" />
           <span>New chat</span>
