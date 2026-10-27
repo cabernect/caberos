@@ -155,6 +155,13 @@ header.header .title-wrapper img {
   border-color: var(--line);
 }
 
+.sidebar a[aria-current="page"],
+.sidebar a[aria-current="page"]:hover,
+.sidebar a[aria-current="page"]:focus {
+  background: var(--olive-soft);
+  color: var(--olive-dark);
+}
+
 :root[data-theme="dark"] .sidebar a[aria-current="page"],
 :root[data-theme="dark"] .sidebar a[aria-current="page"]:hover,
 :root[data-theme="dark"] .sidebar a[aria-current="page"]:focus {

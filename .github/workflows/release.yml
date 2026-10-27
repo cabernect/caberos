@@ -307,9 +307,15 @@ jobs:
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
 
+  # Prod website deploy is stable-only: pre-release tags (any '-' suffix)
+  # still build installers and publish a GitHub pre-release, but the public
+  # site doesn't move until a stable tag lands. `needs: release` also keeps
+  # a failed build from redeploying the site.
   deploy-website:
     name: Deploy website to Cloudflare
     runs-on: ubuntu-latest
+    needs: release
+    if: ${{ !contains(github.ref_name, '-') }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
