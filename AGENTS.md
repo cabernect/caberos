@@ -2,503 +2,203 @@
 
 ## What is this project?
 
-CaberOS is an open-source, local-first AI Agent Operating System. It hosts personal agents on your machine, gives them a workspace, connects them to your services (email, calendar), and lets them run shell commands in a sandbox. The OS supplies the harness, mediates every capability call, and gives you a dashboard to manage your agent(s).
+CaberOS is an open-source, local-first AI Agent Operating System. It hosts personal agents on the operator's machine, gives them a workspace, connects them to services (chat, external channels, MCP servers, the web, a managed browser), and mediates every capability call through a single syscall boundary that checks permissions, requests approvals, and writes audit records.
 
-**Language:** Python 3.12 (backend), React 19 + Vite (frontend)
+**Language:** Python 3.12 (backend), React 19 + TypeScript + Vite (frontend)
 **Package manager:** uv (backend), npm (frontend)
-**Repo structure:** Monorepo — `/backend`, `/frontend`, `/docs`, `/sandbox`, `/scripts`
+**Repo structure:** Monorepo — `/backend`, `/frontend`, `/website`, `/docs`, `/skills`, `/sandbox`, `/scripts`, `/design-system`
 **Desktop shell:** Tauri 2 (Rust) — `frontend/src-tauri/`
 **Container:** Docker + docker-compose — `backend/Dockerfile`, `frontend/Dockerfile`, `docker-compose.yml`
+**Current line:** v0.2.0 "Agent Workbench" on `feat/v0.2.0` (integrated, release pending); latest tag `v0.1.9`.
 
 ## Where things are
 
-- `docs/spec-v0.1.md` — the full specification. 40 decisions (D1-D40). Read this first.
-- `docs/plans/` — 15 implementation plans (00-14) with detailed specs, file lists, verification steps. These are the implementation reference.
-- `docs/plans/README.md` — plan index and build order.
-- `.scratch/caberos-v0.1/issues/` — tracer-bullet tickets (01-11, with 08 split into 08a/08b) with blocking edges. These drive the work order. (gitignored — use GitHub Issues for public tracking)
-- `design-system/caberos/` — design system documentation. MASTER.md describes the actual implemented theme (warm light, olive accent). Page specs for agent-list and conversation.
+- `docs/spec-v0.1.md` — the v0.1 specification, 40 decisions (D1–D40).
+- `docs/plans/` — v0.1 plans (00–15); `docs/plans/v0.2/` — v0.2 workstream specs (00–15) with `test_plan/` and `test_result/` records.
+- `docs/plans/v0.2-release-plan.md` — release boundary, invariants, and deferred items.
+- `docs/TECHNICAL.md` — deep technical reference (module map, data model, API surface, subsystem internals).
+- `docs/PRODUCT.md` — product/business framing (vision, personas, positioning, roadmap narrative).
+- `CONTEXT.md` — shared vocabulary (Model Offering, Reported vs Estimated Cost, etc.). Use this language; don't drift from it.
+- `design-system/caberos/` — implemented theme (warm light, olive accent) + page specs.
+- `AGENTS.md` (this file) — operating manual: conventions, gates, gotchas.
 
 ## Key decisions (quick reference)
 
-- **D1:** Agents are configuration, not code. AgentConfig is a DB row, versioned.
-- **D2:** Custom async harness. LiteLLM is the model transport.
+- **D1 / D25:** Agents are versioned DB configuration (`AgentConfig` + `AgentVersion`), not code. YAML is import/export only.
+- **D2:** Custom async harness; LiteLLM is model transport only — never a metadata/pricing authority.
 - **D3:** Python 3.12 + FastAPI, one daemon.
-- **D5:** SQLAlchemy 2.0 async + aiosqlite. SQLite with WAL mode. Schema via `create_all` + incremental patches in `init_db()` (Alembic deferred to Postgres migration).
-- **D25:** Agent config lives in the DB as versioned rows (AgentVersion). YAML for import/export only.
-- **D33:** FastAPI is the current gateway/API layer. The React dashboard is one client, with Tauri and CLI as future clients using the same REST + SSE contracts. A deeper CaberCore seam is deferred until a non-HTTP entry point requires it.
-- **Execution loop invariant:** A conversation advances strictly as reason → act → observe → repeat, one reasoning step at a time. Multiple tool calls emitted in one model turn may execute concurrently within that single step, but the agent must not run separate jobs concurrently across reasoning steps.
-- **D34:** Three-layer memory: working memory (session), MEMORY.md (file in agent home dir `~/agentos/agents/{agent_id}/`), knowledge graph (SQLite triples). FTS5 default, embeddings configurable.
-- **D35:** Agent identity = `soul`, `persona`, `task` — authoritative versioned config fields in the DB, not workspace files. Plan 14 renders identity once into the real `MEMORY.md`; immutable revision evidence pins the whole core per session.
-- **D37:** Workspaces are shared directories for working files only. Identity is in the DB, MEMORY.md is in the agent home dir — neither in the workspace.
-- **D38:** MCP tools are in v0.1 (revised — was v0.2). CLI/TUI (`caber`) still deferred to v0.2. v0.1 ships React dashboard + MCP integration. `scripts/smoke.py` is a dev tool, not a product CLI.
-- **D9/D13 (revised):** Four capability kinds: `tool`, `sub_agent`, `memory`, `mcp_tool`. Native `connector_action` kind removed — MCP replaces it. CaberOS owns credential custody at rest; MCP servers receive credentials via env/headers at runtime.
-- **D39:** Providers are first-class DB entities with encrypted keys (Fernet). Agents reference providers by id. LiteLLM is the transport.
-- **D40:** Model discovery: dynamic where available (OpenAI, Google, Ollama), free-text fallback (Anthropic), always allow override. Save-time validation via 1-token completion.
+- **D5:** SQLAlchemy 2.0 async. SQLite + aiosqlite (WAL, FTS5) default; Postgres via asyncpg supported. Schema via `create_all` + incremental `init_db()` patches (Alembic deferred).
+- **D33:** FastAPI is the gateway. React dashboard, Tauri shell, and external channels are all clients of the same REST + SSE contracts.
+- **D34:** Three-layer memory — session working memory, `MEMORY.md` in the agent home (`~/agentos/agents/{agent_id}/`), knowledge-graph triples. FTS5 default, embeddings opt-in.
+- **D35:** Agent identity = `soul`, `persona`, `task` — authoritative versioned config fields in the DB. `MEMORY.md` renders identity; it never carries it.
+- **D37:** Workspaces are shared working-file directories. Identity and MEMORY.md live outside them.
+- **D9/D13 (revised):** Four capability kinds: `tool`, `sub_agent`, `memory`, `mcp_tool`. MCP replaced native connectors. CaberOS owns credential custody; MCP servers get credentials via env/headers at runtime.
+- **D39:** Providers are first-class DB entities with Fernet-encrypted keys. Agents reference providers by id.
+- **D40:** Model discovery: dynamic where available, free-text fallback, always allow override. Catalog/pricing authority is the bundled `models.dev` snapshot with daily validated refresh.
 
-## Ticket order
+## Non-negotiable invariants
 
-```
-01 → 02 → 03 → 04 → 08a → 08b
-       ├→ 05, 05a, 06 → 07
-       └→ 09 → 10 → 11
-```
-
-01 smoke; 02 chat; 03 file/tools; 04 approvals; 05 agent UI; 05a providers;
-06 memory/skills; 07 heartbeat; 08a/08b MCP; 09 observability; 10 desktop; 11 hardening.
-
-## Testing the frontend
-
-Use the **Playwright MCP server** (`mcp-playwright`) to test the frontend in a real browser. Available tools include: `browser_navigate`, `browser_click`, `browser_type`, `browser_snapshot`, `browser_console_messages`, `browser_evaluate`, etc. List tools with `mcp_list_tools` before calling.
-
-To test: start both servers (backend on :8081, frontend on :5173), then use Playwright to navigate, click, type, and verify the UI. Browser verification is a required completion gate before declaring application or website work finished; for website changes, exercise both the English and selected localized routes and check console errors, navigation, and metadata.
+1. **Execution loop:** a conversation advances strictly reason → act → observe → repeat, one reasoning step at a time. Multiple tool calls in one model turn may run concurrently within that step; separate reasoning steps never run concurrently in the same conversation. (Parallel *schedule* runs get separate sessions — the invariant holds.)
+2. **Syscall mediation:** every capability call crosses `syscall/mediator.py` — permission check, approval gate, credential injection, execution, audit record. No capability bypasses it.
+3. **Honest data:** never present reconstructed/historical data as live captures; never infer price from a model alias; a legacy zero without pricing provenance is *unknown*, not free; unknown timestamps stay unpositioned on trace timelines; empty states say so.
+4. **Memory never expands permissions.** The agent-global core is for the personal owner's use.
+5. **References = visited URLs.** `web_search` hits are trace evidence only; a `WebSource` row means the agent actually fetched/opened that URL.
+6. **No silent authority expansion:** no automatic optional downloads, privilege escalation, or egress — installs and remote embeddings require explicit operator consent.
 
 ## How to implement
 
-1. **Read the ticket** (`.scratch/caberos-v0.1/issues/NN-*.md`) for what to build and acceptance criteria.
-2. **Consult the relevant plans** (`docs/plans/NN-*.md`) for detailed specs — Pydantic models, file lists, schemas, verification steps.
-3. **Implement end-to-end** (vertical slice: DB + API + harness + sandbox + frontend).
-4. **Verify** against the ticket's acceptance criteria.
-5. **Commit** per ticket. No Co-Authored-By lines. **Always ask the user for permission before committing or pushing.**
-6. **Before every push, run the local equivalent of `test.yml` (CI):** `cd backend && uv run ruff check src/ tests/ && uv run ruff format --check src/ tests/ && uv run pytest -q`, and for frontend changes `cd frontend && npm run lint && npm run build`. Do not push when any step fails — format violations fail CI just like test failures (`uv run ruff format src/ tests/` fixes them).
-7. **Update this file** if you learn something that a fresh session needs to know.
+1. Read the relevant spec (`docs/plans/v0.2/NN-*.md`) and any ticket/issue context.
+2. Implement end-to-end (vertical slice: DB + API + harness + frontend where applicable).
+3. Verify against acceptance criteria; keep tests green.
+4. Commit per coherent unit. **No Co-Authored-By lines. Always ask before committing or pushing.**
+5. Before every push, run the CI equivalent: `cd backend && uv run ruff check src/ tests/ && uv run ruff format --check src/ tests/ && uv run pytest -q` and for frontend changes `cd frontend && npm run lint && npm run build`. Format violations fail CI like test failures (`uv run ruff format src/ tests/` fixes).
+6. Update this file (or TECHNICAL.md / CONTEXT.md) when you learn something a fresh session needs.
 
-## System prompt + memory flow
+## Testing the frontend
 
-Plan 14 (`docs/plans/v0.2/14-context-and-memory.md`) is in progress on
-`feat/v0.2.0-context-memory`; do not assume it is deployed.
+Use the **Playwright MCP server** (`mcp-playwright`) for real-browser verification: start backend on :8081 and frontend on :5173, then navigate/click/verify via `browser_navigate`, `browser_snapshot`, `browser_console_messages`, etc. List tools with `mcp_list_tools` first. Browser verification is a required completion gate for UI work.
 
-Each run assembles platform instructions, the whole bounded session-pinned
-`MEMORY.md`, assigned skill metadata/active procedures, coherent uncovered
-conversation plus its saved summary, and currently loaded permitted schemas.
-Managed soul/persona/task appears once inside the core. Detailed memory and
-other sessions are retrieved through existing tools, not injected at startup.
-Conversation reads use `harness/conversation.py`; complete-input budgeting
-precedes each model turn. Tool-result reduction redesign remains out of scope.
-Conversation summaries persist as immutable `ConversationSummary` snapshots —
-the session points at the active one and a losing CAS write never leaves a row.
-Chat-model dispatch attempts receive a capture reference; bodies are
-best-effort, redacted and retained under the installation retention policy —
-embeddings are not applicable and legacy calls stay not-recorded. The trace
-inspector reads them via `/api/model-calls/{id}/context`, which re-projects the
-stored body on read.
+**Dev DB note:** real development uses `backend/data/agentos.db`. Isolate QA servers on separate ports; never replace the normal backend with a temporary database.
 
-`memory/core.py` owns publication: exact bytes, identity validation, ceiling,
-optimistic hash checks, revisions, and session pins. Automatic durable learning
-runs at session close (`close_session`): a full-transcript summary plus a
-session-scoped extraction over every terminal non-test run's parent
-user/assistant rows, then a conditional `closed` write. Provider, parse, or
-core-conflict failures leave the session open with originals and scratch
-retained; explicit dashboard resume reopens a closed session like a channel
-resume. A session becomes eligible for close once idle past the agent's
-live `limits.session_idle_timeout_min` — a session with an in-flight run
-is never idle, so a long-running task can't be swept out from under
-itself (the legacy per-session `idle_timeout_min` column is no longer
-consulted). The sweeper is
-deadline-driven: each pass computes the nearest `last_activity_at +
-timeout` across open sessions and sleeps until then (bounded by a 300s
-fallback), so the configured timeout is the real close time, not a polling
-cadence. New/resumed sessions, finished runs, and config saves poke the
-sweeper's wake event to recompute early; the lazy run-start path closes
-other idle sessions as background tasks so an incoming run never waits on
-their maintenance. In-flight closes broadcast `session_activity` SSE
-frames and set `learning` on the sessions list, so the chat view can show
-internal work running.
-After a successful close commit, `snapshot_agent_local_drift` pins any
-untracked live-dir skill edits to a revision, then `agentos/reflection.py`
-may run one bounded skill-reflection pass (trigger="reflection"): a
-restricted Harness run with inspect/edit authority over frozen session
-evidence and staged agent-local skill edits only — its failure never
-reopens the session or rolls back learning, and its runs stay out of chat
-history and activation counts. A reflection skipped while the agent was
-busy leaves its evidence fingerprint unclaimed; each sweep pass retries
-recently closed sessions (7-day lookback, capped) once the agent is idle,
-so a skip defers rather than drops the pass.
-Memory never expands permissions. The agent-global core is for the
-personal owner's use, not unrelated contacts.
+## Runs, sessions, and lifecycle
+
+- **Durable runs:** every run is a DB row; status transitions persist (`running` → `awaiting_approval` → `completed`/`failed`/`stopped`). On startup, orphaned `running` rows reconcile to `interrupted`. `get_run_status` falls back to the DB after the in-memory window expires.
+- **Session idle close:** a session becomes eligible for close once idle past the agent's live `limits.session_idle_timeout_min`. A session with an in-flight run is never idle — long work can't be swept out from under itself. The sweeper (`main.py`) is deadline-driven: it sleeps until the nearest `last_activity_at + timeout` (300s fallback cap), and run/session events poke its wake event. Run starts lazily close *other* idle sessions as background tasks.
+- **Session close = learning:** `close_session` (`memory/episodic.py`) writes a full-transcript summary + durable-fact extraction, then a conditional `closed` commit. Provider/parse/core-conflict failures leave the session open. Explicit resume reopens it.
+- **RSI / reflection:** after close commit, `snapshot_agent_local_drift` pins untracked live-dir skill edits, then `reflection.py` may run one bounded skill-reflection pass — a real `Run` row (`trigger="reflection"`) with inspect/edit authority over frozen session evidence and staged agent-local skill edits only. Failures never reopen the session or roll back learning; reflection runs stay out of chat history and activation counts. Skipped reflections (agent busy) leave the evidence fingerprint unclaimed and are retried on later sweeps (7-day lookback, capped).
+- **In-flight visibility:** closes broadcast `session_activity` SSE frames and set `learning` on the sessions list so the chat view shows internal work.
+
+## System prompt + context assembly
+
+Each run assembles: platform instructions (`harness/base_prompt.py`), the bounded session-pinned `MEMORY.md`, assigned skill metadata/active procedures, coherent uncovered conversation + its saved summary, and currently loaded permitted schemas. Identity appears once, inside the core. Conversation reads use `harness/conversation.py`; complete-input budgeting precedes each model turn; mid-run context overflow force-compacts once and retries, then fails honestly.
+
+`memory/core.py` owns `MEMORY.md` publication: exact bytes, identity validation, ceiling (`core_max_tokens`, default 32768), optimistic hash checks, revisions, session pins. `ConversationSummary` rows are immutable snapshots; a losing CAS write never leaves a row.
+
+Chat-model dispatch attempts carry a capture reference; bodies are best-effort, redacted, retained per the installation retention policy. The trace inspector re-projects stored bodies on read via `/api/model-calls/{id}/context`.
+
+Defaults: `max_turns_per_run` 200, `session_idle_timeout_min` 5, `max_cost_per_run` 500. `limits.max_context_tokens` defaults unset (model's real window is the ceiling); it remains an accepted explicit override — do not remove the field.
 
 ## Built-in capabilities
 
-Registered in `capabilities/builtin.py`. Two kinds: `tool` (workspace/shell/web ops) and `memory` (subject-scoped memory ops). `run_subagent` is a tool registered separately in `capabilities/tools/subagent.py`.
+Registered in `capabilities/builtin.py` (+ `run_subagent`/`read_subagent` in `tools/subagent.py`). Kinds: `tool`, `memory`. Egress/approval flags are the mediation contract.
 
-| Capability | Kind | Egress | Approval | Description |
-|---|---|---|---|---|
-| `read_file` | tool | no | no | Read a file from the workspace |
-| `write_file` | tool | no | no | Write a file to the workspace (returns a diff) |
-| `search_files` | tool | no | no | Unified search — `mode`: `content` (grep), `name` (glob), `list` (dir listing) |
-| `terminal` | tool | yes | yes | Run a shell command in the sandbox (persistent session) |
-| `read_terminal` | tool | no | no | Read output from a running/finished terminal session |
-| `close_terminal` | tool | no | no | Close a terminal session |
-| `web_search` | tool | yes | yes | Search the web via DuckDuckGo (free, no API key) |
-| `web_fetch` | tool | yes | yes | Fetch a URL → markdown via trafilatura; `offset`/`has_more` pagination, 50k char hard ceiling |
-| `agent_ask_user` | tool | no | no | Ask the user a clarifying question (HITL elicitation) |
-| `datetime_now` | tool | no | no | Get current date/time (with optional timezone) |
-| `run_subagent` | tool | no | no | Spawn a sub-agent with its own task + capability subset |
-| `read_subagent` | tool | no | no | Poll a running sub-agent's status/output |
-| `memory_recall` | memory | no | no | Recall past conversation snippets (FTS5/Postgres FTS) |
-| `memory_store` | memory | no | no | Store a snippet for later recall (subject-scoped) |
-| `memory_remember_fact` | memory | no | no | Store a KG triple (entity, predicate, object) |
-| `memory_query_facts` | memory | no | no | Query KG triples by entity/predicate/object |
-| `memory_update` | memory | no | no | Update MEMORY.md (agent-scoped, not contact-scoped) |
-| `skills_list` | tool | no | no | List available skills (name + description only — menu) |
-| `skills_load` | tool | no | no | Load a skill's full content + resource listing |
-| `skills_read_resource` | tool | no | no | Read a resource file from a skill directory (scoped to skill dir) |
-| `skills_usage` | tool | no | no | Recorded activation count/last-used for a visible skill in the caller's own conversation scope |
-| `artifact_create` | tool | no | no | Create a tracked deliverable (docx/xlsx/pptx/pdf) from a structured spec — never raw Office XML; saves under `artifacts/` |
-| `artifact_inspect` | tool | no | no | Reopen + validate an artifact; report structure + tracking state honestly |
-| `artifact_revise` | tool | no | no | Apply structured ops against a base revision — conflict on external edits, never overwrite |
-| `artifact_adopt` | tool | no | no | Start tracking an existing workspace file (revision 1 snapshot) |
-| `artifact_history` | tool | no | no | List immutable revisions for an artifact, newest first |
-| `artifact_restore` | tool | no | no | Restore an old revision's bytes as a NEW revision (never rewinds) |
+| Capability | Egress | Approval | Description |
+|---|---|---|---|
+| `read_file` | no | no | Read workspace file (text/docs/images w/ vision cap; 50k cap) |
+| `write_file` | no | no | Write workspace file (returns diff) |
+| `search_files` | no | no | `mode`: content (grep) / name (glob) / list |
+| `terminal` | yes | yes | Shell command in sandbox (persistent background session) |
+| `read_terminal` / `close_terminal` | no | no | Read/close a terminal session |
+| `doc_list` / `doc_search` / `doc_inspect` | no | no | Knowledge Vault: list docs, retrieve (FTS5/hybrid), inspect |
+| `web_search` | yes | yes | DuckDuckGo search — results are trace evidence, NOT references |
+| `web_fetch` | yes | yes | URL → markdown (trafilatura), paginated, 50k ceiling; persists a reference |
+| `browser_open` | yes | yes | Open URL in managed browser; persists landed URL (incl. redirects) |
+| `browser_observe` | no | no | Snapshot current page for the agent |
+| `browser_act` | yes | yes | Click/type/navigate; URL transitions persist references |
+| `browser_extract` | no | no | Extract structured content from the page |
+| `browser_close` | no | no | Close the browser session |
+| `agent_ask_user` | no | no | HITL clarifying question (elicitation) |
+| `datetime_now` | no | no | Current date/time (optional timezone) |
+| `run_subagent` / `read_subagent` | no | no | Spawn/poll a sub-agent (own task + capability subset) |
+| `memory_recall` / `memory_store` | no | no | Session-scoped recall/store (FTS5 or tsvector) |
+| `memory_remember_fact` / `memory_query_facts` | no | no | KG triples (entity, predicate, object) |
+| `memory_update` | no | no | Update MEMORY.md (agent-scoped) |
+| `search_history` | no | no | Search other sessions' summaries/messages |
+| `skills_list` / `skills_load` / `skills_read_resource` / `skills_usage` | no | no | Skill menu → load → resources → activation counts |
+| `capabilities_search` / `capabilities_load` | no | no | Progressive schema discovery: search metadata, load schemas next turn (never widens authority) |
+| `artifact_create` | no | no | Tracked deliverable (docx/xlsx/pptx/pdf) from structured spec → `artifacts/` |
+| `artifact_inspect` | no | no | Reopen + validate; report structure + tracking honestly |
+| `artifact_revise` | no | no | Structured ops vs base revision; conflicts on external edits |
+| `artifact_adopt` / `artifact_history` / `artifact_restore` | no | no | Track existing file; list revisions; restore-as-new-revision |
 
-## Attachments
+## Subsystem notes
 
-Users can attach images, URLs, and files to their chat messages. Attachments are
-stored in the agent workspace and the initial model message contains only
-metadata and workspace-relative references.
+### Skills (governed library)
+DB is the resolution authority: `Skill`/`SkillRevision`/`SkillAssignment`. `resolve_effective_skills()` precedence: agent-local > global > built-in (global respects availability/assignments; disabled/archived agent-local rows suppress the live dir). Runs pin `skill_revision_ids` (`rev:<id>` or `live:<sha256>`) in the manifest — mid-run publishes can't wobble a run. Built-ins seed from `skills/builtins.py` (`BUILTIN_SKILLS`: browser-workflows, doc-coauthoring, evolve, frontend-design, office-documents, skill-creator); removed names are retired at startup. "Create Skill" opens a builder-mode session (`skill-creator` force-loaded, drafts land in `skill-drafts/`, no publish capability by construction). Imports (ZIP/repo URL) go through `skills/importer.py` hardening and land as drafts. Drafts are for *new* skills only: updates to an existing agent-local skill edit the live `skills/<name>/` dir and are pinned as revisions by `snapshot_agent_local_drift` at session close — a same-name `skill-drafts/` dir can never index or publish (unique name per scope+owner) and reconcile logs it as an orphan.
 
-- **Local files**: use the existing `read_file`, `search_files`, `terminal`, or
-  file-processing skills.
-- **Web URLs**: use the existing `web_fetch` capability; URLs are never sent as
-  image inputs automatically.
-- **Images**: `read_file` returns image content only when the selected model
-  supports vision. Otherwise it returns a clear limitation. Images >15 MB are
-  refused; oversized/high-resolution images are downscaled to ≤1568px before
-  base64 (Pillow).
-- **Documents**: `read_file` never returns raw binary. PDF → per-page text
-  extraction with `start_page`/`end_page` paging (image-only pages report
-  honestly); DOCX/PPTX/XLSX → text flattened from the artifact `to_elements`
-  pipeline; unknown binaries are refused. All reads cap at 50k chars with
-  truncation hints; tool results in history are capped at the same 50k.
-- **Context overflow**: if a mid-run model call exceeds the context window,
-  the harness force-compacts once and retries; unrecoverable overflow fails
-  the run with a clear message.
+### Knowledge Vault (RAG)
+Structured extraction → per-block-type parent/child chunking → FTS5 lexical (default) + optional hybrid embeddings → RRF fusion → bounded parent expansion → citations + retrieval trace. Index generations are blue-green (exactly one `active`; concurrent rebuild → 409; stale `building` reconciled to `failed` at startup). Remote embedding providers require explicit egress consent (audited); `fusion=lexical` makes zero provider calls. Every embed call lands in the `model_calls` ledger. **Tabular uploads (.xlsx/.csv) are refused at ingest** pending the deferred row-query layer — a clear refusal beats a misleading index.
 
-The `messages.attachments` column stores metadata (type, MIME type, filename,
-and URL when applicable), never base64 content. Uploaded bytes are stored under
-the workspace `attachments/` directory.
+### Observability
+`model_calls` is the unified ledger (chat/embedding/probe/extract/title; thinking tokens are reported-only). Correlation via `call_id`/`sub_agent_id` on audits/approvals/elicitations/artifacts — exact joins, never temporal. `GET /api/runs/{id}` returns a projected `timeline` (audit roots → tombstone tool_call → pending approval); `/api/spend?scope=platform` reads the ledger while agent scope keeps historic run totals — they are intentionally not algebraically equal. `redaction.py` is the shared read boundary; sensitive payloads fail closed. Traces page: span tree + waterfall + observation inspector.
 
-Workspace layout convention: `attachments/` holds user-supplied inputs;
-`artifacts/` holds agent-produced deliverables (`artifact_create` prefixes the
-path automatically — subdirs preserved, `attachments/` refused); the workspace
-root and other dirs are scratch space (scripts, drafts, `write_file` output).
+### Notifications
+`create_notification()` dedupes by type + entity + unread state. Deep links carry `action_path`; toasts + inbox; SSE-first delivery. The conversation view retro-marks focused-entity notifications read when the window regains focus (`markReadForFocusedEntities` in `notificationStore.ts`).
+
+### Scheduler
+`Schedule`/`ScheduleRevision`/`ScheduleOccurrence` — persisted `next_fire_at` is truth; restart recovery is a DB read + missed-run sweep (`skip`/`run_once`/`catch_up`, capped 25). Triggers: once/interval/cron (croniter) with IANA timezone; DST handled (nonexistent → first valid instant, ambiguous → once). Overlap: skip/queue/cancel_previous/allow_parallel. Failure: `no_retry`/`bounded_retry` (retries = new occurrences via `retry_of`). Heartbeat is a facade over a managed schedule row — old `/api/scheduler/heartbeat*` endpoints unchanged; managed rows reject edit/delete.
+
+### Browser automation
+Managed Chrome-for-Testing (explicit first-use install consent), CDP sessions, headless/visible modes, domain-scoped opt-in persistent profiles, domain leash, approval-gated actions, takeover requests, download staging. `web_fetch` stays the non-interactive path.
+
+### Artifacts & previews
+`Artifact`/`ArtifactRevision`: stable identity, immutable revisions, restore-as-new, conflict detection on external edits, run/message provenance. Structured spec → bytes, never raw Office XML. `previews.py` classifies bytes → bounded renderers; workspace + skill preview endpoints accept path or `{artifact_id, revision_id}`.
+
+### Channels & MCP
+Channels (Telegram/Discord/Zalo OA/Zalo Bot) route through the same pipeline and audit. MCP: stdio/HTTP client, registry, encrypted credentials, OAuth loopback + refresh, stdio PATH resolution (`CABEROS_MCP_RUNTIME_PATH`), per-tool `tool_filter` + deny overrides.
+
+### Runtime readiness / dependencies
+Optional tools/runtimes live in global Settings → General. Direction: app-managed/private installs by default, fixed subprocess recipes, guided system install when unmanaged — all gated on explicit consent. No automatic downloads.
+
+## Attachments & workspace layout
+
+`attachments/` = user inputs; `artifacts/` = agent deliverables (`artifact_create` prefixes paths, refuses `attachments/`); workspace root + other dirs = scratch. Attachment metadata (type, MIME, filename, URL) lives on `messages.attachments` — never bytes. Images >15 MB refused; downscaled ≤1568px; vision-gated. Documents: PDF paged extraction, Office → flattened text via `to_elements`, unknown binaries refused. 50k char caps on reads and tool results in history.
 
 ## Storage summary
 
 | What | Where | Versioned? |
 |---|---|---|
-| Agent identity (soul, persona, task) | DB — AgentConfig fields | yes (AgentVersion) |
-| Agent config (model, capabilities, limits, etc.) | DB — AgentConfig fields | yes (AgentVersion) |
-| MEMORY.md | File — `~/agentos/agents/{agent_id}/MEMORY.md` | living file; immutable `CoreRevision` evidence/session pins (plan 14) |
-| Knowledge graph | DB — memory_triples table | no |
-| Provider keys | DB — encrypted (Fernet) | n/a |
-| Connector tokens | DB — encrypted (Fernet) | n/a |
-| Workspace (working files) | Filesystem — shared directory | n/a |
-| Skills (governed) | Bytes on disk — `skills/` built-ins + `data/skills-store/{id}/rev-{n}/`; index in DB (`Skill`/`SkillRevision`/`SkillAssignment`) | yes (SkillRevision) |
-| Agent-local skills | Filesystem — `workspace/skills/{agent_id}/` (live, agent-editable) | optional published snapshots |
-| Skill drafts | `workspace/{agent}/skill-drafts/` (builder) + `data/skills-drafts/` (imports) — never scanned | no |
-
-## Current status
-
-Tickets **01–09 implemented**: smoke slice, real-model chat + SSE streaming, file ops + tool call UI, approval flow + elicitation (`agent.ask_user`), guardrails, run manager, agent management UI, providers, `run_subagent`, memory + skills (ticket 06), scheduler/heartbeat (ticket 07), MCP client infrastructure (08a), MCP credentials/OAuth (08b), external channels (08c), and observability + spend (ticket 09).
-
-**Current: v0.1.9 is released — durable run lifecycle, operator notifications (toasts + session deep-links), `web_fetch` trafilatura markdown + pagination, MCP stdio runtime PATH resolution, MCP OAuth auto-refresh, URL-attachment chips, and CodeQL path-injection hardening. The CLI/TUI and CaberCore extraction remain deferred.**
-
-**v0.1.9 design notes:**
-- **Durable runs:** run status is persisted to the DB on every transition (`running`, `awaiting_approval`, `completed`, `failed`, `stopped`). On gateway startup, orphaned `running` runs are reconciled to `interrupted`. `get_run_status` falls back to the DB after the 60s in-memory `RunContext` window expires, so results stay inspectable after SSE disconnects.
-- **Notifications:** `create_notification()` dedupes by type + entity + unread state. Run events emit `run_completed`, `run_failed`, `run_interrupted`, `approval_required`, `elicitation_required`, `mcp_connection_failed`, `oauth_reauth_required`.
-- **`web_fetch`:** `httpx` fetch → `trafilatura` markdown extraction (main content, boilerplate removed) → `BeautifulSoup.get_text()` last resort. Hard ceiling of 50k chars; `max_chars` is a model override capped at the ceiling; `offset` + `has_more` let the model paginate. JS rendering is deferred to v0.2 browser automation.
-- **MCP stdio resolver:** bare commands are resolved against the subprocess `PATH`, then `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`, `CABEROS_MCP_RUNTIME_PATH`. The resolved dir is prepended to the child `PATH` so shebang chains (`npx` → `node`) work.
-- **MCP OAuth:** auth-server + protected-resource metadata persisted to the credential store and reloaded on reconnect; `expires_in`/`token_expiry_time = 0` is treated as "no expiry" correctly so refresh triggers when needed.
-- **Language behavior:** the base prompt instructs the model to detect the user's language and use it for both thinking and replies — no explicit language setting.
-
-**v0.1.7 design rule:** Agent configuration defines the permission ceiling; the harness separately tracks which schemas are loaded into the current run. `capabilities_search` exposes bounded metadata for permitted tools, and `capabilities_load` makes selected schemas available on the next model turn without widening syscall authority.
-
-**v0.2 W1+W2 status (branch `feat/v0.2-artifacts`, unmerged):**
-- **W1 (merged via #49):** background terminals, capability search (ranked OR-token), per-tool MCP `tool_filter` + deny overrides, approval precedence (per-tool → wildcard → default), blast-radius accounting.
-- **W2 Artifact Studio (implemented):** `Artifact`/`ArtifactRevision` models — stable identity, immutable revisions, restore-as-new-revision, conflict detection on external edits, workspace containment, run/message provenance. Format handlers for docx/xlsx/pptx (spec→bytes, never raw XML) + pdf (inspect/validate + build). `artifact_*` capabilities wired through the mediator.
-- **Office→PDF export removed (operator decision, 2026-10-13):** `artifact_export_pdf` and the LibreOffice/renderer chain are gone; native Office generation/preview and direct `format: "pdf"` creation + viewing remain. No Chromium replacement engine added.
-- **Verification:** `backend/tests/test_artifacts.py` (22 tests) + `scripts/smoke_artifacts.py` — scripted chain through the real pipeline and `--live` mode driving a real provider end-to-end.
-- **Gaps:** `preview_status` column exists but rendering is W3; `artifact_base_revision_ids` on ExecutionManifest unpopulated; templates/themes guidance is W6 skills.
-
-**v0.2 W3 status (branch `feat/v0.2-previews`, unmerged):**
-- **W3 File previews + attachments (implemented):** shared preview module serves Conversation, Settings→Workspace, and Skills Studio. `agentos/previews.py` classifies bytes → bounded renderers (markdown/code/text/json/csv-table/image/pdf/docx-elements/pptx-slides/xlsx-workbook/media/unknown). Workspace endpoints (`preview`, `raw`, `pdf-page`) accept `path` or `{artifact_id, revision_id}`; skill endpoints mirror them rooted at the skill dir; composer gets ephemeral `attachments/preview` + `url-preview` (http(s)-only, 256 KB cap).
-- **Frontend:** `components/previews/` — `PreviewPanel` (fetch lifecycle, artifact actions, revision banner, compare diff, restore-as-new-revision, Track history, Add to Vault, desktop open/reveal) + per-kind renderers behind a `PreviewBackend` seam (workspace vs skill roots). Payloads are keyed to their source so stale content never renders against a new file. Binary previews fetch authenticated blobs → object URLs (bearer token can't ride `<img src>`).
-- **Composer tray:** clipboard/drag/picker/URL attachments with stable ids, content-hash dedupe (incl. intra-batch), reorder/remove, ephemeral preview chips (kind + size + PDF first-page thumb), object-URL cleanup, retry retention — `onSend` returning `false` keeps the draft.
-- **Attachment persistence:** message attachments carry workspace-relative `attachments/attachment_{i}_{name}` paths (shared helper in `pipeline.py`) so chat chips open the stored file.
-- **Verification:** `backend/tests/test_previews.py` (36 tests) + `attachmentUtils.test.ts` (5 tests); all surfaces exercised live via Playwright MCP.
-
-**v0.2 W4 status:** Browser automation merged via #53 — managed Chrome-for-Testing, CDP sessions, domain-scoped persistent profiles, domain leash, visible takeover, approval-gated actions, download staging. `web_fetch` stays the non-interactive path.
-
-**v0.2 W5 status:** Plan Mode spec settled then **DEFERRED** (see `docs/plans/v0.2/05-plan-mode.md` banner) — cost outweighs value while per-tool approvals already prevent bad outcomes.
-
-**v0.2 W6 status (branch `feat/v0.2-skills`, unmerged):**
-- **W6 Skills Studio (implemented):** DB is the resolution authority for governed scopes. `Skill`/`SkillRevision`/`SkillAssignment` models; `skills/reconcile.py` seeds built-ins from `skills/builtins.BUILTIN_SKILLS`, migrates legacy `skills/` dirs into the store, indexes agent-local workspace dirs.
-- **Resolution:** `skills/resolution.py` — `resolve_effective_skills()` per agent: published governed rows + live workspace scan, precedence `agent-local > global > built-in`, global respects `availability`/`skill_assignments`. Disabled/archived agent-local rows suppress the live dir. `GET /api/agents/{id}/skills` indexes dirs on read so promote works without a restart.
-- **Pinning:** pipeline resolves once per run; manifest `skill_revision_ids` stores `{name: "rev:<id>" | "live:<sha256>"}` — mid-run publishes can't wobble a live run; `skills_load`/`skills_read_resource` serve the pinned rev (agent-local serves live bytes, pin is provenance only).
-- **Builder:** "Create Skill" opens a normal session flagged builder-mode on a host agent — `skill-creator` force-loaded, ordinary workspace tools write `skill-drafts/`; no publish capability exists by construction.
-- **Imports:** ZIP + repo-URL (GitHub/GitLab/Bitbucket normalized → archive zipball over HTTP) share `skills/importer.py` hardening — traversal, symlinks, zip-bomb caps, `https:`-only; multi-`SKILL.md` repos → pick-list; everything lands `draft`.
-- **Validation** (`skills/validate.py`): errors block publish; warnings (ungranted-but-real capabilities, missing license, token estimate) don't.
-- **Lifecycle:** publish/promote (scope change, history preserved)/duplicate/restore-as-new/disable/archive/purge; purge guarded by active-run manifest pins, built-ins never purge, agent-local purge also removes the live dir.
-- **API/UI:** `/api/skills` scoped views, `/effective`, detail, files/preview/raw/pdf-page (revision-aware), validate, export, drafts, import. React Skills Studio: scope views, detail tabs, publish dialog (scope + assignments), builder launch, import ZIP/URL.
-- **Verification:** `test_skills_studio.py` (24) + `test_skills_api.py` (10) + rewritten syscall/preview fixtures; 694 backend tests pass, `tsc -b` clean.
-- **Deferred:** hub/registry, per-agent built-in disable, live-test subsystem.
-
-**v0.2 W7 status (merged — `49e4c11` + `c4c8672`/`ad32d3e`/`76c4bcb` via PR #58):**
-- **RAG v2 implemented:** structured extraction → per-block-type parent/child chunking → FTS lexical + optional hybrid semantic → RRF fusion → bounded parent expansion → excerpts + citations + retrieval trace.
-- **Index generations:** blue-green rebuild/repair/activate/delete; exactly one `active`; concurrent rebuild → 409; `reconcile_stale_builds()` at startup flips committed `building` rows → `failed` (gateway crash hazard closed).
-- **Embedding resource** (`embedding_resources` row): provider + model + `egress_allowed`. Remote providers refuse until egress opted-in (audited `knowledge.embedding_egress_enabled`); local = known local provider types or `localhost`/`127.0.0.1`/`::1`/`0.0.0.0`/`.local` base_url (`provider_is_local` in `knowledge/embeddings.py`). "Local model" = localhost HTTP endpoint (Ollama etc.), not embedded runtime.
-- **`fusion=lexical` is embeddings-off** — `embed_chunks_at_ingest` skips provider calls entirely under lexical (no egress, no spend); uploads land `semantic_state=pending`, a later hybrid flip + Repair fills them.
-- **Embedding ledger:** `embedding_calls` table records every `embed_texts` provider call — operation (`validate`/`index`/`ingest`/`repair`/`query`), tokens, cost, latency, status; plain-string refs survive deletions. `GET /api/knowledge/index.embedding_spend` cumulative; per-generation `cost`/`tokens_in` (index+ingest+repair only — query embeds are per-search spend). `/api/spend` stays agent-scoped; unified platform spend is W10.
-- **Semantic-index panel: built, browser-verified, then REMOVED** — interim UI withdrawn after review; all config/lifecycle is API-only until the W13 frontend rework (`07-rag-v2.md` → "Vault UI — semantic index controls" records the requirements).
-- **Tabular files refused at ingest** — `.xlsx`/`.xls`/`.csv` rejected by `_check_supported()` in `api/knowledge.py` (all three entry points incl. `/from-workspace`): chunking rows is wrong-shaped, needs the deferred row-query layer (v0.2-release-plan → "Structured sources get a row layer"). `_extract_xlsx` stays as dead-but-ready code.
-- **Verification:** `test_knowledge_rag.py` (34) green; full suite 756 pass; `tsc`/`oxlint` clean.
-- **Post-v0.2 backlog:** vault document inspection (`GET /documents/{id}/chunks` + drill-down), structured-source row layer, platform spend view (W10).
-
-**v0.2 W8 status (branch `feat/v0.2-scheduler`, Scheduler v2 implemented — see `docs/plans/v0.2/08-scheduler-v2.md` status block):**
-- **Persistent schedule engine** (`scheduler.py` rewrite): `Schedule`/`ScheduleRevision`/`ScheduleOccurrence` tables; persisted `next_fire_at` is the source of truth — restart/sleep recovery is a DB read + missed-run sweep (`skip`/`run_once`/`catch_up`, `catch_up` capped at 25). Tick = drain due queued occurrences → fire due schedules → commit → spawn run tasks (never run inside the tick transaction).
-- **Triggers:** once / interval / cron (`croniter`) with IANA timezone stored separately. DST: nonexistent wall time fires once at the first valid instant; ambiguous fold time fires once (second pass suppressed). `UTCDateTime` TypeDecorator fixes SQLite's naive-datetime read-back.
-- **Overlap modes:** skip / queue / cancel_previous / allow_parallel (parallel runs are separate sessions — conversation invariant holds). **Failure:** `no_retry` or `bounded_retry(max_attempts, backoff_seconds)` — retries are new occurrences chained via `retry_of`.
-- **Revision pinning:** occurrence pins `revision_id`; edits write new revisions (content-hash-gated); manifest captures `schedule_revision_id` + `plan_revision_id`. `run_now`/`test-run` materialize ad-hoc occurrences.
-- **Heartbeat is a facade:** `agent_config.heartbeat` projects onto a managed `Schedule` (`managed="heartbeat"`) — old `/api/scheduler/heartbeat*` + `/alerts` endpoints unchanged; schedules API rejects edit/delete on managed rows (400). Every enabled agent gets a managed row at startup (heartbeat state inspectable via `/api/schedules`); the page shows them on the Heartbeat tab instead.
-- **Auto-approve:** revision `auto_approve` caps skip the approval prompt *after* normal permission checks — the ceiling never widens. Per-run `max_cost` overrides `limits.max_cost_per_run`; heartbeat cap applies only to `trigger="heartbeat"` (loop bug fixed).
-- **API/UI:** `/api/schedules` CRUD + pause/resume/duplicate/run-now/test-run/preview + paged occurrences. Scheduler page has **two tabs**: **Schedules** (user-created schedules only — managed heartbeat rows filtered out) and **Heartbeat** (the v0.1 per-agent card surface: toggle/prompt/interval/cost/threshold/fire-now via the heartbeat facade). Schedule editor is a **centered modal** with a preset-based cron builder (Daily/Weekdays/Weekly/Monthly + Custom escape hatch) — raw cron never the primary representation; `describeCron()` renders human summaries ("Weekdays at 09:00"). Live fire-instant preview per timezone.
-- **Verification:** merged `test_scheduler.py` (45 tests — facade + durable-scheduler + lock-safety regressions); 793 backend tests pass; `tsc` + `oxlint` + 33 vitest green.
-- **Known limits:** retries re-run the whole task (per-op idempotency keys are W10+); `plan_revision_id` is a forward-compat string ref (no Plan entity yet); alerts are agent-keyed (two failing schedules on one agent collapse); calendar view deferred.
-
-**Ticket 10 (Tauri Desktop App):** SHIPPED for macOS ARM64 (Apple Silicon). macOS Intel and Windows builds require cross-compilation/CI and are not yet set up.
-- Tauri 2 shell wraps the React frontend + packaged PyInstaller gateway.
-- Gateway supervisor (`frontend/src-tauri/src/gateway.rs`): starts the PyInstaller gateway in its own process group, routes stdout/stderr to `<app_data_dir>/logs/gateway.log`, kills the full process group on app exit.
-- Desktop auth uses **bearer token** (not cookies): login returns `session_token` in the JSON response, frontend stores it in `localStorage`, sends it as `Authorization: Bearer <token>` on every request. The backend accepts the token from either the cookie or the bearer header. This avoids cross-site cookie issues between the Tauri webview origin (`tauri.localhost`) and the gateway (`127.0.0.1:51718`).
-- Desktop API base: Tauri uses stable `http://127.0.0.1:51718` through the `gateway_url` command; development mode continues using the Vite proxy on port 8081. OAuth callbacks use `http://localhost:51718/api/mcp/oauth/callback` in the desktop app.
-- Default agents (`caber`, `agent-builder`) seed on first launch — PyInstaller bundles `defaults/*.yaml` via `--add-data` in `scripts/build-gateway.sh`.
-- Gateway log: `tail -f "$HOME/Library/Application Support/com.caberos.desktop/logs/gateway.log"`
-
-**Docker:** IMPLEMENTED. Full stack via docker-compose:
-- Backend: `python:3.12-slim` + uv. For shell sandboxing, tries bwrap (if `SYS_ADMIN` cap present) or falls back to Docker's alpine:3.20 container isolation.
-- Frontend: multi-stage Node build → nginx:alpine, reverse-proxies `/api` and `/health` to backend, SSE buffering disabled.
-- Data persists in named volume `caberos-data`. Postgres option commented out in `docker-compose.yml`.
-- `./scripts/docker.sh {up|down|logs|rebuild}`
-- See `docs/platform-support.md` for sandbox availability across platforms.
-
-**Ticket 07 (Scheduler/Heartbeat):** IMPLEMENTED. Heartbeat scheduler with multi-mode UI.
-
-**Ticket 08a (MCP Client Infrastructure):** IMPLEMENTED. MCP client (stdio/HTTP), server registry, credential store, DB models, 19 API routes, connectors page, agent bindings. 26 tests pass.
-
-**Ticket 08b (MCP Credentials — API Key + OAuth):** IMPLEMENTED. API key flow, OAuth loopback flow with token refresh, revoke, catalog integration.
-
-**Ticket 08c (External Channels):** IMPLEMENTED. Four channels:
-- **Telegram** — polling + webhook, typing indicator, 4096-char split, Markdown
-- **Discord** — slash commands + message create + DM, 2000-char split, Markdown
-- **Zalo OA** — webhook, HMAC-SHA256 verification, `cs` message type, plain text
-- **Zalo Bot Platform** — polling + webhook, typing indicator, 2000-char split, `X-Bot-Api-Secret-Token` verification, Markdown
-- Channel registry, API routes, frontend Channels page, per-channel test state
-- **SSL fix:** `ssl_utils.py` — shared CA bundle path (Homebrew `ca-certificates`) for corporate firewall compatibility. All httpx clients use `verify=SSL_CERT_PATH`.
-- 68 channel tests pass (29 Telegram + 39 Discord/Zalo).
-
-**Ticket 09 (Observability + Spend):** IMPLEMENTED.
-- **API:** `GET /api/runs` (filterable list), `GET /api/runs/{id}` (detail with messages + audit), `GET /api/audit` (syscall log), `GET /api/spend` (today/7d/30d breakdown by agent + trigger), `GET /api/operator-audit`, `GET /api/health`
-- **Frontend:** Observability page with 4 tabs (Runs, Syscall Log, Spend, Health). Run detail view with messages + audit records inline. Denied syscalls highlighted.
-- **Tests:** Observability coverage verified.
-
-**Model discovery enhancements (this session):**
-- Thinking/reasoning metadata + per-message thinking controls (brain icon, effort slider)
-- `max_context_tokens` and `max_output_tokens` from OpenRouter live metadata
-- Image-generation models filtered from chat discovery (402 → 393 models)
-- OpenRouter discovery uses live metadata instead of LiteLLM static catalog
-
-**Current release status:** v0.1.9 is tagged and released. (Prior: v0.1.6 from merge commit `48de8a9`.) The incorrectly ordered v0.1.51 and v0.1.52 tags/releases were removed. Apple Developer signing/notarization is not configured.
-
-**Updater status:** The startup update popup and Settings → About share updater state. Update flow is `downloading → installing → ready`, followed by an explicit `Restart now` action using the Tauri process plugin.
-
-**v0.1.6 verification status:** 431 backend tests pass with 21 warnings. Frontend lint has 0 warnings/errors, 9 frontend tests pass, and the frontend build passes. Tauri tests and `cargo check` pass. CodeQL analysis for the final v0.1.6 pull request reported zero results.
-
-**v0.1.9 verification status (branch `feat/v0.1.9`):** 473 backend tests pass. Frontend lint clean, build passes. Website builds 61 pages (28 Vietnamese). Browser-verified: thinking toggle survives session remount, `web_fetch` extracts TradingView content via trafilatura, "Jump to latest" stays pinned above the composer.
-
-**v0.2 W10 status (branch `feat/v0.2.0-observability`):** unified `model_calls` ledger (chat/embedding/probe/extract/title; `embedding_calls` dropped; `thinking_tokens` reported-only, never folded into output). Correlation via `call_id`/`sub_agent_id` on audits, approvals, elicitations, terminal sessions, artifact revisions, first-citation run sources — joins are exact, never temporal; legacy NULL rows stay rootless. `GET /api/runs/{id}` returns a projected `timeline` (audit roots → tombstone `tool_call` message → pending approval; decision/terminal events carry actual transition times); `/runs` accepts provider/model/purpose/kind/schedule/channel/capability/tool_status/effect/browser_profile/artifact_format/retrieval/time filters; `/spend?scope=platform` reads the ledger (agent scope keeps historic Run totals — the two are not algebraically equal). `redaction.py` is the shared read boundary — flat lists and timeline use the same projector; sensitive payloads fail closed. `services/model_ledger.record_system_call` ledger non-run calls (probes, memory extract, titles). Deferred: browser-session filter, Plan-step linkage, model-fallback events.
-
-**W10 trace UI:** Traces uses an expandable span tree, aligned elapsed-time waterfall, and selected-observation inspector. Model/tool bars use recorded latency with explicitly derived placement; unknown timestamps remain unpositioned. Root Input/Output show redacted run messages, not the full model request. Per-model request/response bodies and instrumented span boundaries are not captured yet; historical data must never be presented as reconstructed per-call input/output. Real web development uses `backend/data/agentos.db`; isolate QA servers on separate ports, never replace the normal backend with a temporary database.
-
-**W10 spend coverage:** Platform spend exposes `priced_calls`, `unpriced_calls`, and `thinking_reported_calls` in totals and breakdowns. A legacy zero without pricing provenance is unknown, not free; explicit provider/LiteLLM zeroes count as priced. Positive legacy costs retain their recorded values. The UI distinguishes unknown/partial pricing from recorded cost, resolves provider names, and keeps agent-scope accounting unchanged. Never infer a price from a custom model alias or rewrite historical costs to fill missing pricing.
+| Agent identity + config | DB (`AgentConfig`) | yes (`AgentVersion`) |
+| MEMORY.md | `~/agentos/agents/{id}/MEMORY.md` | living file; `CoreRevision` evidence/pins |
+| Knowledge graph | DB `memory_triples` | no |
+| Session summaries | DB `ConversationSummary` | immutable snapshots |
+| Provider/connector secrets | DB, Fernet-encrypted | n/a |
+| Workspace files | shared dirs | n/a |
+| Governed skills | bytes `skills/` + `data/skills-store/{id}/rev-{n}/`; index in DB | yes (`SkillRevision`) |
+| Agent-local skills | `workspace/skills/{agent_id}/` | optional published snapshots |
+| Skill drafts | `workspace/{agent}/skill-drafts/`, `data/skills-drafts/` | no |
+| Schedules | DB `Schedule`/`ScheduleRevision`/`ScheduleOccurrence` | yes |
+| Artifacts | `artifacts/` workspace files + DB revisions | yes (`ArtifactRevision`) |
+| Runs/audit/ledger | DB `Run`, audit log, `model_calls` | append-only |
+| Browser profiles | `data/browser-profiles/` (opt-in persistent) | n/a |
+| Knowledge index | DB `knowledge_index` generations + chunks | generations |
 
 ## Build & test commands
 
-**Next: W11 Runtime Readiness** (`feat/v0.2.0-runtime-readiness`) combines model
-catalog/pricing, confirmed bug fixes, and former W12 optional dependencies.
-The approved installer direction is app-managed/private by default, fixed
-subprocess recipes where useful, and guided system installation where a managed
-recipe is not verified. No automatic downloads or privilege escalation. See
-`docs/plans/v0.2/11-bug-fixes.md`, `12-dependencies.md`, and the W11 test plan.
-The implementation checkpoint includes local model offerings, frozen pricing
-receipts, dependency readiness, approved managed-install jobs, SSE-first
-notifications, native OpenAI context-tier cost capture, and MCP 401 challenge
-discovery (records consent-required config without any automatic OAuth flow).
-Chat intentionally shares a zero display for unresolved and genuine zero —
-the distinction lives in receipts/observability. Historical-cost backfill and
-combined Git MCP preparation are **excluded from W11** (operator decision
-2026-10-13). Real installer runs remain pending specific operator download
-consent. W13 frontend rework follows W11 — upcoming, not deferred.
-Closeout verification is in progress — not all of W11 is verified yet; see
-the W11 test-results document.
-Initial dependency scope follows implemented end-user features; FFmpeg/OCR remain deferred, and local MCP runtimes are conditional rather than app prerequisites.
-Optional Tools & Runtimes belongs in global Settings -> General (not agent General settings). Any future combined Git MCP preparation must be app-managed after explicit consent; it is excluded from W11.
-Catalog/accounting authority is the bundled/local models.dev snapshot with a daily validated refresh; LiteLLM is model execution only, not a metadata/pricing fallback. Catalog refresh is enabled by default and respects explicit opt-outs; the internal catalog has no maintenance card in General settings.
-
 ```bash
-# Backend tests (from repo root)
-cd backend && uv run pytest -v
+# Backend (from backend/): tests + lint + format gate
+uv run pytest -q
+uv run ruff check src/ tests/ && uv run ruff format --check src/ tests/
 
-# Lint
-cd backend && uv run ruff check src/ tests/
-cd backend && uv run ruff format --check src/ tests/
-
-# Smoke test (end-to-end pipeline with scripted model double, no real LLM)
+# Smoke test (full pipeline, ScriptedModel — no real LLM)
 cd backend && uv run python ../scripts/smoke.py test-agent "echo hello"
 
-# Seed DB (creates default operator + capabilities)
+# Seed DB
 cd backend && uv run python -m agentos.seed
 
-# Database migrations (Alembic)
-cd backend && uv run alembic upgrade head          # apply all migrations
-cd backend && uv run alembic current               # check current revision
-cd backend && uv run alembic revision --autogenerate -m "description"  # create migration
-cd backend && uv run alembic stamp head            # mark existing DB as up-to-date
+# Dev servers (backend :8081, frontend :5173 w/ /api proxy)
+./scripts/dev.sh            # both
+cd frontend && npm run dev  # frontend only
 
-# Start dev server (backend on :8081)
-./scripts/dev.sh
+# Frontend gates
+cd frontend && npm run lint && npm run build && npm run test
 
-# Frontend dev server (Vite on :5173, proxies /api to backend)
-cd frontend && npm run dev
+# Desktop (Tauri)
+cd frontend && npm run desktop:dev    # dev mode
+cd frontend && npm run desktop:build  # packaged app
 
-# Frontend build
-cd frontend && npm run build
-
-# Install/setup
-./scripts/install.sh
-
-# Desktop app (Tauri — build + run the .app)
-cd frontend && npm run desktop:build
-open frontend/src-tauri/target/release/bundle/macos/CaberOS.app
-
-# Desktop dev (Tauri dev mode — hot reload)
-cd frontend && npm run desktop:dev
-
-# Docker (full stack — backend + frontend via nginx)
-./scripts/docker.sh up        # build + start, → http://localhost:8080
-./scripts/docker.sh logs      # tail logs
-./scripts/docker.sh down      # stop
-./scripts/docker.sh rebuild   # force rebuild images
+# Docker full stack → http://localhost:8080
+./scripts/docker.sh up|down|logs|rebuild
 ```
+
+Current test baseline: ~1,300 backend tests (88 files), 27 frontend test files.
 
 ## Gotchas
 
-- **Release** — `./scripts/release.sh X.Y.Z` from a clean tree. `main` is protected, so it's two-phase: first run creates `release/vX.Y.Z` (bump all manifests + commit + push) → open + merge the PR → re-run the same command to tag `vX.Y.Z` on the merge commit + push (tag push runs `release.yml`). uv_build can't do dynamic/VCS versioning, so the version is a literal — never hand-edit manifests or tag a stale commit.
-- **CodeQL path-injection** — `Path.resolve()`+`is_relative_to` isn't a sanitizer; `os.path.realpath()`+`startswith()` is. Use `resolve_within()` (`sandbox/workspace.py`); check containment before reading.
-- **CodeQL URL-substring** — never `in`/`find` a URL string, even in tests. Use `urlparse(u).hostname == "host"` or `any(tok == url …)`.
-- **Datetimes** — SQLite drops tzinfo; a `Base` load-listener in `models/base.py` stamps UTC. Keep datetimes tz-aware; don't compare with naive `datetime.now()`.
-
-## Backend module layout
-
-```
-backend/src/agentos/
-├── config.py            — settings (env vars, paths, hitl_timeout)
-├── db.py                — async SQLAlchemy engine, session factory, init_db (create_all + schema patches)
-├── config_schema.py     — Pydantic models (AgentConfig, ModelConfig, etc.)
-├── agent_service.py     — agent CRUD, versioning, YAML import/export
-├── secret_store.py      — Fernet encryption for provider keys
-├── ssl_utils.py         — shared SSL CA bundle path (corporate firewall fix)
-├── seed.py              — seed default operator + capabilities
-├── runner.py            — run_agent() + ScriptedModel demo (7-turn workspace check)
-├── run_manager.py       — RunContext, _active_runs registry, start/stop/get run
-├── pipeline.py          — D19's 13-step execution pipeline + LLM title generation
-├── main.py              — FastAPI app entry point (routers, CORS, lifespan)
-├── auth.py              — operator auth (session cookie OR bearer token, bcrypt, login/logout/me)
-├── models/              — SQLAlchemy models (all v0.1 tables)
-│   └── elicitation.py   — ElicitationRequest model
-├── capabilities/        — capability registry + built-in tools
-│   ├── registry.py      — CapabilityDef, CapabilityRegistry
-│   ├── builtin.py       — register_builtin_capabilities() (tools + memory caps)
-│   └── tools/           — file, shell, web, datetime, subagent, memory
-├── memory/              — memory layers and promotion (D34)
-│   ├── core.py          — bounded MEMORY.md publication, revisions, session pins (plan 14)
-│   ├── notebook.py      — legacy notebook compatibility helpers
-│   ├── auto_extract.py  — durable fact extraction and deduplication (session-close and direct-run modes)
-│   ├── triples.py       — knowledge graph (subject/predicate/object triples)
-│   └── recall.py        — lexical recall (FTS5 / Postgres tsvector) + core archive
-├── skills/              — skill loading (D11b, D11c) — NOT auto-injected
-│   └── loader.py        — list_skills (menu), load_skill (full content + resources)
-├── db_backends/         — pluggable database backends (D5)
-│   ├── base.py          — DatabaseBackend ABC
-│   ├── factory.py       — URL scheme → backend class
-│   ├── sqlite_backend.py — SQLite + aiosqlite (WAL, FTS5)
-│   └── postgres_backend.py — Postgres + asyncpg (tsvector, GIN)
-├── api/                 — REST API routes (control plane)
-│   ├── agents.py        — list/get agents
-│   ├── chat.py          — chat channel (POST /message, GET /runs/{id}/events SSE, run management)
-│   ├── providers.py     — provider CRUD, model discovery, validation
-│   ├── approvals.py     — approval list/approve/reject API
-│   ├── elicitation.py   — elicitation respond API
-│   ├── agent_files.py   — MEMORY.md, skills, workspace, memory management (triples/clear)
-│   ├── mcp.py           — MCP server CRUD, credentials, OAuth, catalog, bindings
-│   ├── channels.py      — external channel CRUD, webhook receiver, test
-│   └── observability.py — runs list/detail, audit log, spend, health (Ticket 09)
-├── channels/            — external messaging channels (Ticket 08c)
-│   ├── base.py          — Channel ABC, OutboundMessage, OutputConstraints
-│   ├── registry.py      — channel class + active instance registry
-│   ├── telegram.py      — Telegram (polling + webhook)
-│   ├── discord.py       — Discord (slash commands, message create)
-│   ├── zalo_oa.py       — Zalo Official Account (webhook + HMAC)
-│   └── zalo_bot.py      — Zalo Bot Platform (polling + webhook + typing)
-├── mcp/                 — MCP client infrastructure (Ticket 08a/08b)
-│   ├── client.py        — MCP stdio/HTTP client
-│   ├── registry.py      — server registry, tool discovery
-│   ├── credentials.py   — encrypted credential storage
-│   └── oauth.py         — OAuth loopback flow
-├── sandbox/             — process-level sandbox (D28)
-│   ├── base.py          — SandboxBackend ABC, get_backend(), probe()
-│   ├── seatbelt.py      — macOS sandbox-exec
-│   ├── bwrap.py         — Linux bubblewrap
-│   ├── docker.py        — Docker container (cross-platform fallback)
-│   └── workspace.py     — path validation, workspace creation
-├── syscall/             — the single boundary every capability call crosses
-│   ├── protocol.py      — SyscallHandler Protocol, ToolCall, SyscallResult
-│   ├── mediator.py      — SyscallHandler (approval gate, elicitation, audit)
-│   ├── lock.py          — per-Session asyncio lock (concurrent sessions)
-│   ├── approval_registry.py — asyncio.Event registry for approval resolution
-│   └── elicitation_registry.py — asyncio.Event registry for elicitation resolution
-└── harness/             — agent execution loop
-    ├── base_prompt.py   — static platform system prompt (same for every agent)
-    ├── context.py       — system prompt + tool schema assembly + multimodal message building
-    ├── scripted_model.py — ScriptedModel double (no real LLM needed)
-    ├── litellm_adapter.py — LiteLLM adapter (real model, streaming, reasoning tokens)
-    ├── guardrails.py    — input/output guardrails (secret redaction, injection detection)
-    └── loop.py          — Harness.run() — the agent loop
-```
-
-## Entry point architecture
-
-All entry points (API server, CLI, gateway, native app) call `run_agent()`:
-
-```
-CLI (future)          API Server (chat.py)         Native App (future)
-Gateway (future)      Batch Runner (future)        Python Library
-         \                |                /
-          \               |               /
-           →  run_agent(agent_id, text, user_id, event_callback, ...)  ← runner.py
-                    |
-                    →  Pipeline.handle_inbound()  ← pipeline.py
-                            |
-                            →  Harness.run()      ← harness/loop.py
-                                    |
-                                    →  Model (LiteLLM or Scripted)
-                                    →  SyscallHandler (mediator)
-                                            →  Capabilities (tools)
-```
-
-`run_agent()` handles: DB session, model selection, harness+pipeline wiring, event emission, error handling. The caller provides an `event_callback` for transport (SSE, stdout, WebSocket, etc.).
-
-## Key patterns
-
-- **SyscallHandler Protocol:** The harness depends on the `SyscallHandler` protocol, not a concrete impl. This lets us swap the stub (auto-approve) for the real mediator (approval flow) without touching the harness.
-- **ScriptedModel:** Tests use a scripted model double — no API key, no real LLM. The smoke script also uses it.
-- **Idempotent registry:** `CapabilityRegistry.register()` is idempotent — safe to call multiple times.
-- **Workspace path validation:** All file operations go through `WorkspaceManager.validate_path()` which rejects paths that escape the workspace via `..` or absolute paths.
+- **Release:** `./scripts/release.sh X.Y.Z` from a clean tree — two-phase (release branch PR → merge → re-run to tag). Version is a literal in all manifests; never hand-edit or tag a stale commit.
+- **CodeQL path-injection:** `Path.resolve()`+`is_relative_to` is not a sanitizer — use `os.path.realpath()`+`startswith()` via `sandbox/workspace.py`'s `resolve_within()`, and check containment before reading.
+- **CodeQL URL-substring:** never `in`/`find` a URL string — use `urlparse(u).hostname == "host"`.
+- **Datetimes:** SQLite drops tzinfo; `models/base.py` stamps UTC on load. Keep tz-aware; never compare with naive `datetime.now()`.
+- **Gateway supervisor (desktop):** PyInstaller gateway on `127.0.0.1:51718`, own process group, logs at `~/Library/Application Support/com.caberos.desktop/logs/gateway.log`. Desktop auth = bearer token (not cookies).
+- **Auth:** `auth.py` accepts session cookie OR `Authorization: Bearer` (desktop).
+- **Env vars:** `AGENTOS_` prefix — see `config.py`; key ones: `AGENTOS_DATABASE_URL` (Postgres opt-in), `AGENTOS_DB_PATH`, `AGENTOS_YOLO_MODE` (skip all approvals), `AGENTOS_HITL_TIMEOUT`, `AGENTOS_SANDBOX_TIMEOUT`, `AGENTOS_MODEL_REQUEST_TIMEOUT`, `AGENTOS_MODEL_STREAM_IDLE_TIMEOUT`.

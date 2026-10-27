@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, act, fireEvent } from "@testing-library/react";
+import { render, screen, act } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { ThemeProvider } from "@/lib/theme";
 
@@ -99,6 +99,12 @@ beforeEach(() => {
     overrides: {},
     quiet_hours: { enabled: false, start: "22:00", end: "07:00" },
   });
+  apiMock.getContextCapturePolicy.mockResolvedValue({
+    retention_days: 7,
+    max_bytes: 268435456,
+    max_payload_bytes: 1048576,
+    pinned: { retention_days: false, max_bytes: false, max_payload_bytes: false },
+  });
 });
 
 afterEach(() => {
@@ -126,7 +132,7 @@ describe("General settings (W11 internal catalog)", () => {
     expect(screen.getAllByText("Notifications").length).toBeGreaterThan(0);
   });
 
-  it("installation-wide capture retention lives here, fetched on expand", async () => {
+  it("installation-wide capture retention lives here, fetched on mount", async () => {
     apiMock.getContextCapturePolicy.mockResolvedValue({
       retention_days: 7,
       max_bytes: 268435456,
@@ -141,13 +147,9 @@ describe("General settings (W11 internal catalog)", () => {
       </MemoryRouter>,
     );
     await act(async () => {});
-    // No agent selection needed — this is an installation policy.
-    const toggle = screen.getByRole("button", {
-      name: /Request capture retention/,
-    });
-    expect(apiMock.getContextCapturePolicy).not.toHaveBeenCalled();
-    fireEvent.click(toggle);
-    await act(async () => {});
+    // No agent selection needed — this is an installation policy, shown
+    // directly in the section rather than behind a disclosure.
     expect(apiMock.getContextCapturePolicy).toHaveBeenCalled();
+    expect(screen.getByLabelText(/Retention window/)).toBeTruthy();
   });
 });

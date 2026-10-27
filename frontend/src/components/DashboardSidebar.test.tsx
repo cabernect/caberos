@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { DashboardSidebar } from "./DashboardSidebar";
 
@@ -18,14 +19,16 @@ describe("DashboardSidebar on mobile", () => {
     const navigate = vi.fn();
     const onToggle = vi.fn();
     render(
-      <DashboardSidebar
-        active="traces"
-        onNavigate={navigate}
-        onLogout={vi.fn()}
-        collapsed
-        onToggleCollapse={onToggle}
-        agentCount={2}
-      />,
+      <MemoryRouter>
+        <DashboardSidebar
+          active="traces"
+          onNavigate={navigate}
+          onLogout={vi.fn()}
+          collapsed
+          onToggleCollapse={onToggle}
+          agentCount={2}
+        />
+      </MemoryRouter>,
     );
     fireEvent.click(screen.getByTitle("Expand sidebar"));
     expect(screen.getByTestId("sidebar-scrim")).toBeInTheDocument();

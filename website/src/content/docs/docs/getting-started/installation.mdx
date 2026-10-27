@@ -1,22 +1,24 @@
 ---
 title: Installation
-description: Install CaberOS on macOS, Linux, or Docker.
+description: Install CaberOS on macOS, Windows, Linux, or Docker.
 sidebar:
   order: 1
 ---
 
-CaberOS runs on macOS, Linux, and Windows (via WSL2). Choose the option that fits your platform.
+CaberOS runs on macOS, Windows, and Linux. Choose the option that fits your platform.
 
-## Option 1: Desktop app (easiest, macOS Apple Silicon)
+## Option 1: Desktop app (easiest)
 
-The desktop release currently supports **macOS 13 or newer on Apple Silicon**: M1, M2, M3, or M4. The app bundles its FastAPI gateway and does not require Python, Node, or `uv`.
+The desktop app bundles its FastAPI gateway and does not require Python, Node, or `uv`. It ships for **macOS 13 or newer on Apple Silicon** (M1–M4) and **Windows 10 or newer on x64**.
+
+### macOS
 
 1. Open the [latest release](https://github.com/cabernect/caberos/releases/latest).
 2. Download `CaberOS_<version>_arm64.dmg`.
 3. Open the DMG and drag **CaberOS** to **Applications**.
 4. Launch CaberOS from Applications.
 
-### Gatekeeper message
+#### Gatekeeper message
 
 The release is ad-hoc signed and is not notarized by Apple. If macOS says the application cannot be opened or is damaged, first verify that the DMG came from the official release, then run:
 
@@ -25,6 +27,21 @@ xattr -dr com.apple.quarantine /Applications/CaberOS.app
 ```
 
 Launch CaberOS again after removing the quarantine attribute.
+
+### Windows
+
+1. Open the [latest release](https://github.com/cabernect/caberos/releases/latest).
+2. Download `CaberOS_<version>_x64-setup.exe`.
+3. Run the installer — it installs for the current user, no administrator rights needed.
+4. Launch CaberOS from the Start menu.
+
+#### SmartScreen message
+
+The installer is not yet signed with a widely trusted certificate. If Windows SmartScreen warns on first run while the signature builds reputation, choose **More info → Run anyway** after verifying the download came from the official release.
+
+#### Shell sandbox on Windows
+
+Shell commands run inside bundled Microsoft Execution Containers (MXC) — no Docker or WSL needed, but this requires **Windows 11 24H2 (build 26100) or newer** and a one-time elevated setup: open **Observability → Health** and click **Enable shell sandbox**. On older builds everything else still works; only the `terminal` capability stays off. MXC is reported as *experimental*, not a verified security boundary — see `docs/platform-support.md` for the full matrix.
 
 ## Option 2: Docker (any platform)
 
@@ -58,9 +75,10 @@ Open `http://localhost:5173`. See [Local development](/docs/development/local-de
 | Platform | Desktop app | Docker | Local dev |
 | --- | --- | --- | --- |
 | macOS Apple Silicon | Yes | Yes | Yes |
+| Windows x64 | Yes | Yes (WSL2) | Yes (WSL2) |
 | macOS Intel | Not yet | Yes | Yes |
+| Windows ARM | Not yet | Yes (WSL2) | Yes (WSL2) |
 | Linux | Not yet | Yes | Yes |
-| Windows (WSL2) | Not yet | Yes | Yes |
 
 ## Next step
 

@@ -1,5 +1,6 @@
 """Tests for provider management API (D39, D40)."""
 
+import json
 import uuid
 
 import bcrypt
@@ -224,3 +225,228 @@ class TestProviderCRUD:
             from agentos.secret_store import decrypt
 
             assert decrypt(provider.encrypted_key) == "sk-plaintext-secret"
+
+
+class TestProviderCredentials:
+    """Per-type extra credentials (azure api_version, bedrock aws_*) —
+    encrypted at rest, key names only in API responses, merged into
+    LiteLLM kwargs via the adapter's extras path."""
+
+    async def test_create_with_credentials(self, client, auth_headers):
+        resp = await client.post(
+            "/api/providers",
+            json={
+                "name": "Bedrock",
+                "type": "bedrock",
+                "credentials": {
+                    "aws_access_key_id": "AKIAEXAMPLE",
+                    "aws_secret_access_key": "supersecret",
+                    "aws_region_name": "us-east-1",
+                },
+            },
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert sorted(data["credential_fields"]) == [
+            "aws_access_key_id",
+            "aws_region_name",
+            "aws_secret_access_key",
+        ]
+        # Values never leave the API — names only.
+        assert "AKIAEXAMPLE" not in resp.text
+        assert "supersecret" not in resp.text
+        assert "credentials" not in data
+
+    async def test_credentials_encrypted_at_rest(self, client, auth_headers, db_engine):
+        from sqlalchemy import select
+        from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+        from agentos.models.provider import Provider
+        from agentos.secret_store import decrypt
+
+        create = await client.post(
+            "/api/providers",
+            json={
+                "name": "Azure",
+                "type": "azure",
+                "api_key": "azure-key",
+                "base_url": "https://res.openai.azure.com/",
+                "credentials": {"api_version": "2024-10-21"},
+            },
+            headers=auth_headers,
+        )
+        pid = create.json()["id"]
+        factory = async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
+        async with factory() as db:
+            provider = (await db.execute(select(Provider).where(Provider.id == pid))).scalar_one()
+            assert provider.encrypted_credentials is not None
+            assert "2024-10-21" not in provider.encrypted_credentials
+            assert json.loads(decrypt(provider.encrypted_credentials)) == {
+                "api_version": "2024-10-21"
+            }
+            # Plaintext extra_params stays separate and empty.
+            assert json.loads(provider.extra_params) == {}
+
+    async def test_update_credentials_merge_semantics(self, client, auth_headers, monkeypatch):
+        # The provider-refresh background task shares the single StaticPool
+        # connection in tests and its rollback swallows the endpoint's commit.
+        # Refresh scheduling isn't the behavior under test here.
+        monkeypatch.setattr(
+            "agentos.providers.model_catalog.schedule_provider_refresh",
+            lambda *a, **k: None,
+        )
+        create = await client.post(
+            "/api/providers",
+            json={
+                "name": "Bedrock",
+                "type": "bedrock",
+                "credentials": {
+                    "aws_access_key_id": "AKIA1",
+                    "aws_secret_access_key": "secret1",
+                    "aws_region_name": "us-east-1",
+                },
+            },
+            headers=auth_headers,
+        )
+        pid = create.json()["id"]
+        # Update one key, delete another, leave the third untouched.
+        resp = await client.put(
+            f"/api/providers/{pid}",
+            json={
+                "credentials": {
+                    "aws_secret_access_key": "secret2",
+                    "aws_region_name": "",
+                }
+            },
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        assert sorted(resp.json()["credential_fields"]) == [
+            "aws_access_key_id",
+            "aws_secret_access_key",
+        ]
+
+    async def test_credentials_reach_adapter_extras(self, client, auth_headers, db_engine):
+        """Decrypted credentials fold into extra_params so every LiteLLM
+        call site (chat, responses, probes, aux summaries) receives them."""
+        from agentos.harness.litellm_adapter import LiteLLMAdapter
+
+        create = await client.post(
+            "/api/providers",
+            json={
+                "name": "Bedrock",
+                "type": "bedrock",
+                "credentials": {
+                    "aws_access_key_id": "AKIAEXAMPLE",
+                    "aws_region_name": "eu-west-1",
+                },
+                # Explicit extra_params win over same-named credentials.
+                "extra_params": {"aws_region_name": "us-west-2"},
+            },
+            headers=auth_headers,
+        )
+        pid = create.json()["id"]
+        from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+        factory = async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
+        async with factory() as db:
+            adapter = LiteLLMAdapter(db)
+            config = await adapter._load_provider(pid)
+            assert config["extra_params"]["aws_access_key_id"] == "AKIAEXAMPLE"
+            assert config["extra_params"]["aws_region_name"] == "us-west-2"
+
+
+class TestCatalogModels:
+    async def test_catalog_models_default_section(self, client, auth_headers):
+        """Alias providers get a default catalog section for the picker."""
+        create = await client.post(
+            "/api/providers",
+            json={"name": "Azure", "type": "azure"},
+            headers=auth_headers,
+        )
+        pid = create.json()["id"]
+        resp = await client.get(f"/api/providers/{pid}/catalog-models", headers=auth_headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["catalog_provider_id"] == "azure"
+        assert any(p["id"] == "azure" for p in data["providers"])
+        ids = {m["id"] for m in data["models"]}
+        assert "gpt-4o-mini" in ids
+        mini = next(m for m in data["models"] if m["id"] == "gpt-4o-mini")
+        assert mini["context_window_tokens"] == 128000
+
+    async def test_catalog_models_explicit_section(self, client, auth_headers):
+        create = await client.post(
+            "/api/providers",
+            json={"name": "Bedrock", "type": "bedrock"},
+            headers=auth_headers,
+        )
+        pid = create.json()["id"]
+        resp = await client.get(
+            f"/api/providers/{pid}/catalog-models",
+            params={"catalog_provider": "azure"},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["catalog_provider_id"] == "azure"
+
+    async def test_declared_mapping_resolves_metadata(self, client, auth_headers, monkeypatch):
+        """User-declared catalog mapping resolves context for alias models."""
+        # The refresh task is not under test — keep it out of this session's
+        # shared StaticPool connection. Patched at the source module since the
+        # API imports it lazily per call.
+        from agentos.providers import model_catalog
+
+        monkeypatch.setattr(model_catalog, "schedule_provider_refresh", lambda pid: None)
+
+        create = await client.post(
+            "/api/providers",
+            json={"name": "Azure", "type": "azure"},
+            headers=auth_headers,
+        )
+        pid = create.json()["id"]
+        add = await client.post(
+            f"/api/providers/{pid}/models",
+            json={"model_name": "gpt-4o-mini"},
+            headers=auth_headers,
+        )
+        assert add.status_code == 200
+
+        models = await client.get(f"/api/providers/{pid}/models", headers=auth_headers)
+        offering = next(m for m in models.json()["models"] if m["name"] == "gpt-4o-mini")
+        assert offering["context_window_tokens"] is None
+        assert offering["catalog_mapping_explicit"] is False
+
+        put = await client.put(
+            f"/api/providers/{pid}/models/gpt-4o-mini/metadata",
+            json={
+                "fields": {},
+                "catalog_provider_id": "azure",
+                "catalog_model_id": "gpt-4o-mini",
+            },
+            headers=auth_headers,
+        )
+        assert put.status_code == 200
+
+        models = await client.get(f"/api/providers/{pid}/models", headers=auth_headers)
+        offering = next(m for m in models.json()["models"] if m["name"] == "gpt-4o-mini")
+        assert offering["context_window_tokens"] == 128000
+        assert offering["catalog_mapping_explicit"] is True
+        assert offering["catalog_provider_id"] == "azure"
+        assert offering["catalog_model_id"] == "gpt-4o-mini"
+        prov = offering.get("provenance") or {}
+        ctx_prov = prov.get("context_window_tokens") or {}
+        assert ctx_prov.get("value") == 128000
+        assert ctx_prov.get("source") == "models_dev"
+
+        clear = await client.put(
+            f"/api/providers/{pid}/models/gpt-4o-mini/metadata",
+            json={"fields": {}, "clear_catalog_mapping": True},
+            headers=auth_headers,
+        )
+        assert clear.status_code == 200
+        models = await client.get(f"/api/providers/{pid}/models", headers=auth_headers)
+        offering = next(m for m in models.json()["models"] if m["name"] == "gpt-4o-mini")
+        assert offering["context_window_tokens"] is None
+        assert offering["catalog_mapping_explicit"] is False

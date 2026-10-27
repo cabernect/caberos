@@ -205,6 +205,7 @@ async def compact_session(
         model_str = "gpt-4o"
         api_key = None
         base_url = None
+        extra_params: dict = {}
         resolved_model: dict = {}
         accounting = None
         if config.model.is_configured:
@@ -214,6 +215,7 @@ async def compact_session(
                 model_str = info["model_str"]
                 api_key = info["api_key"]
                 base_url = info["base_url"]
+                extra_params = info.get("extra_params") or {}
                 resolved_model = info.get("resolved_model") or {}
                 accounting = info.get("accounting")
             except Exception:
@@ -270,6 +272,7 @@ async def compact_session(
             previous_summary=session.conversation_summary,
             api_key=api_key,
             base_url=base_url,
+            extra_params=extra_params,
             force=True,
             input_budget=input_budget,
             resolved_model=resolved_model,

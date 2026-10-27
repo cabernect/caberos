@@ -10,7 +10,7 @@ allowed-tools: agent_ask_user write_file read_file search_files skills_load skil
 
 A skill exists to make an agent **predictable**: it takes the same *process* every run, even though its output varies. Every choice below serves that.
 
-You write the draft; the operator reviews and publishes it from the Skills page. Your draft lives in `skill-drafts/<name>/` in your workspace and is inert until published.
+New skills are drafts: write to `skill-drafts/<name>/` in your workspace — inert until the operator reviews and publishes it from the Skills page. Updates to one of your existing skills are different: edit `skills/<name>/` directly. The change goes live immediately and is snapshotted as a reversible revision when the session closes.
 
 ## Step 1 — Interview
 
@@ -22,13 +22,13 @@ Mine the conversation first: if the operator says "turn this into a skill", the 
 - the capabilities it needs — exact names from what this agent can use;
 - what "done" looks like for each branch.
 
-To improve an existing skill, read it with `skills_load` (plus `skills_read_resource` for its files) and interview for what should change.
+To improve an existing skill, read it with `skills_load` (plus `skills_read_resource` for its files) and interview for what should change. Updates edit the live skill dir `skills/<name>/` in place — never write a same-name dir under `skill-drafts/` for a skill that already exists; it can never be indexed or published and is only an orphan.
 
 **Done when** you have read those five points back to the operator and they confirmed them.
 
-## Step 2 — Write the draft
+## Step 2 — Write the files
 
-Write `skill-drafts/<name>/SKILL.md` with `write_file`.
+Write `skill-drafts/<name>/SKILL.md` for a new skill, or edit `skills/<name>/SKILL.md` for an update, with `write_file`.
 
 **Frontmatter** — each value on a single line:
 
@@ -86,7 +86,7 @@ Compare each run's process against the steps. Where a run skipped a step or wand
 
 Tell the operator:
 
-- where the draft is (`skill-drafts/<name>/`);
-- to open it on the **Skills** page → **Drafts**, run **Validate**, and **Publish** with the scope they want (agent-local or global).
+- for a new skill: where the draft is (`skill-drafts/<name>/`) — open the **Skills** page → **Drafts**, run **Validate**, and **Publish** with the scope they want (agent-local or global);
+- for an update to one of your skills: the change is already live in `skills/<name>/` — say what changed and why. It is pinned as a revision when the session closes, and any earlier revision is restorable from the skill's **History** tab.
 
-Publishing is the operator's action; your part ends with a clean draft.
+Publishing is the operator's action; your part ends with a clean draft or a careful live edit.

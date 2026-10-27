@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ValidationError
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..agent_service import (
@@ -146,6 +146,95 @@ async def list_agents(
             }
         )
     return out
+
+
+@router.get("/activity")
+async def agent_activity(
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Per-agent activity rollup for the Agents page (W13).
+
+    One payload replaces the old N+1 sessions-per-agent fetch:
+    session totals, a 7-day activity sparkline (sessions/day, oldest→today),
+    live run counts, and week-over-week session deltas.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from ..models.run import Run
+    from ..models.session import Session
+
+    now = datetime.now(UTC)
+    week_ago = now - timedelta(days=7)
+    two_weeks_ago = now - timedelta(days=14)
+
+    agents = (await db.execute(select(Agent))).scalars().all()
+    agent_ids = [a.id for a in agents]
+
+    # per-agent session totals + last activity
+    session_rows = await db.execute(
+        select(
+            Session.agent_id,
+            func.count(Session.id),
+            func.max(Session.last_activity_at),
+        ).group_by(Session.agent_id)
+    )
+    sessions_by_agent: dict[str, dict] = {
+        aid: {"count": c, "last": last} for aid, c, last in session_rows.all()
+    }
+
+    # 7-day sparkline buckets (sessions started per day, oldest→today)
+    day_rows = await db.execute(
+        select(Session.agent_id, Session.started_at).where(Session.started_at >= week_ago)
+    )
+    spark: dict[str, list[int]] = {aid: [0] * 7 for aid in agent_ids}
+    today = now.date()
+    for aid, started in day_rows.all():
+        if aid not in spark:
+            continue
+        idx = 6 - (today - started.date()).days
+        if 0 <= idx <= 6:
+            spark[aid][idx] += 1
+
+    # sessions this week vs last week (rolling windows)
+    week_counts = await db.execute(
+        select(
+            func.count(Session.id).filter(Session.started_at >= week_ago),
+            func.count(Session.id).filter(
+                Session.started_at >= two_weeks_ago,
+                Session.started_at < week_ago,
+            ),
+        )
+    )
+    this_week, prev_week = week_counts.one()
+
+    # live runs → running count + names
+    live_rows = await db.execute(
+        select(Run.agent_id, func.count(Run.id))
+        .where(Run.status.in_(("running", "awaiting_approval")))
+        .group_by(Run.agent_id)
+    )
+    running_by_agent = {aid: c for aid, c in live_rows.all()}
+    names = {}
+    for a in agents:
+        config = await get_active_config(db, a.id)
+        names[a.id] = config.name if config else a.id
+
+    return {
+        "agents": {
+            aid: {
+                "sessions": sessions_by_agent.get(aid, {}).get("count", 0),
+                "sessions_7d": spark[aid],
+                "running": running_by_agent.get(aid, 0),
+                "last_activity_at": sessions_by_agent.get(aid, {}).get("last"),
+            }
+            for aid in agent_ids
+        },
+        "sessions_this_week": this_week,
+        "sessions_prev_week": prev_week,
+        "running_now": sum(running_by_agent.values()),
+        "running_names": [names[aid] for aid, c in running_by_agent.items() if c > 0],
+    }
 
 
 @router.get("/{agent_id}")

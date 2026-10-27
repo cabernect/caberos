@@ -25,6 +25,15 @@ _OFFICIAL_PROVIDERS = {
     "nvidia_nim": ("nvidia", {"integrate.api.nvidia.com"}),
     "zhipu": ("zhipuai", {"open.bigmodel.cn"}),
 }
+# Deployment-alias providers have no official endpoint identity — their model
+# values are operator-chosen names. These hint the *picker's* default catalog
+# section only; they never auto-map (declared mapping is still required).
+_CATALOG_SECTION_HINTS = {
+    "azure": "azure",
+    "azure_openai": "azure",
+    "bedrock": "amazon-bedrock",
+    "aws_bedrock": "amazon-bedrock",
+}
 _LIMIT_FIELDS = {
     "max_context_tokens": "input",
     "context_window_tokens": "context",
@@ -92,6 +101,17 @@ def resolve_input_budget(
         "model_limit_known": inputs is not None or context is not None,
         "output_reserve": reserve if context is not None and model_override is None else None,
     }
+
+
+def default_catalog_provider(provider_type: str) -> str | None:
+    """Default catalog section for the declared-identity picker.
+
+    A hint for the UI only — alias providers never auto-map.
+    """
+    if provider_type in _CATALOG_SECTION_HINTS:
+        return _CATALOG_SECTION_HINTS[provider_type]
+    mapping = _OFFICIAL_PROVIDERS.get(provider_type)
+    return mapping[0] if mapping else None
 
 
 def catalog_identity(

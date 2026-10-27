@@ -48,24 +48,22 @@ const vietnameseUrl = Astro.site ? new URL(`/vi${englishPath === "/" ? "/" : eng
     <header class="site-header">
       <div class="site-header-inner">
         <a class="brand" href={localizedPath("/")} aria-label="CaberOS home">
-          <img src={mark.src} alt="" width="27" height="27" />
-          <span>
-            CaberOS
-            <small>local-first agents</small>
-          </span>
+          <img src={mark.src} alt="" width="26" height="26" />
+          <span>CaberOS</span>
         </a>
         <nav class="site-nav" aria-label="Main navigation">
-          <a href={`${localizedPath("/")}#product`}>Product</a>
-          <a href={`${localizedPath("/")}#security`}>Security</a>
-          <a href={localizedPath("/docs/")}>Docs</a>
-          <a href={locale === "vi" ? "/" : "/vi/"}>{locale === "vi" ? "English" : "Tiếng Việt"}</a>
-          <a href="https://github.com/cabernect/caberos">GitHub</a>
-          <button class="theme-toggle" data-theme-toggle type="button" aria-label="Switch to dark mode" aria-pressed="false">
+          <a class="nav-link" href={`${localizedPath("/")}#product`}>Product</a>
+          <a class="nav-link" href={`${localizedPath("/")}#use-cases`}>Use cases</a>
+          <a class="nav-link" href={`${localizedPath("/")}#security`}>Security</a>
+          <a class="nav-link" href={localizedPath("/docs/")}>Docs</a>
+          <span class="nav-sep" aria-hidden="true"></span>
+          <a class="nav-lang mono" href={locale === "vi" ? "/" : "/vi/"}>{locale === "vi" ? "EN" : "VI"}</a>
+          <a class="nav-icon-btn" href="https://github.com/cabernect/caberos" aria-label="GitHub repository"><Icon name="github" size={15} /></a>
+          <button class="nav-icon-btn theme-toggle" data-theme-toggle type="button" aria-label="Switch to dark mode" aria-pressed="false">
             <span class="theme-toggle-icon" data-theme-icon="sun"><Icon name="sun" size={15} /></span>
             <span class="theme-toggle-icon" data-theme-icon="moon" hidden><Icon name="moon" size={15} /></span>
-            <span data-theme-label>Light</span>
           </button>
-          <a class="nav-cta" href={localizedPath("/download/")}>{locale === "vi" ? "Tải xuống" : "Download"}</a>
+          <a class="nav-cta" href={localizedPath("/download/")}>{locale === "vi" ? "Tải xuống" : "Download"} <Icon name="download" size={14} /></a>
         </nav>
       </div>
     </header>
@@ -98,7 +96,7 @@ const vietnameseUrl = Astro.site ? new URL(`/vi${englishPath === "/" ? "/" : eng
         </div>
         <div class="footer-bottom">
           <span>MIT License · open source</span>
-          <span>{releaseTag} · macOS Apple Silicon</span>
+          <span>{releaseTag} · macOS + Windows</span>
         </div>
       </div>
     </footer>

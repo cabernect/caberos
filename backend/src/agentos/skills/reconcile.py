@@ -236,7 +236,20 @@ async def _index_agent_draft(db: AsyncSession, agent_id: str, skill_dir: Path) -
             )
         )
     ).scalar_one_or_none()
-    if existing is not None or _load_skill_from_dir(skill_dir, "agent-local") is None:
+    if existing is not None:
+        # A same-name draft can never become its own row — updates belong in
+        # the live skills/ dir (drift snapshots pin them as revisions).
+        if existing.status != "draft":
+            log.warning(
+                "skill-drafts/%s shadows %s agent-local skill '%s' — orphan dir, "
+                "delete it or merge into skills/%s",
+                name,
+                existing.status,
+                name,
+                name,
+            )
+        return None
+    if _load_skill_from_dir(skill_dir, "agent-local") is None:
         return None
     skill = Skill(
         name=name,

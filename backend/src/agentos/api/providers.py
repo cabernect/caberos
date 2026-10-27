@@ -23,7 +23,7 @@ from ..models.agent import Agent
 from ..models.operator import Operator
 from ..models.provider import Provider
 from ..notifications import create_notification
-from ..secret_store import encrypt
+from ..secret_store import decrypt, encrypt
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/providers", tags=["providers"])
@@ -50,6 +50,9 @@ class ProviderCreate(BaseModel):
     base_url: str | None = None
     org_id: str | None = None
     extra_params: dict | None = None
+    # Per-type extra credentials (azure api_version, bedrock aws_*).
+    # Encrypted at rest — secrets never belong in plaintext extra_params.
+    credentials: dict[str, str] | None = None
 
 
 class ProviderUpdate(BaseModel):
@@ -58,6 +61,8 @@ class ProviderUpdate(BaseModel):
     base_url: str | None = None
     org_id: str | None = None
     extra_params: dict | None = None
+    # Per-key merge: non-empty value sets, "" deletes, absent key unchanged.
+    credentials: dict[str, str] | None = None
 
 
 class ProviderOut(BaseModel):
@@ -69,9 +74,17 @@ class ProviderOut(BaseModel):
     org_id: str | None = None
     extra_params: dict = {}
     custom_models: list[str] = []
+    # Credential key NAMES only — values never leave the encrypted blob.
+    credential_fields: list[str] = []
 
     @classmethod
     def from_model(cls, p: Provider) -> "ProviderOut":
+        credential_fields: list[str] = []
+        if p.encrypted_credentials:
+            try:
+                credential_fields = sorted(json.loads(decrypt(p.encrypted_credentials)))
+            except Exception:
+                credential_fields = []
         return cls(
             id=p.id,
             name=p.name,
@@ -81,6 +94,7 @@ class ProviderOut(BaseModel):
             org_id=p.org_id,
             extra_params=json.loads(p.extra_params) if p.extra_params else {},
             custom_models=json.loads(p.custom_models) if p.custom_models else [],
+            credential_fields=credential_fields,
         )
 
 
@@ -104,6 +118,11 @@ class ModelInfo(BaseModel):
     discovery_error: str | None = None
     stale: bool | None = None
     last_confirmed_at: str | None = None
+    # Declared catalog identity (user-set mapping for alias providers like
+    # azure deployments) — ids only when explicitly mapped.
+    catalog_provider_id: str | None = None
+    catalog_model_id: str | None = None
+    catalog_mapping_explicit: bool = False
 
 
 @router.get("")
@@ -121,11 +140,13 @@ async def create_provider(
     operator: Operator = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ) -> ProviderOut:
+    credentials = {k: v for k, v in (data.credentials or {}).items() if v}
     provider = Provider(
         id=str(uuid.uuid4()),
         name=data.name,
         type=data.type,
         encrypted_key=encrypt(data.api_key) if data.api_key else None,
+        encrypted_credentials=encrypt(json.dumps(credentials)) if credentials else None,
         base_url=data.base_url,
         org_id=data.org_id,
         extra_params=json.dumps(data.extra_params or {}),
@@ -174,6 +195,21 @@ async def update_provider(
         provider.org_id = data.org_id
     if data.extra_params is not None:
         provider.extra_params = json.dumps(data.extra_params)
+    if data.credentials is not None:
+        # Per-key merge — blank edit fields keep the stored value, an
+        # explicit "" deletes the key, absent keys are untouched.
+        creds: dict[str, str] = {}
+        if provider.encrypted_credentials:
+            try:
+                creds = json.loads(decrypt(provider.encrypted_credentials))
+            except Exception:
+                creds = {}
+        for k, v in data.credentials.items():
+            if v:
+                creds[k] = v
+            else:
+                creds.pop(k, None)
+        provider.encrypted_credentials = encrypt(json.dumps(creds)) if creds else None
 
     await db.commit()
     await db.refresh(provider)
@@ -279,6 +315,13 @@ async def list_models(
                 last_confirmed_at=(
                     offering.discovered_at.isoformat() if offering.discovered_at else None
                 ),
+                catalog_provider_id=(
+                    offering.catalog_provider_id if offering.catalog_mapping_explicit else None
+                ),
+                catalog_model_id=(
+                    offering.catalog_model_id if offering.catalog_mapping_explicit else None
+                ),
+                catalog_mapping_explicit=bool(offering.catalog_mapping_explicit),
             )
         )
     for name in custom:
@@ -305,6 +348,54 @@ async def list_models(
         "fetched_at": fetched_at,
         "snapshot_revision": snapshot_sha,
         "refresh_in_progress": provider_refresh_in_progress(provider_id),
+    }
+
+
+@router.get("/{provider_id}/catalog-models")
+async def list_catalog_models(
+    provider_id: str,
+    catalog_provider: str | None = None,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Candidate catalog identities for declaring an offering's mapping.
+
+    Alias providers (azure deployments, bedrock inference profiles) carry
+    operator-chosen names, never model ids — the operator declares which
+    catalog model the name actually serves. Local snapshot read only.
+    """
+    from ..providers.catalog import get_catalog_snapshot
+    from ..providers.catalog_policy import default_catalog_provider, project_model
+
+    result = await db.execute(select(Provider).where(Provider.id == provider_id))
+    provider = result.scalar_one_or_none()
+    if provider is None:
+        raise HTTPException(status_code=404, detail="Provider not found")
+
+    snapshot = get_catalog_snapshot()
+    providers = [
+        {"id": pid, "name": info["name"], "models": info["models"]}
+        for pid, info in sorted(snapshot.providers().items())
+    ]
+    selected = catalog_provider or default_catalog_provider(provider.type)
+    models = []
+    if selected:
+        for mid, raw in snapshot.models(selected).items():
+            projected = project_model(raw)
+            models.append(
+                {
+                    "id": mid,
+                    "name": projected.get("display_name") or mid,
+                    "context_window_tokens": projected.get("context_window_tokens"),
+                    "supports_thinking": projected.get("supports_thinking"),
+                    "supports_vision": projected.get("supports_vision"),
+                }
+            )
+        models.sort(key=lambda m: m["id"])
+    return {
+        "catalog_provider_id": selected,
+        "providers": providers,
+        "models": models,
     }
 
 

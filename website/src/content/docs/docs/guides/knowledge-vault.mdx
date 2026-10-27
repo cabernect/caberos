@@ -143,11 +143,11 @@ To keep retrieved document content on the machine, use a compatible local model 
 
 ### Unsupported document format
 
-Convert the source to Markdown, text, PDF with a text layer, DOCX, or XLSX.
+Convert the source to Markdown, text, PDF with a text layer, or DOCX. Tabular files (`.xlsx`, `.xls`, `.csv`) are refused at ingest — they wait for the row-query layer.
 
 ### Upload rejected
 
-Check that the filename is a simple filename, the extension is supported, and the file is no larger than 25 MB.
+Check that the filename is a simple filename, the extension is supported, and the file is no larger than 250 MB.
 
 ### PDF results are empty
 

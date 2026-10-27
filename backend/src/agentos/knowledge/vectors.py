@@ -28,14 +28,17 @@ _SCOPE_SQL = """
     (d.agent_id IS NULL OR d.agent_id = :agent_id)
 """
 
-_CANDIDATE_SQL = f"""
+
+def _candidate_sql(all_scopes: bool) -> str:
+    scope = "" if all_scopes else f"AND {_SCOPE_SQL}"
+    return f"""
     SELECT ce.chunk_id, ce.vector
     FROM chunk_embeddings ce
     JOIN document_chunks dc ON dc.id = ce.chunk_id
     JOIN documents d ON d.id = dc.document_id
     WHERE ce.generation_id = :generation_id
       AND dc.kind != 'parent'
-      AND {_SCOPE_SQL}
+      {scope}
 """
 
 
@@ -96,12 +99,13 @@ class PythonVectorAdapter:
         query_vector: bytes,
         agent_id: str | None,
         k: int,
+        all_scopes: bool = False,
     ) -> list[tuple[str, float]]:
         query = unpack_f32(query_vector)
         top: list[tuple[float, str]] = []
         scanned = 0
         stream = await db.stream(
-            text(_CANDIDATE_SQL),
+            text(_candidate_sql(all_scopes)),
             {"generation_id": generation_id, "agent_id": agent_id},
         )
         async for row in stream:
@@ -126,12 +130,14 @@ class SqliteVecAdapter:
         query_vector: bytes,
         agent_id: str | None,
         k: int,
+        all_scopes: bool = False,
     ) -> list[tuple[str, float]]:
         # vec_* functions exist only where the extension was loaded — it is
         # per-connection, so ensure it on this session's connection. Loading is
         # idempotent; if it fails the caller degrades via EmbeddingUnavailable.
         if not await sqlite_vec_available(db):
             raise RuntimeError("sqlite-vec extension unavailable")
+        scope = "" if all_scopes else f"AND {_SCOPE_SQL}"
         result = await db.execute(
             text(
                 f"""
@@ -141,7 +147,7 @@ class SqliteVecAdapter:
                 JOIN documents d ON d.id = dc.document_id
                 WHERE ce.generation_id = :generation_id
                   AND dc.kind != 'parent'
-                  AND {_SCOPE_SQL}
+                  {scope}
                 ORDER BY vec_distance_cosine(ce.vector, :query) ASC
                 LIMIT :k
                 """

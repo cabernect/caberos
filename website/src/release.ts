@@ -23,4 +23,5 @@ if (typeof manifest.version !== "string" || manifest.version.length === 0) {
 export const releaseVersion = manifest.version;
 export const releaseTag = `v${releaseVersion}`;
 export const releaseUrl = `https://github.com/cabernect/caberos/releases/tag/${releaseTag}`;
-export const downloadUrl = `https://github.com/cabernect/caberos/releases/download/${releaseTag}/CaberOS_${releaseVersion}_arm64.dmg`;
+export const macDownloadUrl = `https://github.com/cabernect/caberos/releases/download/${releaseTag}/CaberOS_${releaseVersion}_arm64.dmg`;
+export const windowsDownloadUrl = `https://github.com/cabernect/caberos/releases/download/${releaseTag}/CaberOS_${releaseVersion}_x64-setup.exe`;

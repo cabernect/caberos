@@ -270,8 +270,8 @@ async def publish(
     """Publish a draft or snapshot an agent-local working copy.
 
     source dir: draft → workspace skill-drafts dir; published agent-local →
-    live workspace dir (snapshot). Publishing to agent-local also syncs the
-    content into the live workspace dir so it goes live immediately.
+    live workspace dir (snapshot). Publishing to agent-local also syncs
+    the content into the live workspace dir so it goes live immediately.
     """
     if scope not in ("global", "agent-local"):
         raise SkillError("publish scope must be 'global' or 'agent-local'")

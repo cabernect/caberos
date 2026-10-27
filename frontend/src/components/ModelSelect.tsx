@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useId } from "react";
 import { ChevronDown, Check, Search } from "lucide-react";
 import type { ModelInfo } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 interface ModelSelectProps {
   value: string;
@@ -12,7 +13,12 @@ interface ModelSelectProps {
 }
 
 /**
- * Searchable model dropdown.
+ * Form-field model select — a single-provider dropdown for settings forms
+ * (agent Settings, Create Agent). Accepts free-text model names for
+ * providers without discovery.
+ *
+ * Not the same component as `ModelPicker` — that one is the composer's
+ * cross-provider session override with capability metadata.
  *
  * - When models are discovered, shows a filterable list.
  * - Always allows typing a custom model name (for providers without discovery).
@@ -103,45 +109,35 @@ export function ModelSelect({
         type="button"
         disabled={disabled}
         onClick={() => setOpen(!open)}
-        className="flex w-full items-center justify-between gap-2 rounded-[5px] border px-3 py-2 text-[13px] text-[var(--ink)] outline-none transition"
-        style={{
-          borderColor: "var(--border)",
-          background: "var(--surface)",
-          cursor: disabled ? "not-allowed" : "pointer",
-          opacity: disabled ? 0.5 : 1,
-        }}
+        className={cn(
+          "flex w-full items-center justify-between gap-2 rounded-md border px-3 py-2 text-[13px] outline-none transition",
+          open ? "border-accent" : "border-line",
+          disabled && "cursor-not-allowed opacity-50",
+        )}
+        style={{ background: "var(--ground)" }}
       >
         <span
-          className={value ? "text-[var(--ink)]" : "text-[var(--ink-3)]"}
-          style={{
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
+          className={cn(
+            "overflow-hidden text-ellipsis whitespace-nowrap",
+            value ? "text-ink" : "text-ink-3",
+          )}
         >
           {loading ? "Loading…" : value || placeholder}
         </span>
         <ChevronDown
-          className="h-4 w-4 shrink-0 text-[var(--ink-3)]"
-          style={{ transform: showDropdown ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}
+          className={cn(
+            "h-4 w-4 shrink-0 text-ink-3 transition-transform",
+            showDropdown && "rotate-180",
+          )}
         />
       </button>
 
       {/* Dropdown */}
       {showDropdown && (
-        <div
-          className="absolute z-50 mt-1 w-full overflow-hidden rounded-[5px] border shadow-lg"
-          style={{
-            background: "var(--white)",
-            borderColor: "var(--border)",
-          }}
-        >
+        <div className="absolute z-50 mt-1 w-full overflow-hidden rounded-lg border border-line bg-surface shadow-lg">
           {/* Search input */}
-          <div
-            className="flex items-center gap-2 border-b px-3 py-2"
-            style={{ borderColor: "var(--border)" }}
-          >
-            <Search className="h-3.5 w-3.5 shrink-0 text-[var(--ink-3)]" />
+          <div className="flex items-center gap-2 border-b border-line px-3 py-2">
+            <Search className="h-3.5 w-3.5 shrink-0 text-ink-3" />
             <input
               ref={inputRef}
               value={query}
@@ -153,25 +149,21 @@ export function ModelSelect({
               }}
               onKeyDown={handleKeyDown}
               placeholder="Search or type…"
-              className="w-full bg-transparent text-[13px] text-[var(--ink)] outline-none"
+              className="w-full bg-transparent text-[13px] text-ink outline-none placeholder:text-ink-3"
               aria-controls={listId}
               aria-autocomplete="list"
             />
           </div>
 
           {/* Model list */}
-          <div
-            id={listId}
-            className="max-h-[200px] overflow-y-auto"
-            role="listbox"
-          >
+          <div id={listId} className="max-h-[200px] overflow-y-auto" role="listbox">
             {filtered.length === 0 && !hasModels && (
-              <div className="px-3 py-3 text-[12px] text-[var(--ink-3)]">
+              <div className="px-3 py-3 text-[12px] text-ink-3">
                 No models discovered. Type a model name above and press Enter.
               </div>
             )}
             {filtered.length === 0 && hasModels && (
-              <div className="px-3 py-3 text-[12px] text-[var(--ink-3)]">
+              <div className="px-3 py-3 text-[12px] text-ink-3">
                 No matches. Press Enter to use "{query}" as a custom model.
               </div>
             )}
@@ -183,19 +175,16 @@ export function ModelSelect({
                 aria-selected={m.name === value}
                 onClick={() => selectModel(m.name)}
                 onMouseEnter={() => setHighlighted(i)}
-                className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-[13px] transition"
-                style={{
-                  background:
-                    i === highlighted ? "var(--surface)" : "transparent",
-                  color: "var(--ink)",
-                  cursor: "pointer",
-                }}
+                className={cn(
+                  "flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-[13px] text-ink transition",
+                  i === highlighted && "bg-ground",
+                )}
               >
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <span className="overflow-hidden text-ellipsis whitespace-nowrap">
                   {m.name}
                 </span>
                 {m.name === value && (
-                  <Check className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
+                  <Check className="h-3.5 w-3.5 shrink-0 text-accent" />
                 )}
               </button>
             ))}
@@ -203,10 +192,7 @@ export function ModelSelect({
 
           {/* Footer hint */}
           {hasModels && (
-            <div
-              className="border-t px-3 py-1.5 text-[11px] text-[var(--ink-3)]"
-              style={{ borderColor: "var(--border)" }}
-            >
+            <div className="border-t border-line px-3 py-1.5 text-[11px] text-ink-3">
               {filtered.length} of {models.length} models
             </div>
           )}

@@ -53,6 +53,36 @@ async def test_knowledge_api_uploads_lists_searches_and_deletes(client):
 
 
 @pytest.mark.asyncio
+async def test_overview_search_covers_all_scopes_while_scope_search_isolates(client, db):
+    from agentos.models.agent import Agent
+
+    db.add(Agent(id="agent-1", name="Caber", enabled=True))
+    await db.commit()
+
+    shared = await client.post(
+        "/api/knowledge/documents/upload",
+        files={"file": ("guide.md", b"Bearer tokens are persisted.", "text/markdown")},
+    )
+    private = await client.post(
+        "/api/knowledge/scopes/agent-1/documents/upload",
+        files={"file": ("notes.md", b"Bearer tokens rotate hourly.", "text/markdown")},
+    )
+    assert shared.status_code == 200
+    assert private.status_code == 200
+
+    overview = await client.post("/api/knowledge/search", json={"query": "Bearer tokens"})
+    assert overview.status_code == 200
+    by_doc = {r["document_id"]: r for r in overview.json()["results"]}
+    assert by_doc[shared.json()["id"]]["agent_id"] is None
+    assert by_doc[private.json()["id"]]["agent_id"] == "agent-1"
+
+    scoped = await client.post(
+        "/api/knowledge/scopes/shared/search", json={"query": "Bearer tokens"}
+    )
+    assert [r["document_id"] for r in scoped.json()["results"]] == [shared.json()["id"]]
+
+
+@pytest.mark.asyncio
 async def test_knowledge_api_rejects_unknown_scope(client):
     response = await client.get("/api/knowledge/scopes/not-an-agent/documents")
 

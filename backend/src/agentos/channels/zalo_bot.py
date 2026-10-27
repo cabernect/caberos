@@ -256,6 +256,12 @@ class ZaloBotChannel(Channel):
             inbound = await self.receive(update)
             if inbound is None:
                 return
+            if not self.chat_allowed(inbound.external_user_id):
+                log.info(
+                    "Zalo Bot: dropping message from %s — not in allowed chat IDs",
+                    inbound.external_user_id,
+                )
+                return
 
             log.info(
                 "Zalo Bot: processing update from %s: %s",

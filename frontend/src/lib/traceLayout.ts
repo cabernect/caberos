@@ -15,7 +15,27 @@ export interface TraceRow {
   adjusted: boolean;
   leftPercent: number | null;
   widthPercent: number | null;
+  /** Synthetic rows only — set when "group repeated calls" folds a run of
+   * identical sibling spans into one row. */
+  group?: TraceRow[];
+  groupLabel?: string;
+  groupKey?: string;
+  /** Recorded after the run's completed_at — session-close maintenance is
+   * deliberately ledgered to the last run. Kept in the trace but never
+   * placed on the run's time axis. */
+  outsideWindow?: boolean;
+  /** Synthetic section row collecting every outside-window root so
+   * housekeeping sits collapsed at the foot of the waterfall instead of
+   * mingling with in-run work. */
+  postRun?: boolean;
+  /** Total records inside a post-run section, including nested. */
+  postRunCount?: number;
 }
+
+/** Post-run ledgered work (session-close summary/extraction stamps the last
+ * run's id) lands outside the recorded window. A short grace keeps boundary
+ * records — notifications emitted at completion — placed at the edge. */
+const RUN_EDGE_GRACE_MS = 750;
 
 type RunTiming = Pick<RunDetail, "started_at" | "completed_at">;
 
@@ -111,6 +131,52 @@ export function buildTraceLayout(events: TimelineEvent[], run?: RunTiming) {
     }
     if (!cyclic) row.parentId = parent;
   }
+
+  // Post-run maintenance is ledgered to the run but recorded after its
+  // window closed. Mark it now, then re-parent each outside-window root
+  // under one synthetic section appended last — the waterfall stays the
+  // run's own work, and housekeeping stays inspectable one level down.
+  for (const row of byId.values()) {
+    if (
+      row.event !== null &&
+      end !== null &&
+      row.startMs !== null &&
+      row.startMs > end + RUN_EDGE_GRACE_MS
+    ) {
+      row.outsideWindow = true;
+    }
+  }
+  const postRunRoots = [...byId.values()].filter((row) => {
+    if (!row.outsideWindow) return false;
+    let ancestor = row.parentId;
+    while (ancestor && ancestor !== rootId) {
+      if (byId.get(ancestor)?.outsideWindow) return false;
+      ancestor = byId.get(ancestor)?.parentId ?? null;
+    }
+    return true;
+  });
+  if (postRunRoots.length > 0) {
+    let sectionId = "trace-post-run";
+    while (byId.has(sectionId)) sectionId = `_${sectionId}`;
+    const postRunCount = [...byId.values()].filter((r) => r.outsideWindow).length;
+    byId.set(sectionId, {
+      id: sectionId,
+      event: null,
+      parentId: rootId,
+      depth: 1,
+      children: [],
+      startMs: null,
+      endMs: null,
+      durationMs: null,
+      timing: "unknown",
+      adjusted: false,
+      leftPercent: null,
+      widthPercent: null,
+      postRun: true,
+      postRunCount,
+    });
+    for (const row of postRunRoots) row.parentId = sectionId;
+  }
   for (const row of byId.values()) {
     if (row.parentId) byId.get(row.parentId)!.children.push(row.id);
   }
@@ -126,11 +192,17 @@ export function buildTraceLayout(events: TimelineEvent[], run?: RunTiming) {
   const knownStarts = rows.flatMap((row) => row.startMs === null ? [] : [row.startMs]);
   const originMs = start ?? (knownStarts.length ? Math.min(...knownStarts) : null);
   const knownEnds = rows.flatMap((row) => row.endMs === null ? [] : [row.endMs]);
-  const extentMs = originMs !== null && knownEnds.length
-    ? Math.max(originMs, ...knownEnds) - originMs
+  // When the run window is recorded it IS the axis — ledgered post-run work
+  // must not stretch it. Only an open-ended run falls back to event spread.
+  const extentMs = originMs !== null
+    ? end !== null
+      ? end - originMs
+      : knownEnds.length
+        ? Math.max(originMs, ...knownEnds) - originMs
+        : 0
     : 0;
   for (const row of rows) {
-    if (originMs === null || row.startMs === null) continue;
+    if (originMs === null || row.startMs === null || row.outsideWindow) continue;
     const visualExtent = extentMs || 1;
     row.leftPercent = Math.max(0, Math.min(100,
       (row.startMs - originMs) / visualExtent * 100));

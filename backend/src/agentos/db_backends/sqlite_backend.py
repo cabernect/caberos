@@ -197,6 +197,7 @@ class SQLiteBackend(DatabaseBackend):
         patches = [
             ("messages", "attachments", "TEXT"),
             ("providers", "custom_models", "TEXT NOT NULL DEFAULT '[]'"),
+            ("providers", "encrypted_credentials", "TEXT"),
             ("messages", "subagent_id", "VARCHAR(36)"),
             ("run_sources", "message_id", "VARCHAR(36)"),
             ("memory_entries", "run_id", "VARCHAR(36)"),

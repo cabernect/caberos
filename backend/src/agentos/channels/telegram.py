@@ -213,6 +213,12 @@ class TelegramChannel(Channel):
             inbound = await self.receive(update)
             if inbound is None:
                 return
+            if not self.chat_allowed(inbound.external_user_id):
+                log.info(
+                    "Telegram: dropping message from %s — not in allowed chat IDs",
+                    inbound.external_user_id,
+                )
+                return
 
             # Send typing indicator
             await self.send_typing(inbound.external_user_id)

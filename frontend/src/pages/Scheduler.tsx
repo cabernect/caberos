@@ -1,21 +1,30 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  CalendarClock,
   Play,
-  AlertCircle,
   X,
   Clock,
   Plus,
   Copy,
-  Trash2,
   History,
-  FlaskConical,
   Pencil,
+  Archive,
+  Trash2,
+  RotateCcw,
   HeartPulse,
 } from "lucide-react";
-import { DashboardSidebar, type NavKey } from "@/components/DashboardSidebar";
-import { PageHeader } from "@/components/PageHeader";
+import { DashboardSidebar, NAV_ROUTES, type NavKey } from "@/components/DashboardSidebar";
+import { PageIntro } from "@/components/guidance/PageIntro";
+import { INTRO_BY_KEY } from "@/components/guidance/tourStops";
+import { PageHeader } from "@/components/ui/page-header";
+import { FilterPills } from "@/components/ui/filter-pills";
+import { IconTile } from "@/components/ui/icon-tile";
+import { EmptyState } from "@/components/ui/empty-state";
+import { WarningBanner } from "@/components/ui/warning-banner";
+import { Button } from "@/components/ui/button";
+import { Toggle } from "@/components/ui/toggle";
+import { Select } from "@/components/ui/select";
+import { useConfirm } from "@/lib/confirmHook";
 import { api } from "@/lib/api";
 import type {
   Agent,
@@ -27,23 +36,6 @@ import type {
   SchedulerAlert,
 } from "@/lib/types";
 
-const inputStyle: React.CSSProperties = {
-  borderColor: "var(--border)",
-  background: "var(--surface)",
-  color: "var(--ink)",
-};
-
-const labelStyle: React.CSSProperties = {
-  color: "var(--ink-3)",
-};
-
-const actionBtn: React.CSSProperties = {
-  border: "1px solid var(--border)",
-  background: "var(--white)",
-  color: "var(--ink-2)",
-  cursor: "pointer",
-};
-
 const TIMEZONES: string[] = (() => {
   try {
     return Intl.supportedValuesOf("timeZone");
@@ -53,6 +45,37 @@ const TIMEZONES: string[] = (() => {
 })();
 
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+const SETUP_IDEAS = [
+  { label: "Today's news", prompt: "Summarize today's top news headlines" },
+  { label: "Calendar", prompt: "Tell me what's next on my calendar" },
+  { label: "Daily brief", prompt: "Give me a daily brief: calendar, inbox highlights, and anything urgent" },
+];
+
+const INTERVAL_PRESETS = [
+  { label: "15 min", minutes: 15 },
+  { label: "30 min", minutes: 30 },
+  { label: "Every hour", minutes: 60 },
+  { label: "6 hours", minutes: 360 },
+  { label: "Daily", minutes: 1440 },
+];
+
+/** Theoretical daily ceiling: enabled heartbeats × runs/day × per-run cap. */
+function maxDailyHeartbeatSpend(hbs: HeartbeatStatus[]): number {
+  return hbs
+    .filter((h) => h.enabled && h.interval_minutes > 0)
+    .reduce((sum, h) => sum + (1440 / h.interval_minutes) * h.max_cost_per_heartbeat, 0);
+}
+
+function shortWhen(iso: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  const today = new Date();
+  const sameDay = d.toDateString() === today.toDateString();
+  return sameDay
+    ? d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+    : d.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
 
 function triggerSummary(t: ScheduleTrigger | null): string {
   if (!t) return "—";
@@ -107,6 +130,8 @@ export function Scheduler() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mode, setMode] = useState<"schedules" | "heartbeat">("schedules");
   const [schedules, setSchedules] = useState<Schedule[]>([]);
+  const [archived, setArchived] = useState<Schedule[]>([]);
+  const [showArchived, setShowArchived] = useState(false);
   const [heartbeats, setHeartbeats] = useState<HeartbeatStatus[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [alerts, setAlerts] = useState<SchedulerAlert[]>([]);
@@ -115,18 +140,25 @@ export function Scheduler() {
   const [runError, setRunError] = useState<string | null>(null);
   const [editing, setEditing] = useState<Schedule | "new" | null>(null);
   const [historyFor, setHistoryFor] = useState<string | null>(null);
+  const [setupFor, setSetupFor] = useState<string | null>(null);
+  const [setupBulk, setSetupBulk] = useState(false);
+  const { confirm } = useConfirm();
   const navigate = useNavigate();
 
   const fetchData = useCallback(async () => {
     // Independent fetches — one failing endpoint must not blank the page
     // (e.g. an older gateway without /api/schedules still shows heartbeats).
-    const [scheds, hbs, alts, agts] = await Promise.all([
+    const [scheds, arch, hbs, alts, agts] = await Promise.all([
       api.listSchedules().catch(() => null),
+      api.listSchedules(true).catch(() => null),
       api.listHeartbeats().catch(() => null),
       api.listSchedulerAlerts().catch(() => null),
       api.listAgents().catch(() => null),
     ]);
     if (scheds) setSchedules(scheds);
+    // Managed heartbeat rows belong to the Heartbeat tab even when archived —
+    // an older gateway may ignore ?archived=true and hand back the full list.
+    if (arch) setArchived(arch.filter((s) => !s.managed));
     if (hbs) setHeartbeats(hbs);
     if (alts) setAlerts(alts);
     if (agts) setAgents(agts);
@@ -147,15 +179,7 @@ export function Scheduler() {
   };
 
   const handleNavigate = (page: NavKey) => {
-    if (page === "agents") navigate("/agents");
-    if (page === "settings") navigate("/settings");
-    if (page === "vault") navigate("/vault");
-    if (page === "skills") navigate("/skills");
-    if (page === "scheduler") return;
-    if (page === "mcps") navigate("/mcps");
-    if (page === "channels") navigate("/channels");
-    if (page === "observability") navigate("/observability");
-    if (page === "traces") navigate("/traces");
+    navigate(NAV_ROUTES[page]);
   };
 
   const handleToggle = async (sched: Schedule) => {
@@ -187,52 +211,44 @@ export function Scheduler() {
     }
   };
 
-  const handleHbFieldChange = (
-    agentId: string,
-    field: keyof HeartbeatStatus,
-    value: string | number,
-  ) => {
-    setHeartbeats((prev) =>
-      prev.map((h) => (h.agent_id === agentId ? { ...h, [field]: value } : h)),
+  // Row toggle — a heartbeat can't run without a prompt, so enabling an
+  // unconfigured one opens the setup panel instead of a silent no-op.
+  const handleHbRowToggle = (hb: HeartbeatStatus) => {
+    if (!hb.enabled && !hb.task_prompt.trim()) {
+      setSetupFor(hb.agent_id);
+      return;
+    }
+    handleHbToggle(hb);
+  };
+
+  const handleSetupSeveral = () => {
+    const first = heartbeats.find((h) => !h.task_prompt.trim());
+    if (first) {
+      setSetupBulk(true);
+      setSetupFor(first.agent_id);
+    }
+  };
+
+  // After a bulk-mode save, advance to the next agent that still has no
+  // prompt; otherwise close the panel.
+  const handleSetupSaved = (savedId: string) => {
+    fetchData();
+    if (!setupBulk) {
+      setSetupFor(null);
+      return;
+    }
+    const next = heartbeats.find(
+      (h) => h.agent_id !== savedId && !h.task_prompt.trim(),
     );
+    setSetupFor(next ? next.agent_id : null);
+    setSetupBulk(next != null);
   };
 
-  const handleHbFieldSave = async (
-    agentId: string,
-    field: "interval_minutes" | "task_prompt" | "max_cost_per_heartbeat" | "consecutive_failure_threshold",
-    value: string | number,
-  ) => {
-    const numFields = ["interval_minutes", "max_cost_per_heartbeat", "consecutive_failure_threshold"];
-    const payload: Record<string, string | number | boolean> = { [field]: value };
-    if (numFields.includes(field)) payload[field] = Number(value);
-    try {
-      await api.updateHeartbeat(agentId, payload);
-      fetchData();
-    } catch (e) {
-      setRunError(e instanceof Error ? e.message : "Save failed");
-      fetchData();
-    }
-  };
-
-  const handleHbFire = async (agentId: string) => {
-    setFiring(agentId);
-    setRunError(null);
-    try {
-      const r = await api.fireHeartbeat(agentId);
-      if (r.error) setRunError(r.error);
-      fetchData();
-    } catch (e) {
-      setRunError(e instanceof Error ? e.message : "Run failed");
-    } finally {
-      setFiring(null);
-    }
-  };
-
-  const handleRun = async (id: string, test = false) => {
+  const handleRun = async (id: string) => {
     setFiring(id);
     setRunError(null);
     try {
-      const r = test ? await api.testRunSchedule(id) : await api.runScheduleNow(id);
+      const r = await api.runScheduleNow(id);
       if (r.error) setRunError(r.error);
       fetchData();
     } catch (e) {
@@ -251,12 +267,45 @@ export function Scheduler() {
     }
   };
 
-  const handleDelete = async (id: string) => {
+  const handleDelete = async (sched: Schedule) => {
+    const ok = await confirm({
+      title: `Archive "${sched.name}"?`,
+      message:
+        "The schedule stops firing and leaves the list. Its revision and occurrence history stay in the database.",
+      confirmLabel: "Archive",
+    });
+    if (!ok) return;
     try {
-      await api.deleteSchedule(id);
+      await api.deleteSchedule(sched.id);
       fetchData();
     } catch (e) {
       setRunError(e instanceof Error ? e.message : "Archive failed");
+    }
+  };
+
+  const handleUnarchive = async (sched: Schedule) => {
+    try {
+      await api.unarchiveSchedule(sched.id);
+      fetchData();
+    } catch (e) {
+      setRunError(e instanceof Error ? e.message : "Restore failed");
+    }
+  };
+
+  const handlePurge = async (sched: Schedule) => {
+    const ok = await confirm({
+      title: `Delete "${sched.name}" permanently?`,
+      message:
+        "Removes the schedule, its revisions, and its occurrence history. This cannot be undone.",
+      confirmLabel: "Delete permanently",
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await api.deleteSchedule(sched.id, true);
+      fetchData();
+    } catch (e) {
+      setRunError(e instanceof Error ? e.message : "Delete failed");
     }
   };
 
@@ -277,7 +326,7 @@ export function Scheduler() {
   );
 
   return (
-    <div className="flex h-screen overflow-hidden" style={{ background: "var(--surface)" }}>
+    <div className="flex h-screen overflow-hidden bg-ground">
       <DashboardSidebar
         active="scheduler"
         onNavigate={handleNavigate}
@@ -288,151 +337,175 @@ export function Scheduler() {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <PageHeader
-          icon={CalendarClock}
+          breadcrumbs={[{ label: "Workspace" }, { label: "Scheduler" }]}
           title="Scheduler"
-          description="Autonomous runs for your agents — heartbeat pulse, one-time, interval, or cron"
-        >
-          <button
-            onClick={() => setEditing("new")}
-            className="ml-auto flex items-center gap-1.5 rounded-[6px] px-3 py-2 text-[13px] font-medium transition"
-            style={{
-              background: "var(--ink)",
-              color: "var(--white)",
-              border: "1px solid var(--ink)",
-              cursor: "pointer",
-            }}
-          >
-            <Plus className="h-4 w-4" />
-            New schedule
-          </button>
-        </PageHeader>
+          subtitle="Autonomous runs for your agents — each run is its own session with its own history."
+          actions={
+            <Button onClick={() => setEditing("new")}><Plus />New schedule</Button>
+          }
+        />
 
-        {/* Surface tabs — heartbeat is its own surface, not a schedule kind */}
-        <div className="flex gap-1 px-8 pt-4" style={{ borderBottom: "1px solid var(--border)" }}>
-          {(
-            [
-              ["schedules", "Schedules", Clock],
-              ["heartbeat", "Heartbeat", HeartPulse],
-            ] as const
-          ).map(([key, label, Icon]) => {
-            const active = mode === key;
-            return (
-              <button
-                key={key}
-                onClick={() => setMode(key)}
-                className="flex items-center gap-1.5 px-3 py-2 text-[13px] font-medium transition"
-                style={{
-                  borderBottom: active ? "2px solid var(--accent)" : "2px solid transparent",
-                  color: active ? "var(--accent)" : "var(--ink-2)",
-                  cursor: "pointer",
-                  background: "none",
-                  borderTop: "none",
-                  borderLeft: "none",
-                  borderRight: "none",
-                }}
-              >
-                <Icon className="h-3.5 w-3.5" />
-                {label}
-              </button>
-            );
-          })}
+        <div className="px-8 pt-4">
+          <PageIntro def={INTRO_BY_KEY.scheduler} />
+        </div>
+
+        <div className="px-8 pb-3">
+          <FilterPills
+            pills={[
+              { key: "schedules", label: "Schedules", count: sorted.length },
+              { key: "heartbeat", label: "Heartbeat", count: heartbeats.length },
+            ]}
+            active={mode}
+            onChange={(k) => setMode(k as "schedules" | "heartbeat")}
+            variant="segmented"
+          />
         </div>
 
         {/* Run/action errors (e.g. "Schedule has no task prompt") */}
         {runError && (
-          <div className="mx-8 mt-4 flex items-center gap-3 rounded-[6px] border px-4 py-2.5" style={{ borderColor: "var(--danger)", background: "var(--surface)" }}>
-            <AlertCircle className="h-4 w-4 shrink-0" style={{ color: "var(--danger)" }} />
-            <span className="flex-1 text-[12px]" style={{ color: "var(--ink)" }}>{runError}</span>
-            <button onClick={() => setRunError(null)} className="rounded-[4px] p-1" style={{ border: "none", background: "none", cursor: "pointer" }}>
-              <X className="h-3.5 w-3.5" style={{ color: "var(--ink-2)" }} />
-            </button>
+          <div className="px-8 pb-3">
+            <WarningBanner
+              tone="danger"
+              action={
+                <button onClick={() => setRunError(null)} className="text-danger/70 hover:text-danger" aria-label="Dismiss">
+                  <X className="h-4 w-4" />
+                </button>
+              }
+            >
+              {runError}
+            </WarningBanner>
           </div>
         )}
 
         {/* Alerts */}
         {alerts.length > 0 && (
-          <div className="mx-8 mt-4 space-y-2">
+          <div className="space-y-2 px-8 pb-3">
             {alerts.map((alert, i) => (
-              <div
+              <WarningBanner
                 key={`${alert.agent_id}-${i}`}
-                className="flex items-center gap-3 rounded-[6px] border px-4 py-3"
-                style={{ borderColor: "var(--danger)", background: "var(--surface)" }}
+                tone="danger"
+                title={`${alert.agent_name} — failed ${alert.consecutive_failures} times (threshold: ${alert.threshold})`}
+                action={
+                  <button
+                    onClick={() => handleClearAlert(alert.agent_id)}
+                    className="text-danger/70 hover:text-danger"
+                    aria-label="Clear alert"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                }
               >
-                <AlertCircle className="h-4 w-4 shrink-0" style={{ color: "var(--danger)" }} />
-                <div className="flex-1">
-                  <span className="text-[13px] font-medium" style={{ color: "var(--ink)" }}>
-                    {alert.agent_name}
-                  </span>
-                  <span className="text-[12px]" style={{ color: "var(--ink-2)" }}>
-                    {" "}
-                    — failed {alert.consecutive_failures} times (threshold: {alert.threshold})
-                  </span>
-                  {alert.last_error && (
-                    <p className="mt-0.5 font-mono text-[11px]" style={{ color: "var(--ink-3)" }}>
-                      {alert.last_error.substring(0, 120)}
-                    </p>
-                  )}
-                </div>
-                <button
-                  onClick={() => handleClearAlert(alert.agent_id)}
-                  className="rounded-[4px] p-1 transition hover:bg-[var(--surface)]"
-                  style={{ border: "1px solid var(--border)", cursor: "pointer" }}
-                >
-                  <X className="h-3.5 w-3.5" style={{ color: "var(--ink-2)" }} />
-                </button>
-              </div>
+                {alert.last_error ? alert.last_error.substring(0, 120) : "No error detail recorded."}
+              </WarningBanner>
             ))}
           </div>
         )}
 
         {/* Schedule list — user-created schedules only */}
         {mode === "schedules" && (
-        <div className="flex-1 overflow-y-auto px-8 py-6">
+        <div className="flex-1 overflow-y-auto px-8 py-4">
           {loading ? (
-            <div className="flex h-full items-center justify-center">
-              <p className="text-[14px] text-[var(--ink-3)]">Loading…</p>
+            <p className="py-20 text-center text-[14px] text-ink-faint">Loading…</p>
+          ) : showArchived ? (
+            <div className="mx-auto max-w-5xl">
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-[12px] text-ink-3">
+                  Archived schedules — restore one (it comes back paused) or delete it for good.
+                </p>
+                <button
+                  onClick={() => setShowArchived(false)}
+                  className="text-[12px] font-medium text-accent hover:underline"
+                >
+                  ← Back to schedules
+                </button>
+              </div>
+              {archived.length === 0 ? (
+                <EmptyState icon={Archive} title="Nothing archived">
+                  Archived schedules keep their revision and occurrence history in the database — you can restore them here later.
+                </EmptyState>
+              ) : (
+                <div className="overflow-hidden rounded-xl border border-line bg-surface">
+                  <div className="grid grid-cols-[minmax(0,1.6fr)_minmax(0,3fr)_110px_120px_180px] items-center gap-3 border-b border-line px-5 py-2.5">
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-3">Schedule</span>
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-3">What it does</span>
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-3">Status</span>
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-3">Next run</span>
+                    <span />
+                  </div>
+                  {archived.map((sched) => (
+                    <ScheduleRow
+                      key={sched.id}
+                      sched={sched}
+                      firing={false}
+                      historyOpen={false}
+                      archivedView
+                      onToggle={() => {}}
+                      onRun={() => {}}
+                      onEdit={() => {}}
+                      onDuplicate={() => {}}
+                      onDelete={() => {}}
+                      onHistory={() => {}}
+                      onRestore={() => handleUnarchive(sched)}
+                      onPurge={() => handlePurge(sched)}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
           ) : sorted.length === 0 ? (
-            <div className="flex h-full flex-col items-center justify-center">
-              <Clock className="h-12 w-12" style={{ color: "var(--ink-3)" }} />
-              <p className="mt-4 text-[14px] text-[var(--ink-2)]">No schedules yet</p>
-              <p className="mt-1 max-w-sm text-center text-[12px] text-[var(--ink-3)]">
-                Attach once, interval, or cron schedules to an agent — every run is an
-                independent session with its own history. For the per-agent periodic
-                pulse, use the Heartbeat tab.
-                {agents.length === 0 && " Create an agent first."}
-              </p>
-              <button
-                onClick={() => setEditing("new")}
-                className="mt-4 flex items-center gap-1.5 rounded-[6px] px-3 py-2 text-[13px] font-medium"
-                style={{
-                  background: "var(--ink)",
-                  color: "var(--white)",
-                  border: "1px solid var(--ink)",
-                  cursor: "pointer",
-                }}
-              >
-                <Plus className="h-4 w-4" />
-                Create your first schedule
-              </button>
-            </div>
+            <EmptyState
+              icon={Clock}
+              title="No schedules yet"
+              action={<Button onClick={() => setEditing("new")}><Plus />Create your first schedule</Button>}
+            >
+              Attach once, interval, or cron schedules to an agent — every run is an
+              independent session with its own history. For the per-agent periodic
+              pulse, use the Heartbeat tab.
+              {agents.length === 0 && " Create an agent first."}
+              {archived.length > 0 && (
+                <>
+                  {" "}
+                  <button onClick={() => setShowArchived(true)} className="font-medium text-accent hover:underline">
+                    View {archived.length} archived
+                  </button>
+                </>
+              )}
+            </EmptyState>
           ) : (
-            <div className="mx-auto max-w-4xl space-y-4">
-              {sorted.map((sched) => (
-                <ScheduleCard
-                  key={sched.id}
-                  sched={sched}
-                  firing={firing === sched.id}
-                  historyOpen={historyFor === sched.id}
-                  onToggle={() => handleToggle(sched)}
-                  onRun={() => handleRun(sched.id)}
-                  onTest={() => handleRun(sched.id, true)}
-                  onEdit={() => setEditing(sched)}
-                  onDuplicate={() => handleDuplicate(sched.id)}
-                  onDelete={() => handleDelete(sched.id)}
-                  onHistory={() => setHistoryFor(historyFor === sched.id ? null : sched.id)}
-                />
-              ))}
+            <div className="mx-auto max-w-5xl">
+              {archived.length > 0 && (
+                <div className="mb-2 flex justify-end">
+                  <button
+                    onClick={() => setShowArchived(true)}
+                    className="text-[12px] font-medium text-ink-3 transition hover:text-ink"
+                  >
+                    Archived ({archived.length})
+                  </button>
+                </div>
+              )}
+              <div className="overflow-hidden rounded-xl border border-line bg-surface">
+                <div className="grid grid-cols-[minmax(0,1.6fr)_minmax(0,3fr)_110px_120px_180px] items-center gap-3 border-b border-line px-5 py-2.5">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-3">Schedule</span>
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-3">What it does</span>
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-3">Status</span>
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-3">Next run</span>
+                  <span />
+                </div>
+                {sorted.map((sched) => (
+                  <ScheduleRow
+                    key={sched.id}
+                    sched={sched}
+                    firing={firing === sched.id}
+                    historyOpen={historyFor === sched.id}
+                    onToggle={() => handleToggle(sched)}
+                    onRun={() => handleRun(sched.id)}
+                    onEdit={() => setEditing(sched)}
+                    onDuplicate={() => handleDuplicate(sched.id)}
+                    onDelete={() => handleDelete(sched)}
+                    onHistory={() => setHistoryFor(historyFor === sched.id ? null : sched.id)}
+                  />
+                ))}
+              </div>
             </div>
           )}
         </div>
@@ -440,41 +513,83 @@ export function Scheduler() {
 
         {/* Heartbeat — the agent's built-in periodic pulse (per-agent config) */}
         {mode === "heartbeat" && (
-          <div className="flex-1 overflow-y-auto px-8 py-6">
-            <p className="mb-4 text-[13px]" style={{ color: "var(--ink-2)" }}>
-              Each agent has one heartbeat — it fires on a fixed interval with the agent's
-              own cost cap and failure-alert threshold.
-            </p>
+          <div className="flex-1 overflow-y-auto px-8 py-4">
             {loading ? (
-              <div className="flex h-full items-center justify-center">
-                <p className="text-[14px] text-[var(--ink-3)]">Loading…</p>
-              </div>
-            ) : heartbeats.length === 0 ? (
-              <div className="flex h-full flex-col items-center justify-center">
-                <HeartPulse className="h-12 w-12" style={{ color: "var(--ink-3)" }} />
-                <p className="mt-4 text-[14px]" style={{ color: "var(--ink-2)" }}>No agents found</p>
-                <p className="mt-1 text-[12px]" style={{ color: "var(--ink-3)" }}>
+                <p className="py-20 text-center text-[14px] text-ink-faint">Loading…</p>
+              ) : heartbeats.length === 0 ? (
+                <EmptyState icon={HeartPulse} title="No agents found">
                   Create an agent first, then configure its heartbeat here.
-                </p>
-              </div>
-            ) : (
-              <div className="mx-auto max-w-3xl space-y-4">
-                {heartbeats.map((hb) => (
-                  <HeartbeatCard
-                    key={hb.agent_id}
-                    hb={hb}
-                    firing={firing === hb.agent_id}
-                    onToggle={() => handleHbToggle(hb)}
-                    onFieldChange={handleHbFieldChange}
-                    onFieldSave={handleHbFieldSave}
-                    onFire={() => handleHbFire(hb.agent_id)}
-                  />
-                ))}
-              </div>
-            )}
+                </EmptyState>
+              ) : (
+                <div className="mx-auto max-w-5xl space-y-5">
+                  {/* Explainer */}
+                  <div className="flex items-start gap-3 rounded-xl border border-line bg-accent-tint/60 p-4">
+                    <IconTile icon={HeartPulse} tone="surface" size="md" />
+                    <div>
+                      <p className="text-[13px] font-semibold text-ink">What is a heartbeat?</p>
+                      <p className="mt-0.5 text-[13px] leading-[1.5] text-ink-2">
+                        A timer that wakes an agent to run one prompt, such as "check my
+                        inbox and summarize what matters". Each agent has one. You set how
+                        often it runs and how much it may spend.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Summary line */}
+                  <div className="flex items-baseline justify-between">
+                    <p className="text-[13px] text-ink-2">
+                      <span className="font-semibold text-ink">
+                        {heartbeats.filter((h) => h.enabled).length} of {heartbeats.length}
+                      </span>{" "}
+                      heartbeats on{"  ·  "}Most you could spend today:{" "}
+                      <span className="font-semibold text-ink">
+                        ${maxDailyHeartbeatSpend(heartbeats).toFixed(2)}
+                      </span>
+                    </p>
+                    {heartbeats.some((h) => !h.task_prompt.trim()) && (
+                      <button
+                        onClick={handleSetupSeveral}
+                        className="text-[13px] font-medium text-accent underline-offset-2 hover:underline"
+                      >
+                        Set up several at once
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Table */}
+                  <div className="overflow-hidden rounded-xl border border-line bg-surface">
+                    <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)_90px_130px_120px] items-center gap-3 border-b border-line px-5 py-2.5">
+                      <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-3">Agent</span>
+                      <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-3">What it does</span>
+                      <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-3">Status</span>
+                      <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-3">Next run</span>
+                      <span />
+                    </div>
+                    {heartbeats.map((hb) => (
+                      <HeartbeatRow
+                        key={hb.agent_id}
+                        hb={hb}
+                        selected={setupFor === hb.agent_id}
+                        onToggle={() => handleHbRowToggle(hb)}
+                        onSetup={() => { setSetupBulk(false); setSetupFor(hb.agent_id); }}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
           </div>
         )}
       </div>
+
+      {setupFor && (
+        <HeartbeatSetup
+          key={setupFor}
+          hb={heartbeats.find((h) => h.agent_id === setupFor)!}
+          onClose={() => { setSetupFor(null); setSetupBulk(false); }}
+          onSaved={handleSetupSaved}
+          onFired={fetchData}
+        />
+      )}
 
       {editing !== null && (
         <ScheduleDialog
@@ -492,31 +607,35 @@ export function Scheduler() {
 }
 
 // ---------------------------------------------------------------------------
-// Schedule card
+// Schedule row — one schedule per line; occurrence history expands below
 // ---------------------------------------------------------------------------
 
-function ScheduleCard({
+function ScheduleRow({
   sched,
   firing,
   historyOpen,
+  archivedView,
   onToggle,
   onRun,
-  onTest,
   onEdit,
   onDuplicate,
   onDelete,
   onHistory,
+  onRestore,
+  onPurge,
 }: {
   sched: Schedule;
   firing: boolean;
   historyOpen: boolean;
+  archivedView?: boolean;
   onToggle: () => void;
   onRun: () => void;
-  onTest: () => void;
   onEdit: () => void;
   onDuplicate: () => void;
   onDelete: () => void;
   onHistory: () => void;
+  onRestore?: () => void;
+  onPurge?: () => void;
 }) {
   const managed = sched.managed === "heartbeat";
   const [occurrences, setOccurrences] = useState<ScheduleOccurrence[] | null>(null);
@@ -530,171 +649,202 @@ function ScheduleCard({
     }
   }, [historyOpen, sched.id]);
 
-  return (
-    <div
-      className="rounded-xl p-4"
-      style={{
-        border: sched.enabled ? "1px solid var(--accent)" : "1px solid var(--border-soft)",
-        background: "var(--sidebar)",
-      }}
-    >
-      <div className="flex items-center gap-3">
-        <button
-          onClick={onToggle}
-          className="relative h-5 w-9 shrink-0 rounded-full transition"
-          style={{ background: sched.enabled ? "var(--accent)" : "var(--ink-3)", cursor: "pointer", border: "none" }}
-          title={sched.enabled ? "Pause" : "Resume"}
-        >
-          <span
-            className="absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all"
-            style={{ left: sched.enabled ? "18px" : "2px" }}
-          />
-        </button>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="truncate text-[14px] font-medium" style={{ color: "var(--ink)" }}>
-              {sched.name}
-            </span>
-            <span className="text-[12px]" style={{ color: "var(--ink-3)" }}>
-              {sched.agent_name}
-            </span>
-            {managed && (
-              <span
-                className="rounded-full px-1.5 py-0.5 font-mono text-[9px] uppercase"
-                style={{ background: "var(--surface)", color: "var(--ink-3)" }}
-              >
-                heartbeat
-              </span>
-            )}
-            <span className="font-mono text-[10px]" style={{ color: "var(--ink-3)" }}>
-              rev {sched.revision_number}
-            </span>
-          </div>
-          <p className="mt-0.5 truncate text-[12px]" style={{ color: "var(--ink-2)" }}>
-            {triggerSummary(sched.trigger)}
-            {sched.task_prompt && (
-              <span className="ml-2" style={{ color: "var(--ink-3)" }}>
-                — {sched.task_prompt.substring(0, 60)}
-                {sched.task_prompt.length > 60 ? "…" : ""}
-              </span>
-            )}
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-1.5">
-          {sched.last_status && (
-            <span className="font-mono text-[11px]" style={{ color: statusColor(sched.last_status) }}>
-              {sched.last_status}
-            </span>
-          )}
-          {sched.consecutive_failures > 0 && (
-            <span
-              className="rounded-full px-2 py-0.5 font-mono text-[11px]"
-              style={{ background: "var(--surface)", color: "var(--danger)" }}
-            >
-              {sched.consecutive_failures} fail
-            </span>
-          )}
-          <button onClick={onRun} disabled={firing} className="flex items-center gap-1 rounded-[4px] px-2 py-1 font-mono text-[11px]" style={{ ...actionBtn, opacity: firing ? 0.5 : 1 }} title="Run now (real run)">
-            <Play className="h-3 w-3" />
-            {firing ? "…" : "Run"}
-          </button>
-          <button onClick={onTest} disabled={firing} className="flex items-center gap-1 rounded-[4px] px-2 py-1 font-mono text-[11px]" style={actionBtn} title="Test run (scripted, no model call)">
-            <FlaskConical className="h-3 w-3" />
-          </button>
-          <button onClick={onHistory} className="rounded-[4px] px-2 py-1" style={{ ...actionBtn, color: historyOpen ? "var(--accent)" : "var(--ink-2)" }} title="Occurrence history">
-            <History className="h-3 w-3" />
-          </button>
-          <button onClick={onEdit} className="rounded-[4px] px-2 py-1" style={actionBtn} title={managed ? "Edit heartbeat config" : "Edit"}>
-            <Pencil className="h-3 w-3" />
-          </button>
-          <button onClick={onDuplicate} className="rounded-[4px] px-2 py-1" style={actionBtn} title="Duplicate as a new disabled schedule">
-            <Copy className="h-3 w-3" />
-          </button>
-          <button onClick={onDelete} disabled={managed} className="rounded-[4px] px-2 py-1" style={{ ...actionBtn, color: "var(--danger)", opacity: managed ? 0.4 : 1, cursor: managed ? "not-allowed" : "pointer" }} title={managed ? "A heartbeat always exists — toggle it off instead" : "Archive"}>
-            <Trash2 className="h-3 w-3" />
-          </button>
-        </div>
-      </div>
+  const iconBtn =
+    "flex h-7 w-7 items-center justify-center rounded-md border border-line bg-surface text-ink-2 transition hover:border-ink-3 hover:text-ink disabled:cursor-not-allowed disabled:opacity-40";
 
-      <div className="mt-3 flex gap-6 border-t pt-3" style={{ borderColor: "var(--border)" }}>
-        <div>
-          <span className="font-mono text-[10px] uppercase tracking-wider" style={labelStyle}>Next fire</span>
-          <p className="text-[12px]" style={{ color: "var(--ink-2)" }}>
-            {sched.next_fire_at ? new Date(sched.next_fire_at).toLocaleString() : "—"}
-          </p>
-        </div>
-        <div>
-          <span className="font-mono text-[10px] uppercase tracking-wider" style={labelStyle}>Last fired</span>
-          <p className="text-[12px]" style={{ color: "var(--ink-2)" }}>
-            {sched.last_fired_at ? new Date(sched.last_fired_at).toLocaleString() : "—"}
-          </p>
-        </div>
-        <div>
-          <span className="font-mono text-[10px] uppercase tracking-wider" style={labelStyle}>Missed / overlap</span>
-          <p className="text-[12px]" style={{ color: "var(--ink-2)" }}>
-            {sched.policies ? `${sched.policies.missed} / ${sched.policies.overlap}` : "—"}
-          </p>
-        </div>
-        <div>
-          <span className="font-mono text-[10px] uppercase tracking-wider" style={labelStyle}>Retry</span>
-          <p className="text-[12px]" style={{ color: "var(--ink-2)" }}>
-            {sched.policies?.failure.mode === "bounded_retry"
-              ? `≤${sched.policies.failure.max_attempts}× (${sched.policies.failure.backoff_seconds}s)`
-              : "none"}
-          </p>
-        </div>
-        {sched.last_error && (
-          <div className="min-w-0 flex-1">
-            <span className="font-mono text-[10px] uppercase tracking-wider" style={labelStyle}>Last error</span>
-            <p className="truncate text-[12px]" style={{ color: "var(--danger)" }} title={sched.last_error}>
-              {sched.last_error.substring(0, 80)}
+  return (
+    <div className="border-t border-line first:border-t-0">
+      <div className={`grid grid-cols-[minmax(0,1.6fr)_minmax(0,3fr)_110px_120px_180px] items-center gap-3 px-5 py-3 transition ${archivedView ? "opacity-75" : "hover:bg-ground"}`}>
+        {/* Schedule */}
+        <div className="flex min-w-0 items-center gap-3">
+          {archivedView ? (
+            <span className="flex h-7 w-9 shrink-0 items-center justify-center text-ink-3" title="Archived">
+              <Archive className="h-4 w-4" />
+            </span>
+          ) : (
+            <Toggle
+              checked={sched.enabled}
+              onCheckedChange={onToggle}
+              title={sched.enabled ? "Pause" : "Resume"}
+            />
+          )}
+          <div className="min-w-0">
+            <div className="flex min-w-0 items-center gap-1.5">
+              <span className="truncate text-[13px] font-semibold text-ink">{sched.name}</span>
+              {managed && (
+                <span className="rounded-full bg-ground px-1.5 py-0.5 font-mono text-[9px] uppercase text-ink-3">
+                  heartbeat
+                </span>
+              )}
+            </div>
+            <p className="truncate text-[11px] text-ink-3">
+              {sched.agent_name} · rev {sched.revision_number}
             </p>
           </div>
-        )}
+        </div>
+
+        {/* What it does */}
+        <div className="min-w-0">
+          <p className="truncate text-[13px] text-ink-2">{triggerSummary(sched.trigger)}</p>
+          <p className="truncate text-[12px] text-ink-3">
+            {sched.task_prompt?.trim() || "No prompt"}
+          </p>
+        </div>
+
+        {/* Status */}
+        <div className="text-[13px]">
+          {archivedView ? (
+            <span className="text-ink-3">Archived</span>
+          ) : sched.enabled ? (
+            <span className="text-ink-2">On</span>
+          ) : (
+            <span className="text-ink-3">Off</span>
+          )}
+          {sched.last_status && (
+            <p className="font-mono text-[11px]" style={{ color: statusColor(sched.last_status) }}>
+              {sched.last_status}
+            </p>
+          )}
+          {sched.consecutive_failures > 0 && (
+            <p className="text-[11px] text-danger">{sched.consecutive_failures} failed</p>
+          )}
+        </div>
+
+        {/* Next run */}
+        <span className="truncate text-[12px] text-ink-3">
+          {sched.next_fire_at ? shortWhen(sched.next_fire_at) : "—"}
+        </span>
+
+        {/* Actions */}
+        <div className="flex items-center gap-1.5 justify-self-end">
+          {archivedView ? (
+            <>
+              <button
+                onClick={onRestore}
+                className="flex items-center gap-1.5 rounded-lg border border-line bg-surface px-3 py-1.5 text-[12px] font-medium text-ink transition hover:border-accent hover:text-accent"
+                title="Restore — comes back paused"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                Restore
+              </button>
+              <button
+                onClick={onPurge}
+                className={`${iconBtn} text-danger hover:border-danger/50 hover:text-danger`}
+                title="Delete permanently — removes schedule, revisions, and history"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                onClick={onRun}
+                disabled={firing}
+                className="flex items-center gap-1.5 rounded-lg border border-line bg-surface px-3 py-1.5 text-[12px] font-medium text-ink transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
+                title="Run now"
+              >
+                <Play className="h-3.5 w-3.5" />
+                {firing ? "…" : "Run"}
+              </button>
+              <button
+                onClick={onHistory}
+                className={`${iconBtn} ${historyOpen ? "border-accent/50 text-accent" : ""}`}
+                title="Occurrence history"
+              >
+                <History className="h-3.5 w-3.5" />
+              </button>
+              <button onClick={onEdit} className={iconBtn} title={managed ? "Edit heartbeat config" : "Edit"}>
+                <Pencil className="h-3.5 w-3.5" />
+              </button>
+              <button onClick={onDuplicate} className={iconBtn} title="Duplicate as a new disabled schedule">
+                <Copy className="h-3.5 w-3.5" />
+              </button>
+              <button
+                onClick={onDelete}
+                disabled={managed}
+                className={iconBtn}
+                title={managed ? "A heartbeat always exists — toggle it off instead" : "Archive"}
+              >
+                <Archive className="h-3.5 w-3.5" />
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       {historyOpen && (
-        <div className="mt-3 border-t pt-3" style={{ borderColor: "var(--border)" }}>
-          <span className="font-mono text-[10px] uppercase tracking-wider" style={labelStyle}>
-            Occurrence history
-          </span>
-          {occurrences === null ? (
-            <p className="mt-1 text-[12px]" style={{ color: "var(--ink-3)" }}>Loading…</p>
-          ) : occurrences.length === 0 ? (
-            <p className="mt-1 text-[12px]" style={{ color: "var(--ink-3)" }}>No occurrences yet</p>
-          ) : (
-            <div className="mt-1 max-h-64 space-y-1 overflow-y-auto">
-              {occurrences.map((occ) => (
-                <div
-                  key={occ.id}
-                  className="flex items-center gap-3 rounded-[4px] px-2 py-1.5 text-[12px]"
-                  style={{ background: "var(--surface)" }}
-                >
-                  <span className="font-mono" style={{ color: statusColor(occ.status) }}>
-                    {occ.status}
-                  </span>
-                  <span style={{ color: "var(--ink-2)" }}>
-                    {new Date(occ.scheduled_for).toLocaleString()}
-                  </span>
-                  {occ.attempt > 1 && (
-                    <span className="font-mono text-[10px]" style={{ color: "var(--ink-3)" }}>
-                      attempt {occ.attempt}
-                    </span>
-                  )}
-                  {occ.run_id && (
-                    <span className="font-mono text-[10px]" style={{ color: "var(--ink-3)" }}>
-                      run {occ.run_id.slice(0, 8)}
-                    </span>
-                  )}
-                  {occ.error && (
-                    <span className="ml-auto truncate font-mono text-[10px]" style={{ color: "var(--danger)" }} title={occ.error}>
-                      {occ.error.substring(0, 60)}
-                    </span>
-                  )}
-                </div>
-              ))}
+        <div className="border-t border-line bg-ground/50 px-5 py-4">
+          <div className="flex gap-6">
+            <div>
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-3">Last fired</span>
+              <p className="text-[12px] text-ink-2">
+                {sched.last_fired_at ? new Date(sched.last_fired_at).toLocaleString() : "—"}
+              </p>
             </div>
-          )}
+            <div>
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-3">Missed / overlap</span>
+              <p className="text-[12px] text-ink-2">
+                {sched.policies ? `${sched.policies.missed} / ${sched.policies.overlap}` : "—"}
+              </p>
+            </div>
+            <div>
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-3">Retry</span>
+              <p className="text-[12px] text-ink-2">
+                {sched.policies?.failure.mode === "bounded_retry"
+                  ? `≤${sched.policies.failure.max_attempts}× (${sched.policies.failure.backoff_seconds}s)`
+                  : "none"}
+              </p>
+            </div>
+            {sched.last_error && (
+              <div className="min-w-0 flex-1">
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-3">Last error</span>
+                <p className="truncate text-[12px] text-danger" title={sched.last_error}>
+                  {sched.last_error.substring(0, 80)}
+                </p>
+              </div>
+            )}
+          </div>
+          <div className="mt-3">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-3">
+              Occurrence history
+            </span>
+            {occurrences === null ? (
+              <p className="mt-1 text-[12px] text-ink-3">Loading…</p>
+            ) : occurrences.length === 0 ? (
+              <p className="mt-1 text-[12px] text-ink-3">No occurrences yet</p>
+            ) : (
+              <div className="mt-1 max-h-64 space-y-1 overflow-y-auto">
+                {occurrences.map((occ) => (
+                  <div
+                    key={occ.id}
+                    className="flex items-center gap-3 rounded-md bg-surface px-2 py-1.5 text-[12px]"
+                  >
+                    <span className="font-mono" style={{ color: statusColor(occ.status) }}>
+                      {occ.status}
+                    </span>
+                    <span className="text-ink-2">
+                      {new Date(occ.scheduled_for).toLocaleString()}
+                    </span>
+                    {occ.attempt > 1 && (
+                      <span className="font-mono text-[10px] text-ink-3">
+                        attempt {occ.attempt}
+                      </span>
+                    )}
+                    {occ.run_id && (
+                      <span className="font-mono text-[10px] text-ink-3">
+                        run {occ.run_id.slice(0, 8)}
+                      </span>
+                    )}
+                    {occ.error && (
+                      <span className="ml-auto truncate font-mono text-[10px] text-danger" title={occ.error}>
+                        {occ.error.substring(0, 60)}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -714,13 +864,11 @@ function ModalShell({
 }) {
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-6"
-      style={{ background: "rgba(0,0,0,0.35)" }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/25 p-6"
       onClick={onClose}
     >
       <div
-        className="max-h-[85vh] w-[560px] overflow-y-auto rounded-xl p-6"
-        style={{ background: "var(--sidebar)", boxShadow: "0 8px 40px rgba(0,0,0,0.25)" }}
+        className="max-h-[85vh] w-[560px] overflow-y-auto rounded-xl bg-surface p-6 shadow-[0_8px_40px_rgba(0,0,0,0.25)]"
         onClick={(e) => e.stopPropagation()}
       >
         {children}
@@ -748,177 +896,293 @@ function ScheduleDialog({
 }
 
 // ---------------------------------------------------------------------------
-// Heartbeat card — per-agent pulse config, edits via the heartbeat facade API
+// Heartbeat row — one agent per line; setup happens in the side panel
 // ---------------------------------------------------------------------------
 
-function HeartbeatCard({
+function HeartbeatRow({
   hb,
-  firing,
+  selected,
   onToggle,
-  onFieldChange,
-  onFieldSave,
-  onFire,
+  onSetup,
 }: {
   hb: HeartbeatStatus;
-  firing: boolean;
+  selected: boolean;
   onToggle: () => void;
-  onFieldChange: (agentId: string, field: keyof HeartbeatStatus, value: string | number) => void;
-  onFieldSave: (
-    agentId: string,
-    field: "interval_minutes" | "task_prompt" | "max_cost_per_heartbeat" | "consecutive_failure_threshold",
-    value: string | number,
-  ) => void;
-  onFire: () => void;
+  onSetup: () => void;
 }) {
-  const numField = (v: string) => {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : 0;
+  const configured = hb.task_prompt.trim().length > 0;
+  return (
+    <div
+      className={`grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)_90px_130px_120px] items-center gap-3 px-5 py-3 transition ${
+        selected ? "bg-accent-tint/50" : "hover:bg-ground"
+      } border-t border-line first:border-t-0`}
+    >
+      <div className="flex min-w-0 items-center gap-3">
+        <Toggle checked={hb.enabled} onCheckedChange={onToggle} title={hb.enabled ? "Turn off" : configured ? "Turn on" : "Set up first"} />
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-accent-tint text-[13px] font-semibold text-accent">
+          {hb.agent_name[0]?.toUpperCase() ?? "?"}
+        </div>
+        <span className="truncate text-[13px] font-semibold text-ink">{hb.agent_name}</span>
+      </div>
+      <p className={`truncate text-[13px] ${configured ? "text-ink-2" : "text-ink-3"}`}>
+        {configured ? hb.task_prompt : "No prompt yet"}
+      </p>
+      <div className="text-[13px]">
+        {hb.enabled ? (
+          <span className="text-ink-2">On</span>
+        ) : (
+          <span className="text-ink-3">Off</span>
+        )}
+        {hb.consecutive_failures > 0 && (
+          <p className="text-[11px] text-danger">{hb.consecutive_failures} failed</p>
+        )}
+      </div>
+      <span className="truncate text-[12px] text-ink-3">
+        {hb.enabled ? shortWhen(hb.next_fire) : "—"}
+      </span>
+      <button
+        onClick={onSetup}
+        className="flex items-center justify-center gap-1.5 justify-self-end rounded-lg border border-line bg-surface px-3 py-1.5 text-[12px] font-medium text-ink transition hover:border-accent hover:text-accent"
+      >
+        <Pencil className="h-3.5 w-3.5" />
+        {configured ? "Edit" : "Set up"}
+      </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Heartbeat setup — floating modal: prompt, cadence, spend, test run
+// ---------------------------------------------------------------------------
+
+function HeartbeatSetup({
+  hb,
+  onClose,
+  onSaved,
+  onFired,
+}: {
+  hb: HeartbeatStatus;
+  onClose: () => void;
+  onSaved: (savedId: string) => void;
+  onFired: () => void;
+}) {
+  const [prompt, setPrompt] = useState(hb.task_prompt);
+  const preset = INTERVAL_PRESETS.find((p) => p.minutes === hb.interval_minutes);
+  const [intervalMode, setIntervalMode] = useState<"preset" | "custom">(preset ? "preset" : "custom");
+  const [intervalMin, setIntervalMin] = useState(hb.interval_minutes || 60);
+  const [maxCost, setMaxCost] = useState(String(hb.max_cost_per_heartbeat ?? 0.5));
+  const [failThreshold, setFailThreshold] = useState(String(hb.consecutive_failure_threshold ?? 3));
+  const [enabled, setEnabled] = useState(hb.enabled);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const runsPerDay = intervalMin > 0 ? Math.round(1440 / intervalMin) : 0;
+  const cost = Number(maxCost) || 0;
+  const dailyCap = runsPerDay * cost;
+  const threshold = Number(failThreshold) || 3;
+
+  const hasPrompt = prompt.trim().length > 0;
+
+  const save = async (turnOn: boolean) => {
+    setSaving(true);
+    setError(null);
+    try {
+      await api.updateHeartbeat(hb.agent_id, {
+        task_prompt: prompt,
+        interval_minutes: intervalMin,
+        max_cost_per_heartbeat: cost,
+        consecutive_failure_threshold: threshold,
+        // A heartbeat without a prompt can't run — saving empty turns it off.
+        enabled: hasPrompt ? (turnOn ? true : enabled) : false,
+      });
+      onSaved(hb.agent_id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const fireOnce = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      await api.updateHeartbeat(hb.agent_id, {
+        task_prompt: prompt,
+        interval_minutes: intervalMin,
+        max_cost_per_heartbeat: cost,
+        consecutive_failure_threshold: threshold,
+      });
+      const r = await api.fireHeartbeat(hb.agent_id);
+      if (r.error) setError(r.error);
+      else onFired();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Run failed");
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
     <div
-      className="rounded-xl p-4"
-      style={{
-        border: hb.enabled ? "1px solid var(--accent)" : "1px solid var(--border-soft)",
-        background: "var(--sidebar)",
-      }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/25 p-6"
+      onClick={onClose}
     >
-      <div className="flex items-center gap-3">
-        <button
-          onClick={onToggle}
-          className="relative h-5 w-9 shrink-0 rounded-full transition"
-          style={{ background: hb.enabled ? "var(--accent)" : "var(--ink-3)", cursor: "pointer", border: "none" }}
-          title={hb.enabled ? "Pause" : "Resume"}
-        >
-          <span
-            className="absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all"
-            style={{ left: hb.enabled ? "18px" : "2px" }}
-          />
-        </button>
-        <span className="text-[14px] font-medium" style={{ color: "var(--ink)" }}>
-          {hb.agent_name}
-        </span>
-        <span
-          className="rounded-full px-1.5 py-0.5 font-mono text-[9px] uppercase"
-          style={{ background: "var(--surface)", color: "var(--ink-3)" }}
-        >
-          heartbeat
-        </span>
-        <div className="ml-auto flex items-center gap-3">
-          {hb.last_status && (
-            <span className="font-mono text-[11px]" style={{ color: statusColor(hb.last_status) }}>
-              {hb.last_status}
-            </span>
-          )}
-          {hb.consecutive_failures > 0 && (
-            <span
-              className="rounded-full px-2 py-0.5 font-mono text-[11px]"
-              style={{ background: "var(--surface)", color: "var(--danger)" }}
-            >
-              {hb.consecutive_failures} fail
-            </span>
-          )}
-          <button
-            onClick={onFire}
-            disabled={firing || !hb.task_prompt.trim()}
-            className="flex items-center gap-1 rounded-[4px] px-2 py-1 font-mono text-[11px]"
-            style={{
-              ...actionBtn,
-              opacity: firing || !hb.task_prompt.trim() ? 0.5 : 1,
-              cursor: firing || !hb.task_prompt.trim() ? "not-allowed" : "pointer",
-            }}
-            title={hb.task_prompt.trim() ? "Fire now" : "Set a task prompt first"}
-          >
-            <Play className="h-3 w-3" />
-            {firing ? "…" : "Fire now"}
-          </button>
+      <div
+        className="flex max-h-[85vh] w-[520px] flex-col overflow-hidden rounded-xl bg-surface shadow-[0_8px_40px_rgba(0,0,0,0.25)]"
+        onClick={(e) => e.stopPropagation()}
+      >
+      {/* Header */}
+      <div className="flex items-center gap-3 border-b border-line px-5 py-4">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-accent-tint text-[14px] font-semibold text-accent">
+          {hb.agent_name[0]?.toUpperCase() ?? "?"}
         </div>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-[14px] font-semibold text-ink">{hb.agent_name} heartbeat</p>
+          <p className="text-[12px] text-ink-3">
+            {enabled ? "On" : "Off"} · {hb.task_prompt.trim() ? "configured" : "not set up yet"}
+          </p>
+        </div>
+        <Toggle checked={enabled} onCheckedChange={setEnabled} />
+        <button onClick={onClose} className="rounded-md p-1 text-ink-3 transition hover:bg-ground hover:text-ink" aria-label="Close">
+          <X className="h-4.5 w-4.5" />
+        </button>
       </div>
 
-      <div className="mt-4 space-y-3">
+      <div className="flex-1 space-y-5 overflow-y-auto px-5 py-5">
+        {/* Prompt */}
         <div>
-          <label className="mb-1 block font-mono text-[11px] uppercase tracking-wider" style={labelStyle}>
-            Task prompt
+          <label className="mb-1.5 block text-[12px] font-medium text-ink-2">
+            What should {hb.agent_name} do each time?
           </label>
           <textarea
-            value={hb.task_prompt}
-            onChange={(e) => onFieldChange(hb.agent_id, "task_prompt", e.target.value)}
-            onBlur={(e) => onFieldSave(hb.agent_id, "task_prompt", e.target.value)}
-            rows={2}
-            className="w-full rounded-[5px] border px-3 py-2 text-[13px] leading-[1.5]"
-            style={{ ...inputStyle, resize: "vertical" }}
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            rows={3}
+            className="w-full resize-vertical rounded-lg border border-line bg-ground px-3 py-2.5 text-[13px] leading-[1.5] text-ink outline-none transition focus:border-accent"
             placeholder="e.g. Check my inbox and summarize important messages"
           />
+          <p className="mt-1.5 text-[12px] text-ink-3">
+            Ideas:{" "}
+            {SETUP_IDEAS.map((idea, i) => (
+              <span key={idea.label}>
+                {i > 0 && " · "}
+                <button onClick={() => setPrompt(idea.prompt)} className="text-accent hover:underline">
+                  {idea.label}
+                </button>
+              </span>
+            ))}
+          </p>
         </div>
 
-        <div className="grid grid-cols-3 gap-3">
-          <div>
-            <label className="mb-1 block font-mono text-[11px] uppercase tracking-wider" style={labelStyle}>
-              Every (min)
-            </label>
-            <input
-              type="number"
-              min={1}
-              value={hb.interval_minutes}
-              onChange={(e) => onFieldChange(hb.agent_id, "interval_minutes", numField(e.target.value))}
-              onBlur={(e) => onFieldSave(hb.agent_id, "interval_minutes", numField(e.target.value))}
-              className="w-full rounded-[5px] border px-3 py-1.5 font-mono text-[13px]"
-              style={inputStyle}
-            />
+        {/* Interval */}
+        <div>
+          <label className="mb-1.5 block text-[12px] font-medium text-ink-2">How often?</label>
+          <div className="flex flex-wrap gap-2">
+            {INTERVAL_PRESETS.map((p) => (
+              <button
+                key={p.minutes}
+                onClick={() => { setIntervalMode("preset"); setIntervalMin(p.minutes); }}
+                className={`rounded-lg border px-3 py-1.5 text-[12.5px] font-medium transition ${
+                  intervalMode === "preset" && intervalMin === p.minutes
+                    ? "border-accent bg-accent-tint text-accent"
+                    : "border-line bg-surface text-ink-2 hover:border-ink-3 hover:text-ink"
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+            <button
+              onClick={() => setIntervalMode("custom")}
+              className={`rounded-lg border px-3 py-1.5 text-[12.5px] font-medium transition ${
+                intervalMode === "custom"
+                  ? "border-accent bg-accent-tint text-accent"
+                  : "border-line bg-surface text-ink-2 hover:border-ink-3 hover:text-ink"
+              }`}
+            >
+              Custom
+            </button>
           </div>
+          {intervalMode === "custom" && (
+            <div className="mt-2 flex items-center gap-2">
+              <input
+                type="number"
+                min={1}
+                value={intervalMin}
+                onChange={(e) => setIntervalMin(Math.max(1, Number(e.target.value) || 1))}
+                className="w-24 rounded-lg border border-line bg-ground px-3 py-1.5 font-mono text-[13px] text-ink outline-none focus:border-accent"
+              />
+              <span className="text-[12px] text-ink-3">minutes</span>
+            </div>
+          )}
+          <p className="mt-2 text-[12px] text-ink-3">
+            Runs about {runsPerDay} time{runsPerDay === 1 ? "" : "s"} a day.
+            {intervalMode === "preset" && " Custom lets you enter minutes."}
+          </p>
+        </div>
+
+        {/* Spend + alert */}
+        <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="mb-1 block font-mono text-[11px] uppercase tracking-wider" style={labelStyle}>
-              Max cost ($)
-            </label>
+            <label className="mb-1.5 block text-[12px] font-medium text-ink-2">Spend limit per run</label>
             <input
               type="number"
               step={0.05}
               min={0}
-              value={hb.max_cost_per_heartbeat}
-              onChange={(e) => onFieldChange(hb.agent_id, "max_cost_per_heartbeat", numField(e.target.value))}
-              onBlur={(e) => onFieldSave(hb.agent_id, "max_cost_per_heartbeat", numField(e.target.value))}
-              className="w-full rounded-[5px] border px-3 py-1.5 font-mono text-[13px]"
-              style={inputStyle}
+              value={maxCost}
+              onChange={(e) => setMaxCost(e.target.value)}
+              className="w-full rounded-lg border border-line bg-ground px-3 py-2 font-mono text-[13px] text-ink outline-none focus:border-accent"
             />
           </div>
           <div>
-            <label className="mb-1 block font-mono text-[11px] uppercase tracking-wider" style={labelStyle}>
-              Fail threshold
-            </label>
+            <label className="mb-1.5 block text-[12px] font-medium text-ink-2">Alert me after</label>
             <input
               type="number"
               min={1}
-              value={hb.consecutive_failure_threshold}
-              onChange={(e) => onFieldChange(hb.agent_id, "consecutive_failure_threshold", numField(e.target.value))}
-              onBlur={(e) => onFieldSave(hb.agent_id, "consecutive_failure_threshold", numField(e.target.value))}
-              className="w-full rounded-[5px] border px-3 py-1.5 font-mono text-[13px]"
-              style={inputStyle}
+              value={failThreshold}
+              onChange={(e) => setFailThreshold(e.target.value)}
+              className="w-full rounded-lg border border-line bg-ground px-3 py-2 text-[13px] text-ink outline-none focus:border-accent"
             />
+            <p className="mt-1 text-[11px] text-ink-3">failed runs in a row</p>
           </div>
         </div>
 
-        <div className="flex gap-6 border-t pt-3" style={{ borderColor: "var(--border)" }}>
-          <div>
-            <span className="font-mono text-[10px] uppercase tracking-wider" style={labelStyle}>Last fired</span>
-            <p className="text-[12px]" style={{ color: "var(--ink-2)" }}>
-              {hb.last_fired ? new Date(hb.last_fired).toLocaleString() : "—"}
-            </p>
-          </div>
-          <div>
-            <span className="font-mono text-[10px] uppercase tracking-wider" style={labelStyle}>Next fire</span>
-            <p className="text-[12px]" style={{ color: "var(--ink-2)" }}>
-              {hb.next_fire ? new Date(hb.next_fire).toLocaleString() : "—"}
-            </p>
-          </div>
-          {hb.last_error && (
-            <div className="min-w-0 flex-1">
-              <span className="font-mono text-[10px] uppercase tracking-wider" style={labelStyle}>Last error</span>
-              <p className="truncate text-[12px]" style={{ color: "var(--danger)" }} title={hb.last_error}>
-                {hb.last_error.substring(0, 80)}
-              </p>
-            </div>
-          )}
+        {/* Derived daily cap */}
+        <div className="rounded-lg bg-ground px-3.5 py-3">
+          <p className="text-[13px] font-semibold text-ink">
+            Most you could spend: ${dailyCap.toFixed(2)} a day
+          </p>
+          <p className="mt-0.5 text-[12px] text-ink-3">
+            {runsPerDay} runs × ${cost.toFixed(2)}. Most runs should cost much less.
+          </p>
         </div>
+
+        {/* Last / next run */}
+        <div className="grid grid-cols-2 gap-3 text-[13px]">
+          <div>
+            <p className="text-[12px] text-ink-3">Last run</p>
+            <p className="mt-0.5 text-ink-2">{shortWhen(hb.last_fired)}</p>
+          </div>
+          <div>
+            <p className="text-[12px] text-ink-3">Next run</p>
+            <p className="mt-0.5 text-ink-2">
+              {enabled ? shortWhen(hb.next_fire) : "After you turn it on"}
+            </p>
+          </div>
+        </div>
+
+        {error && <p className="text-[12px] text-danger">{error}</p>}
+      </div>
+
+      {/* Footer */}
+      <div className="flex gap-2.5 border-t border-line px-5 py-4">
+        <Button onClick={() => save(true)} disabled={saving} className="flex-1">
+          {saving ? "Saving…" : hasPrompt ? "✓ Save and turn on" : "Save"}
+        </Button>
+        <Button variant="secondary" onClick={fireOnce} disabled={saving || !hasPrompt}>
+          {saving ? "…" : "▷ Run once to test"}
+        </Button>
+      </div>
       </div>
     </div>
   );
@@ -1091,7 +1355,14 @@ function FullScheduleForm({
     }
   };
 
-  const sel: React.CSSProperties = { ...inputStyle, border: "1px solid var(--border)" };
+  const fld =
+    "w-full rounded-lg border border-line bg-ground px-3 py-2 text-[13px] text-ink outline-none transition focus:border-accent";
+  const pill = (on: boolean) =>
+    `rounded-lg border px-3 py-1.5 text-[12.5px] font-medium transition ${
+      on
+        ? "border-accent bg-accent-tint text-accent"
+        : "border-line bg-surface text-ink-2 hover:border-ink-3 hover:text-ink"
+    }`;
 
   return (
     <>
@@ -1105,26 +1376,28 @@ function FullScheduleForm({
         onClose={onClose}
       />
 
-      <div className="mt-5 space-y-4">
+      <div className="mt-5 space-y-5">
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="mb-1 block font-mono text-[11px] uppercase tracking-wider" style={labelStyle}>Agent</label>
-            <select value={agentId} onChange={(e) => setAgentId(e.target.value)} className="w-full rounded-[5px] px-2 py-1.5 text-[13px]" style={sel}>
-              {agents.map((a) => (
-                <option key={a.id} value={a.id}>{a.name}</option>
-              ))}
-            </select>
+            <label className="mb-1.5 block text-[12px] font-medium text-ink-2">Agent</label>
+            <Select
+              value={agentId}
+              onChange={setAgentId}
+              options={agents.map((a) => ({ value: a.id, label: a.name }))}
+              className={fld}
+              align="left" panelClassName="text-[13px]"
+            />
           </div>
           <div>
-            <label className="mb-1 block font-mono text-[11px] uppercase tracking-wider" style={labelStyle}>Name</label>
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Schedule" className="w-full rounded-[5px] border px-3 py-1.5 text-[13px]" style={inputStyle} />
+            <label className="mb-1.5 block text-[12px] font-medium text-ink-2">Name</label>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Schedule" className={fld} />
           </div>
         </div>
 
         {/* Trigger — no cron syntax required */}
         <div>
-          <label className="mb-1 block font-mono text-[11px] uppercase tracking-wider" style={labelStyle}>When</label>
-          <div className="flex gap-1">
+          <label className="mb-1.5 block text-[12px] font-medium text-ink-2">When</label>
+          <div className="flex gap-2">
             {(
               [
                 ["once", "Once"],
@@ -1132,56 +1405,58 @@ function FullScheduleForm({
                 ["cron", "On a schedule"],
               ] as const
             ).map(([k, label]) => (
-              <button
-                key={k}
-                onClick={() => setKind(k)}
-                className="rounded-[4px] px-3 py-1 font-mono text-[11px] uppercase"
-                style={{
-                  border: "1px solid var(--border)",
-                  background: kind === k ? "var(--accent)" : "var(--surface)",
-                  color: kind === k ? "var(--white)" : "var(--ink-2)",
-                  cursor: "pointer",
-                }}
-              >
+              <button key={k} onClick={() => setKind(k)} className={pill(kind === k)}>
                 {label}
               </button>
             ))}
           </div>
 
-          <div className="mt-2">
+          <div className="mt-3">
             {kind === "once" && (
-              <input type="datetime-local" value={onceAt} onChange={(e) => setOnceAt(e.target.value)} className="w-full rounded-[5px] border px-3 py-1.5 font-mono text-[13px]" style={inputStyle} />
+              <input type="datetime-local" value={onceAt} onChange={(e) => setOnceAt(e.target.value)} className={`${fld} font-mono`} />
             )}
             {kind === "interval" && (
               <div className="flex items-center gap-2">
-                <span className="text-[13px]" style={{ color: "var(--ink-2)" }}>Every</span>
-                <input type="number" min={1} value={intervalValue} onChange={(e) => setIntervalValue(Number(e.target.value))} className="w-24 rounded-[5px] border px-3 py-1.5 font-mono text-[13px]" style={inputStyle} />
-                <select value={intervalUnit} onChange={(e) => setIntervalUnit(e.target.value as "m" | "h" | "d")} className="rounded-[5px] px-2 py-1.5 text-[13px]" style={sel}>
-                  <option value="m">minutes</option>
-                  <option value="h">hours</option>
-                  <option value="d">days</option>
-                </select>
+                <span className="text-[13px] text-ink-2">Every</span>
+                <input type="number" min={1} value={intervalValue} onChange={(e) => setIntervalValue(Number(e.target.value))} className={`${fld} w-24 font-mono`} />
+                <Select
+                  value={intervalUnit}
+                  onChange={(v) => setIntervalUnit(v as "m" | "h" | "d")}
+                  options={[
+                    { value: "m", label: "minutes" },
+                    { value: "h", label: "hours" },
+                    { value: "d", label: "days" },
+                  ]}
+                  className={`${fld} w-auto`}
+                  align="left" panelClassName="text-[13px]"
+                />
               </div>
             )}
             {kind === "cron" && (
-              <div className="space-y-2">
+              <div className="space-y-2.5">
                 <div className="flex items-center gap-2">
-                  <select value={cronPreset} onChange={(e) => setCronPreset(e.target.value as CronPreset)} className="rounded-[5px] px-2 py-1.5 text-[13px]" style={sel}>
-                    <option value="daily">Daily</option>
-                    <option value="weekdays">Weekdays</option>
-                    <option value="weekly">Weekly on…</option>
-                    <option value="monthly">Monthly on day…</option>
-                    <option value="custom">Custom expression</option>
-                  </select>
+                  <Select
+                    value={cronPreset}
+                    onChange={(v) => setCronPreset(v as CronPreset)}
+                    options={[
+                      { value: "daily", label: "Daily" },
+                      { value: "weekdays", label: "Weekdays" },
+                      { value: "weekly", label: "Weekly on…" },
+                      { value: "monthly", label: "Monthly on day…" },
+                      { value: "custom", label: "Custom expression" },
+                    ]}
+                    className={`${fld} w-auto`}
+                    align="left" panelClassName="text-[13px]"
+                  />
                   {cronPreset !== "custom" && (
-                    <input type="time" value={cronTime} onChange={(e) => setCronTime(e.target.value)} className="rounded-[5px] border px-2 py-1.5 font-mono text-[13px]" style={inputStyle} />
+                    <input type="time" value={cronTime} onChange={(e) => setCronTime(e.target.value)} className={`${fld} w-auto font-mono`} />
                   )}
                   {cronPreset === "monthly" && (
-                    <input type="number" min={1} max={28} value={cronDom} onChange={(e) => setCronDom(Number(e.target.value))} className="w-16 rounded-[5px] border px-2 py-1.5 font-mono text-[13px]" style={inputStyle} title="Day of month (≤28 keeps every month safe)" />
+                    <input type="number" min={1} max={28} value={cronDom} onChange={(e) => setCronDom(Number(e.target.value))} className={`${fld} w-20 font-mono`} title="Day of month (≤28 keeps every month safe)" />
                   )}
                 </div>
                 {cronPreset === "weekly" && (
-                  <div className="flex gap-1">
+                  <div className="flex gap-1.5">
                     {DOW.map((d, i) => {
                       const on = cronDays.includes(i);
                       return (
@@ -1190,13 +1465,7 @@ function FullScheduleForm({
                           onClick={() =>
                             setCronDays((prev) => (on ? prev.filter((x) => x !== i) : [...prev, i]))
                           }
-                          className="rounded-[4px] px-2 py-1 font-mono text-[11px]"
-                          style={{
-                            border: "1px solid var(--border)",
-                            background: on ? "var(--accent)" : "var(--surface)",
-                            color: on ? "var(--white)" : "var(--ink-2)",
-                            cursor: "pointer",
-                          }}
+                          className={pill(on)}
                         >
                           {d}
                         </button>
@@ -1205,35 +1474,33 @@ function FullScheduleForm({
                   </div>
                 )}
                 {cronPreset === "custom" && (
-                  <input value={cronCustom} onChange={(e) => setCronCustom(e.target.value)} placeholder="0 9 * * 1-5" className="w-full rounded-[5px] border px-3 py-1.5 font-mono text-[13px]" style={inputStyle} />
+                  <input value={cronCustom} onChange={(e) => setCronCustom(e.target.value)} placeholder="0 9 * * 1-5" className={`${fld} font-mono`} />
                 )}
-                <input list="tz-list" value={timezone} onChange={(e) => setTimezone(e.target.value)} placeholder="Timezone (IANA)" className="w-full rounded-[5px] border px-3 py-1.5 font-mono text-[13px]" style={inputStyle} />
+                <input list="tz-list" value={timezone} onChange={(e) => setTimezone(e.target.value)} placeholder="Timezone (IANA)" className={`${fld} font-mono`} />
                 <datalist id="tz-list">
                   {TIMEZONES.map((tz) => (
                     <option key={tz} value={tz} />
                   ))}
                 </datalist>
-                <p className="font-mono text-[11px]" style={{ color: "var(--accent)" }}>
-                  {cronSummary()}
-                </p>
+                <p className="font-mono text-[11px] text-accent">{cronSummary()}</p>
               </div>
             )}
           </div>
 
-          <div className="mt-2">
-            <button onClick={handlePreview} className="rounded-[4px] px-2.5 py-1 font-mono text-[11px]" style={{ border: "1px solid var(--border)", background: "var(--surface)", color: "var(--accent)", cursor: "pointer" }}>
+          <div className="mt-3">
+            <button onClick={handlePreview} className="rounded-lg border border-line bg-surface px-3 py-1.5 text-[12px] font-medium text-accent transition hover:border-accent">
               Preview next runs
             </button>
             {preview && (
-              <div className="mt-2 rounded-[5px] border p-2" style={{ borderColor: "var(--border)" }}>
-                <p className="font-mono text-[10px] uppercase" style={labelStyle}>
+              <div className="mt-2 rounded-lg bg-ground p-3">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-ink-3">
                   Next {preview.length} — shown in {previewTz}
                 </p>
                 {preview.length === 0 && (
-                  <p className="mt-1 text-[12px]" style={{ color: "var(--ink-3)" }}>No upcoming fires (trigger exhausted)</p>
+                  <p className="mt-1 text-[12px] text-ink-3">No upcoming fires (trigger exhausted)</p>
                 )}
                 {preview.map((iso, i) => (
-                  <p key={i} className="font-mono text-[11px]" style={{ color: "var(--ink-2)" }}>
+                  <p key={i} className="mt-0.5 font-mono text-[11px] text-ink-2">
                     {new Date(iso).toLocaleString(undefined, { timeZone: previewTz })}
                   </p>
                 ))}
@@ -1243,62 +1510,79 @@ function FullScheduleForm({
         </div>
 
         <div>
-          <label className="mb-1 block font-mono text-[11px] uppercase tracking-wider" style={labelStyle}>Task prompt</label>
+          <label className="mb-1.5 block text-[12px] font-medium text-ink-2">Task prompt</label>
           <textarea
             value={taskPrompt}
             onChange={(e) => setTaskPrompt(e.target.value)}
             rows={3}
-            className="w-full rounded-[5px] border px-3 py-2 text-[13px] leading-[1.5]"
-            style={{ ...inputStyle, resize: "vertical" }}
+            className={`${fld} resize-vertical leading-[1.5]`}
             placeholder="What should the agent do on each fire?"
           />
         </div>
 
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="mb-1 block font-mono text-[11px] uppercase tracking-wider" style={labelStyle}>While paused/down</label>
-            <select value={missed} onChange={(e) => setMissed(e.target.value as typeof missed)} className="w-full rounded-[5px] px-2 py-1.5 text-[13px]" style={sel}>
-              <option value="skip">skip — record + move on</option>
-              <option value="run_once">run once — latest only</option>
-              <option value="catch_up">catch up — every missed</option>
-            </select>
+            <label className="mb-1.5 block text-[12px] font-medium text-ink-2">While paused/down</label>
+            <Select
+              value={missed}
+              onChange={(v) => setMissed(v as typeof missed)}
+              options={[
+                { value: "skip", label: "skip — record + move on" },
+                { value: "run_once", label: "run once — latest only" },
+                { value: "catch_up", label: "catch up — every missed" },
+              ]}
+              className={fld}
+              align="left" panelClassName="text-[13px]"
+            />
           </div>
           <div>
-            <label className="mb-1 block font-mono text-[11px] uppercase tracking-wider" style={labelStyle}>If still running</label>
-            <select value={overlap} onChange={(e) => setOverlap(e.target.value as typeof overlap)} className="w-full rounded-[5px] px-2 py-1.5 text-[13px]" style={sel}>
-              <option value="skip">skip this fire</option>
-              <option value="queue">queue for after</option>
-              <option value="cancel_previous">cancel previous</option>
-              <option value="allow_parallel">run alongside</option>
-            </select>
+            <label className="mb-1.5 block text-[12px] font-medium text-ink-2">If still running</label>
+            <Select
+              value={overlap}
+              onChange={(v) => setOverlap(v as typeof overlap)}
+              options={[
+                { value: "skip", label: "skip this fire" },
+                { value: "queue", label: "queue for after" },
+                { value: "cancel_previous", label: "cancel previous" },
+                { value: "allow_parallel", label: "run alongside" },
+              ]}
+              className={fld}
+              align="left" panelClassName="text-[13px]"
+            />
           </div>
           <div>
-            <label className="mb-1 block font-mono text-[11px] uppercase tracking-wider" style={labelStyle}>On failure</label>
-            <select value={failureMode} onChange={(e) => setFailureMode(e.target.value as typeof failureMode)} className="w-full rounded-[5px] px-2 py-1.5 text-[13px]" style={sel}>
-              <option value="no_retry">no retry</option>
-              <option value="bounded_retry">bounded retry</option>
-            </select>
+            <label className="mb-1.5 block text-[12px] font-medium text-ink-2">On failure</label>
+            <Select
+              value={failureMode}
+              onChange={(v) => setFailureMode(v as typeof failureMode)}
+              options={[
+                { value: "no_retry", label: "no retry" },
+                { value: "bounded_retry", label: "bounded retry" },
+              ]}
+              className={fld}
+              align="left" panelClassName="text-[13px]"
+            />
           </div>
           {failureMode === "bounded_retry" && (
-            <div className="flex gap-2">
+            <div className="flex gap-3">
               <div>
-                <label className="mb-1 block font-mono text-[11px] uppercase tracking-wider" style={labelStyle}>Attempts</label>
-                <input type="number" min={2} max={10} value={maxAttempts} onChange={(e) => setMaxAttempts(Number(e.target.value))} className="w-16 rounded-[5px] border px-2 py-1.5 font-mono text-[13px]" style={inputStyle} />
+                <label className="mb-1.5 block text-[12px] font-medium text-ink-2">Attempts</label>
+                <input type="number" min={2} max={10} value={maxAttempts} onChange={(e) => setMaxAttempts(Number(e.target.value))} className={`${fld} w-20 font-mono`} />
               </div>
               <div>
-                <label className="mb-1 block font-mono text-[11px] uppercase tracking-wider" style={labelStyle}>Backoff s</label>
-                <input type="number" min={5} value={backoff} onChange={(e) => setBackoff(Number(e.target.value))} className="w-20 rounded-[5px] border px-2 py-1.5 font-mono text-[13px]" style={inputStyle} />
+                <label className="mb-1.5 block text-[12px] font-medium text-ink-2">Backoff s</label>
+                <input type="number" min={5} value={backoff} onChange={(e) => setBackoff(Number(e.target.value))} className={`${fld} w-24 font-mono`} />
               </div>
             </div>
           )}
         </div>
 
         <div>
-          <label className="mb-1 block font-mono text-[11px] uppercase tracking-wider" style={labelStyle}>
+          <label className="mb-1.5 block text-[12px] font-medium text-ink-2">
             Pre-approved capabilities
           </label>
           {approvalCaps.length === 0 ? (
-            <p className="text-[12px]" style={{ color: "var(--ink-3)" }}>
+            <p className="text-[12px] text-ink-3">
               This agent has no approval-gated capabilities — nothing to pre-approve.
             </p>
           ) : (
@@ -1311,13 +1595,11 @@ function FullScheduleForm({
                     onClick={() =>
                       setAutoApprove((prev) => (on ? prev.filter((x) => x !== c.name) : [...prev, c.name]))
                     }
-                    className="rounded-full px-2.5 py-1 font-mono text-[11px]"
-                    style={{
-                      border: "1px solid var(--border)",
-                      background: on ? "var(--accent)" : "var(--surface)",
-                      color: on ? "var(--white)" : "var(--ink-2)",
-                      cursor: "pointer",
-                    }}
+                    className={`rounded-full border px-3 py-1 font-mono text-[11px] transition ${
+                      on
+                        ? "border-accent bg-accent-tint text-accent"
+                        : "border-line bg-surface text-ink-2 hover:border-ink-3"
+                    }`}
                     title="Scheduled runs skip the approval prompt for this capability (still inside the agent's permission ceiling)"
                   >
                     {c.name}
@@ -1326,19 +1608,19 @@ function FullScheduleForm({
               })}
             </div>
           )}
-          <p className="mt-1 text-[11px]" style={{ color: "var(--ink-3)" }}>
+          <p className="mt-1 text-[11px] text-ink-3">
             Pre-approval skips the prompt — it never widens the agent's capability ceiling.
           </p>
         </div>
 
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="mb-1 block font-mono text-[11px] uppercase tracking-wider" style={labelStyle}>Max cost / run ($)</label>
-            <input type="number" step={0.05} min={0} value={maxCost} onChange={(e) => setMaxCost(e.target.value)} placeholder="agent default" className="w-full rounded-[5px] border px-3 py-1.5 font-mono text-[13px]" style={inputStyle} />
+            <label className="mb-1.5 block text-[12px] font-medium text-ink-2">Max cost / run ($)</label>
+            <input type="number" step={0.05} min={0} value={maxCost} onChange={(e) => setMaxCost(e.target.value)} placeholder="agent default" className={`${fld} font-mono`} />
           </div>
-          <div className="flex items-end">
-            <label className="flex items-center gap-2 text-[13px]" style={{ color: "var(--ink-2)" }}>
-              <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+          <div className="flex items-end pb-1">
+            <label className="flex cursor-pointer items-center gap-2 text-[13px] text-ink-2">
+              <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} className="cursor-pointer accent-[var(--accent)]" />
               Enabled
             </label>
           </div>
@@ -1369,17 +1651,11 @@ function DialogTitle({
   return (
     <div className="flex items-start justify-between">
       <div>
-        <h2 className="text-[16px] font-semibold" style={{ color: "var(--ink)" }}>
-          {title}
-        </h2>
-        {sub && (
-          <p className="mt-1 text-[11px]" style={{ color: "var(--ink-3)" }}>
-            {sub}
-          </p>
-        )}
+        <h2 className="text-[16px] font-semibold text-ink">{title}</h2>
+        {sub && <p className="mt-1 text-[11px] text-ink-3">{sub}</p>}
       </div>
-      <button onClick={onClose} className="rounded-[4px] p-1" style={{ border: "none", background: "none", cursor: "pointer" }}>
-        <X className="h-4 w-4" style={{ color: "var(--ink-2)" }} />
+      <button onClick={onClose} className="rounded-md p-1 text-ink-3 transition hover:bg-ground hover:text-ink">
+        <X className="h-4 w-4" />
       </button>
     </div>
   );
@@ -1387,10 +1663,7 @@ function DialogTitle({
 
 function ErrorBox({ msg }: { msg: string }) {
   return (
-    <p
-      className="rounded-[5px] px-3 py-2 text-[12px]"
-      style={{ background: "var(--surface)", color: "var(--danger)", border: "1px solid var(--danger)" }}
-    >
+    <p className="rounded-lg border border-danger/50 bg-danger-tint px-3 py-2 text-[12px] text-danger">
       {msg}
     </p>
   );
@@ -1410,24 +1683,11 @@ function DialogFooter({
   label: string;
 }) {
   return (
-    <div className="flex justify-end gap-2 border-t pt-4" style={{ borderColor: "var(--border)" }}>
-      <button onClick={onClose} className="rounded-[6px] px-3 py-1.5 text-[13px]" style={{ border: "1px solid var(--border)", background: "var(--surface)", color: "var(--ink-2)", cursor: "pointer" }}>
-        Cancel
-      </button>
-      <button
-        onClick={onSave}
-        disabled={saving || disabled}
-        className="rounded-[6px] px-4 py-1.5 text-[13px] font-medium"
-        style={{
-          background: "var(--accent)",
-          color: "var(--white)",
-          border: "none",
-          cursor: saving || disabled ? "not-allowed" : "pointer",
-          opacity: saving || disabled ? 0.6 : 1,
-        }}
-      >
+    <div className="flex justify-end gap-2 border-t border-line pt-4">
+      <Button variant="secondary" onClick={onClose}>Cancel</Button>
+      <Button onClick={onSave} disabled={saving || disabled}>
         {saving ? "Saving…" : label}
-      </button>
+      </Button>
     </div>
   );
 }

@@ -364,6 +364,7 @@ class Harness:
         model_str = "gpt-4o"  # fallback
         api_key = None
         base_url = None
+        extra_params: dict = {}
         use_responses = False
         resolved_model: dict = {}
         accounting = None
@@ -373,6 +374,7 @@ class Harness:
                 model_str = info["model_str"]
                 api_key = info["api_key"]
                 base_url = info["base_url"]
+                extra_params = info.get("extra_params") or {}
                 use_responses = bool(info.get("use_responses"))
                 accounting = info.get("accounting")
                 resolved_model = info.get("resolved_model") or {}
@@ -448,6 +450,7 @@ class Harness:
                 previous_summary=conversation.summary,
                 api_key=api_key,
                 base_url=base_url,
+                extra_params=extra_params,
                 force=force,
                 use_responses=use_responses,
                 input_budget=resolved_input_budget,
@@ -558,10 +561,6 @@ class Harness:
                 "syscall_handler": syscall_handler,
             }
 
-        # Emit typing event
-        if event_emitter:
-            await self._emit(event_emitter, "typing", {})
-
         max_turns = agent_config.limits.max_turns_per_run
         max_cost = (
             agent_config.heartbeat.max_cost_per_heartbeat
@@ -594,6 +593,12 @@ class Harness:
                 result.status = "failed"
                 result.error = gate_error
                 break
+
+            # Per-turn signal that a model call is being dispatched — the
+            # frontend renders the "thinking…" affordance from here until
+            # this turn's first streamed output (thinking/token/tool_call).
+            if event_emitter:
+                await self._emit(event_emitter, "typing", {})
 
             # Step 8: Call model
             # Use streaming if the adapter supports it (LiteLLMAdapter);
@@ -795,13 +800,6 @@ class Harness:
 
             # Step 9: Process tool calls
             if response.tool_calls:
-                if (
-                    restrictions is not None
-                    and len(response.tool_calls) > restrictions.max_tool_calls_per_turn
-                ):
-                    result.status = "failed"
-                    result.error = "Restricted execution exceeded the per-turn tool-call limit"
-                    break
                 # Normalize call ids ONCE — the assistant history row and the
                 # ToolCall objects must share the same ids.
                 for tc in response.tool_calls:
@@ -872,9 +870,34 @@ class Harness:
                     await _loop_db.commit()
 
                 # Dispatch all tool calls concurrently within this reasoning step.
-                approval_batch = _approval_batch_for(agent_config, session, calls)
+                # Restricted runs bound concurrency (not count) and skip the
+                # full-response approval barrier — the mediator denies
+                # approval-needing tools outright, and a barrier would
+                # deadlock while slots drain oversized batches.
+                approval_batch = (
+                    _approval_batch_for(agent_config, session, calls)
+                    if restrictions is None
+                    else None
+                )
+                _gate = (
+                    asyncio.Semaphore(max(1, restrictions.max_concurrent_tool_calls))
+                    if restrictions is not None
+                    else None
+                )
 
                 async def _mediate_one(call: ToolCall) -> SyscallResult:
+                    if _gate is not None:
+                        async with _gate:
+                            return await syscall_handler.mediate(
+                                call=call,
+                                session=session,
+                                agent_config=agent_config,
+                                run_id=run_id,
+                                event_emitter=event_emitter,
+                                capability_catalog=capability_catalog,
+                                approval_batch=approval_batch,
+                                trigger=trigger,
+                            )
                     return await syscall_handler.mediate(
                         call=call,
                         session=session,

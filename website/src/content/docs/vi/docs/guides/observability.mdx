@@ -44,9 +44,9 @@ Mở **Traces**, chọn agent. Agent card tóm tắt run count, cost, token, err
 
 ## Run detail
 
-Run là một inbound user message hoặc heartbeat qua pipeline. Detail gồm run/agent/session ID, status/error, trigger, thời gian, token, cost, context token/ceiling, compaction, context breakdown, capability đã load, message và audit record.
+Run là một inbound user message, channel message, lần fire theo schedule, hoặc một pass nội bộ (heartbeat, reflection) qua pipeline. Detail gồm run/agent/session ID, status/error, trigger, thời gian, token, cost, context token/ceiling, compaction, context breakdown, capability đã load, message và audit record.
 
-Dùng **Timeline** để hiểu execution order và **Messages** để inspect content đã persist.
+Run detail mở ra một span tree với waterfall của các công việc đã định thời. Chọn một span để inspect observation của nó — input, kết quả, denial — trong inspector panel. Timeline chiếu bản ghi đã persist theo thứ tự: audit root tới tool-call tombstone tới approval còn pending. Thinking row xuất hiện khi model stream reasoning content, và **Messages** hiển thị trực tiếp content đã persist.
 
 ## Chẩn đoán capability discovery
 
@@ -90,3 +90,11 @@ Các route cần authenticated operator session hoặc desktop bearer token.
 ## Retention và privacy
 
 Run, message, syscall args/result, token, cost và operator activity lưu local nhưng có thể chứa prompt, filename, URL hoặc service data. Bảo vệ data directory và backup; review trace trước khi chia sẻ.
+
+## Troubleshooting
+
+- **Overview trống**: chạy một non-test conversation, kiểm tra khoảng thời gian đã chọn bao gồm nó và refresh. Test run bị loại khỏi KPI tổng hợp.
+- **Health data unavailable**: kiểm tra `http://127.0.0.1:51718/health` và gateway log. Nếu endpoint tối thiểu cũng fail thì gateway chưa sẵn sàng.
+- **Task đang chạy biến mất sau restart**: mọi run đều là row đã persist. Khi khởi động, các run còn đánh dấu `running` do process chết được reconcile thành `interrupted` — bản ghi vẫn còn và được đánh dấu trung thực. Chỉ live event streaming là process-local; status và history của run vẫn đọc từ database sau restart.
+- **Cost bằng zero**: model có thể là local, custom, hoặc thiếu pricing metadata. Token count vẫn hữu ích khi cost không có.
+- **Trace không hiển thị tool mong đợi**: model có thể không chọn nó, schema chưa load, hoặc request fail trước mediation. So sánh streaming event của conversation, capability đã load và audit record.

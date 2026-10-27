@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import {
-  X, Save, Copy, Download, Upload, Power, Trash2, ArrowLeft,
-  FileText, Folder, ChevronRight, ChevronDown, FolderOpen,
+  X, Save, Copy, Download, Upload, Power, Trash2,
+  ChevronRight, ChevronDown,
 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { useConfirm } from "@/lib/confirmHook";
@@ -14,11 +14,12 @@ import type {
   Provider,
   Skill,
   SkillInfo,
-  WorkspaceEntry,
 } from "@/lib/types";
 import { ModelSelect } from "@/components/ModelSelect";
 import { ThinkingToggle } from "@/components/ThinkingToggle";
-import { PreviewPanel } from "@/components/previews/PreviewPanel";
+import { Button } from "@/components/ui/button";
+import { FilterPills } from "@/components/ui/filter-pills";
+import { Select } from "@/components/ui/select";
 
 interface SettingsOverlayProps {
   agent: Agent | null;
@@ -28,7 +29,7 @@ interface SettingsOverlayProps {
   providers: Provider[];
 }
 
-const TABS = ["General", "Capabilities", "Memory", "Skills", "Workspace", "Channels"] as const;
+const TABS = ["General", "Capabilities", "Memory", "Skills", "Channels"] as const;
 type Tab = (typeof TABS)[number];
 
 export function SettingsOverlay({ agent, open, onClose, onSaved, providers }: SettingsOverlayProps) {
@@ -64,63 +65,50 @@ export function SettingsOverlay({ agent, open, onClose, onSaved, providers }: Se
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center"
-      style={{ background: "rgba(0,0,0,0.25)" }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/25"
       onClick={onClose}
     >
       <div
-        className="flex h-[80vh] w-full max-w-2xl flex-col rounded-lg border shadow-2xl"
-        style={{ background: "var(--white)", borderColor: "var(--border)" }}
+        className="flex h-[80vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div
-          className="flex shrink-0 items-center justify-between px-6 py-4"
-          style={{ borderBottom: "1px solid var(--border)" }}
-        >
-          <h2 className="text-[16px] font-semibold text-[var(--ink)]">
-            {effectiveAgent?.name || "Agent"} Settings
-          </h2>
+        <div className="flex shrink-0 items-center justify-between border-b border-line px-5 py-3.5">
+          <div>
+            <h2 className="text-[15px] font-semibold text-ink">
+              {effectiveAgent?.name || "Agent"} settings
+            </h2>
+            <p className="mt-0.5 text-[12px] text-ink-3">
+              Identity, model, capabilities, memory and data.
+            </p>
+          </div>
           <div className="flex items-center gap-3">
             {savedMsg && (
-              <span className="text-[12px] font-mono" style={{ color: "var(--success)" }}>
+              <span className="rounded-full bg-accent-tint px-2.5 py-0.5 text-[11px] font-medium text-accent">
                 {savedMsg}
               </span>
             )}
             <button
               onClick={onClose}
-              className="flex h-7 w-7 items-center justify-center rounded text-[var(--ink-2)] transition hover:bg-[var(--border)] hover:text-[var(--ink)]"
-              style={{ border: "none", background: "none", cursor: "pointer" }}
+              className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md border-none bg-transparent text-ink-muted transition-colors hover:bg-sunken hover:text-ink"
             >
               <X className="h-4 w-4" />
             </button>
           </div>
         </div>
 
-        {/* Tabs */}
-        <div
-          className="flex shrink-0 gap-1 overflow-x-auto px-6"
-          style={{ borderBottom: "1px solid var(--border)" }}
-        >
-          {TABS.map((t) => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className="whitespace-nowrap border-b-2 px-3 py-2.5 text-[13px] transition"
-              style={{
-                borderColor: tab === t ? "var(--accent)" : "transparent",
-                color: tab === t ? "var(--ink)" : "var(--ink-2)",
-                background: "none",
-                cursor: "pointer",
-              }}
-            >
-              {t}
-            </button>
-          ))}
+        {/* Tabs — segmented */}
+        <div className="shrink-0 border-b border-line px-5 py-3">
+          <FilterPills
+            pills={TABS.map((t) => ({ key: t, label: t }))}
+            active={tab}
+            onChange={(k) => setTab(k as Tab)}
+            variant="segmented"
+          />
         </div>
 
         {/* Content — scrollable */}
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto p-5">
           {tab === "General" && (
             <GeneralTab agent={effectiveAgent} providers={providers} onSaved={onSaved} onClose={onClose} showSaved={showSaved} />
           )}
@@ -129,7 +117,6 @@ export function SettingsOverlay({ agent, open, onClose, onSaved, providers }: Se
           )}
           {tab === "Memory" && <MemoryTab agentId={agent?.id || ""} onClose={onClose} showSaved={showSaved} />}
           {tab === "Skills" && <SkillsTab agentId={agent?.id || ""} showSaved={showSaved} />}
-          {tab === "Workspace" && <WorkspaceTab agentId={agent?.id || ""} showSaved={showSaved} />}
           {tab === "Channels" && <ChannelsTab agentId={agent?.id || ""} />}
         </div>
       </div>
@@ -290,7 +277,7 @@ function GeneralTab({
     input.click();
   };
 
-  if (!agent) return <p className="text-[13px] text-[var(--ink-2)]">Loading...</p>;
+  if (!agent) return <p className="text-[13px] text-ink-2">Loading...</p>;
 
   return (
     <div className="space-y-8">
@@ -300,31 +287,27 @@ function GeneralTab({
           <input
             value={agent.id}
             disabled
-            className="w-full rounded-[5px] border px-3 py-2 font-mono text-[12px] text-[var(--ink-3)]"
-            style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+            className="w-full rounded-md border px-3 py-2 font-mono text-[12px] text-ink-3"
+            style={{ borderColor: "var(--border)", background: "var(--ground)" }}
           />
         </Field>
         <Field label="Name">
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            className="w-full rounded-[5px] border px-3 py-2 text-[13px] text-[var(--ink)] outline-none"
-            style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+            className="w-full rounded-md border px-3 py-2 text-[13px] text-ink outline-none"
+            style={{ borderColor: "var(--border)", background: "var(--ground)" }}
           />
         </Field>
         <div className="grid grid-cols-2 gap-4">
           <Field label="Provider">
-            <select
+            <Select
               value={providerId}
-              onChange={(e) => setProviderId(e.target.value)}
-              className="w-full rounded-[5px] border px-3 py-2 text-[13px] text-[var(--ink)] outline-none"
-              style={{ borderColor: "var(--border)", background: "var(--surface)" }}
-            >
-              <option value="">— Select —</option>
-              {providers.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
+              onChange={setProviderId}
+              options={providers.map((p) => ({ value: p.id, label: p.name }))}
+              className="w-full rounded-md border border-[var(--border)] bg-ground px-3 py-2 text-[13px] text-ink outline-none"
+              align="left" panelClassName="text-[13px]"
+            />
           </Field>
           <Field label="Default Model">
             <ModelSelect
@@ -350,7 +333,7 @@ function GeneralTab({
                   onToggle={(enabled) => setThinkingEnabled(enabled)}
                   onEffortChange={setThinkingEffort}
                 />
-                <span className="text-[11px] text-[var(--ink-3)]">
+                <span className="text-[11px] text-ink-3">
                   {thinkingEnabled === null
                     ? "Model default — no explicit thinking"
                     : thinkingEnabled
@@ -371,8 +354,8 @@ function GeneralTab({
             onChange={(e) => setSoul(e.target.value)}
             placeholder="What this agent believes in, its core values and principles..."
             rows={4}
-            className="w-full resize-y rounded-[5px] border px-3 py-2 text-[13px] leading-[1.6] text-[var(--ink)] outline-none"
-            style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+            className="w-full resize-y rounded-md border px-3 py-2 text-[13px] leading-[1.6] text-ink outline-none"
+            style={{ borderColor: "var(--border)", background: "var(--ground)" }}
           />
         </Field>
         <Field label="Persona — tone, communication style">
@@ -381,8 +364,8 @@ function GeneralTab({
             onChange={(e) => setPersona(e.target.value)}
             placeholder="How this agent talks, its personality and communication style..."
             rows={4}
-            className="w-full resize-y rounded-[5px] border px-3 py-2 text-[13px] leading-[1.6] text-[var(--ink)] outline-none"
-            style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+            className="w-full resize-y rounded-md border px-3 py-2 text-[13px] leading-[1.6] text-ink outline-none"
+            style={{ borderColor: "var(--border)", background: "var(--ground)" }}
           />
         </Field>
         <Field label="Task — mission, instructions">
@@ -391,8 +374,8 @@ function GeneralTab({
             onChange={(e) => setTask(e.target.value)}
             placeholder="What this agent should do, its mission and instructions..."
             rows={4}
-            className="w-full resize-y rounded-[5px] border px-3 py-2 text-[13px] leading-[1.6] text-[var(--ink)] outline-none"
-            style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+            className="w-full resize-y rounded-md border px-3 py-2 text-[13px] leading-[1.6] text-ink outline-none"
+            style={{ borderColor: "var(--border)", background: "var(--ground)" }}
           />
         </Field>
       </Section>
@@ -400,15 +383,16 @@ function GeneralTab({
       {/* Section: Limits */}
       <Section title="Limits & Sandbox">
         <Field label="Sandbox mode">
-          <select
+          <Select
             value={sandboxMode}
-            onChange={(e) => setSandboxMode(e.target.value as "strict" | "open")}
-            className="w-full rounded-[5px] px-2.5 py-1.5 text-[13px]"
-            style={{ border: "1px solid var(--border)", background: "var(--surface)" }}
-          >
-            <option value="strict">Strict — workspace only</option>
-            <option value="open">Open — full filesystem access</option>
-          </select>
+            onChange={(v) => setSandboxMode(v as "strict" | "open")}
+            options={[
+              { value: "strict", label: "Strict — workspace only" },
+              { value: "open", label: "Open — full filesystem access" },
+            ]}
+            className="w-full rounded-md border border-line bg-ground px-2.5 py-1.5 text-[13px]"
+            align="left" panelClassName="text-[13px]"
+          />
         </Field>
         <div className="grid grid-cols-2 gap-4">
           <Field label="Max turns per run">
@@ -427,7 +411,7 @@ function GeneralTab({
             <NumberInput value={coreMax} onChange={(v) => setCoreMax(v ?? 32768)} placeholder="32768" />
           </Field>
         </div>
-        <p className="text-[12px] text-[var(--ink-3)]">
+        <p className="text-[12px] text-ink-3">
           Heartbeat scheduling is configured in the{" "}
           <a href="/scheduler" className="underline" style={{ color: "var(--accent)" }}>Scheduler</a> page.
         </p>
@@ -450,21 +434,21 @@ function GeneralTab({
           </button>
           <button
             onClick={handleDuplicate}
-            className="flex items-center gap-1.5 rounded-[6px] px-3 py-2 text-[13px] text-[var(--ink-2)] transition"
+            className="flex items-center gap-1.5 rounded-[6px] px-3 py-2 text-[13px] text-ink-2 transition"
             style={{ border: "1px solid var(--border)", background: "none", cursor: "pointer" }}
           >
             <Copy className="h-3.5 w-3.5" /> Duplicate
           </button>
           <button
             onClick={handleExport}
-            className="flex items-center gap-1.5 rounded-[6px] px-3 py-2 text-[13px] text-[var(--ink-2)] transition"
+            className="flex items-center gap-1.5 rounded-[6px] px-3 py-2 text-[13px] text-ink-2 transition"
             style={{ border: "1px solid var(--border)", background: "none", cursor: "pointer" }}
           >
             <Download className="h-3.5 w-3.5" /> Export YAML
           </button>
           <button
             onClick={handleImport}
-            className="flex items-center gap-1.5 rounded-[6px] px-3 py-2 text-[13px] text-[var(--ink-2)] transition"
+            className="flex items-center gap-1.5 rounded-[6px] px-3 py-2 text-[13px] text-ink-2 transition"
             style={{ border: "1px solid var(--border)", background: "none", cursor: "pointer" }}
           >
             <Upload className="h-3.5 w-3.5" /> Import YAML
@@ -809,35 +793,29 @@ function CapabilitiesTab({
     <div className="space-y-3">
       {/* YOLO mode banner — per-agent approval bypass */}
       <div
-        className="flex items-center justify-between rounded-[6px] border px-4 py-3"
-        style={{
-          borderColor: yoloMode || globalYolo ? "var(--danger)" : "var(--border)",
-          background: yoloMode || globalYolo ? "rgba(239,68,68,0.05)" : "transparent",
-        }}
+        className={`flex items-center justify-between rounded-lg border px-4 py-3 transition ${
+          yoloMode || globalYolo ? "border-danger bg-danger-tint" : "border-line"
+        }`}
       >
         <div>
           <div className="flex items-center gap-2">
-            <span className="text-[13px] font-semibold text-[var(--ink)]">YOLO Mode</span>
+            <span className="text-[13px] font-semibold text-ink">YOLO Mode</span>
             {(yoloMode || globalYolo) && (
-              <span
-                className="rounded-full px-2 py-0.5 text-[9px] font-mono uppercase"
-                style={{ background: "var(--danger)", color: "#fff" }}
-              >
+              <span className="rounded-full bg-danger px-2 py-0.5 text-[9px] font-mono uppercase text-white">
                 Active
               </span>
             )}
           </div>
-          <p className="mt-0.5 text-[11px] text-[var(--ink-3)]">
+          <p className="mt-0.5 text-[11px] text-ink-3">
             Skip approval gates for this agent only. Tools execute immediately without confirmation.
           </p>
           {globalYolo && (
-            <p className="mt-0.5 text-[11px] font-medium" style={{ color: "var(--danger)" }}>
+            <p className="mt-0.5 text-[11px] font-medium text-danger">
               Forced on for all agents via the global YOLO setting.{" "}
               <button
                 type="button"
                 onClick={disableGlobalYolo}
-                className="underline underline-offset-2"
-                style={{ color: "var(--danger)", background: "none", border: "none", cursor: "pointer", font: "inherit", padding: 0 }}
+                className="text-danger underline underline-offset-2"
               >
                 turn off global override
               </button>
@@ -845,22 +823,20 @@ function CapabilitiesTab({
           )}
         </div>
         <button
+          type="button"
           onClick={toggleYolo}
           disabled={globalYolo}
-          className="rounded-[5px] px-3 py-1.5 text-[12px] font-medium transition"
-          style={{
-            border: "1px solid var(--border)",
-            background: yoloMode ? "var(--danger)" : "none",
-            color: yoloMode ? "#fff" : "var(--ink-2)",
-            cursor: globalYolo ? "not-allowed" : "pointer",
-            opacity: globalYolo ? 0.5 : 1,
-          }}
+          className={`rounded-md border px-3 py-1.5 text-[12px] font-medium transition ${
+            yoloMode
+              ? "border-danger bg-danger text-white"
+              : "border-line text-ink-2 hover:border-ink-3"
+          } ${globalYolo ? "cursor-not-allowed opacity-50" : ""}`}
         >
           {yoloMode ? "Disable" : "Enable"}
         </button>
       </div>
 
-      <p className="text-[12px] text-[var(--ink-3)]">
+      <p className="text-[12px] text-ink-3">
         Permit tools directly or make large MCP integrations discoverable on demand. Egress tools can require approval.
       </p>
       <CapabilityGroup
@@ -898,12 +874,12 @@ function CapabilitiesTab({
         );
       })}
       {saveError && (
-        <p role="alert" className="font-mono text-[11px]" style={{ color: "var(--danger)" }}>
+        <p role="alert" className="font-mono text-[11px] text-danger">
           {saveError}
         </p>
       )}
       {saving && (
-        <p className="font-mono text-[11px] text-[var(--ink-3)]">Saving…</p>
+        <p className="font-mono text-[11px] text-ink-3">Saving…</p>
       )}
     </div>
   );
@@ -953,62 +929,59 @@ function CapabilityGroup({
   };
 
   return (
-    <div className="rounded-[6px] border" style={{ borderColor: "var(--border)" }}>
+    <div className="overflow-hidden rounded-lg border border-line bg-surface">
       <div
-        className="flex items-center gap-2 px-4 py-2.5 cursor-pointer"
+        className="flex cursor-pointer items-center gap-2 px-4 py-2.5 transition hover:bg-ground"
         onClick={() => setExpanded(!expanded)}
       >
         {expanded ? (
-          <ChevronDown className="h-3.5 w-3.5" style={{ color: "var(--ink-3)" }} />
+          <ChevronDown className="h-3.5 w-3.5 text-ink-3" />
         ) : (
-          <ChevronRight className="h-3.5 w-3.5" style={{ color: "var(--ink-3)" }} />
+          <ChevronRight className="h-3.5 w-3.5 text-ink-3" />
         )}
-        <span className="font-mono text-[12px] font-medium uppercase tracking-wider" style={{ color: "var(--ink-2)" }}>
+        <span className="font-mono text-[11px] font-medium uppercase tracking-[0.05em] text-ink-2">
           {title}
         </span>
-        <span className="font-mono text-[11px]" style={{ color: "var(--ink-3)" }}>
+        <span className="font-mono text-[11px] text-ink-3">
           {grantedCount}/{caps.length}
         </span>
         {serverGrantActive ? (
-          <select
+          <Select
             value={serverMode}
             onClick={(event) => event.stopPropagation()}
-            onChange={(event) => onServerModeChange?.(event.target.value as GrantMode)}
-            className="ml-auto rounded-[4px] border px-1.5 py-1 text-[10px]"
-            style={{ borderColor: "var(--border)", color: "var(--ink-2)", background: "var(--white)" }}
-          >
-            <option value="none">Not permitted</option>
-            <option value="on_demand">Permitted on demand</option>
-            <option value="always">Always available</option>
-          </select>
+            onChange={(v) => onServerModeChange?.(v as GrantMode)}
+            options={[
+              { value: "none", label: "Not permitted" },
+              { value: "on_demand", label: "Permitted on demand" },
+              { value: "always", label: "Always available" },
+            ]}
+            className="ml-auto h-7 rounded-md border border-line bg-ground px-2 text-[11px] text-ink-2 outline-none transition focus:border-accent"
+          />
         ) : (
           <button
             onClick={(event) => { event.stopPropagation(); handleToggleAll(); }}
-            className="ml-auto rounded-[4px] px-2 py-0.5 font-mono text-[10px] transition"
-            style={{
-              background: "none",
-              border: "1px solid var(--border)",
-              color: "var(--ink-3)",
-              cursor: "pointer",
-            }}
+            className="ml-auto rounded-md border border-line px-2.5 py-1 font-mono text-[10px] text-ink-3 transition hover:border-ink-3 hover:text-ink-2"
           >
             {allGranted ? "Disable all" : "Enable all"}
           </button>
         )}
         {serverGrantActive && serverMode !== "none" && caps.some((cap) => cap.egress) && (
-          <label className="flex items-center gap-1.5 text-[10px] text-[var(--ink-2)]" onClick={(event) => event.stopPropagation()}>
+          <label
+            className="flex items-center gap-1.5 text-[11px] text-ink-2"
+            onClick={(event) => event.stopPropagation()}
+          >
             <input
               type="checkbox"
               checked={serverRequiresApproval}
               onChange={(event) => onServerApprovalChange?.(event.target.checked)}
-              style={{ cursor: "pointer" }}
+              className="cursor-pointer accent-[var(--accent)]"
             />
             approval
           </label>
         )}
       </div>
       {expanded && (
-        <div className="space-y-1.5 px-4 pb-3">
+        <div className="space-y-1.5 border-t border-line px-4 pb-3 pt-3">
           {caps.map((cap) => {
             const mode = modeFor(cap);
             const viaServer = serverGrantActive && serverMode !== "none" && isInherited(cap);
@@ -1016,22 +989,20 @@ function CapabilityGroup({
             return (
               <div
                 key={cap.name}
-                className="flex items-center justify-between rounded-[5px] px-3 py-2"
-                style={{ background: "var(--surface)" }}
+                className="flex items-center justify-between gap-3 rounded-md bg-ground px-3 py-2"
               >
                 <div className="flex min-w-0 items-center gap-2.5">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="font-mono text-[12px] font-medium text-[var(--ink)]">{cap.name}</span>
+                      <span className="font-mono text-[12px] font-medium text-ink">{cap.name}</span>
                       {cap.egress && (
-                        <span className="rounded-full px-1.5 py-0.5 text-[9px] font-mono" style={{ background: "rgba(245,158,11,0.1)", color: "var(--warning)" }}>
+                        <span className="rounded-full bg-warning-tint px-1.5 py-0.5 font-mono text-[9px] text-warning">
                           egress
                         </span>
                       )}
                     </div>
                     <p
-                      className="text-[11px] text-[var(--ink-2)]"
-                      style={{ cursor: cap.description.length > 80 ? "pointer" : "default" }}
+                      className={`text-[11px] text-ink-2 ${cap.description.length > 80 ? "cursor-pointer" : ""}`}
                       title={cap.description.length > 80 ? cap.description : undefined}
                       onClick={() => cap.description.length > 80 && setExpandedDesc(expandedDesc === cap.name ? null : cap.name)}
                     >
@@ -1039,7 +1010,7 @@ function CapabilityGroup({
                         ? (expandedDesc === cap.name ? cap.description : cap.description.slice(0, 80) + "…")
                         : cap.description}
                       {cap.description.length > 80 && (
-                        <span className="ml-1 font-mono text-[10px] text-[var(--ink-3)]">
+                        <span className="ml-1 font-mono text-[10px] text-ink-3">
                           {expandedDesc === cap.name ? "[-]" : "[+]"}
                         </span>
                       )}
@@ -1048,21 +1019,26 @@ function CapabilityGroup({
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   {viaServer && (
-                    <span className="font-mono text-[10px] text-[var(--ink-3)]">via server</span>
+                    <span className="font-mono text-[10px] text-ink-3">via server</span>
                   )}
-                  <select
+                  <Select
                     value={mode}
-                    onChange={(event) => onModeChange(cap.name, event.target.value as GrantMode)}
-                    className="rounded-[4px] border px-1.5 py-1 text-[10px]"
-                    style={{ borderColor: "var(--border)", color: "var(--ink-2)", background: "var(--white)" }}
-                  >
-                    <option value="none">Not permitted</option>
-                    <option value="on_demand">On demand</option>
-                    <option value="always">Always</option>
-                  </select>
+                    onChange={(v) => onModeChange(cap.name, v as GrantMode)}
+                    options={[
+                      { value: "none", label: "Not permitted" },
+                      { value: "on_demand", label: "On demand" },
+                      { value: "always", label: "Always" },
+                    ]}
+                    className="h-7 rounded-md border border-line bg-surface px-2 text-[11px] text-ink-2 outline-none transition focus:border-accent"
+                  />
                   {!viaServer && mode !== "none" && cap.egress && (
-                    <label className="flex items-center gap-1.5 text-[10px] text-[var(--ink-2)]">
-                      <input type="checkbox" checked={needsApproval} onChange={() => toggleApproval(cap.name)} style={{ cursor: "pointer" }} />
+                    <label className="flex items-center gap-1.5 text-[11px] text-ink-2">
+                      <input
+                        type="checkbox"
+                        checked={needsApproval}
+                        onChange={() => toggleApproval(cap.name)}
+                        className="cursor-pointer accent-[var(--accent)]"
+                      />
                       approval
                     </label>
                   )}
@@ -1180,27 +1156,27 @@ function MemoryTab({ agentId }: { agentId: string; onClose: () => void; showSave
     }
   };
 
-  if (loading) return <p className="text-[13px] text-[var(--ink-2)]">Loading…</p>;
+  if (loading) return <p className="text-[13px] text-ink-2">Loading…</p>;
 
   return (
     <div className="space-y-3">
-      <p className="text-[12px] text-[var(--ink-3)]">
+      <p className="text-[12px] text-ink-3">
         Core memory is agent-wide and personal — running sessions keep their
         pinned snapshot; edits apply to future sessions.
       </p>
       {managed && (
         <div>
-          <p className="text-[12px] font-medium text-[var(--ink-2)] mb-1">Managed identity (read-only)</p>
+          <p className="text-[12px] font-medium text-ink-2 mb-1">Managed identity (read-only)</p>
           <pre
-            className="w-full max-h-40 overflow-y-auto whitespace-pre-wrap break-all rounded-[5px] border px-3 py-2 font-mono text-[11px] leading-[1.5] text-[var(--ink-3)]"
-            style={{ borderColor: "var(--border)", background: "var(--surface-2, var(--surface))" }}
+            className="w-full max-h-40 overflow-y-auto whitespace-pre-wrap break-all rounded-md border px-3 py-2 font-mono text-[11px] leading-[1.5] text-ink-3"
+            style={{ borderColor: "var(--border)", background: "var(--ground)" }}
           >
             {managed}
           </pre>
         </div>
       )}
       <div>
-        <p className="text-[12px] font-medium text-[var(--ink-2)] mb-1">Curated memory</p>
+        <p className="text-[12px] font-medium text-ink-2 mb-1">Curated memory</p>
         <textarea
           value={content}
           onChange={(e) => setContent(e.target.value)}
@@ -1208,12 +1184,12 @@ function MemoryTab({ agentId }: { agentId: string; onClose: () => void; showSave
 
 Durable preferences and standing facts…"
           rows={14}
-          className="w-full resize-y rounded-[5px] border px-3 py-2 font-mono text-[12px] leading-[1.6] text-[var(--ink)] outline-none"
-          style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+          className="w-full resize-y rounded-md border px-3 py-2 font-mono text-[12px] leading-[1.6] text-ink outline-none"
+          style={{ borderColor: "var(--border)", background: "var(--ground)" }}
         />
       </div>
       <div className="flex items-center justify-between">
-        <p className="text-[11px] text-[var(--ink-3)]">
+        <p className="text-[11px] text-ink-3">
           {meta.token_count != null && meta.max_tokens != null
             ? `${meta.token_count} / ${meta.max_tokens} tokens`
             : ""}
@@ -1228,7 +1204,7 @@ Durable preferences and standing facts…"
             // Cleanup only makes sense against the saved bytes — a dirty
             // draft hasn't been persisted yet, so it's disabled until saved.
             disabled={cleaning || saving || dirty || loadFailed}
-            className="rounded-[5px] border px-3 py-1.5 text-[12px] text-[var(--ink-2)] disabled:opacity-50"
+            className="rounded-md border px-3 py-1.5 text-[12px] text-ink-2 disabled:opacity-50"
             style={{ borderColor: "var(--border)" }}
           >
             {cleaning ? "Cleaning…" : "Clean Up"}
@@ -1304,6 +1280,12 @@ function SkillsTab({ agentId, showSaved }: { agentId: string; showSaved: (msg: s
   };
 
   const handlePromote = async (skill: Skill) => {
+    const ok = await confirm({
+      title: "Promote to global?",
+      message: `Promote "${skill.name}" to a global skill? It becomes available to all agents and leaves this agent's workspace.`,
+      confirmLabel: "Promote",
+    });
+    if (!ok) return;
     try {
       await api.promoteSkill(skill.id!, { change_summary: "promoted from agent settings" });
       load();
@@ -1313,39 +1295,39 @@ function SkillsTab({ agentId, showSaved }: { agentId: string; showSaved: (msg: s
     }
   };
 
-  if (loading) return <p className="text-[13px] text-[var(--ink-2)]">Loading…</p>;
+  if (loading) return <p className="text-[13px] text-ink-2">Loading…</p>;
 
   return (
     <div className="space-y-5">
       <div>
         <div className="flex items-center justify-between mb-2">
-          <p className="text-[12px] font-medium text-[var(--ink-2)]">
+          <p className="text-[12px] font-medium text-ink-2">
             Global Skills ({systemSkills.length})
           </p>
           <a
             href="/skills"
-            className="text-[12px] text-[var(--accent)] hover:underline"
+            className="text-[12px] text-accent hover:underline"
           >
             Manage in Skills page →
           </a>
         </div>
-        <p className="text-[11px] text-[var(--ink-3)] mb-3">
+        <p className="text-[11px] text-ink-3 mb-3">
           Available to all agents. Use /skillname in chat to activate.
         </p>
         {systemSkills.length === 0 ? (
-          <p className="py-4 text-center text-[13px] text-[var(--ink-3)]">No global skills installed.</p>
+          <p className="py-4 text-center text-[13px] text-ink-3">No global skills installed.</p>
         ) : (
           <div className="space-y-1.5">
             {systemSkills.map((skill) => (
               <div
                 key={skill.name}
-                className="flex items-center justify-between rounded-[5px] border px-4 py-2.5"
-                style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+                className="flex items-center justify-between rounded-md border px-4 py-2.5"
+                style={{ borderColor: "var(--border)", background: "var(--ground)" }}
               >
                 <div className="min-w-0 flex-1">
-                  <p className="font-mono text-[13px] font-medium text-[var(--ink)]">{skill.name}</p>
+                  <p className="font-mono text-[13px] font-medium text-ink">{skill.name}</p>
                   {skill.description && (
-                    <p className="text-[12px] text-[var(--ink-2)] truncate">{skill.description}</p>
+                    <p className="text-[12px] text-ink-2 truncate">{skill.description}</p>
                   )}
                 </div>
               </div>
@@ -1355,14 +1337,14 @@ function SkillsTab({ agentId, showSaved }: { agentId: string; showSaved: (msg: s
       </div>
 
       <div style={{ borderTop: "1px solid var(--border)", paddingTop: "16px" }}>
-        <p className="text-[12px] font-medium text-[var(--ink-2)] mb-2">
+        <p className="text-[12px] font-medium text-ink-2 mb-2">
           Agent Skills ({agentSkills.length})
         </p>
-        <p className="text-[11px] text-[var(--ink-3)] mb-3">
+        <p className="text-[11px] text-ink-3 mb-3">
           Created by this agent via skill-creator. Promote to global to share with other agents.
         </p>
         {agentSkills.length === 0 ? (
-          <p className="py-4 text-center text-[13px] text-[var(--ink-3)]">
+          <p className="py-4 text-center text-[13px] text-ink-3">
             No agent-specific skills. Use the skill-creator skill in chat to create one.
           </p>
         ) : (
@@ -1370,20 +1352,20 @@ function SkillsTab({ agentId, showSaved }: { agentId: string; showSaved: (msg: s
             {agentSkills.map((skill) => (
               <div
                 key={skill.name}
-                className="flex items-center justify-between rounded-[5px] border px-4 py-2.5"
-                style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+                className="flex items-center justify-between rounded-md border px-4 py-2.5"
+                style={{ borderColor: "var(--border)", background: "var(--ground)" }}
               >
                 <div className="min-w-0 flex-1">
-                  <p className="font-mono text-[13px] font-medium text-[var(--ink)]">{skill.name}</p>
+                  <p className="font-mono text-[13px] font-medium text-ink">{skill.name}</p>
                   {skill.description && (
-                    <p className="text-[12px] text-[var(--ink-2)] truncate">{skill.description}</p>
+                    <p className="text-[12px] text-ink-2 truncate">{skill.description}</p>
                   )}
                 </div>
                 <div className="flex items-center gap-2 ml-2">
                   {skill.id && (
                     <button
                       onClick={() => handlePromote(skill)}
-                      className="text-[12px] text-[var(--accent)] transition hover:underline"
+                      className="text-[12px] text-accent transition hover:underline"
                       style={{ border: "none", background: "none", cursor: "pointer" }}
                       title="Promote to global"
                     >
@@ -1392,7 +1374,7 @@ function SkillsTab({ agentId, showSaved }: { agentId: string; showSaved: (msg: s
                   )}
                   <button
                     onClick={() => handleDeleteAgentSkill(skill.name)}
-                    className="text-[var(--ink-3)] transition hover:text-[var(--danger)]"
+                    className="text-ink-3 transition hover:text-danger"
                     style={{ border: "none", background: "none", cursor: "pointer" }}
                   >
                     <Trash2 className="h-4 w-4" />
@@ -1404,331 +1386,6 @@ function SkillsTab({ agentId, showSaved }: { agentId: string; showSaved: (msg: s
         )}
       </div>
     </div>
-  );
-}
-
-// --- Workspace Tab ---
-//
-// Lazy file tree + split preview (W3): each directory fetches its children
-// on first expand — the API lists one level at a time — and caches them by
-// path, indenting nested levels like the Skills resource tree. The tree
-// stays navigable on the left while the shared PreviewPanel renders the
-// selected file on the right; narrow layouts fall back to a full-width
-// preview with Back.
-
-interface WorkspaceTreeProps {
-  /** dir path ("" = root) → loaded children */
-  tree: Map<string, WorkspaceEntry[]>;
-  expanded: Set<string>;
-  loadingDirs: Set<string>;
-  previewPath: string | null;
-  onToggle: (dirPath: string) => void;
-  onOpen: (filePath: string) => void;
-  onDelete: (entry: WorkspaceEntry, rel: string) => void;
-}
-
-function WorkspaceTab({ agentId, showSaved }: { agentId: string; showSaved: (msg: string) => void }) {
-  const { confirm } = useConfirm();
-  const [tree, setTree] = useState<Map<string, WorkspaceEntry[]>>(new Map());
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [loadingDirs, setLoadingDirs] = useState<Set<string>>(new Set());
-  const [previewPath, setPreviewPath] = useState<string | null>(null);
-  const listRef = useRef<HTMLDivElement>(null);
-  // Saved when the preview opens: where the browser was scrolled and which
-  // row was selected, so closing the preview lands the operator back
-  // exactly where they left off.
-  const browseStateRef = useRef<{ scrollTop: number; selected: string | null }>({
-    scrollTop: 0,
-    selected: null,
-  });
-
-  const fetchDir = useCallback(async (dirPath: string) => {
-    if (!agentId) return;
-    setLoadingDirs((prev) => new Set(prev).add(dirPath));
-    try {
-      const result = await api.listWorkspace(agentId, dirPath);
-      const list = result.type === "dir" ? result.entries ?? [] : [];
-      setTree((prev) => new Map(prev).set(dirPath, list));
-    } catch {
-      // Same contract as before: a failed listing renders as empty.
-      setTree((prev) => new Map(prev).set(dirPath, []));
-    } finally {
-      setLoadingDirs((prev) => {
-        const next = new Set(prev);
-        next.delete(dirPath);
-        return next;
-      });
-    }
-  }, [agentId]);
-
-  useEffect(() => { void fetchDir(""); }, [fetchDir]);
-
-  const toggleDir = (dirPath: string) => {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(dirPath)) next.delete(dirPath);
-      else next.add(dirPath);
-      return next;
-    });
-    if (!tree.has(dirPath) && !loadingDirs.has(dirPath)) void fetchDir(dirPath);
-  };
-
-  const openFile = (filePath: string) => {
-    browseStateRef.current = {
-      scrollTop: listRef.current?.scrollTop ?? 0,
-      selected: filePath,
-    };
-    setPreviewPath(filePath);
-  };
-
-  const closePreview = () => {
-    const saved = browseStateRef.current;
-    setPreviewPath(null);
-    // Restore the browser's scroll + focus after React remounts the list.
-    requestAnimationFrame(() => {
-      if (listRef.current) listRef.current.scrollTop = saved.scrollTop;
-      if (saved.selected) {
-        listRef.current
-          ?.querySelector<HTMLButtonElement>(`[data-path="${CSS.escape(saved.selected)}"]`)
-          ?.focus();
-      }
-    });
-  };
-
-  const errDetail = (e: unknown) => {
-    const m = e instanceof Error ? e.message : String(e);
-    try {
-      return JSON.parse(m.replace(/^\d+:\s*/, "")).detail ?? m;
-    } catch {
-      return m;
-    }
-  };
-
-  // Splice a deleted path out of its parent's cached children; deleting a
-  // dir also drops its cached subtree (expanded/loading state included) —
-  // the server already removed everything, so no refetch is needed.
-  const pruneDeleted = (rel: string, wasDir: boolean) => {
-    const parent = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
-    const name = rel.split("/").pop()!;
-    setTree((prev) => {
-      const next = new Map(prev);
-      const list = next.get(parent);
-      if (list) next.set(parent, list.filter((e) => e.name !== name));
-      if (wasDir) {
-        for (const key of [...next.keys()]) {
-          if (key === rel || key.startsWith(`${rel}/`)) next.delete(key);
-        }
-      }
-      return next;
-    });
-    if (wasDir) {
-      const pruneSet = (prev: Set<string>) => {
-        const next = new Set(prev);
-        for (const key of [...next]) {
-          if (key === rel || key.startsWith(`${rel}/`)) next.delete(key);
-        }
-        return next;
-      };
-      setExpanded(pruneSet);
-      setLoadingDirs(pruneSet);
-    }
-  };
-
-  const handleDelete = async (entry: WorkspaceEntry, rel: string) => {
-    const ok = await confirm({
-      title: `Delete ${entry.type === "dir" ? "folder" : "file"}?`,
-      message: `Delete "${rel}"${entry.type === "dir" ? " and everything inside it" : ""}? This cannot be undone.`,
-      confirmLabel: "Delete",
-      danger: true,
-    });
-    if (!ok) return;
-    try {
-      await api.deleteWorkspaceEntry(agentId, rel);
-      if (previewPath === rel || previewPath?.startsWith(`${rel}/`)) closePreview();
-      pruneDeleted(rel, entry.type === "dir");
-      showSaved(`Deleted ${entry.name}`);
-    } catch (e) {
-      showSaved(`Delete failed: ${errDetail(e)}`);
-    }
-  };
-
-  const rootEntries = tree.get("");
-
-  const treeList = (
-    <div ref={listRef} className="h-full overflow-auto py-1">
-      <WorkspaceTreeLevel
-        dirPath=""
-        depth={0}
-        tree={tree}
-        expanded={expanded}
-        loadingDirs={loadingDirs}
-        previewPath={previewPath}
-        onToggle={toggleDir}
-        onOpen={openFile}
-        onDelete={(entry, rel) => void handleDelete(entry, rel)}
-      />
-      {rootEntries && rootEntries.length === 0 && (
-        <p className="py-8 text-center text-[13px] text-[var(--ink-3)]">Empty directory.</p>
-      )}
-    </div>
-  );
-
-  return (
-    <div className="space-y-3">
-      <div className="flex items-center gap-1.5 text-[12px] text-[var(--ink-2)]">
-        <FolderOpen className="h-3.5 w-3.5" style={{ color: "var(--accent)" }} />
-        <span>workspace</span>
-      </div>
-
-      {!rootEntries ? (
-        <p className="text-[13px] text-[var(--ink-2)]">Loading…</p>
-      ) : previewPath ? (
-        <div>
-          {/* Narrow layouts get a full-width preview with a way back —
-              the split browser column only exists at md+. */}
-          <button
-            onClick={closePreview}
-            className="mb-2 flex items-center gap-1.5 rounded-[5px] px-2 py-1 text-[12px] text-[var(--ink-2)] transition hover:bg-[var(--surface)] md:hidden"
-            style={{ border: "none", background: "none", cursor: "pointer" }}
-          >
-            <ArrowLeft className="h-3.5 w-3.5" /> Back to Workspace
-          </button>
-          <div className="flex gap-0 overflow-hidden rounded-[5px] border border-[var(--border)]" style={{ height: "60vh" }}>
-            <div className="hidden w-56 shrink-0 overflow-auto border-r border-[var(--border)] p-2 md:block">
-              {treeList}
-            </div>
-            <div className="min-w-0 flex-1">
-              <PreviewPanel
-                agentId={agentId}
-                source={{ path: previewPath }}
-                onClose={closePreview}
-                onDeleted={(p) => {
-                  closePreview();
-                  showSaved(`Deleted ${p.split("/").pop()}`);
-                  // A delete happened inside the file's parent dir — refetch
-                  // it if its children were already loaded so the tree stays
-                  // in sync with the server.
-                  const parent = p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
-                  if (tree.has(parent)) void fetchDir(parent);
-                }}
-              />
-            </div>
-          </div>
-        </div>
-      ) : (
-        <div style={{ maxHeight: "60vh" }}>{treeList}</div>
-      )}
-    </div>
-  );
-}
-
-function WorkspaceTreeLevel({
-  dirPath,
-  depth,
-  tree,
-  expanded,
-  loadingDirs,
-  previewPath,
-  onToggle,
-  onOpen,
-  onDelete,
-}: WorkspaceTreeProps & { dirPath: string; depth: number }) {
-  const entries = tree.get(dirPath) ?? [];
-  return (
-    <>
-      {entries.map((entry) => {
-        const rel = dirPath ? `${dirPath}/${entry.name}` : entry.name;
-        if (entry.type === "dir") {
-          const isOpen = expanded.has(rel);
-          const Chevron = isOpen ? ChevronDown : ChevronRight;
-          const FolderIcon = isOpen ? FolderOpen : Folder;
-          const kids = tree.get(rel);
-          return (
-            <div key={rel}>
-              <div
-                className="group flex w-full items-center rounded-[5px] transition hover:bg-[var(--surface)]"
-                style={{ background: previewPath === rel ? "var(--surface)" : "none" }}
-              >
-                <button
-                  data-path={rel}
-                  onClick={() => onToggle(rel)}
-                  className="flex min-w-0 flex-1 items-center gap-1.5 py-1.5 pr-3 text-[13px]"
-                  style={{ paddingLeft: `${depth * 16 + 8}px`, border: "none", background: "none", cursor: "pointer", color: "var(--ink)" }}
-                >
-                  <Chevron className="h-3 w-3 shrink-0 text-[var(--ink-3)]" />
-                  <FolderIcon className="h-4 w-4 shrink-0" style={{ color: "var(--accent)" }} />
-                  <span className="truncate">{entry.name}</span>
-                </button>
-                <WorkspaceDeleteButton name={entry.name} onClick={() => onDelete(entry, rel)} />
-              </div>
-              {isOpen &&
-                (loadingDirs.has(rel) && !kids ? (
-                  <p
-                    className="py-1.5 text-[12px] text-[var(--ink-3)]"
-                    style={{ paddingLeft: `${(depth + 1) * 16 + 26}px` }}
-                  >
-                    Loading…
-                  </p>
-                ) : kids && kids.length === 0 ? (
-                  <p
-                    className="py-1.5 text-[12px] text-[var(--ink-3)]"
-                    style={{ paddingLeft: `${(depth + 1) * 16 + 26}px` }}
-                  >
-                    Empty
-                  </p>
-                ) : (
-                  <WorkspaceTreeLevel
-                    dirPath={rel}
-                    depth={depth + 1}
-                    tree={tree}
-                    expanded={expanded}
-                    loadingDirs={loadingDirs}
-                    previewPath={previewPath}
-                    onToggle={onToggle}
-                    onOpen={onOpen}
-                    onDelete={onDelete}
-                  />
-                ))}
-            </div>
-          );
-        }
-        return (
-          <div
-            key={rel}
-            className="group flex w-full items-center rounded-[5px] transition hover:bg-[var(--surface)]"
-            style={{ background: previewPath === rel ? "var(--surface)" : "none" }}
-          >
-            <button
-              data-path={rel}
-              onClick={() => onOpen(rel)}
-              className="flex min-w-0 flex-1 items-center gap-2 py-1.5 pr-3 text-[13px]"
-              style={{ paddingLeft: `${depth * 16 + 26}px`, border: "none", background: "none", cursor: "pointer", color: "var(--ink)" }}
-            >
-              <FileText className="h-4 w-4 shrink-0" style={{ color: "var(--ink-3)" }} />
-              <span className="truncate">{entry.name}</span>
-              <span className="ml-auto shrink-0 font-mono text-[11px] text-[var(--ink-3)]">
-                {entry.size > 1024 ? `${(entry.size / 1024).toFixed(1)}KB` : `${entry.size}B`}
-              </span>
-            </button>
-            <WorkspaceDeleteButton name={entry.name} onClick={() => onDelete(entry, rel)} />
-          </div>
-        );
-      })}
-    </>
-  );
-}
-
-function WorkspaceDeleteButton({ name, onClick }: { name: string; onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      aria-label={`Delete ${name}`}
-      title={`Delete ${name}`}
-      className="mr-1 shrink-0 rounded-[3px] p-1 text-[var(--ink-3)] opacity-0 transition hover:bg-[var(--white)] hover:text-[var(--danger)] group-hover:opacity-100"
-      style={{ border: "none", cursor: "pointer" }}
-    >
-      <Trash2 className="h-3.5 w-3.5" />
-    </button>
   );
 }
 
@@ -1755,12 +1412,12 @@ function ChannelsTab({ agentId }: { agentId: string }) {
     <div className="space-y-2">
       {/* Dashboard chat — always active */}
       <div
-        className="flex items-center justify-between rounded-[5px] border px-4 py-3"
-        style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+        className="flex items-center justify-between rounded-md border px-4 py-3"
+        style={{ borderColor: "var(--border)", background: "var(--ground)" }}
       >
         <div>
-          <p className="text-[13px] font-medium text-[var(--ink)]">Dashboard</p>
-          <p className="text-[12px] text-[var(--ink-2)]">Built-in web chat channel</p>
+          <p className="text-[13px] font-medium text-ink">Dashboard</p>
+          <p className="text-[12px] text-ink-2">Built-in web chat channel</p>
         </div>
         <span className="rounded-full px-2 py-0.5 text-[11px] font-mono" style={{ background: "rgba(22,163,74,0.1)", color: "var(--success)" }}>
           Active
@@ -1769,14 +1426,14 @@ function ChannelsTab({ agentId }: { agentId: string }) {
 
       {/* External channels connected to this agent */}
       {loading ? (
-        <p className="py-2 text-[12px] text-[var(--ink-3)]">Loading...</p>
+        <p className="py-2 text-[12px] text-ink-3">Loading...</p>
       ) : channels.length === 0 ? (
         <div
-          className="rounded-[5px] border px-4 py-3"
-          style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+          className="rounded-md border px-4 py-3"
+          style={{ borderColor: "var(--border)", background: "var(--ground)" }}
         >
-          <p className="text-[13px] text-[var(--ink-2)]">No external channels connected</p>
-          <p className="mt-1 text-[12px] text-[var(--ink-3)]">
+          <p className="text-[13px] text-ink-2">No external channels connected</p>
+          <p className="mt-1 text-[12px] text-ink-3">
             Go to the Channels page to connect Telegram, Discord, and other messaging platforms to this agent.
           </p>
         </div>
@@ -1784,16 +1441,16 @@ function ChannelsTab({ agentId }: { agentId: string }) {
         channels.map((ch) => (
           <div
             key={ch.id}
-            className="flex items-center justify-between rounded-[5px] border px-4 py-3"
-            style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+            className="flex items-center justify-between rounded-md border px-4 py-3"
+            style={{ borderColor: "var(--border)", background: "var(--ground)" }}
           >
             <div className="flex items-center gap-2">
               <span className="text-lg">{platformIcons[ch.platform] || "📡"}</span>
               <div>
-                <p className="text-[13px] font-medium text-[var(--ink)]">
+                <p className="text-[13px] font-medium text-ink">
                   {ch.platform.charAt(0).toUpperCase() + ch.platform.slice(1)}
                 </p>
-                <p className="text-[12px] text-[var(--ink-2)]">
+                <p className="text-[12px] text-ink-2">
                   {ch.mode === "polling" ? "Polling" : "Webhook"} mode
                 </p>
               </div>
@@ -1811,7 +1468,7 @@ function ChannelsTab({ agentId }: { agentId: string }) {
         ))
       )}
 
-      <p className="pt-2 text-[12px] text-[var(--ink-3)]">
+      <p className="pt-2 text-[12px] text-ink-3">
         Manage channels in the <a href="/channels" className="underline">Channels page</a>.
       </p>
     </div>
@@ -1823,7 +1480,7 @@ function ChannelsTab({ agentId }: { agentId: string }) {
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="space-y-3">
-      <h3 className="text-[14px] font-semibold text-[var(--ink)]" style={{ paddingBottom: "4px", borderBottom: "1px solid var(--border)" }}>
+      <h3 className="border-b border-line pb-1.5 text-[11px] font-semibold uppercase tracking-[0.05em] text-ink-3">
         {title}
       </h3>
       {children}
@@ -1834,7 +1491,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <label className="mb-1 block text-[12px] font-medium text-[var(--ink-2)]">{label}</label>
+      <label className="mb-1.5 block text-[12px] font-medium text-ink-2">{label}</label>
       {children}
     </div>
   );
@@ -1851,27 +1508,15 @@ function NumberInput({ value, onChange, step, placeholder }: { value: number | n
         const v = e.target.value;
         onChange(v === "" ? null : parseFloat(v) || 0);
       }}
-      className="w-full rounded-[5px] border px-3 py-2 text-[13px] text-[var(--ink)] outline-none"
-      style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+      className="w-full rounded-md border border-line bg-ground px-3 py-2 text-[13px] text-ink outline-none transition focus:border-accent placeholder:text-ink-faint"
     />
   );
 }
 
 function SaveButton({ onClick, disabled, label }: { onClick: () => void; disabled: boolean; label: string }) {
   return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      className="flex items-center gap-1.5 rounded-[6px] px-4 py-2 text-[13px] font-medium transition"
-      style={{
-        background: "var(--ink)",
-        color: "var(--white)",
-        border: "1px solid var(--ink)",
-        cursor: disabled ? "not-allowed" : "pointer",
-        opacity: disabled ? 0.5 : 1,
-      }}
-    >
+    <Button size="sm" onClick={onClick} disabled={disabled}>
       <Save className="h-3.5 w-3.5" /> {label}
-    </button>
+    </Button>
   );
 }

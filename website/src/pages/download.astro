@@ -1,7 +1,7 @@
 ---
 import MarketingLayout from "../layouts/MarketingLayout.astro";
 import Icon from "../components/Icon.astro";
-import { downloadUrl, releaseTag, releaseUrl } from "../release";
+import { macDownloadUrl, releaseTag, releaseUrl, windowsDownloadUrl } from "../release";
 
 const { locale = "en" } = Astro.props;
 const isVietnamese = locale === "vi";
@@ -11,14 +11,14 @@ const localizedPath = (path: string) => `${isVietnamese ? "/vi" : ""}${path}`;
 <MarketingLayout
   locale={locale}
   title={`${isVietnamese ? "Tải CaberOS" : "Download CaberOS"} ${releaseTag}`}
-  description={isVietnamese ? `Tải CaberOS ${releaseTag} cho macOS Apple Silicon và làm theo hướng dẫn khởi chạy lần đầu.` : `Download CaberOS ${releaseTag} for macOS Apple Silicon and follow the first-launch guide.`}
+  description={isVietnamese ? `Tải CaberOS ${releaseTag} cho macOS hoặc Windows và làm theo hướng dẫn khởi chạy lần đầu.` : `Download CaberOS ${releaseTag} for macOS or Windows and follow the first-launch guide.`}
 >
   <section class="download-hero">
     <div class="container download-hero-grid">
       <div>
         <p class="eyebrow"><span class="eyebrow-line"></span>{isVietnamese ? "Tải CaberOS" : "Get CaberOS"}</p>
         <h1>{isVietnamese ? "Bắt đầu với một cỗ máy bạn kiểm soát." : "Start with a machine you control."}</h1>
-        <p class="download-lead">{isVietnamese ? "CaberOS chạy trên máy Mac, giữ workspace của agent ở gần bạn và tạo ranh giới rõ ràng quanh mọi hành động." : "CaberOS runs on your Mac, keeps your agent workspace close, and gives you a clear boundary around every action."}</p>
+        <p class="download-lead">{isVietnamese ? "CaberOS chạy trên macOS và Windows, giữ workspace của agent ở gần bạn và tạo ranh giới rõ ràng quanh mọi hành động." : "CaberOS runs on macOS and Windows, keeps your agent workspace close, and gives you a clear boundary around every action."}</p>
       </div>
       <div class="release-card">
         <div class="release-card-head">
@@ -28,14 +28,25 @@ const localizedPath = (path: string) => `${isVietnamese ? "/vi" : ""}${path}`;
           </div>
           <span class="release-mark"><Icon name="download" size={23} /></span>
         </div>
-        <p>macOS Apple Silicon · ARM64</p>
-        <a class="release-button" href={downloadUrl} aria-label={`${isVietnamese ? "Tải CaberOS" : "Download CaberOS"} ${releaseTag} for macOS Apple Silicon`}>
-          <span class="release-button-icon"><Icon name="download" size={19} /></span>
-          <span class="release-button-copy">
-            <strong>{isVietnamese ? "Tải CaberOS" : "Download CaberOS"}</strong>
-            <small>macOS Apple Silicon · DMG installer</small>
-          </span>
-        </a>
+        <div class="release-options">
+          <a class="release-button" href={macDownloadUrl} aria-label={`${isVietnamese ? "Tải CaberOS" : "Download CaberOS"} ${releaseTag} for macOS Apple Silicon`}>
+            <span class="release-button-icon"><Icon name="apple" size={19} /></span>
+            <span class="release-button-copy">
+              <strong>macOS</strong>
+              <small>Apple Silicon · DMG</small>
+            </span>
+            <Icon name="download" size={15} />
+          </a>
+          <a class="release-button" href={windowsDownloadUrl} aria-label={`${isVietnamese ? "Tải CaberOS" : "Download CaberOS"} ${releaseTag} for Windows x64`}>
+            <span class="release-button-icon"><Icon name="windows" size={19} /></span>
+            <span class="release-button-copy">
+              <strong>Windows</strong>
+              <small>x64 · setup.exe</small>
+            </span>
+            <Icon name="download" size={15} />
+          </a>
+        </div>
+        <p class="release-other">{isVietnamese ? "Chưa có: macOS Intel, Windows ARM, desktop Linux — Docker và cài từ source hỗ trợ các nền đó." : "Not yet: macOS Intel, Windows ARM, native Linux — Docker and source installs cover those."}</p>
         <a class="release-link" href={releaseUrl}>{isVietnamese ? "Xem ghi chú và artifact" : "View release notes and artifacts"} <Icon name="arrow" size={15} /></a>
       </div>
     </div>
@@ -46,11 +57,32 @@ const localizedPath = (path: string) => `${isVietnamese ? "/vi" : ""}${path}`;
       <article class="download-main">
         <p class="eyebrow"><span class="eyebrow-line"></span>{isVietnamese ? "Cài đặt" : "Installation"}</p>
         <h2>{isVietnamese ? "Từ tải xuống đến phản hồi đầu tiên." : "From download to first response."}</h2>
+        <div class="platform-grid">
+          <div class="platform-card">
+            <div class="platform-head">
+              <span class="platform-icon"><Icon name="apple" size={18} /></span>
+              <div><h3>macOS</h3><span class="platform-sub mono">Apple Silicon · DMG</span></div>
+            </div>
+            <ol class="platform-steps">
+              <li>{isVietnamese ? "Mở file DMG và kéo " : "Open the DMG and drag "}<strong>CaberOS</strong>{isVietnamese ? " vào thư mục Applications." : " into your Applications folder."}</li>
+              <li>{isVietnamese ? "Nếu macOS báo ứng dụng bị lỗi, chạy " : "If macOS reports the app is damaged, run "}<code>xattr -dr com.apple.quarantine /Applications/CaberOS.app</code></li>
+            </ol>
+          </div>
+          <div class="platform-card">
+            <div class="platform-head">
+              <span class="platform-icon"><Icon name="windows" size={18} /></span>
+              <div><h3>Windows</h3><span class="platform-sub mono">x64 · setup.exe</span></div>
+            </div>
+            <ol class="platform-steps">
+              <li>{isVietnamese ? "Chạy file " : "Run the "}<code>-setup.exe</code>{isVietnamese ? " — cài cho user hiện tại, không cần quyền admin." : " installer — installs for the current user, no admin needed."}</li>
+              <li>{isVietnamese ? "Nếu SmartScreen cảnh báo, chọn " : "If SmartScreen warns, choose "}<strong>More info → Run anyway</strong>{isVietnamese ? " (chữ ký đang tích lũy reputation)." : " while the signature builds reputation."}</li>
+            </ol>
+          </div>
+        </div>
         <div class="steps">
-          <div class="step"><span class="step-number mono">01</span><div><h3>{isVietnamese ? "Tải xuống và mở" : "Download and open"}</h3><p>{isVietnamese ? "Tải DMG, mở file và kéo " : "Download the DMG, open it, and drag "}<strong>CaberOS</strong>{isVietnamese ? " vào thư mục Applications." : " into your Applications folder."}</p></div></div>
-          <div class="step"><span class="step-number mono">02</span><div><h3>{isVietnamese ? "Khởi chạy CaberOS" : "Launch CaberOS"}</h3><p>{isVietnamese ? "Desktop shell tự động khởi động local gateway. Lần chạy đầu tiên tạo thư mục dữ liệu và agent mặc định." : "The desktop shell starts its local gateway automatically. The first launch creates the local data directory and default agents."}</p></div></div>
-          <div class="step"><span class="step-number mono">03</span><div><h3>{isVietnamese ? "Hoàn tất thiết lập" : "Complete setup"}</h3><p>{isVietnamese ? "Đăng nhập bằng tài khoản operator ban đầu, cấu hình model provider và tạo hoặc tùy chỉnh agent đầu tiên." : "Sign in with the initial operator account, configure a model provider, and create or customize your first agent."}</p></div></div>
-          <div class="step"><span class="step-number mono">04</span><div><h3>{isVietnamese ? "Gửi một message" : "Send a message"}</h3><p>{isVietnamese ? "Yêu cầu agent kiểm tra workspace. Approval, tool và run trace sẽ xuất hiện khi công việc diễn ra." : "Ask your agent to inspect its workspace. Approvals, tools, and the run trace appear as the work happens."}</p></div></div>
+          <div class="step"><span class="step-number mono">01</span><div><h3>{isVietnamese ? "Khởi chạy CaberOS" : "Launch CaberOS"}</h3><p>{isVietnamese ? "Desktop shell tự động khởi động local gateway. Lần chạy đầu tiên tạo thư mục dữ liệu và agent mặc định." : "The desktop shell starts its local gateway automatically. The first launch creates the local data directory and default agents."}</p></div></div>
+          <div class="step"><span class="step-number mono">02</span><div><h3>{isVietnamese ? "Hoàn tất thiết lập" : "Complete setup"}</h3><p>{isVietnamese ? "Đăng nhập bằng tài khoản operator ban đầu, cấu hình model provider và tạo hoặc tùy chỉnh agent đầu tiên." : "Sign in with the initial operator account, configure a model provider, and create or customize your first agent."}</p></div></div>
+          <div class="step"><span class="step-number mono">03</span><div><h3>{isVietnamese ? "Gửi một message" : "Send a message"}</h3><p>{isVietnamese ? "Yêu cầu agent kiểm tra workspace. Approval, tool và run trace sẽ xuất hiện khi công việc diễn ra." : "Ask your agent to inspect its workspace. Approvals, tools, and the run trace appear as the work happens."}</p></div></div>
         </div>
         <div class="download-actions">
           <a class="text-link" href={localizedPath("/docs/getting-started/installation/")}>{isVietnamese ? "Đọc hướng dẫn cài đặt" : "Read the full installation guide"} <Icon name="arrow" size={15} /></a>
@@ -62,16 +94,16 @@ const localizedPath = (path: string) => `${isVietnamese ? "/vi" : ""}${path}`;
         <div class="aside-card">
           <span class="card-kicker mono">{isVietnamese ? "YÊU CẦU" : "REQUIREMENTS"}</span>
           <ul class="check-list">
-            <li>{isVietnamese ? "macOS 13 trở lên" : "macOS 13 or newer"}</li>
-            <li>{isVietnamese ? "Apple Silicon: M1, M2, M3 hoặc M4" : "Apple Silicon: M1, M2, M3, or M4"}</li>
+            <li>{isVietnamese ? "macOS 13+ (Apple Silicon) hoặc Windows 10+ (x64)" : "macOS 13+ (Apple Silicon) or Windows 10+ (x64)"}</li>
+            <li>{isVietnamese ? "Windows 11 24H2+ cho shell sandbox (experimental); mọi thứ khác chạy trên build cũ hơn" : "Windows 11 24H2+ for the shell sandbox (experimental); everything else runs on older builds"}</li>
             <li>{isVietnamese ? "200 MB dung lượng trống" : "200 MB of free disk space"}</li>
             <li>{isVietnamese ? "Có Internet nếu dùng cloud model provider" : "Internet access for cloud model providers"}</li>
           </ul>
         </div>
         <div class="aside-card note-card">
           <span class="card-kicker mono">{isVietnamese ? "LƯU Ý" : "IMPORTANT"}</span>
-          <p>{isVietnamese ? "Bản phát hành được ký ad-hoc và chưa được Apple notarize. macOS có thể yêu cầu bạn xác nhận muốn mở ứng dụng." : "The release is ad-hoc signed and is not notarized by Apple. macOS may ask you to confirm that you want to open it."}</p>
-          <p>{isVietnamese ? "Mac Intel và Windows chưa được hỗ trợ trong bản build này." : "Intel Macs and Windows are not supported by this build."}</p>
+          <p>{isVietnamese ? "Bản desktop chưa được notarize. macOS có thể yêu cầu xác nhận mở ứng dụng; Windows SmartScreen có thể cảnh báo trong khi chữ ký tích lũy reputation." : "Desktop builds are not notarized yet. macOS may ask you to confirm opening the app; Windows SmartScreen may warn while the signature builds reputation."}</p>
+          <p>{isVietnamese ? "macOS Intel, Windows ARM và desktop Linux chưa có bản build — Docker và cài từ source hỗ trợ các nền đó." : "macOS Intel, Windows ARM, and a native Linux desktop are not built yet — Docker and source installs cover those."}</p>
         </div>
       </aside>
     </div>
@@ -87,8 +119,10 @@ const localizedPath = (path: string) => `${isVietnamese ? "/vi" : ""}${path}`;
       <div class="command-card">
         <span class="command-label mono">{isVietnamese ? "KIỂM TRA SỨC KHỎE" : "HEALTH CHECK"}</span>
         <pre><code>curl -i http://127.0.0.1:51718/health</code></pre>
-        <span class="command-label mono">{isVietnamese ? "FILE LOG" : "LOG FILE"}</span>
+        <span class="command-label mono">{isVietnamese ? "FILE LOG · MACOS" : "LOG FILE · macOS"}</span>
         <pre><code>tail -n 100 "$HOME/Library/Application Support/com.caberos.desktop/logs/gateway.log"</code></pre>
+        <span class="command-label mono">{isVietnamese ? "FILE LOG · WINDOWS" : "LOG FILE · Windows"}</span>
+        <pre><code>Get-Content "$env:APPDATA\com.caberos.desktop\logs\gateway.log" -Tail 100</code></pre>
         <a class="light-link" href={localizedPath("/docs/operations/troubleshooting/")}>{isVietnamese ? "Mở tài liệu xử lý sự cố" : "Open troubleshooting docs"} <Icon name="arrow" size={15} /></a>
       </div>
     </div>
@@ -160,50 +194,55 @@ const localizedPath = (path: string) => `${isVietnamese ? "/vi" : ""}${path}`;
     color: var(--olive-dark);
   }
 
+  .release-options {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 18px;
+  }
+
   .release-button {
     display: flex;
     align-items: center;
     gap: 12px;
     width: 100%;
-    min-height: 62px;
-    padding: 9px 15px 9px 11px;
-    border: 1px solid var(--olive-dark);
-    border-radius: 5px;
-    background: var(--olive-dark);
-    color: var(--paper);
+    padding: 10px 14px 10px 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--paper);
+    color: var(--ink);
     font-size: 13px;
     font-weight: 600;
     text-decoration: none;
-    transition: background 180ms ease, border-color 180ms ease, color 180ms ease;
+    transition: border-color 180ms ease, background 180ms ease, transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
   }
 
   .release-button:hover {
-    border-color: var(--ink);
-    background: var(--ink);
-    color: var(--white);
-  }
-
-  :root[data-theme="dark"] .release-button {
     border-color: var(--olive);
-    background: var(--olive);
-    color: var(--paper);
+    background: var(--olive-soft);
+    transform: translateY(-1px);
   }
 
-  :root[data-theme="dark"] .release-button:hover {
-    border-color: var(--olive-dark);
-    background: var(--olive-dark);
-    color: var(--paper);
+  .release-button > svg {
+    margin-left: auto;
+    color: var(--ink-3);
+    flex-shrink: 0;
+  }
+
+  .release-button:hover > svg {
+    color: var(--olive-dark);
   }
 
   .release-button-icon {
     display: inline-flex;
-    flex: 0 0 36px;
+    flex: 0 0 38px;
     align-items: center;
     justify-content: center;
-    width: 36px;
-    height: 36px;
-    border: 1px solid currentColor;
-    border-radius: 4px;
+    width: 38px;
+    height: 38px;
+    border-radius: 8px;
+    background: var(--olive-soft);
+    color: var(--olive-dark);
   }
 
   .release-button-copy {
@@ -214,18 +253,25 @@ const localizedPath = (path: string) => `${isVietnamese ? "/vi" : ""}${path}`;
   }
 
   .release-button-copy strong {
-    font-size: 13px;
+    font-size: 13.5px;
     line-height: 1.1;
   }
 
   .release-button-copy small {
-    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-family: "Geist Mono", ui-monospace, monospace;
     font-size: 9px;
     font-weight: 500;
     letter-spacing: 0.04em;
     line-height: 1.1;
-    opacity: 0.8;
+    color: var(--ink-3);
     text-transform: uppercase;
+  }
+
+  .release-other {
+    margin: 16px 0 0;
+    color: var(--ink-3);
+    font-size: 11.5px;
+    line-height: 1.55;
   }
 
   .release-link {
@@ -260,6 +306,85 @@ const localizedPath = (path: string) => `${isVietnamese ? "/vi" : ""}${path}`;
     font-weight: 600;
     letter-spacing: -0.045em;
     line-height: 1.04;
+  }
+
+  .platform-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    margin-bottom: 40px;
+  }
+
+  .platform-card {
+    padding: 20px 20px 18px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--white);
+  }
+
+  .platform-head {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    margin-bottom: 14px;
+    padding-bottom: 13px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .platform-head h3 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+  }
+
+  .platform-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 36px;
+    height: 36px;
+    border-radius: 9px;
+    background: var(--olive-soft);
+    color: var(--olive-dark);
+  }
+
+  .platform-sub {
+    display: block;
+    margin-top: 2px;
+    color: var(--ink-3);
+    font-size: 9px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  .platform-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 11px;
+    margin: 0;
+    padding: 0 0 0 17px;
+    color: var(--ink-2);
+    font-size: 12.5px;
+    line-height: 1.6;
+  }
+
+  .platform-steps li::marker {
+    color: var(--olive);
+    font-family: "Geist Mono", ui-monospace, monospace;
+    font-size: 11px;
+  }
+
+  .platform-steps code {
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--paper-strong);
+    color: var(--ink);
+    font-family: "Geist Mono", ui-monospace, monospace;
+    font-size: 10.5px;
+    overflow-wrap: anywhere;
   }
 
   .steps {
@@ -354,8 +479,8 @@ const localizedPath = (path: string) => `${isVietnamese ? "/vi" : ""}${path}`;
 
   .troubleshooting-section {
     padding: 108px 0;
-    background: var(--ink);
-    color: var(--white);
+    background: #16150f;
+    color: #f7f6f2;
   }
 
   .troubleshooting-grid {
@@ -387,7 +512,7 @@ const localizedPath = (path: string) => `${isVietnamese ? "/vi" : ""}${path}`;
 
   .troubleshooting-grid code {
     color: #d4e294;
-    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-family: "Geist Mono", ui-monospace, monospace;
     font-size: 0.92em;
   }
 
@@ -434,6 +559,12 @@ const localizedPath = (path: string) => `${isVietnamese ? "/vi" : ""}${path}`;
     .download-aside {
       display: grid;
       grid-template-columns: 1fr 1fr;
+    }
+  }
+
+  @media (max-width: 760px) {
+    .platform-grid {
+      grid-template-columns: 1fr;
     }
   }
 

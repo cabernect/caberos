@@ -515,6 +515,80 @@ async def test_responses_stream_extracts_reasoning_tokens(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_responses_reasoning_request_asks_for_summary(monkeypatch):
+    """Without reasoning.summary the Responses API reports reasoning tokens in
+    usage but emits zero summary deltas — thinking never reaches the UI."""
+    captured: dict = {}
+
+    class _RecordingTransport:
+        async def responses(self, **kwargs):
+            captured.update(kwargs)
+            return _responses_response(0)
+
+    adapter = LiteLLMAdapter(db=None, transport=_RecordingTransport())
+
+    async def load_provider(_id):
+        return _RESPONSES_PROVIDER
+
+    monkeypatch.setattr(adapter, "_load_provider", load_provider)
+    await adapter.complete(
+        agent_model=ModelConfig(
+            provider_id="p", name="m", thinking_enabled=True, thinking_effort="high"
+        ),
+        messages=[{"role": "user", "content": "hi"}],
+    )
+    assert captured["reasoning"] == {"effort": "high", "summary": "auto"}
+
+
+@pytest.mark.asyncio
+async def test_responses_stream_reasoning_request_asks_for_summary(monkeypatch):
+    captured: dict = {}
+
+    class _RecordingTransport:
+        async def responses(self, **kwargs):
+            captured.update(kwargs)
+            return _responses_stream(0)
+
+    adapter = LiteLLMAdapter(db=None, transport=_RecordingTransport())
+
+    async def load_provider(_id):
+        return _RESPONSES_PROVIDER
+
+    monkeypatch.setattr(adapter, "_load_provider", load_provider)
+    async for _kind, _payload in adapter.complete_stream(
+        agent_model=ModelConfig(
+            provider_id="p", name="m", thinking_enabled=True, thinking_effort="high"
+        ),
+        messages=[{"role": "user", "content": "hi"}],
+    ):
+        pass
+    assert captured["reasoning"] == {"effort": "high", "summary": "auto"}
+
+
+@pytest.mark.asyncio
+async def test_responses_reasoning_disabled_omits_summary(monkeypatch):
+    """effort=none produces no reasoning — a summary request would be noise."""
+    captured: dict = {}
+
+    class _RecordingTransport:
+        async def responses(self, **kwargs):
+            captured.update(kwargs)
+            return _responses_response(0)
+
+    adapter = LiteLLMAdapter(db=None, transport=_RecordingTransport())
+
+    async def load_provider(_id):
+        return _RESPONSES_PROVIDER
+
+    monkeypatch.setattr(adapter, "_load_provider", load_provider)
+    await adapter.complete(
+        agent_model=ModelConfig(provider_id="p", name="m", thinking_enabled=False),
+        messages=[{"role": "user", "content": "hi"}],
+    )
+    assert captured["reasoning"] == {"effort": "none"}
+
+
+@pytest.mark.asyncio
 async def test_missing_reasoning_tokens_stays_none(monkeypatch):
     adapter = LiteLLMAdapter(
         db=None,
@@ -942,7 +1016,7 @@ async def test_opencode_gpt_uses_responses_reasoning(monkeypatch):
     assert result.content == "done"
     assert captured["model"] == "openai/gpt-5.2"
     assert captured["api_base"] == "https://opencode.ai/zen/v1"
-    assert captured["reasoning"] == {"effort": "high"}
+    assert captured["reasoning"] == {"effort": "high", "summary": "auto"}
     assert "reasoning_effort" not in captured
 
 
@@ -1516,3 +1590,205 @@ def test_response_cost_rejects_nonfinite(monkeypatch):
     # completion_cost returning None → unknown, not litellm-0
     monkeypatch.setattr(_litellm, "completion_cost", lambda **_: None)
     assert response_cost({}, "m") == (0.0, "unknown")
+
+
+@pytest.mark.asyncio
+async def test_restricted_tool_calls_bounded_concurrency_not_failed(db, tmp_path):
+    """A restricted turn with >4 tool calls drains through bounded
+    concurrency (<=4 in flight) — it is not a fatal per-turn limit."""
+    from agentos.syscall.protocol import ExecutionRestrictions
+
+    config = AgentConfig(id="a1", name="A1", model=ModelConfig(provider_id="p", name="m"))
+
+    class BoundedRecording:
+        def __init__(self):
+            self.active = 0
+            self.max_active = 0
+            self.calls: list[str] = []
+            self.restrictions = ExecutionRestrictions(capability_names=frozenset({"read_file"}))
+            self.db = db
+
+        async def mediate(self, call, **kwargs):
+            self.calls.append(call.id)
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            try:
+                await asyncio.sleep(0.01)
+                return SyscallResult(output={"ok": call.id}, allowed=True)
+            finally:
+                self.active -= 1
+
+    ids = [f"r-{i}" for i in range(7)]
+    model = ScriptedModel(
+        [
+            ScriptedResponse(
+                tool_calls=[{"id": i, "name": "read_file", "args": {"path": "x"}} for i in ids]
+            ),
+            ScriptedResponse(content="done"),
+        ]
+    )
+    handler = BoundedRecording()
+    result = await asyncio.wait_for(
+        Harness(model=model).run(
+            agent_config=config,
+            session=None,
+            message="go",
+            syscall_handler=handler,
+            run_id=str(uuid.uuid4()),
+        ),
+        timeout=10,
+    )
+    assert result.status == "completed"
+    assert len(handler.calls) == 7
+    assert sorted(handler.calls) == sorted(ids)
+    assert 1 < handler.max_active <= 4
+    # Results land in original call order regardless of completion order.
+    assert [c["id"] for c in result.tool_calls_made] == ids
+
+
+@pytest.mark.asyncio
+async def test_unrestricted_tool_calls_unbounded_still_works(db, tmp_path):
+    """Without restrictions the batch still runs concurrently with no cap."""
+    config = AgentConfig(id="a2", name="A2", model=ModelConfig(provider_id="p", name="m"))
+
+    class Unbounded:
+        def __init__(self):
+            self.active = 0
+            self.max_active = 0
+            self.db = db
+
+        async def mediate(self, call, **kwargs):
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            try:
+                await asyncio.sleep(0.01)
+                return SyscallResult(output={"ok": True}, allowed=True)
+            finally:
+                self.active -= 1
+
+    ids = [f"u-{i}" for i in range(6)]
+    model = ScriptedModel(
+        [
+            ScriptedResponse(
+                tool_calls=[{"id": i, "name": "read_file", "args": {"path": "x"}} for i in ids]
+            ),
+            ScriptedResponse(content="done"),
+        ]
+    )
+    handler = Unbounded()
+    result = await asyncio.wait_for(
+        Harness(model=model).run(
+            agent_config=config,
+            session=None,
+            message="go",
+            syscall_handler=handler,
+            run_id=str(uuid.uuid4()),
+        ),
+        timeout=10,
+    )
+    assert result.status == "completed"
+    assert handler.max_active == 6
+
+
+@pytest.mark.asyncio
+async def test_restricted_max_turns_one_stops_after_batch_drains(db):
+    """Restricted run with max_turns=1: an oversized batch drains through
+    bounded concurrency, then the loop stops before any second dispatch."""
+    from agentos.config_schema import Limits
+    from agentos.syscall.protocol import ExecutionRestrictions
+
+    config = AgentConfig(
+        id="rl1",
+        name="RL1",
+        model=ModelConfig(provider_id="p", name="m"),
+        limits=Limits(max_turns_per_run=1),
+    )
+
+    class Bounded:
+        def __init__(self):
+            self.calls: list[str] = []
+            self.restrictions = ExecutionRestrictions(capability_names=frozenset({"read_file"}))
+            self.db = db
+
+        async def mediate(self, call, **kwargs):
+            self.calls.append(call.id)
+            await asyncio.sleep(0)
+            return SyscallResult(output={"ok": True}, allowed=True)
+
+    model = ScriptedModel(
+        [
+            ScriptedResponse(
+                tool_calls=[
+                    {"id": f"t-{i}", "name": "read_file", "args": {"path": "x"}} for i in range(6)
+                ]
+            ),
+            ScriptedResponse(content="never reached"),
+        ]
+    )
+    handler = Bounded()
+    result = await asyncio.wait_for(
+        Harness(model=model).run(
+            agent_config=config,
+            session=None,
+            message="go",
+            syscall_handler=handler,
+            run_id=str(uuid.uuid4()),
+        ),
+        timeout=10,
+    )
+    assert result.status == "limit_exceeded"
+    assert len(handler.calls) == 6  # batch drained, then turn limit hit
+    assert len(model.seen_calls) == 1  # no second model dispatch
+
+
+@pytest.mark.asyncio
+async def test_restricted_cost_budget_denies_next_dispatch(db):
+    """Restricted run: once observed cost exceeds max_cost_per_run, the next
+    reasoning step is not dispatched — no extra model call."""
+    from agentos.config_schema import Limits
+    from agentos.syscall.protocol import ExecutionRestrictions
+
+    config = AgentConfig(
+        id="rl2",
+        name="RL2",
+        model=ModelConfig(provider_id="p", name="m"),
+        limits=Limits(max_cost_per_run=0.01),
+    )
+
+    class Bounded:
+        def __init__(self):
+            self.calls: list[str] = []
+            self.restrictions = ExecutionRestrictions(capability_names=frozenset({"read_file"}))
+            self.db = db
+
+        async def mediate(self, call, **kwargs):
+            self.calls.append(call.id)
+            await asyncio.sleep(0)
+            return SyscallResult(output={"ok": True}, allowed=True)
+
+    model = ScriptedModel(
+        [
+            ScriptedResponse(
+                tool_calls=[
+                    {"id": f"t-{i}", "name": "read_file", "args": {"path": "x"}} for i in range(6)
+                ],
+                cost=0.5,
+                cost_source="provider",
+            ),
+            ScriptedResponse(content="never reached"),
+        ]
+    )
+    handler = Bounded()
+    result = await asyncio.wait_for(
+        Harness(model=model).run(
+            agent_config=config,
+            session=None,
+            message="go",
+            syscall_handler=handler,
+            run_id=str(uuid.uuid4()),
+        ),
+        timeout=10,
+    )
+    assert result.status == "limit_exceeded"
+    assert len(handler.calls) == 6
+    assert len(model.seen_calls) == 1  # cost cap blocked the second dispatch

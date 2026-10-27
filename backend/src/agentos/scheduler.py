@@ -555,11 +555,14 @@ async def _execute(occurrence_id: str, *, is_test: bool = False) -> None:
                 sched.last_error = occ_error or (occ.error if occ else None)
                 if occ_status == "completed":
                     sched.consecutive_failures = 0
+                    if sched.managed != "heartbeat" and not is_test and occ is not None:
+                        await _notify_completion(db, sched, occ)
                 else:
                     sched.consecutive_failures += 1
                     if occ is not None:
                         await _maybe_retry(db, sched, occ, cfg)
-                    await _notify_failure(db, sched)
+                    if not is_test:
+                        await _notify_failure(db, sched)
             await db.commit()
     except Exception:
         log.exception("Failed to persist occurrence outcome (%s)", occurrence_id)
@@ -604,9 +607,43 @@ async def _maybe_retry(
     )
 
 
+async def _notify_completion(db: AsyncSession, sched: Schedule, occ: ScheduleOccurrence) -> None:
+    """Ping the operator when a user-created schedule fire completes.
+
+    Managed heartbeats stay quiet — they fire hourly and have their own
+    failure-streak alerting. event_id keys on the occurrence so every fire
+    notifies once; the body carries the tail of the reply so the ping
+    itself says what the run produced.
+    """
+    from .models.run import Message, Run
+    from .notifications import create_notification, one_line
+
+    session_id = await db.scalar(select(Run.session_id).where(Run.id == occ.run_id))
+    last = await db.scalar(
+        select(Message.content)
+        .where(Message.run_id == occ.run_id, Message.role == "assistant")
+        .order_by(Message.seq.desc())
+        .limit(1)
+    )
+    await create_notification(
+        db,
+        notification_type="schedule_completed",
+        severity="info",
+        title=f"Schedule ran — {sched.name}",
+        message=one_line(last) if last else "Scheduled run completed.",
+        action_path=(
+            f"/agents/{sched.agent_id}/chat?session={session_id}" if session_id else "/scheduler"
+        ),
+        entity_id=sched.id,
+        entity_type="schedule",
+        agent_id=sched.agent_id,
+        event_id=f"schedule_completed:{occ.id}",
+    )
+
+
 async def _notify_failure(db: AsyncSession, sched: Schedule) -> None:
     threshold = await _failure_threshold(db, sched)
-    if sched.consecutive_failures != threshold:
+    if sched.consecutive_failures < threshold:
         return
     from .notifications import create_notification
 
@@ -615,7 +652,7 @@ async def _notify_failure(db: AsyncSession, sched: Schedule) -> None:
         db,
         notification_type="schedule_failed",
         severity="warning",
-        title=f"Schedule failed {threshold}× — {sched.name}",
+        title=f"Schedule failed {sched.consecutive_failures}× — {sched.name}",
         message=sched.last_error or "scheduled run failed",
         action_path="/scheduler",
         entity_id=sched.id,
@@ -640,7 +677,9 @@ async def _failure_threshold(db: AsyncSession, sched: Schedule) -> int:
         config = await get_active_config(db, sched.agent_id)
         if config is not None:
             return config.heartbeat.consecutive_failure_threshold
-    return 3
+    # User schedules alert on the first failure — the daily event_id key
+    # still caps it at one ping per schedule per day while it stays broken.
+    return 1
 
 
 # -- missed-run sweep (startup / resume) ---------------------------------------

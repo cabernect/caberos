@@ -58,7 +58,7 @@ an ordinary user message, not a gate.
      `skills_load`, `skills_read_resource`, `skills_usage`,
      `search_history`}; anything else is denied by mediation, and
      approval-needing calls are denied outright (a background reflection
-     cannot block on HITL). ≤4 tool calls per turn, ≤8 turns, output tokens
+     cannot block on HITL). ≤4 concurrent tool calls (oversized batches drain through bounded slots, no extra reasoning turns), ≤8 turns, output tokens
      capped, no compaction retry — inspect/edit only, never task replay.
    - **Staged edits**: `read_file`/`write_file`/`skills_load`/
      `skills_read_resource` under `skills/{name}/` delegate to

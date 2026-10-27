@@ -213,18 +213,11 @@ async def update_server(
     reconnect_needed = False
 
     if req.require_approval is not None:
+        # Registration-time default only — stamped onto tools discovered at
+        # (re)connect in registry.py. Per-tool overrides live on McpTool and
+        # are changed via PATCH /servers/{id}/tools/{tool_id}; flipping this
+        # must not rewrite existing rows.
         server.require_approval = req.require_approval
-        # Update all registered tools' require_approval flag
-        from ..models.mcp import McpTool
-
-        tool_result = await db.execute(select(McpTool).where(McpTool.mcp_server_id == server_id))
-        tools = tool_result.scalars().all()
-        for tool in tools:
-            tool.require_approval = req.require_approval
-            # Update the in-memory capability registry
-            cap = cap_registry._caps.get(tool.capability_name)
-            if cap:
-                cap.require_approval = req.require_approval
 
     if req.enabled is not None and req.enabled != server.enabled:
         server.enabled = req.enabled
@@ -251,6 +244,38 @@ async def update_server(
         "enabled": server.enabled,
         "tool_filter": json.loads(server.tool_filter) if server.tool_filter is not None else None,
         "connected": mcp_registry.is_server_connected(server.id),
+    }
+
+
+class UpdateToolRequest(BaseModel):
+    require_approval: bool
+
+
+@router.patch("/servers/{server_id}/tools/{tool_id}")
+async def update_server_tool(
+    server_id: str,
+    tool_id: str,
+    req: UpdateToolRequest,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Set per-tool approval — the granularity the MCP page's
+    Allow/Ask/Block picker writes. `tool_filter` still decides whether the
+    tool is exposed at all; this flag decides whether it asks first."""
+    tool = await db.scalar(
+        select(McpTool).where(McpTool.id == tool_id, McpTool.mcp_server_id == server_id)
+    )
+    if tool is None:
+        raise HTTPException(status_code=404, detail="tool not found")
+    tool.require_approval = req.require_approval
+    cap = cap_registry._caps.get(tool.capability_name)
+    if cap:
+        cap.require_approval = req.require_approval
+    await db.commit()
+    return {
+        "id": tool.id,
+        "capability_name": tool.capability_name,
+        "require_approval": tool.require_approval,
     }
 
 

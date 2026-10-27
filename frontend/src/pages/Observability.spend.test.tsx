@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 import { SpendSection } from "./Observability";
 
 const agentSpend = {
@@ -151,11 +151,9 @@ describe("SpendSection", () => {
     render(<SpendSection days={7} agents={[]} />);
     await openPlatform();
     await waitFor(() => screen.getByText("By kind"));
-    const selects = screen.getAllByRole("combobox");
-    const providerSelect = selects.find((s) =>
-      [...(s as HTMLSelectElement).options].some((o) => o.textContent === "OpenAI"),
-    )!;
-    fireEvent.change(providerSelect, { target: { value: "p-uuid-1" } });
+    const providerField = screen.getByText("Provider", { selector: "span" }).closest("label")!;
+    fireEvent.click(within(providerField).getByRole("button"));
+    fireEvent.click(screen.getByRole("option", { name: "OpenAI" }));
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
     await waitFor(() =>
       expect(api.getPlatformSpend).toHaveBeenLastCalledWith(
@@ -165,10 +163,12 @@ describe("SpendSection", () => {
   });
 
   it("a failed request clears the previous payload", async () => {
-    render(<SpendSection days={7} agents={[]} />);
+    render(<SpendSection days={7} agents={[{ id: "a1", name: "Caber" } as any]} />);
     await waitFor(() => screen.getByText("By agent"));
     (api.getSpend as any).mockRejectedValueOnce(new Error("boom"));
-    fireEvent.change(screen.getByLabelText("Agent"), { target: { value: "a1" } });
+    const agentField = screen.getByText("Agent", { selector: "span" }).closest("label")!;
+    fireEvent.click(within(agentField).getByRole("button"));
+    fireEvent.click(screen.getByRole("option", { name: "Caber" }));
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
     await waitFor(() => screen.getByText(/Couldn't load spend/));
     expect(screen.queryByText("By trigger")).not.toBeInTheDocument();
@@ -184,7 +184,10 @@ describe("SpendSection", () => {
     fireEvent.click(screen.getByRole("button", { name: "Platform" }));
     await act(async () => resolvePlatform(platformSpend));
     await waitFor(() => screen.getByText("By kind"));
-    fireEvent.click(screen.getByRole("button", { name: "Agent" }));
+    const agentScopePill = screen
+      .getAllByRole("button", { name: "Agent" })
+      .find((b) => !b.hasAttribute("aria-haspopup"))!;
+    fireEvent.click(agentScopePill);
     await waitFor(() => screen.getByText("By trigger"));
     expect(screen.queryByText("By kind")).not.toBeInTheDocument();
   });

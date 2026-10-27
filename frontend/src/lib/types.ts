@@ -15,6 +15,9 @@ export interface Provider {
   org_id: string | null;
   extra_params: Record<string, unknown>;
   custom_models: string[];
+  /** Names of configured extra credentials (azure api_version, bedrock
+   *  aws_*). Values never leave the encrypted backend blob. */
+  credential_fields: string[];
 }
 
 export interface ModelProvenance {
@@ -51,6 +54,11 @@ export interface ModelInfo {
   discovery_error?: string | null;
   stale?: boolean | null;
   last_confirmed_at?: string | null;
+  /** Declared catalog identity for alias providers (azure deployment names,
+   * bedrock inference profiles) — set via the metadata endpoint. */
+  catalog_provider_id?: string | null;
+  catalog_model_id?: string | null;
+  catalog_mapping_explicit?: boolean;
 }
 
 /** GET /api/providers/{id}/models response — additive fields optional so
@@ -378,6 +386,8 @@ export interface KnowledgeDocument {
 export interface KnowledgeResult {
   chunk_id: string;
   document_id: string;
+  /** Owning scope — null = Shared knowledge. */
+  agent_id?: string | null;
   text: string;
   source_path: string;
   storage_path: string;
@@ -725,6 +735,8 @@ export interface ChannelInfo {
   webhook_url: string;
   has_token: boolean;
   extra_config: Record<string, unknown> | null;
+  /** null = anyone may message the agent; a list (even empty) = only these chat IDs */
+  allowed_chat_ids: string[] | null;
 }
 
 // Observability (Ticket 09)
@@ -918,6 +930,7 @@ export interface PlatformSpendSummary {
 
 export interface RunFilters {
   agent_id?: string;
+  session_id?: string;
   status?: string;
   trigger?: string;
   is_test?: boolean;

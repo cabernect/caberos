@@ -1,50 +1,82 @@
 ---
 title: Scheduler và heartbeat
-description: Chạy agent theo interval cố định, giới hạn cost tự động và xử lý failure.
+description: Chạy agent theo lịch bền vững, giới hạn cost tự động và xử lý failure.
 sidebar:
   order: 4
 ---
 
-Heartbeat tự chạy agent task theo interval cố định. Nó dùng cùng model harness, capability, permission, memory, syscall audit và observability như user message.
+Schedule tự chạy một agent task — một lần tại thời điểm đã chọn, theo interval cố định, hoặc theo cron expression. Nó dùng cùng model harness, capability, permission, memory, syscall audit và observability như một message do user gửi.
 
-## Scheduling mode hiện tại
+Schedule là bền vững. Mỗi schedule là một row trong database với thời điểm fire tiếp theo được persist, revision history bất biến, và occurrence log ghi lại mọi quyết định fire — kể cả những lần bị skip hoặc cancel thay vì được chạy.
 
-| Mode | Status | Mục đích |
-| --- | --- | --- |
-| Heartbeat | Available | Chạy task sau mỗi interval. |
-| Cron | Coming soon | Chạy theo calendar expression. |
-| Event | Coming soon | Phản ứng webhook, file change, connector event hoặc agent signal. |
+Màn hình **Scheduler** có hai tab: **Schedules** cho các schedule độc lập bạn tự tạo, và **Heartbeat** cho managed heartbeat schedule của từng agent.
 
-Hiện chỉ heartbeat interval thực thi được.
+## Các loại trigger
 
-## Cấu hình heartbeat
-
-1. Mở **Scheduler → Heartbeat**.
-2. Tìm agent enabled.
-3. Nhập task prompt.
-4. Đặt interval phút.
-5. Đặt cost ceiling mỗi heartbeat.
-6. Đặt failure threshold liên tiếp.
-7. Enable heartbeat.
-8. Dùng **Run now** để test.
-
-Heartbeat config thuộc agent configuration; save tạo agent version mới.
-
-## Configuration fields
-
-| Field | Hành vi |
+| Trigger | Mục đích |
 | --- | --- |
-| Enabled | Start/stop periodic task sau khi scheduler sync. |
-| Task prompt | Inbound instruction mỗi run; prompt trống ngăn schedule. |
-| Interval | Delay giữa run; runtime tối thiểu một phút. |
-| Max cost per heartbeat | Thay per-run cost ceiling cho heartbeat. |
-| Failure threshold | Tạo alert sau số run liên tiếp không completed. |
+| Once | Fire một lần tại ngày giờ đã chọn. |
+| Interval | Fire sau mỗi khoảng delay cố định. Tối thiểu runtime là một phút. |
+| Cron | Fire theo calendar expression — hằng ngày, ngày trong tuần, hằng tuần, hằng tháng hoặc expression tùy chỉnh — trong một IANA timezone đã chọn. |
 
-Scheduler scan config khoảng 30 giây nên enable/disable không đổi ngay lập tức.
+Trigger cron có nhận biết timezone: một giờ đồng hồ không tồn tại vì gap daylight-saving sẽ fire một lần tại instant hợp lệ đầu tiên, và một giờ nhập nhằng vẫn chỉ fire một lần. Dùng **Preview next runs** trong form schedule để xem các fire time được tính trước khi lưu.
 
-## Prompt an toàn
+Trigger theo sự kiện — phản ứng webhook, thay đổi file hay tín hiệu agent — chưa được triển khai.
 
-Heartbeat không có user message mới để suy luận intent. Hãy viết prompt tự đủ:
+## Tạo một schedule
+
+1. Mở **Scheduler → Schedules**.
+2. Chọn **New schedule**.
+3. Chọn agent và đặt tên cho schedule.
+4. Chọn trigger, và với cron thì chọn cả timezone.
+5. Viết task prompt tự đủ.
+6. Chọn policy missed-run, overlap và failure.
+7. Tùy chọn pre-approve các capability cần approval và đặt cost ceiling cho mỗi run.
+8. Để **Enabled** bật rồi lưu.
+
+Lưu một schedule đã có sẽ ghi một revision bất biến mới. Occurrence đang chạy giữ revision mà nó được khởi tạo, nên chỉnh sửa không bao giờ làm biến đổi việc đang chạy.
+
+Từ hàng của schedule bạn có thể pause hoặc resume, chạy ngay, mở occurrence history, sửa, duplicate thành một schedule disabled mới, hoặc archive. Schedule đã archive có thể restore — quay lại ở trạng thái paused — hoặc xóa vĩnh viễn, khi đó cả revision và history cũng bị xóa.
+
+## Các policy
+
+### Occurrence bị lỡ — khi paused hoặc gateway dừng
+
+Khi gateway khởi động hoặc một schedule được resume, sweep so sánh next-fire time đã persist với hiện tại rồi áp dụng missed-run policy:
+
+| Policy | Hành vi |
+| --- | --- |
+| `skip` | Ghi một occurrence skipped kèm số instant đã trôi qua, rồi tiếp tục từ instant mới tiếp theo. |
+| `run_once` | Xếp một occurrence cho instant bị lỡ gần nhất; các lần lỡ trước đó được ghi là skipped. |
+| `catch_up` | Xếp mọi instant bị lỡ, tối đa 25 occurrence mỗi sweep. |
+
+### Run chồng nhau — một fire đến khi run trước vẫn đang chạy
+
+| Policy | Hành vi |
+| --- | --- |
+| `skip` | Ghi instant đó là skipped-overlap và không chạy gì. |
+| `queue` | Xếp occurrence vào hàng; nó chạy sau khi run trước kết thúc. |
+| `cancel_previous` | Dừng run đang chạy và fire instant mới. |
+| `allow_parallel` | Cho occurrence mới chạy song song với run đang hoạt động. |
+
+### Failure
+
+| Policy | Hành vi |
+| --- | --- |
+| `no_retry` | Ghi failure và chờ instant tiếp theo. |
+| `bounded_retry` | Xếp một occurrence retry sau backoff tăng theo số attempt, tới số attempt đã cấu hình. |
+
+Retry là một occurrence mới liên kết với occurrence thất bại — nó xuất hiện trong occurrence history như một row riêng, không phải chạy lại ngầm. Trạng thái occurrence phản ánh toàn bộ quyết định: `queued`, `running`, `completed`, `failed`, `skipped_missed`, `skipped_overlap` và `cancelled`.
+
+## Heartbeat
+
+Heartbeat của agent là cùng engine đó sau một giao diện đơn giản hơn. Các field heartbeat trên agent — task prompt, interval theo phút, cost ceiling, ngưỡng consecutive-failure — chiếu thành một managed schedule row, nên cấu hình heartbeat hiện có vẫn hoạt động nguyên vẹn.
+
+Managed heartbeat row xuất hiện trong tab **Heartbeat**. Chúng không sửa hay xóa được từ màn hình schedules; hãy đổi qua cấu hình heartbeat của agent, và việc đó sẽ ghi một schedule revision mới. **Run now** trên heartbeat vẫn chạy task ngay mà không làm đổi lần fire định kỳ tiếp theo.
+
+## Viết task prompt an toàn
+
+Scheduled run không có user message mới để suy luận intent. Hãy viết prompt tự đủ:
 
 ```text
 Review the shared workspace status file. Summarize blocked items and stale
@@ -52,32 +84,98 @@ timestamps. Do not edit files or contact external services. If the file is
 missing, report that as the result.
 ```
 
-Nêu rõ inspect gì, output gì và action nào bị cấm. Tránh prompt rộng như “take care of anything important”.
+Với một dịch vụ đã kết nối:
+
+```text
+Check the project tracker for issues assigned to me that changed since the
+last run. Write a concise summary. Do not create, update, or close issues.
+```
+
+Nêu rõ cần inspect gì, output gì và action nào bị cấm. Tránh prompt rộng như “take care of anything important”.
 
 ## Hành vi thực thi
 
-Khi interval hết hạn, CaberOS đọc config, tạo run trigger `heartbeat`, gửi prompt qua pipeline, áp dụng cost/turn/context limit, mediation mọi capability call, lưu heartbeat message và cập nhật fire/status/error/next-fire/failure.
+Khi một fire instant đến, CaberOS:
 
-Result xuất hiện trong conversation và Observability; spend tách được heartbeat với user-message trigger.
+1. Load revision hiện tại của schedule.
+2. Áp dụng overlap policy nếu một occurrence trước vẫn mở.
+3. Ghi một occurrence và tạo run với trigger `schedule` — hoặc `heartbeat` cho managed schedule — trong session riêng.
+4. Gửi task prompt qua pipeline thông thường.
+5. Áp dụng cost ceiling của schedule và các giới hạn turn/context bình thường.
+6. Mediation mọi capability call.
+7. Cập nhật occurrence, last-fire, status, error, next-fire và consecutive-failure.
+
+Kết quả xuất hiện trong history của agent và trong Observability, được link từ occurrence. Spend report tách được trigger schedule khỏi user-message.
 
 ## Permission và approval
 
-Heartbeat không có authority rộng hơn agent. Not permitted vẫn unavailable, On demand cần discovery/load, MCP cần connected/bound, sandbox và audit vẫn áp dụng.
+Scheduled run không có authority rộng hơn agent:
 
-Heartbeat unattended có thể pause chờ approval hoặc bị deny theo channel policy. Với read-only check, chỉ grant operation cần thiết và test bằng **Run now**.
+- Capability chưa được permit vẫn unavailable.
+- Capability on-demand vẫn cần discovery và loading.
+- MCP server vẫn phải connected và bound.
+- Sandbox rule vẫn áp dụng.
+- Call vẫn tạo audit record.
 
-## Run now và failure tracking
+Cẩn thận với capability cần operator. Run không có người trông có thể pause chờ approval hoặc bị deny theo channel policy. Form schedule có thể pre-approve từng capability cần approval chỉ cho schedule đó — pre-approval bỏ qua prompt bên trong capability ceiling hiện có của agent và không bao giờ mở rộng nó. Với check read-only tự động, chỉ grant các read operation cần thiết và kiểm tra hành vi bằng **Run now**.
 
-**Run now** chạy ngay mà không đổi prompt periodic, yêu cầu prompt không trống. Dùng để kiểm tra provider/model, capability, approval, cost/turn limit, conversation và trace.
+## Run now
 
-Scheduler theo dõi consecutive failure trong process memory. Completed run reset counter; failed/stopped/exception tăng counter. Gateway restart reset runtime state nhưng config vẫn lưu.
+**Run now** tạo một occurrence ad-hoc và chạy ngay mà không đổi next-fire time đã persist. Nó yêu cầu task prompt không trống.
 
-## Cost và availability
+Dùng để kiểm tra:
 
-Heartbeat dùng `max_cost_per_heartbeat`. Provider cost có thể thiếu hoặc xấp xỉ; kết hợp provider quota/billing alert.
+- model và provider sẵn sàng;
+- prompt tự đủ;
+- capability cần thiết đã được permit;
+- approval hành xử như mong đợi;
+- cost và turn limit đủ;
+- kết quả xuất hiện đúng conversation và trace.
 
-Scheduler chạy trong local gateway và chỉ hoạt động khi máy thức, gateway chạy, agent/heartbeat enabled, prompt không trống và model/integration sẵn sàng. Đây không phải durable distributed scheduler; interval bị lỡ không tự replay.
+## Theo dõi failure và notification
+
+Bộ đếm consecutive-failure nằm trên schedule row nên sống qua restart. Run completed reset nó; run failed, stopped hoặc exceptional tăng nó.
+
+Khi đạt ngưỡng đã cấu hình, dashboard hiển thị alert và tạo notification nêu tên agent, số lần failure, ngưỡng và lỗi mới nhất. Heartbeat dùng ngưỡng trong cấu hình agent; các schedule khác alert ngay từ failure đầu tiên, dedupe còn một notification mỗi schedule mỗi ngày trong lúc failure còn kéo dài. Occurrence completed của user-schedule cũng có thể gửi completion notification link tới session mà nó tạo ra.
+
+Clear alert chỉ xóa alert hiển thị chứ không sửa task gốc. Hãy để schedule chạy thành công để reset trạng thái failure.
+
+## Kiểm soát cost
+
+Schedule có thể đặt cost ceiling riêng mỗi run — `max_cost_per_heartbeat` trên heartbeat — thay vì dùng ceiling của user message. Hãy bắt đầu với giá trị nhỏ và kiểm tra spend thực tế.
+
+Cost metadata của provider có thể thiếu hoặc xấp xỉ. Kết hợp limit của CaberOS với quota hoặc billing alert phía provider cho workload cần kiểm soát tài chính chặt.
+
+## Availability
+
+Schedule chỉ fire khi:
+
+- máy đang thức;
+- gateway CaberOS đang chạy;
+- agent và schedule đều enabled;
+- task prompt không trống;
+- model đã cấu hình và các integration cần thiết sẵn sàng.
+
+Đây không phải distributed scheduler — không có node thứ hai đảm nhận việc fire. Điều trạng thái persist cho bạn là khả năng khôi phục: khoảng trống khi gateway tắt được xử lý bởi missed-run policy lúc restart, và occurrence đang `running` khi process chết được reconcile thành `cancelled` ở lần khởi động sau thay vì trông như vẫn sống.
 
 ## Troubleshooting
 
-Heartbeat không start: kiểm tra agent, heartbeat, prompt, 30 giây sync và interval tối thiểu một phút. Run now invalid: agent không tồn tại hoặc prompt trống. Chờ vô hạn: tìm pending approval. Failure tăng: xem provider, denied syscall, MCP, context và cost. Cron/Event không chọn được vì chưa implement.
+### Schedule không bao giờ fire
+
+Kiểm tra schedule và agent đều enabled, task prompt không trống, và trigger đã tạo next-fire time — detail view hiển thị nó. Interval có tối thiểu runtime một phút.
+
+### Run now báo configuration invalid
+
+Schedule có thể chưa có revision, hoặc task prompt đang trống.
+
+### Scheduled run chờ vô hạn
+
+Tìm pending approval. Pre-approve capability trên schedule đó hoặc đổi approval policy chỉ sau khi xem xét operation được yêu cầu.
+
+### Consecutive failure tăng liên tục
+
+Mở run của occurrence mới nhất trong Observability. Kiểm tra lỗi provider, syscall bị deny, MCP server mất kết nối, context limit và cost limit.
+
+### Không có run nào trong lúc máy ngủ
+
+Đó là điều hiển nhiên — fire cần gateway đang chạy. Kiểm tra occurrence history sau lần khởi động tiếp theo: missed-run policy quyết định khoảng trống được ghi là `skipped_missed`, gộp thành một lần catch-up `run_once`, hay chạy lại từng instant bằng `catch_up`. Đổi policy nếu schedule nên xử lý các instant bị lỡ thay vì chỉ ghi nhận chúng.

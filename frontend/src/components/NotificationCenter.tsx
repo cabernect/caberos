@@ -26,14 +26,14 @@ export function NotificationCenter({
             ? "relative flex h-7 w-7 items-center justify-center rounded transition-colors"
             : "relative flex h-8 w-full items-center justify-start gap-2 rounded-[5px] px-2.5 py-2 text-[13px] transition-colors"
           : "relative flex h-9 w-9 items-center justify-center rounded-full border shadow-sm transition-colors hover:bg-[var(--hover)]"}
-        style={{ background: active ? "var(--ink)" : "none", borderColor: "var(--border)", color: active ? "var(--white)" : "var(--ink-2)", cursor: "pointer", fontWeight: active ? 500 : 400 }}
+        style={{ background: active ? "var(--accent-tint)" : "none", borderColor: "var(--border)", color: active ? "var(--accent)" : "var(--ink-2)", cursor: "pointer", fontWeight: active ? 500 : 400 }}
         onMouseEnter={(event) => {
-          event.currentTarget.style.background = active ? "var(--ink-2)" : "var(--border)";
-          event.currentTarget.style.color = active ? "var(--white)" : "var(--ink)";
+          event.currentTarget.style.background = active ? "var(--accent-tint)" : "var(--border)";
+          event.currentTarget.style.color = active ? "var(--accent)" : "var(--ink)";
         }}
         onMouseLeave={(event) => {
-          event.currentTarget.style.background = active ? "var(--ink)" : "none";
-          event.currentTarget.style.color = active ? "var(--white)" : "var(--ink-2)";
+          event.currentTarget.style.background = active ? "var(--accent-tint)" : "none";
+          event.currentTarget.style.color = active ? "var(--accent)" : "var(--ink-2)";
         }}
       >
         <Bell className="h-4 w-4" />

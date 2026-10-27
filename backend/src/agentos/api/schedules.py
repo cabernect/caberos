@@ -8,7 +8,9 @@ Endpoints:
   POST   /api/schedules/{id}/pause         — freeze next_fire_at
   POST   /api/schedules/{id}/resume        — re-enable; missed policy decides the gap
   POST   /api/schedules/{id}/duplicate     — copy config to a new disabled schedule
-  DELETE /api/schedules/{id}               — archive (tombstone)
+  DELETE /api/schedules/{id}               — archive (tombstone); ?hard=true deletes
+                                             an already-archived row + history for good
+  POST   /api/schedules/{id}/unarchive     — restore (paused); ?archived=true lists them
   POST   /api/schedules/{id}/run-now       — ad-hoc occurrence, real run
   POST   /api/schedules/{id}/test-run      — ad-hoc occurrence, scripted pipeline
   POST   /api/schedules/preview            — next N instants for a trigger+timezone
@@ -17,7 +19,7 @@ Endpoints:
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import scheduler as svc
@@ -138,6 +140,13 @@ async def _get_schedule(db: AsyncSession, schedule_id: str) -> Schedule:
     return sched
 
 
+async def _get_schedule_any(db: AsyncSession, schedule_id: str) -> Schedule:
+    sched = await db.get(Schedule, schedule_id)
+    if sched is None:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    return sched
+
+
 def _reject_managed(sched: Schedule) -> None:
     if sched.managed:
         raise HTTPException(
@@ -153,11 +162,19 @@ async def _agent_name(db: AsyncSession, agent_id: str) -> str:
 
 @router.get("")
 async def list_schedules(
+    archived: bool = Query(False),
     operator: Operator = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     result = await db.execute(
-        select(Schedule).where(Schedule.archived_at.is_(None)).order_by(Schedule.created_at.desc())
+        # User-created schedules only — managed heartbeat projections are
+        # served by the heartbeat facade, never by this listing.
+        select(Schedule)
+        .where(
+            Schedule.managed.is_(None),
+            Schedule.archived_at.is_not(None) if archived else Schedule.archived_at.is_(None),
+        )
+        .order_by(Schedule.created_at.desc())
     )
     out = []
     for sched in result.scalars().all():
@@ -298,18 +315,54 @@ async def duplicate_schedule(
 @router.delete("/{schedule_id}")
 async def delete_schedule(
     schedule_id: str,
+    hard: bool = Query(False),
     operator: Operator = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    sched = await _get_schedule(db, schedule_id)
+    sched = await _get_schedule_any(db, schedule_id)
     _reject_managed(sched)
     from datetime import UTC, datetime
 
+    if hard:
+        # Permanent delete is a second step — the row must be archived first,
+        # so an active schedule can't be destroyed by a single call.
+        if sched.archived_at is None:
+            raise HTTPException(
+                status_code=400, detail="Archive the schedule before deleting it permanently"
+            )
+        await db.execute(
+            delete(ScheduleOccurrence).where(ScheduleOccurrence.schedule_id == sched.id)
+        )
+        await db.execute(delete(ScheduleRevision).where(ScheduleRevision.schedule_id == sched.id))
+        await db.delete(sched)
+        await db.commit()
+        return {"id": sched.id, "deleted": True}
+
+    if sched.archived_at is not None:
+        raise HTTPException(status_code=404, detail="Schedule not found")
     sched.enabled = False
     sched.next_fire_at = None
     sched.archived_at = datetime.now(UTC)
     await db.commit()
     return {"id": sched.id, "archived": True}
+
+
+@router.post("/{schedule_id}/unarchive")
+async def unarchive_schedule(
+    schedule_id: str,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    sched = await _get_schedule_any(db, schedule_id)
+    _reject_managed(sched)
+    if sched.archived_at is None:
+        raise HTTPException(status_code=400, detail="Schedule is not archived")
+    # Restores paused — archive cleared `enabled`, so the operator re-enables
+    # explicitly. next_fire_at recomputes on that toggle.
+    sched.archived_at = None
+    await db.commit()
+    rev = await svc.current_revision(db, sched)
+    return _schedule_out(sched, rev, await _agent_name(db, sched.agent_id))
 
 
 @router.post("/{schedule_id}/run-now")

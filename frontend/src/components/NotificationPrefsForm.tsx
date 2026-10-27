@@ -12,6 +12,9 @@ import {
   type OsPermission,
 } from "@/lib/notifAdapters";
 import type { NotifSurface, SurfacePrefs } from "@/lib/types";
+import { IS_MAC } from "@/lib/platform";
+import { Toggle } from "@/components/ui/toggle";
+import { Select } from "@/components/ui/select";
 
 /** Known event types — surfaced in the override editor. Anything not
  *  listed still resolves through the defaults row. */
@@ -133,19 +136,23 @@ export function NotificationPrefsForm() {
               {os === "system" ? "Desktop" : "Browser"} alerts are blocked —
               enable them in{" "}
               {os === "system" ? (
-                <button
-                  type="button"
-                  className="underline underline-offset-2"
-                  onClick={() => {
-                    void import("@tauri-apps/plugin-opener").then((m) =>
-                      m.openUrl(
-                        "x-apple.systempreferences:com.apple.Notifications-Settings",
-                      ),
-                    );
-                  }}
-                >
-                  macOS notification settings
-                </button>
+                IS_MAC ? (
+                  <button
+                    type="button"
+                    className="underline underline-offset-2"
+                    onClick={() => {
+                      void import("@tauri-apps/plugin-opener").then((m) =>
+                        m.openUrl(
+                          "x-apple.systempreferences:com.apple.Notifications-Settings",
+                        ),
+                      );
+                    }}
+                  >
+                    macOS notification settings
+                  </button>
+                ) : (
+                  "system notification settings"
+                )
               ) : (
                 "browser site settings"
               )}
@@ -153,95 +160,88 @@ export function NotificationPrefsForm() {
             </p>
           )}
         </div>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={enabled}
+        <Toggle
+          checked={enabled}
+          onCheckedChange={toggleAll}
           aria-label="Enable notifications"
-          onClick={() => toggleAll(!enabled)}
-          className="relative h-5 w-9 shrink-0 rounded-full transition-colors"
-          style={{
-            // --border on --sidebar is nearly invisible (7% luminance) —
-            // mix toward --ink-3 so the OFF track actually reads as a pill.
-            background: enabled
-              ? "var(--accent)"
-              : "color-mix(in srgb, var(--border) 45%, var(--ink-3))",
-            border: "none",
-            cursor: "pointer",
-          }}
-        >
-          <span
-            className="absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform"
-            style={{
-              transform: enabled ? "translateX(16px)" : "none",
-              boxShadow: "0 1px 2px rgba(0,0,0,.25)",
-            }}
-          />
-        </button>
+        />
       </div>
 
       {/* Quiet hours */}
-      <div className="mt-4 flex flex-wrap items-center gap-3 text-[13px] text-[var(--ink)]">
-        <label className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            checked={prefs.quiet_hours.enabled}
-            onChange={(e) =>
-              patch({ quiet_hours: { enabled: e.target.checked } })
-            }
-            className="h-3.5 w-3.5"
-          />
-          Quiet hours
-        </label>
-        <input
-          type="time"
-          value={prefs.quiet_hours.start}
-          disabled={!prefs.quiet_hours.enabled}
-          onChange={(e) =>
-            patch({ quiet_hours: { start: e.target.value } })
-          }
-          className="rounded-[4px] border px-2 py-0.5 text-[12px]"
-          style={{ borderColor: "var(--border)", background: "var(--white)", color: "var(--ink)" }}
-        />
-        <span className="text-[var(--ink-3)]">to</span>
-        <input
-          type="time"
-          value={prefs.quiet_hours.end}
-          disabled={!prefs.quiet_hours.enabled}
-          onChange={(e) =>
-              patch({ quiet_hours: { end: e.target.value } })
-          }
-          className="rounded-[4px] border px-2 py-0.5 text-[12px]"
-          style={{ borderColor: "var(--border)", background: "var(--white)", color: "var(--ink)" }}
-        />
-        <span className="text-[11px] text-[var(--ink-3)]">
-          suppresses pings — approvals and questions still reach you (they
-          block the run); the inbox records everything
-        </span>
+      <div
+        className="mt-4 border-t pt-4"
+        style={{ borderColor: "var(--border-soft)" }}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-[13px] font-medium text-[var(--ink)]">
+            Quiet hours
+          </p>
+          <div className="flex items-center gap-3">
+            <input
+              type="time"
+              value={prefs.quiet_hours.start}
+              disabled={!prefs.quiet_hours.enabled}
+              onChange={(e) =>
+                patch({ quiet_hours: { start: e.target.value } })
+              }
+              className="w-[76px] rounded-md border px-2 py-1.5 text-center text-[13px] disabled:opacity-50"
+              style={{ borderColor: "var(--border)", background: "var(--white)", color: "var(--ink)" }}
+            />
+            <span className="text-[13px] text-[var(--ink-3)]">to</span>
+            <input
+              type="time"
+              value={prefs.quiet_hours.end}
+              disabled={!prefs.quiet_hours.enabled}
+              onChange={(e) =>
+                patch({ quiet_hours: { end: e.target.value } })
+              }
+              className="w-[76px] rounded-md border px-2 py-1.5 text-center text-[13px] disabled:opacity-50"
+              style={{ borderColor: "var(--border)", background: "var(--white)", color: "var(--ink)" }}
+            />
+            <Toggle
+              checked={prefs.quiet_hours.enabled}
+              onCheckedChange={(on) =>
+                patch({ quiet_hours: { enabled: on } })
+              }
+              aria-label="Quiet hours"
+            />
+          </div>
+        </div>
+        <p className="mt-1.5 text-[12px] text-[var(--ink-3)]">
+          Pauses alerts during these hours. Approvals and questions still
+          reach you because they block a run; the inbox records everything.
+        </p>
       </div>
 
       {/* Per-event overrides */}
-      <details className="mt-4">
+      <details
+        className="mt-4 border-t pt-3.5"
+        style={{ borderColor: "var(--border-soft)" }}
+      >
         <summary
-          className="cursor-pointer text-[12px] font-medium text-[var(--ink-2)]"
+          className="cursor-pointer text-[13px] font-medium text-[var(--ink)]"
           style={{ listStylePosition: "inside" }}
         >
-          Advanced — per-event overrides
+          Per-event overrides
         </summary>
-        <div className="mt-2 grid grid-cols-1 gap-x-8 gap-y-1 sm:grid-cols-2">
+        <div className="mt-2 divide-y" style={{ borderColor: "var(--border-soft)" }}>
           {EVENT_TYPES.map(({ type, label }) => (
-            <div key={type} className="flex items-center justify-between gap-3 py-0.5">
-              <span className="truncate text-[12px] text-[var(--ink-2)]">{label}</span>
-              <select
+            <div
+              key={type}
+              className="flex items-center justify-between gap-3 py-2.5"
+              style={{ borderColor: "var(--border-soft)" }}
+            >
+              <span className="truncate text-[13px] text-[var(--ink)]">{label}</span>
+              <Select
                 value={overrideChoice(prefs.overrides, type, os)}
-                onChange={(e) => setOverride(type, e.target.value as OverrideChoice)}
-                className="rounded-[4px] border px-1.5 py-0.5 text-[11px]"
-                style={{ borderColor: "var(--border)", background: "var(--white)", color: "var(--ink)" }}
-              >
-                <option value="default">Default</option>
-                <option value="muted">Muted</option>
-                <option value="desktop">Ping desktop</option>
-              </select>
+                onChange={(v) => setOverride(type, v as OverrideChoice)}
+                options={[
+                  { value: "default", label: "Default" },
+                  { value: "muted", label: "Inbox only" },
+                  { value: "desktop", label: "Toast + desktop ping" },
+                ]}
+                className="rounded-md border border-line bg-surface px-2 py-1 text-[12px] text-ink"
+              />
             </div>
           ))}
         </div>

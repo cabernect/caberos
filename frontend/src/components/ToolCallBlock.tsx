@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { Eye, FileText } from "lucide-react";
+import { CheckCircle2, ChevronDown, Eye, FileText, HelpCircle, Loader2, ShieldAlert, XCircle } from "lucide-react";
 import { api, type PreviewSource } from "@/lib/api";
 import { DiffBlock } from "@/components/DiffBlock";
 import { ThinkingBlock } from "@/components/ThinkingBlock";
+import { Select } from "@/components/ui/select";
 
 export interface ToolCallData {
   id: string;
@@ -134,7 +135,9 @@ export function collectFileRefs(calls: ToolCallData[]): FileRef[] {
   return [...seen.values()];
 }
 
-/** Chips row of output files a run produced — click opens the preview. */
+/** Output-file cards a run produced — click opens the workspace preview.
+    W13 mockup: accent-bordered card, icon tile, mono path, "Created in
+    workspace · {kind}", Open › affordance. */
 export function FileChips({
   refs,
   onPreview,
@@ -143,24 +146,55 @@ export function FileChips({
   onPreview?: (source: PreviewSource) => void;
 }) {
   if (!onPreview || refs.length === 0) return null;
+  const kindOf = (name: string) => {
+    const ext = name.split(".").pop()?.toLowerCase() ?? "";
+    const kinds: Record<string, string> = {
+      md: "Markdown",
+      txt: "Text",
+      pdf: "PDF",
+      docx: "Word",
+      xlsx: "Spreadsheet",
+      pptx: "Slides",
+      png: "Image",
+      jpg: "Image",
+      jpeg: "Image",
+      csv: "CSV",
+      json: "JSON",
+      py: "Python",
+      ts: "TypeScript",
+      tsx: "TypeScript",
+      js: "JavaScript",
+      html: "HTML",
+    };
+    return kinds[ext] ?? (ext ? ext.toUpperCase() : "File");
+  };
   return (
-    <div className="mb-3 flex flex-wrap items-center gap-1.5">
-      <span className="mr-0.5 font-mono text-[10px] uppercase tracking-wider text-[var(--ink-3)]">
-        files
-      </span>
+    <div className="mb-3 mt-3 space-y-2">
       {refs.map((ref, i) => (
         <button
           key={i}
           onClick={() => onPreview(ref.source)}
-          title={`${ref.source.path ?? ref.name} — click to preview`}
-          className="flex items-center gap-1.5 rounded-full border border-[var(--border)] bg-[var(--surface)]/60 py-0.5 pl-2 pr-2.5 text-[11px] text-[var(--ink-2)] transition-colors hover:border-[var(--accent)]/50 hover:bg-[var(--surface)] hover:text-[var(--ink)]"
-          style={{ cursor: "pointer" }}
+          title={`${ref.source.path ?? ref.name} — open in workspace`}
+          className="flex w-full cursor-pointer items-center gap-3 rounded-[12px] border px-3.5 py-2.5 text-left transition-colors hover:bg-accent-tint/40"
+          style={{
+            borderColor: "color-mix(in oklab, var(--accent) 45%, var(--line))",
+            background: "var(--surface)",
+          }}
         >
-          <FileText
-            className="h-3 w-3 shrink-0"
-            style={{ color: "var(--accent)" }}
-          />
-          <span className="max-w-[200px] truncate">{ref.name}</span>
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[9px] bg-accent-tint text-accent">
+            <FileText className="h-4 w-4" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate font-mono text-[13px] font-medium text-ink">
+              {ref.source.path ?? ref.name}
+            </span>
+            <span className="mt-0.5 block text-[11px] text-ink-muted">
+              Created in workspace · {kindOf(ref.name)}
+            </span>
+          </span>
+          <span className="shrink-0 text-[12px] font-medium text-accent">
+            Open ›
+          </span>
         </button>
       ))}
     </div>
@@ -235,15 +269,17 @@ export function ToolCallBlock({ call, subagentStream, onPreview }: ToolCallBlock
 
   const isSubagent = call.capability === "run_subagent";
 
-  const handleApprove = async () => {
+  const approve = async (rememberFlag: boolean) => {
     if (!call.approval_id) return;
     try {
-      await api.approveCall(call.approval_id, remember, rememberScope, rememberPattern || undefined);
+      await api.approveCall(call.approval_id, rememberFlag, rememberScope, rememberPattern || undefined);
       setApprovalState("approved");
     } catch {
       setApprovalState("error");
     }
   };
+
+  const handleApprove = () => approve(remember);
 
   const handleReject = async () => {
     if (!call.approval_id) return;
@@ -260,16 +296,30 @@ export function ToolCallBlock({ call, subagentStream, onPreview }: ToolCallBlock
       {!isSubagent && (
         <div
           onClick={() => hasResult && setExpanded(!expanded)}
-          className="mb-2 flex items-center gap-2 rounded-[5px] border px-2.5 py-1.5"
+          className="mb-2 flex items-center gap-2.5 rounded-[10px] border px-3 py-2"
           style={{
-            background: "var(--tool-bg)",
-            borderColor: call.status === "pending_approval" ? "var(--warning)" : "var(--border)",
+            background: "var(--surface)",
+            borderColor: call.status === "pending_approval" ? "var(--warning)" : "var(--line)",
             cursor: hasResult ? "pointer" : "default",
           }}
         >
-          <span className="text-[11px] font-medium text-[var(--ink-1)]">{label}</span>
+          {/* Status icon — mockup: green check done, spinner running,
+              ? waiting for approval, ✕ failed/denied. */}
+          {call.status === "complete" && (
+            <CheckCircle2 className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--success)" }} />
+          )}
+          {(call.status === "running" || call.status === "pending") && (
+            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" style={{ color: "var(--warning)" }} />
+          )}
+          {(call.status === "pending_approval" || call.status === "pending_input") && (
+            <HelpCircle className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--warning)" }} />
+          )}
+          {(call.status === "denied" || call.status === "failed" || call.status === "interrupted" || call.status === "timeout") && (
+            <XCircle className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--danger)" }} />
+          )}
+          <span className="text-[12px] font-medium text-ink">{label}</span>
           {detail && (
-            <span className="min-w-0 truncate font-mono text-[11px] text-[var(--ink-3)]">{detail}</span>
+            <span className="min-w-0 truncate font-mono text-[11px] text-ink-muted">{detail}</span>
           )}
           {onPreview && previewSourceFor(call) && (
             <button
@@ -286,12 +336,18 @@ export function ToolCallBlock({ call, subagentStream, onPreview }: ToolCallBlock
               <Eye className="h-3.5 w-3.5" />
             </button>
           )}
-          <span
-            className={`ml-auto font-mono text-[11px] ${call.status === "running" ? "pulse" : ""}`}
-            style={{ color: config.color }}
-          >
-            {config.symbol}
-          </span>
+          {hasResult ? (
+            <ChevronDown
+              className={`ml-auto h-3.5 w-3.5 shrink-0 text-ink-faint transition-transform duration-150 ${expanded ? "rotate-180" : ""}`}
+            />
+          ) : (
+            <span
+              className={`ml-auto font-mono text-[11px] ${call.status === "running" ? "pulse" : ""}`}
+              style={{ color: config.color }}
+            >
+              {config.symbol}
+            </span>
+          )}
         </div>
       )}
 
@@ -302,82 +358,70 @@ export function ToolCallBlock({ call, subagentStream, onPreview }: ToolCallBlock
         </div>
       )}
 
-      {/* Approval buttons */}
+      {/* Approval card — warning-tinted, pauses the run until decided. */}
       {call.status === "pending_approval" && call.approval_id && (
-        <div className="mb-2 rounded-[5px] border p-2"
-          style={{ borderColor: "var(--warning)", background: "var(--surface)" }}
+        <div
+          className="mb-2 rounded-[14px] border p-3.5"
+          style={{ borderColor: "var(--warning)", background: "var(--warning-tint)" }}
         >
-          <div className="flex items-center gap-2">
-            <span className="font-mono text-[11px] text-[var(--ink-2)]">
-              {approvalState === "pending" && "Requires approval"}
-              {approvalState === "approved" && (
-                call.approval_batch_size && call.approval_batch_size > 1
-                  ? "Approved — waiting for the action batch"
-                  : "Approved — executing..."
-              )}
-              {approvalState === "rejected" && "Rejected"}
-              {approvalState === "error" && "Error — try again"}
-            </span>
-            {approvalState === "pending" && (
-              <div className="ml-auto flex gap-1.5">
-                <button
-                  onClick={handleApprove}
-                  className="rounded-[4px] px-2.5 py-1 font-mono text-[11px] font-medium transition"
-                  style={{ background: "var(--success)", color: "var(--white)", border: "none", cursor: "pointer" }}
-                >
-                  Approve
-                </button>
-                <button
-                  onClick={handleReject}
-                  className="rounded-[4px] px-2.5 py-1 font-mono text-[11px] font-medium transition"
-                  style={{ background: "var(--danger)", color: "var(--white)", border: "none", cursor: "pointer" }}
-                >
-                  Deny
-                </button>
+          <div className="flex items-start gap-2.5">
+            <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" style={{ color: "var(--warning)" }} />
+            <div className="min-w-0 flex-1">
+              <div className="text-[13px] font-semibold text-ink">
+                Wants to {label.charAt(0).toLowerCase() + label.slice(1)}
               </div>
-            )}
-          </div>
-          {call.approval_batch_size && call.approval_batch_size > 1 && (
-            <div className="mt-1.5 font-mono text-[10px] text-[var(--ink-3)]">
-              This action has {call.approval_batch_size} approval requests. Nothing runs until all are decided.
-            </div>
-          )}
-          {approvalState === "pending" && (
-            <div className="mt-1.5">
-              <label className="flex items-center gap-1.5 font-mono text-[10px] text-[var(--ink-3)]"
-                style={{ cursor: "pointer", userSelect: "none" }}
-              >
-                <input
-                  type="checkbox"
-                  checked={remember}
-                  onChange={(e) => {
-                    setRemember(e.target.checked);
-                    if (!e.target.checked) setRememberScope("exact");
-                  }}
-                  style={{ cursor: "pointer" }}
-                />
-                Remember for this session
-              </label>
-              {remember && (
-                <>
-                  <select
-                    value={rememberScope}
-                    onChange={(e) => setRememberScope(e.target.value as "exact" | "same_verb" | "pattern" | "capability")}
-                    className="mt-1 rounded-[4px] border px-1.5 py-0.5 font-mono text-[10px]"
-                    style={{
-                      borderColor: "var(--border)",
-                      background: "var(--white)",
-                      color: "var(--ink-2)",
-                      cursor: "pointer",
-                    }}
+              <div className="mt-0.5 text-[12px] text-ink-muted">
+                The run is paused until you decide.
+              </div>
+              {detail && (
+                <div className="mt-2 break-all rounded-[8px] border border-line bg-surface px-2.5 py-1.5 font-mono text-[11px] text-ink-muted">
+                  {detail}
+                </div>
+              )}
+              <div className="mt-2 flex items-center gap-2">
+                <span className="font-mono text-[11px] text-ink-muted">
+                  {approvalState === "pending" && "Requires approval"}
+                  {approvalState === "approved" && (
+                    call.approval_batch_size && call.approval_batch_size > 1
+                      ? "Approved — waiting for the action batch"
+                      : "Approved — executing..."
+                  )}
+                  {approvalState === "rejected" && "Rejected"}
+                  {approvalState === "error" && "Error — try again"}
+                </span>
+              </div>
+              {approvalState === "pending" && (
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                  <button
+                    onClick={handleApprove}
+                    className="cursor-pointer rounded-[8px] bg-ink px-3 py-1.5 text-[12px] font-medium text-surface transition-opacity hover:opacity-85"
                   >
-                    <option value="exact">This exact call only</option>
-                    {call.capability === "terminal" && (
-                      <option value="same_verb">All "{(call.args?.command as string || "").trim().split(/\s+/)[0] || "cmd"}" commands</option>
-                    )}
-                    <option value="pattern">Custom pattern (wildcard)</option>
-                    <option value="capability">All {call.capability} calls</option>
-                  </select>
+                    Allow once
+                  </button>
+                  <button
+                    onClick={() => {
+                      setRemember(true);
+                      void approve(true);
+                    }}
+                    className="cursor-pointer rounded-[8px] border border-line bg-surface px-3 py-1.5 text-[12px] font-medium text-ink transition-colors hover:bg-sunken"
+                  >
+                    Always allow
+                  </button>
+                  <Select
+                    value={rememberScope}
+                    onChange={(v) => setRememberScope(v as "exact" | "same_verb" | "pattern" | "capability")}
+                    options={[
+                      { value: "exact", label: "this call" },
+                      ...(call.capability === "terminal"
+                        ? [{ value: "same_verb", label: `all "${(call.args?.command as string || "").trim().split(/\s+/)[0] || "cmd"}" commands` }]
+                        : []),
+                      { value: "pattern", label: "custom pattern" },
+                      { value: "capability", label: `all ${call.capability}` },
+                    ]}
+                    title="Scope for Always allow"
+                    className="cursor-pointer rounded-[8px] border border-line bg-surface px-1.5 py-1.5 font-mono text-[10px] text-ink-muted"
+                    panelClassName="whitespace-nowrap"
+                  />
                   {rememberScope === "pattern" && (
                     <input
                       type="text"
@@ -388,18 +432,24 @@ export function ToolCallBlock({ call, subagentStream, onPreview }: ToolCallBlock
                           ? `${(call.args?.command as string || "").trim().split(/\s+/)[0] || "cmd"} *`
                           : "*"
                       }
-                      className="mt-1 w-full rounded-[4px] border px-1.5 py-0.5 font-mono text-[10px]"
-                      style={{
-                        borderColor: "var(--border)",
-                        background: "var(--white)",
-                        color: "var(--ink-2)",
-                      }}
+                      className="w-28 rounded-[8px] border border-line bg-surface px-1.5 py-1.5 font-mono text-[10px] text-ink-muted outline-none"
                     />
                   )}
-                </>
+                  <button
+                    onClick={handleReject}
+                    className="cursor-pointer rounded-[8px] border border-danger/40 bg-surface px-3 py-1.5 text-[12px] font-medium text-danger transition-colors hover:bg-danger-tint"
+                  >
+                    Deny
+                  </button>
+                </div>
+              )}
+              {call.approval_batch_size && call.approval_batch_size > 1 && (
+                <div className="mt-1.5 font-mono text-[10px] text-ink-faint">
+                  This action has {call.approval_batch_size} approval requests. Nothing runs until all are decided.
+                </div>
               )}
             </div>
-          )}
+          </div>
         </div>
       )}
 

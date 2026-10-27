@@ -1,7 +1,11 @@
 import { useState, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
 import { Check, Copy } from "lucide-react";
+import { normalizeMathDelims } from "@/lib/mathDelims";
+import "katex/dist/katex.min.css";
 
 /**
  * Markdown renderer with copy-to-clipboard on code blocks.
@@ -10,12 +14,13 @@ import { Check, Copy } from "lucide-react";
 export function Markdown({ children }: { children: string }) {
   return (
     <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
+      remarkPlugins={[remarkGfm, remarkMath]}
+      rehypePlugins={[rehypeKatex]}
       components={{
         pre: CodeBlock,
       }}
     >
-      {children}
+      {normalizeMathDelims(children)}
     </ReactMarkdown>
   );
 }

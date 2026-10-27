@@ -23,7 +23,7 @@ class ExecutionRestrictions:
     capability_names: frozenset[str]
     skill_edits: Any = None
     history_scope: dict[str, Any] | None = None
-    max_tool_calls_per_turn: int = 4
+    max_concurrent_tool_calls: int = 4
 
 
 @dataclass

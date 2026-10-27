@@ -1,6 +1,10 @@
 import { Brain } from "lucide-react";
+import { Select } from "@/components/ui/select";
 
 /** Thinking toggle + effort selector — shown when the selected model supports reasoning.
+ *
+ *  "Think" pill (accent-tint when on) + a compact effort dropdown —
+ *  models can expose 6+ efforts, so a segmented control wraps the row.
  *
  *  Used in two places:
  *  - ChatInputBar: per-message override (null = use agent default)
@@ -22,56 +26,29 @@ export function ThinkingToggle({
   const isOn = enabled === true;
 
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex items-center gap-1.5">
       <button
         type="button"
         onClick={() => onToggle(!isOn)}
-        className="flex items-center gap-1 rounded-[4px] border px-2 py-1 font-mono text-[11px] transition"
-        style={{
-          borderColor: isOn ? "var(--accent)" : "var(--border)",
-          background: isOn ? "var(--surface)" : "transparent",
-          color: isOn ? "var(--accent)" : "var(--ink-3)",
-          cursor: "pointer",
-        }}
-        onMouseEnter={(e) => {
-          if (!isOn) {
-            e.currentTarget.style.borderColor = "var(--ink-3)";
-            e.currentTarget.style.color = "var(--ink-2)";
-          }
-        }}
-        onMouseLeave={(e) => {
-          if (!isOn) {
-            e.currentTarget.style.borderColor = "var(--border)";
-            e.currentTarget.style.color = "var(--ink-3)";
-          }
-        }}
+        className={`flex cursor-pointer items-center gap-1.5 rounded-[8px] border px-2.5 py-1.5 text-[12px] font-medium transition-colors ${
+          isOn
+            ? "border-accent/40 bg-accent-tint text-accent"
+            : "border-line bg-surface text-ink-muted hover:text-ink"
+        }`}
         title={isOn ? "Thinking enabled — click to disable" : "Enable thinking/reasoning"}
       >
-        <Brain className="h-3 w-3" />
+        <Brain className="h-3.5 w-3.5" />
         <span>Think</span>
       </button>
       {isOn && efforts.length > 0 && (
-        <select
+        <Select
           value={effort}
-          onChange={(e) => onEffortChange(e.target.value)}
-          className="rounded-[4px] border px-1.5 py-1 font-mono text-[11px] outline-none transition"
-          style={{
-            borderColor: "var(--border)",
-            background: "var(--surface)",
-            color: "var(--ink-2)",
-            cursor: "pointer",
-          }}
-          onMouseEnter={(e) =>
-            (e.currentTarget.style.borderColor = "var(--ink-3)")
-          }
-          onMouseLeave={(e) =>
-            (e.currentTarget.style.borderColor = "var(--border)")
-          }
-        >
-          {efforts.map((e) => (
-            <option key={e} value={e}>{e}</option>
-          ))}
-        </select>
+          onChange={onEffortChange}
+          options={efforts.map((e) => ({ value: e, label: e }))}
+          className="cursor-pointer rounded-[8px] border border-line bg-surface py-1.5 pl-2 pr-1.5 text-[12px] font-medium text-ink-muted outline-none transition-colors hover:text-ink focus-visible:outline-2 focus-visible:outline-accent"
+          title="Thinking effort"
+          ariaLabel="Thinking effort"
+        />
       )}
     </div>
   );

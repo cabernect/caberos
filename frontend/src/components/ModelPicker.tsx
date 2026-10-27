@@ -1,10 +1,10 @@
 import { useEffect, useState, useRef } from "react";
-import { Search, Eye, Brain } from "lucide-react";
+import { Search, Eye, Brain, Check, ChevronDown } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Provider, ModelInfo } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-interface SelectedModel {
+export interface SelectedModel {
   provider_id: string;
   name: string;
   supports_vision?: boolean;
@@ -12,7 +12,7 @@ interface SelectedModel {
   thinking_efforts?: string[];
 }
 
-interface ModelSelectorProps {
+interface ModelPickerProps {
   defaultProviderId: string | null;
   defaultModelName: string | null;
   onChange: (model: SelectedModel | null) => void;
@@ -29,25 +29,34 @@ interface LoadState {
   mounted: boolean;
 }
 
-export function ModelSelector({
+/**
+ * Composer model picker — a session-scoped override that browses every
+ * configured provider, carries capability flags (vision/thinking) to the
+ * thinking toggles, and can reset to the agent default.
+ *
+ * Not the same component as `ModelSelect` — that one is a single-provider
+ * form field (Settings / Create Agent) that accepts free-text model names.
+ */
+export function ModelPicker({
   defaultProviderId,
   defaultModelName,
   onChange,
-}: ModelSelectorProps) {
+}: ModelPickerProps) {
   const [providers, setProviders] = useState<ProviderModels[]>([]);
   const [loadErrors, setLoadErrors] = useState<Set<string>>(new Set());
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const [selected, setSelected] = useState<string>(
     defaultProviderId && defaultModelName
       ? `${defaultProviderId}/${defaultModelName}`
       : "",
   );
 
-  // Per-instance request generation — two mounted selectors never
-  // invalidate each other, and an out-of-order provider list or model
-  // response can never reset newer state.
+  // Per-instance request generation — two mounted pickers never invalidate
+  // each other, and an out-of-order provider list or model response can
+  // never reset newer state.
   const loadState = useRef<LoadState>({ generation: 0, mounted: true });
 
   const refreshProviders = () => {
@@ -122,6 +131,19 @@ export function ModelSelector({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Close on outside press — keeps the trigger a real toggle (clicking the
+  // pill while open lands on the button, not an invisible overlay layer).
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
 
   const handleSelect = (
     providerId: string,
@@ -293,77 +315,49 @@ export function ModelSelector({
   };
 
   return (
-    <div className="relative shrink-0">
+    <div ref={containerRef} className="relative shrink-0">
       <button
+        type="button"
         onClick={toggleOpen}
-        className="flex items-center gap-1 rounded-[5px] border px-2 py-1.5 font-mono text-[12px] whitespace-nowrap transition"
-        style={{
-          borderColor: "var(--border)",
-          background: "none",
-          color: "var(--ink-2)",
-          cursor: "pointer",
-        }}
-        onMouseEnter={(e) =>
-          (e.currentTarget.style.borderColor = "var(--ink-3)")
-        }
-        onMouseLeave={(e) =>
-          (e.currentTarget.style.borderColor = "var(--border)")
-        }
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        className={cn(
+          "flex items-center gap-1 whitespace-nowrap rounded-md border px-2 py-1.5 font-mono text-[12px] transition",
+          open
+            ? "border-accent text-ink"
+            : "border-line text-ink-2 hover:border-ink-3",
+        )}
       >
-        <span className="max-w-[200px] truncate" title={selectedLabel}>
+        <span className="max-w-[140px] truncate" title={selectedLabel}>
           {selectedLabel}
         </span>
-        <span
-          className="text-[10px] opacity-60"
-          style={{ transform: open ? "rotate(180deg)" : "none" }}
-        >
-          ▾
-        </span>
+        <ChevronDown
+          className={cn("h-3 w-3 shrink-0 text-ink-3 transition-transform", open && "rotate-180")}
+        />
       </button>
 
       {open && (
-        <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div
-            className="absolute bottom-full left-0 z-50 mb-1 max-h-80 min-w-[240px] overflow-y-auto rounded-md border p-1 shadow-lg"
-            style={{
-              borderColor: "var(--border)",
-              background: "var(--white)",
-              boxShadow: "0 4px 16px rgba(0,0,0,0.08)",
-            }}
-          >
-            <div className="relative mb-1">
-              <Search
-                className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
-                style={{ color: "var(--ink-3)" }}
-              />
-              <input
-                ref={searchRef}
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search models…"
-                className="w-full rounded-[4px] border py-1.5 pl-7 pr-2 font-mono text-[12px] outline-none"
-                style={{
-                  borderColor: "var(--border)",
-                  background: "var(--surface)",
-                  color: "var(--ink)",
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Escape") setOpen(false);
-                  e.stopPropagation();
-                }}
-              />
-            </div>
+        <div className="absolute bottom-full right-0 z-50 mb-1.5 flex max-h-80 w-[360px] flex-col overflow-hidden rounded-lg border border-line bg-surface shadow-lg">
+          {/* Search */}
+          <div className="relative border-b border-line">
+            <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-3" />
+            <input
+              ref={searchRef}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search models…"
+              className="w-full bg-transparent py-2 pl-8 pr-3 font-mono text-[12px] text-ink outline-none placeholder:text-ink-3"
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setOpen(false);
+                e.stopPropagation();
+              }}
+            />
+          </div>
 
+          <div className="overflow-y-auto">
             {!search && selected && !isDefault && (
-              <div
-                className="mb-1 flex items-center gap-2 rounded-[4px] px-3 py-1.5 font-mono text-[12px]"
-                style={{ background: "var(--surface)", color: "var(--accent)" }}
-              >
-                <span
-                  className="text-[10px] font-bold uppercase"
-                  style={{ color: "var(--accent)" }}
-                >
+              <div className="flex items-center gap-2 border-b border-line bg-ground px-3 py-1.5 font-mono text-[12px] text-accent">
+                <span className="text-[10px] font-semibold uppercase tracking-wide">
                   Current
                 </span>
                 <span className="truncate" title={selectedLabel}>
@@ -373,35 +367,25 @@ export function ModelSelector({
             )}
 
             <button
+              type="button"
               onClick={handleUseDefault}
-              className={cn(
-                "flex w-full items-center justify-between px-3 py-1.5 text-left font-mono text-[12px] transition",
-              )}
-              style={{
-                color:
-                  !selected ||
-                  selected === `${defaultProviderId}/${defaultModelName}`
-                    ? "var(--accent)"
-                    : "var(--ink)",
-              }}
-              onMouseEnter={(e) =>
-                (e.currentTarget.style.background = "var(--surface)")
-              }
-              onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
+              className="flex w-full items-center justify-between px-3 py-2 text-left font-mono text-[12px] transition hover:bg-ground"
             >
-              <span style={{ color: "var(--ink-2)" }}>Agent default</span>
+              <span className={cn(isDefault ? "text-accent" : "text-ink-2")}>
+                Agent default
+              </span>
               {defaultModelName && (
-                <span style={{ color: "var(--ink-3)" }}>
+                <span className="text-ink-3">
                   {defaultModelName} ·{" "}
                   {defaultProviderName || defaultProviderId?.slice(0, 8)}
                 </span>
               )}
             </button>
 
-            <div style={{ borderTop: "1px solid var(--border)" }} />
+            <div className="border-t border-line" />
 
             {filteredProviders.length === 0 && (
-              <div className="px-3 py-3 text-center font-mono text-[11px] text-[var(--ink-3)]">
+              <div className="px-3 py-4 text-center font-mono text-[11px] text-ink-3">
                 {search
                   ? `No models matching "${search}".`
                   : providers.length === 0
@@ -412,13 +396,13 @@ export function ModelSelector({
 
             {filteredProviders.map(({ provider, models }) => (
               <div key={provider.id}>
-                <div
-                  className="px-3 py-1.5 font-mono text-[11px] text-[var(--ink-3)]"
-                  style={{ background: "var(--surface)" }}
-                >
+                <div className="flex items-center gap-1.5 border-b border-line bg-ground px-3 py-1.5 font-mono text-[11px] text-ink-3">
                   {provider.name}
                   {loadErrors.has(provider.id) && (
-                    <span className="ml-1" title="Model list failed to load; showing last-known data">
+                    <span
+                      className="text-[10px]"
+                      title="Model list failed to load; showing last-known data"
+                    >
                       · refresh failed
                     </span>
                   )}
@@ -427,9 +411,13 @@ export function ModelSelector({
                   const key = `${provider.id}/${model.id}`;
                   const note = availabilityNote(model);
                   const label = model.display_name || model.id;
+                  const isSelected = selected === key;
                   return (
                     <button
                       key={key}
+                      type="button"
+                      role="option"
+                      aria-selected={isSelected}
                       onClick={() =>
                         handleSelect(
                           provider.id,
@@ -439,46 +427,32 @@ export function ModelSelector({
                           model.thinking_efforts || [],
                         )
                       }
-                      className="flex w-full items-center gap-1 px-3 py-1.5 text-left font-mono text-[12px] transition"
-                      style={{
-                        color: selected === key ? "var(--accent)" : "var(--ink)",
-                      }}
-                      onMouseEnter={(e) =>
-                        (e.currentTarget.style.background = "var(--surface)")
-                      }
-                      onMouseLeave={(e) =>
-                        (e.currentTarget.style.background = "none")
-                      }
+                      className={cn(
+                        "flex w-full items-center gap-1 px-3 py-2 text-left font-mono text-[12px] transition hover:bg-ground",
+                        isSelected ? "text-accent" : "text-ink",
+                      )}
                     >
                       <span className="flex-1 truncate">
                         {label}
                         {label !== model.id && (
-                          <span style={{ color: "var(--ink-3)" }}>
-                            {" "}
-                            · {model.id}
-                          </span>
+                          <span className="text-ink-3"> · {model.id}</span>
                         )}
-                        {note && (
-                          <span style={{ color: "var(--ink-3)" }}>{note}</span>
-                        )}
+                        {note && <span className="text-ink-3">{note}</span>}
                       </span>
                       {model.supports_thinking === true && (
                         <Brain
-                          className="ml-1 h-3.5 w-3.5 shrink-0"
-                          style={{ color: "var(--ink-3)" }}
+                          className="ml-1 h-3.5 w-3.5 shrink-0 text-ink-3"
                           aria-label="Supports thinking/reasoning"
                         />
                       )}
                       {model.supports_vision === true && (
                         <Eye
-                          className="ml-1 h-3.5 w-3.5 shrink-0"
-                          style={{ color: "var(--ink-3)" }}
+                          className="ml-1 h-3.5 w-3.5 shrink-0 text-ink-3"
                           aria-label="Supports vision/image input"
                         />
                       )}
                       <span
-                        className="ml-1 shrink-0 font-mono text-[10px]"
-                        style={{ color: "var(--ink-4)" }}
+                        className="ml-1 shrink-0 font-mono text-[10px] text-ink-faint"
                         title={limitsTitle(model)}
                       >
                         {model.context_window_tokens != null
@@ -487,13 +461,16 @@ export function ModelSelector({
                             ? `in ${fmt(model.max_context_tokens)}`
                             : "?"}
                       </span>
+                      {isSelected && (
+                        <Check className="ml-1 h-3.5 w-3.5 shrink-0 text-accent" />
+                      )}
                     </button>
                   );
                 })}
               </div>
             ))}
           </div>
-        </>
+        </div>
       )}
     </div>
   );

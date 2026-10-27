@@ -42,6 +42,11 @@ class ChangePasswordRequest(BaseModel):
     new_password: str
 
 
+class SetupCredentialsRequest(BaseModel):
+    username: str | None = None
+    new_password: str
+
+
 class OperatorOut(BaseModel):
     id: str
     username: str
@@ -231,3 +236,42 @@ async def change_password(
     db.add(audit)
     await db.commit()
     return {"status": "password_changed"}
+
+
+@router.post("/setup-credentials")
+async def setup_credentials(
+    data: SetupCredentialsRequest,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> OperatorOut:
+    """First-run credential setup — replaces the default login without asking
+    for the old password (the operator is already authenticated). Only valid
+    while must_change_password is true; afterwards use /change-password."""
+    if not operator.must_change_password:
+        raise HTTPException(
+            status_code=409,
+            detail="Credentials are already set — use change-password.",
+        )
+    new_username = (data.username or "").strip()
+    if new_username:
+        if len(new_username) > 64 or not all(ch.isalnum() or ch in "._-" for ch in new_username):
+            raise HTTPException(status_code=400, detail="Invalid username")
+        operator.username = new_username
+    if len(data.new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    operator.password_hash = hash_password(data.new_password)
+    operator.must_change_password = False
+    db.add(
+        OperatorAuditLog(
+            id=str(uuid.uuid4()),
+            operator_id=operator.id,
+            action="setup_credentials",
+            target=operator.id,
+        )
+    )
+    await db.commit()
+    return OperatorOut(
+        id=operator.id,
+        username=operator.username,
+        must_change_password=operator.must_change_password,
+    )
