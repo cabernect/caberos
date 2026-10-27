@@ -308,6 +308,7 @@ async def reindex_scope_document(
     ).resolve()
     source = (scope_root / document.storage_path).resolve()
     try:
+        scope_root.relative_to(knowledge_root)
         source.relative_to(scope_root)
     except ValueError as error:
         raise HTTPException(status_code=400, detail="Document storage path is invalid") from error
