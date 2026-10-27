@@ -65,7 +65,7 @@ const localizedPath = (path: string) => `${isVietnamese ? "/vi" : ""}${path}`;
             </div>
             <ol class="platform-steps">
               <li>{isVietnamese ? "Mở file DMG và kéo " : "Open the DMG and drag "}<strong>CaberOS</strong>{isVietnamese ? " vào thư mục Applications." : " into your Applications folder."}</li>
-              <li>{isVietnamese ? "Nếu macOS báo ứng dụng bị lỗi, chạy " : "If macOS reports the app is damaged, run "}<code>xattr -dr com.apple.quarantine /Applications/CaberOS.app</code></li>
+              <li>{isVietnamese ? "Nếu macOS báo ứng dụng bị lỗi, mở " : "If macOS reports the app is damaged, open "}<strong>{isVietnamese ? "Terminal" : "Terminal"}</strong>{isVietnamese ? " và chạy " : " and run "}<code>xattr -dr com.apple.quarantine /Applications/CaberOS.app</code></li>
             </ol>
           </div>
           <div class="platform-card">
@@ -117,11 +117,11 @@ const localizedPath = (path: string) => `${isVietnamese ? "/vi" : ""}${path}`;
         <p>{isVietnamese ? "CaberOS lưu output của desktop gateway trong thư mục dữ liệu ứng dụng. Gateway chỉ lắng nghe trên loopback port " : "CaberOS stores desktop gateway output in your application data directory. The bundled gateway listens only on loopback port "}<code>51718</code>.</p>
       </div>
       <div class="command-card">
-        <span class="command-label mono">{isVietnamese ? "KIỂM TRA SỨC KHỎE" : "HEALTH CHECK"}</span>
+        <span class="command-label mono">{isVietnamese ? "KIỂM TRA SỨC KHỎE · TERMINAL / POWERSHELL" : "HEALTH CHECK · TERMINAL / POWERSHELL"}</span>
         <pre><code>curl -i http://127.0.0.1:51718/health</code></pre>
-        <span class="command-label mono">{isVietnamese ? "FILE LOG · MACOS" : "LOG FILE · macOS"}</span>
+        <span class="command-label mono">{isVietnamese ? "FILE LOG · MACOS TERMINAL" : "LOG FILE · macOS TERMINAL"}</span>
         <pre><code>tail -n 100 "$HOME/Library/Application Support/com.caberos.desktop/logs/gateway.log"</code></pre>
-        <span class="command-label mono">{isVietnamese ? "FILE LOG · WINDOWS" : "LOG FILE · Windows"}</span>
+        <span class="command-label mono">{isVietnamese ? "FILE LOG · WINDOWS POWERSHELL" : "LOG FILE · WINDOWS POWERSHELL"}</span>
         <pre><code>Get-Content "$env:APPDATA\com.caberos.desktop\logs\gateway.log" -Tail 100</code></pre>
         <a class="light-link" href={localizedPath("/docs/operations/troubleshooting/")}>{isVietnamese ? "Mở tài liệu xử lý sự cố" : "Open troubleshooting docs"} <Icon name="arrow" size={15} /></a>
       </div>
