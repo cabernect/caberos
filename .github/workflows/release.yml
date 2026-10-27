@@ -66,9 +66,10 @@ jobs:
         shell: bash
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#v}"
+          TAG_BASE="${TAG_VERSION%%-*}"
           ./scripts/check-version.sh
           BACKEND_VERSION=$(grep '^version = ' backend/pyproject.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
-          if [ "$BACKEND_VERSION" != "$TAG_VERSION" ]; then
+          if [ "$BACKEND_VERSION" != "$TAG_BASE" ]; then
             echo "Tag version ($TAG_VERSION) does not match manifest version ($BACKEND_VERSION)"
             echo "Run: ./scripts/set-version.sh $TAG_VERSION"
             exit 1
@@ -284,8 +285,9 @@ jobs:
       - name: Compose release body from CHANGELOG.md
         run: |
           set -euo pipefail
+          VER="${GITHUB_REF_NAME#v}"
           python3 scripts/release-body.py \
-            --version "${GITHUB_REF_NAME#v}" \
+            --version "${VER%%-*}" \
             --out release-body.md
           cat release-body.md
 
