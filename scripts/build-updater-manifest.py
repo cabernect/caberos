@@ -18,7 +18,7 @@ Usage:
         --repo cabernect/caberos \
         --tag v0.3.0 \
         --platform darwin-aarch64=dist/CaberOS.app.tar.gz \
-        --platform windows-x86_64=dist/CaberOS_0.3.0_x64-setup.nsis.zip \
+        --platform windows-x86_64=dist/CaberOS_0.3.0_x64-setup.exe \
         --out latest.json
 
 Each artifact must have a sibling `<artifact>.sig` produced by the same build.
@@ -113,7 +113,7 @@ def build_manifest(
 def _parse_platform(value: str) -> tuple[str, Path]:
     if "=" not in value:
         raise argparse.ArgumentTypeError(
-            f"--platform expects KEY=PATH (got {value!r}), e.g. windows-x86_64=dist/setup.nsis.zip"
+            f"--platform expects KEY=PATH (got {value!r}), e.g. windows-x86_64=dist/setup.exe"
         )
     key, _, path = value.partition("=")
     return key.strip(), Path(path.strip())
