@@ -78,7 +78,7 @@ All entry points converge on `run_agent()` → `Pipeline.handle_inbound()` → `
 
 **close_session** (`memory/episodic.py`) — full-transcript `ConversationSummary` + session-scoped durable-fact extraction over terminal non-test runs, then conditional `closed` write. Provider/parse/core-conflict failure leaves the session open with originals + scratch retained. Dashboard resume reopens like a channel resume.
 
-**Reflection (RSI)** — post-close: `snapshot_agent_local_drift` pins untracked live-dir skill edits; `reflect_session` may run one bounded pass (real `Run` row, `trigger="reflection"`) with inspect/edit authority over frozen evidence + staged agent-local edits only. Dedupes by evidence fingerprint; skipped-while-busy stays unclaimed and retries within a 7-day lookback. Never reopens the session, never rolls back learning, invisible to chat history and activation counts.
+**Reflection (RSI)** — post-close: `snapshot_agent_local_drift` pins untracked live-dir skill edits; `reflect_session` may run one bounded pass (real `Run` row, `trigger="reflection"`) with inspect/edit authority over frozen evidence + staged agent-local edits only. Restricted runs bound *concurrency* (≤4 simultaneous mediated calls), not count — oversized tool-call batches drain through bounded slots rather than failing. Dedupes by evidence fingerprint; skipped-while-busy stays unclaimed and retries within a 7-day lookback. Never reopens the session, never rolls back learning, invisible to chat history and activation counts.
 
 ## 4. Data model (`models/`)
 

@@ -27,7 +27,7 @@ export interface Attachment {
 }
 
 export interface ChatInputBarHandle {
-  addFiles: (files: File[]) => void;
+  addFiles: (files: File[]) => Promise<void>;
   prefill: (text: string) => void;
 }
 
@@ -114,6 +114,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
   const [thinkingEffort, setThinkingEffort] = useState<string>(defaultThinkingEffort || "medium");
   const [contextItems, setContextItems] = useState<ContextItem[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [pendingFiles, setPendingFiles] = useState(0);
   // Transient tray note — e.g. "duplicate skipped". Auto-clears.
   const [trayNote, setTrayNote] = useState<string | null>(null);
   const [showContextMenu, setShowContextMenu] = useState(false);
@@ -253,7 +254,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
       setSelectedOptions(new Set());
       return;
     }
-    if (!text.trim() || disabled) return;
+    if ((!text.trim() && attachments.length === 0) || disabled || pendingFiles > 0) return;
 
     // Slash command detection: /skillname rest of message
     // Extracts the skill name and passes it separately to the backend
@@ -329,75 +330,84 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
   // Exposed via ref so the parent (Conversation) can forward drops
   // from the entire chat view, not just the input bar.
   //
-  // Pipeline per file: content-hash dedupe → stage card immediately
-  // (object URL for images) → read bytes for transport → lazily fetch
-  // a bounded backend preview for PDF/Office thumbnails.
+  // Read bytes, dedupe, then stage the card so failed reads cannot be sent.
+  // PDF/Office thumbnail previews load separately and never block sending.
   const addFiles = useCallback(async (files: File[]) => {
     if (isElicitation) return;
-    // Staged hashes live outside state — React batches the setAttachments
-    // calls below, so the ref alone can't catch dupes within one batch.
-    const staged = new Set<string>();
-    for (const file of files) {
-      // Content-hash dedupe — same bytes pasted/dropped twice collapse.
-      let hash = "";
-      try {
-        hash = await fileHash(file);
-      } catch {}
-      const dupe =
-        hash &&
-        (staged.has(hash) || attachmentsRef.current.some((a) => a.hash === hash));
-      if (dupe) {
-        setTrayNote(`"${file.name}" already attached — duplicate skipped`);
-        continue;
-      }
-      if (hash) staged.add(hash);
+    setPendingFiles((n) => n + 1);
+    try {
+      // Staged hashes live outside state — React batches the setAttachments
+      // calls below, so the ref alone can't catch dupes within one batch.
+      const staged = new Set<string>();
+      for (const file of files) {
+        // Read the transport payload BEFORE staging a card — a failed read
+        // must never leave a card whose bytes are empty. Text goes as text,
+        // everything else base64.
+        const isImage = file.type.startsWith("image/");
+        const isText = file.type.startsWith("text/") || file.type === "application/json";
+        let data: string;
+        try {
+          data = isText ? await file.text() : await fileToBase64(file);
+        } catch {
+          setTrayNote(`Could not read "${file.name}".`);
+          continue;
+        }
 
-      const isImage = file.type.startsWith("image/");
-      const isText = file.type.startsWith("text/") || file.type === "application/json";
-      const att: Attachment = {
-        type: isImage ? "image" : "file",
-        mimeType: file.type || (isImage ? "image/png" : "application/octet-stream"),
-        data: "",
-        filename: file.name || "pasted-image.png",
-        id: crypto.randomUUID(),
-        size: file.size,
-        hash,
-        previewUrl: isImage ? URL.createObjectURL(file) : undefined,
-      };
-      setAttachments((prev) => [...prev, att]);
-      setContextItems((prev) => [
-        ...prev,
-        {
+        // Content-hash dedupe — same bytes pasted/dropped twice collapse.
+        let hash = "";
+        try {
+          hash = await fileHash(file);
+        } catch {}
+        const dupe =
+          hash &&
+          (staged.has(hash) || attachmentsRef.current.some((a) => a.hash === hash));
+        if (dupe) {
+          setTrayNote(`"${file.name}" already attached — duplicate skipped`);
+          continue;
+        }
+        if (hash) staged.add(hash);
+
+        const att: Attachment = {
           type: isImage ? "image" : "file",
-          label: att.filename,
-          title: `${att.filename} · ${formatAttachmentSize(file.size)}`,
-        },
-      ]);
+          mimeType: file.type || (isImage ? "image/png" : "application/octet-stream"),
+          data,
+          filename: file.name || "pasted-image.png",
+          id: crypto.randomUUID(),
+          size: file.size,
+          hash,
+          previewUrl: isImage ? URL.createObjectURL(file) : undefined,
+        };
+        setAttachments((prev) => [...prev, att]);
+        setContextItems((prev) => [
+          ...prev,
+          {
+            type: isImage ? "image" : "file",
+            label: att.filename,
+            title: `${att.filename} · ${formatAttachmentSize(file.size)}`,
+          },
+        ]);
 
-      // Transport payload — text files go as text, everything else base64.
-      const data = isText ? await file.text() : await fileToBase64(file);
-      setAttachments((prev) =>
-        prev.map((a) => (a.id === att.id ? { ...a, data } : a)),
-      );
-
-      // Lazy bounded preview for non-image kinds (PDF first page, Office
-      // first slide/sheet/elements) — best-effort card thumbnail.
-      if (!isImage && agentId) {
-        api
-          .previewAttachment(agentId, file)
-          .then((p) => {
-            if (p.thumb_png) {
-              setAttachments((prev) =>
-                prev.map((a) =>
-                  a.id === att.id
-                    ? { ...a, thumb: `data:image/png;base64,${p.thumb_png}` }
-                    : a,
-                ),
-              );
-            }
-          })
-          .catch(() => {});
+        // Lazy bounded preview for non-image kinds (PDF first page, Office
+        // first slide/sheet/elements) — best-effort card thumbnail.
+        if (!isImage && agentId) {
+          api
+            .previewAttachment(agentId, file)
+            .then((p) => {
+              if (p.thumb_png) {
+                setAttachments((prev) =>
+                  prev.map((a) =>
+                    a.id === att.id
+                      ? { ...a, thumb: `data:image/png;base64,${p.thumb_png}` }
+                      : a,
+                  ),
+                );
+              }
+            })
+            .catch(() => {});
+        }
       }
+    } finally {
+      setPendingFiles((n) => Math.max(0, n - 1));
     }
   }, [fileToBase64, isElicitation, agentId]);
 
@@ -710,7 +720,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
       {/* Attachment tray (W3c) — cards with thumbnails, size, kind,
           reorder, remove. Attachments and context chips share index
           order; the card reads from the richer attachment record. */}
-      {!isElicitation && attachments.length > 0 && (
+      {!isElicitation && (attachments.length > 0 || trayNote) && (
         <div className="mx-auto mb-1.5 max-w-[672px]">
           {trayNote && (
             <p className="mb-1 text-[11px] text-[var(--ink-3)]" role="status">
@@ -1028,7 +1038,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
           // Send button
           const canSend = isElicitation
             ? (text.trim() || selectedOptions.size > 0)
-            : (text.trim() && !disabled);
+            : ((text.trim() || attachments.length > 0) && !disabled && pendingFiles === 0);
           return (
           <button
             onClick={handleSend}
@@ -1276,4 +1286,3 @@ function ContextCircle({
     </div>
   );
 }
-

@@ -800,13 +800,6 @@ class Harness:
 
             # Step 9: Process tool calls
             if response.tool_calls:
-                if (
-                    restrictions is not None
-                    and len(response.tool_calls) > restrictions.max_tool_calls_per_turn
-                ):
-                    result.status = "failed"
-                    result.error = "Restricted execution exceeded the per-turn tool-call limit"
-                    break
                 # Normalize call ids ONCE — the assistant history row and the
                 # ToolCall objects must share the same ids.
                 for tc in response.tool_calls:
@@ -877,9 +870,34 @@ class Harness:
                     await _loop_db.commit()
 
                 # Dispatch all tool calls concurrently within this reasoning step.
-                approval_batch = _approval_batch_for(agent_config, session, calls)
+                # Restricted runs bound concurrency (not count) and skip the
+                # full-response approval barrier — the mediator denies
+                # approval-needing tools outright, and a barrier would
+                # deadlock while slots drain oversized batches.
+                approval_batch = (
+                    _approval_batch_for(agent_config, session, calls)
+                    if restrictions is None
+                    else None
+                )
+                _gate = (
+                    asyncio.Semaphore(max(1, restrictions.max_concurrent_tool_calls))
+                    if restrictions is not None
+                    else None
+                )
 
                 async def _mediate_one(call: ToolCall) -> SyscallResult:
+                    if _gate is not None:
+                        async with _gate:
+                            return await syscall_handler.mediate(
+                                call=call,
+                                session=session,
+                                agent_config=agent_config,
+                                run_id=run_id,
+                                event_emitter=event_emitter,
+                                capability_catalog=capability_catalog,
+                                approval_batch=approval_batch,
+                                trigger=trigger,
+                            )
                     return await syscall_handler.mediate(
                         call=call,
                         session=session,

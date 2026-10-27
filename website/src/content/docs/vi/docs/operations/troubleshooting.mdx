@@ -19,17 +19,34 @@ Gateway hoạt động trả HTTP `200` và:
 
 ## Xem gateway log
 
+**macOS:**
+
 ```bash
 tail -n 100 "$HOME/Library/Application Support/com.caberos.desktop/logs/gateway.log"
+```
+
+**Windows (PowerShell):**
+
+```powershell
+Get-Content "$env:APPDATA\com.caberos.desktop\logs\gateway.log" -Tail 100
 ```
 
 Log append-only với backup rotation có giới hạn; startup attempt cũ có thể nằm phía trên lỗi mới nhất.
 
 ## Kiểm tra process và port
 
+**macOS:**
+
 ```bash
 pgrep -alf 'CaberOS|caberos-gateway'
 lsof -nP -iTCP:51718 -sTCP:LISTEN
+```
+
+**Windows (PowerShell):**
+
+```powershell
+Get-Process | Where-Object { $_.Name -match 'CaberOS|caberos-gateway' }
+netstat -ano | Select-String ':51718'
 ```
 
 Nếu process khác đang giữ port `51718`, hãy đóng process đó hoặc dừng development process xung đột rồi khởi động lại CaberOS.

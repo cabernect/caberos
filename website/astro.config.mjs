@@ -28,6 +28,9 @@ export default defineConfig({
         },
       ],
       customCss: ["./src/styles/docs.css"],
+      components: {
+        Header: "./src/components/DocsHeader.astro",
+      },
       sidebar: [
         {
           label: "Start here",

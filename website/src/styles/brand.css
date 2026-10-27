@@ -1,18 +1,21 @@
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap");
+
 :root {
-  --paper: #f5f5f3;
-  --paper-strong: #efefed;
+  /* Aligned with the CaberOS app theme (frontend/src/index.css light) */
+  --paper: #f7f6f2;
+  --paper-strong: #f0efe9;
   --white: #ffffff;
-  --line: #e0dfdc;
-  --ink: #111110;
-  --ink-2: #6b6b68;
-  --ink-3: #92928e;
-  --olive: #6a8216;
-  --olive-dark: #4f640e;
-  --olive-soft: #f0f2e2;
+  --line: #e8e6de;
+  --ink: #16150f;
+  --ink-2: #6b6a60;
+  --ink-3: #6f6e64;
+  --olive: #5b6b1f;
+  --olive-dark: #455417;
+  --olive-soft: #ecefd9;
   --warm: #f0ede8;
   --cream: #fffbf0;
-  --amber: #d97706;
-  --green: #16803c;
+  --amber: #a4560a;
+  --green: #3e8e4f;
   --max-width: 1180px;
   --reading-width: 720px;
   --shadow: 0 24px 70px rgba(17, 17, 16, 0.09);
@@ -20,19 +23,20 @@
 }
 
 :root[data-theme="dark"] {
-  --paper: #151811;
-  --paper-strong: #1d2119;
-  --white: #22271e;
-  --line: #3d4935;
-  --ink: #f5f5f3;
-  --ink-2: #c0c8b8;
-  --ink-3: #929c89;
-  --olive: #a8c04a;
-  --olive-dark: #d8e99b;
-  --olive-soft: #2f3b20;
+  /* Aligned with the CaberOS app theme (frontend/src/index.css dark) */
+  --paper: #151511;
+  --paper-strong: #26261f;
+  --white: #1e1e19;
+  --line: #2d2d25;
+  --ink: #f2f0e6;
+  --ink-2: #a5a396;
+  --ink-3: #8f8d81;
+  --olive: #a8bd45;
+  --olive-dark: #c8dc75;
+  --olive-soft: #2a3b16;
   --warm: #2a2d25;
   --cream: #332e1e;
-  --amber: #e7ac52;
+  --amber: #e8a15c;
   --green: #76d093;
   --shadow: 0 24px 70px rgba(0, 0, 0, 0.24);
   color-scheme: dark;
@@ -52,7 +56,7 @@ body {
   margin: 0;
   background: var(--paper);
   color: var(--ink);
-  font-family: Arial, "Helvetica Neue", sans-serif;
+  font-family: "Geist", Arial, "Helvetica Neue", sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -62,7 +66,7 @@ a,
 .site-header,
 #main-content,
 .site-footer {
-  font-family: Arial, "Helvetica Neue", sans-serif;
+  font-family: "Geist", Arial, "Helvetica Neue", sans-serif;
 }
 
 a {
@@ -105,7 +109,7 @@ a {
 }
 
 .mono {
-  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
 .site-header {
@@ -113,13 +117,13 @@ a {
   top: 0;
   z-index: 20;
   width: min(calc(100% - 32px), 1240px);
-  margin: 16px auto 0;
-  padding: 11px 12px 11px 16px;
-  border: 1px solid rgba(224, 223, 220, 0.92);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.9);
-  box-shadow: 0 8px 28px rgba(17, 17, 16, 0.04);
-  backdrop-filter: blur(18px);
+  margin: 14px auto 0;
+  padding: 9px 10px 9px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 10px 32px rgba(22, 21, 15, 0.05);
+  backdrop-filter: blur(16px) saturate(1.3);
 }
 
 .site-header-inner {
@@ -132,23 +136,23 @@ a {
 .brand {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 9px;
   min-width: max-content;
   font-size: 15px;
   font-weight: 700;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.025em;
 }
 
 .brand img {
-  width: 27px;
-  height: 27px;
+  width: 26px;
+  height: 26px;
 }
 
 .brand small {
   display: block;
   margin-top: 1px;
   color: var(--ink-3);
-  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-family: "Geist Mono", ui-monospace, monospace;
   font-size: 9px;
   font-weight: 500;
   letter-spacing: 0.08em;
@@ -160,53 +164,61 @@ a {
   align-items: center;
   justify-content: flex-end;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 2px;
 }
 
-.site-nav a {
-  padding: 8px 10px;
-  border-radius: 4px;
+.site-nav .nav-link {
+  padding: 7px 10px;
+  border-radius: 7px;
   color: var(--ink-2);
   font-size: 13px;
   font-weight: 500;
   transition: color 180ms ease, background 180ms ease;
 }
 
-.site-nav a:hover {
-  background: var(--olive-soft);
+.site-nav .nav-link:hover {
+  background: var(--paper-strong);
+  color: var(--ink);
+}
+
+.nav-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 9px 0 7px;
+  background: var(--line);
+}
+
+.nav-lang {
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--ink-2);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  transition: border-color 180ms ease, color 180ms ease;
+}
+
+.nav-lang:hover {
+  border-color: var(--olive);
   color: var(--olive-dark);
 }
 
-.site-nav .nav-cta {
-  margin-left: 4px;
-  padding: 9px 13px;
-  background: var(--ink);
-  color: var(--white);
-}
-
-.site-nav .nav-cta:hover {
-  background: var(--olive-dark);
-  color: var(--white);
-}
-
-.theme-toggle {
+.nav-icon-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  min-height: 32px;
-  padding: 0 9px;
+  justify-content: center;
+  width: 31px;
+  height: 31px;
+  margin-left: 4px;
   border: 1px solid var(--line);
-  border-radius: 4px;
-  background: var(--white);
+  border-radius: 7px;
+  background: transparent;
   color: var(--ink-2);
-  font-family: Arial, "Helvetica Neue", sans-serif;
-  font-size: 11px;
-  font-weight: 600;
   cursor: pointer;
-  transition: border-color 180ms ease, color 180ms ease, background 180ms ease;
+  transition: border-color 180ms ease, color 180ms ease;
 }
 
-.theme-toggle:hover {
+.nav-icon-btn:hover {
   border-color: var(--olive);
   color: var(--olive-dark);
 }
@@ -220,25 +232,39 @@ a {
   display: none;
 }
 
+.nav-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-left: 9px;
+  padding: 8px 13px;
+  border-radius: 8px;
+  background: var(--ink);
+  color: var(--white);
+  font-size: 12.5px;
+  font-weight: 600;
+  transition: background 180ms ease;
+}
+
+.nav-cta:hover {
+  background: var(--olive);
+  color: var(--white);
+}
+
 :root[data-theme="dark"] .site-header {
   border-color: var(--line);
-  background: rgba(29, 33, 25, 0.92);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  background: rgba(30, 30, 25, 0.85);
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.22);
 }
 
-:root[data-theme="dark"] .site-nav a:hover {
-  background: var(--olive-soft);
-  color: var(--olive-dark);
-}
-
-:root[data-theme="dark"] .site-nav .nav-cta {
+:root[data-theme="dark"] .nav-cta {
   background: var(--ink);
-  color: #151811;
+  color: #151511;
 }
 
-:root[data-theme="dark"] .site-nav .nav-cta:hover {
+:root[data-theme="dark"] .nav-cta:hover {
   background: var(--olive);
-  color: #151811;
+  color: #151511;
 }
 
 :root[data-theme="dark"] .principles-section {
@@ -300,7 +326,7 @@ a {
   padding-top: 18px;
   border-top: 1px solid var(--line);
   color: var(--ink-3);
-  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-family: "Geist Mono", ui-monospace, monospace;
   font-size: 10px;
   letter-spacing: 0.02em;
 }

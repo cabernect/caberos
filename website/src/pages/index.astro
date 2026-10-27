@@ -2,42 +2,103 @@
 import MarketingLayout from "../layouts/MarketingLayout.astro";
 import Icon from "../components/Icon.astro";
 import { releaseTag, releaseUrl } from "../release";
+import mark from "../assets/logo-mark.svg";
 
 const { locale = "en" } = Astro.props;
 const isVietnamese = locale === "vi";
 const localizedPath = (path: string) => `${isVietnamese ? "/vi" : ""}${path}`;
 const repositoryUrl = "https://github.com/cabernect/caberos";
 
-const features = isVietnamese
+const promises = isVietnamese
   ? [
-      { icon: "shield", kicker: "Kiểm soát", title: "Thiết kế với quyền hạn", description: "Mọi capability call quan trọng đều đi qua một ranh giới trung gian để bạn phê duyệt, từ chối và kiểm tra." },
-      { icon: "layers", kicker: "Bối cảnh", title: "Bộ nhớ thuộc về bạn", description: "Kết hợp bộ nhớ làm việc, ghi chú lâu dài, tri thức và skill mà không đưa toàn bộ dữ liệu vào mỗi prompt." },
-      { icon: "spark", kicker: "Agent", title: "Agent là cấu hình", description: "Định hình identity, model, task, giới hạn và capability dưới dạng dữ liệu có version để duplicate, export và rollback." },
-      { icon: "plug", kicker: "Tích hợp", title: "Kết nối qua MCP", description: "Đưa công cụ và dịch vụ vào qua MCP stdio hoặc HTTP, với credential được mã hóa và hỗ trợ OAuth recovery." },
-      { icon: "activity", kicker: "Quan sát", title: "Biết điều gì đã xảy ra", description: "Theo dõi run, tool call, approval, chi phí, lỗi và heartbeat trong một giao diện observability." },
-      { icon: "terminal", kicker: "Workspace", title: "Một nơi để vận hành", description: "Agent làm việc với file và shell command trong workspace có mediation và sandbox thay vì một hộp chat khó kiểm tra." },
-    ] as const
-  : [
-      { icon: "shield", kicker: "Control", title: "Permissioned by design", description: "Every consequential capability call crosses one mediation boundary. Approve, deny, remember, and audit it on your terms." },
-      { icon: "layers", kicker: "Context", title: "Memory that belongs to you", description: "Combine working memory, durable notes, knowledge, and skills without turning every prompt into a data dump." },
-      { icon: "spark", kicker: "Agents", title: "Agents are configurations", description: "Shape identity, model, task, limits, and capabilities as versioned data you can duplicate, export, and roll back." },
-      { icon: "plug", kicker: "Integrations", title: "Connect through MCP", description: "Bring your tools and services through stdio or HTTP MCP servers, with encrypted credentials and OAuth recovery." },
-      { icon: "activity", kicker: "Visibility", title: "See what happened", description: "Follow runs, tool calls, approvals, costs, failures, and heartbeat activity from one observability surface." },
-      { icon: "terminal", kicker: "Workspace", title: "A place to operate", description: "Agents can work with files and shell commands inside a mediated, sandboxed workspace instead of an opaque chat box." },
-    ] as const;
-
-const principles = isVietnamese
-  ? [
-      ["01", "Local-first", "Cấu hình, bộ nhớ, credential, workspace và lịch sử audit của bạn nằm trên máy local."],
-      ["02", "Một ranh giới", "Tool, approval, credential, subject và egress được xử lý tại syscall layer."],
-      ["03", "Progressive", "Tìm capability catalog trước. Chỉ load full schema khi run thực sự cần."],
-      ["04", "Mã nguồn mở", "Kiểm tra runtime, chạy local và giữ hệ thống agent gần dữ liệu mà nó phục vụ."],
+      ["01", "Bạn duyệt những gì quan trọng", "Khi agent muốn làm điều có hệ quả, nó hỏi trước. Bạn phê duyệt, từ chối, hoặc ghi nhớ câu trả lời."],
+      ["02", "Dữ liệu ở lại với bạn", "Bộ nhớ, file và lịch sử nằm trên máy của bạn — không phải trên server của ai khác."],
+      ["03", "Bạn luôn xem lại được", "Mỗi run để lại một trace mở ra được: nó đã làm gì, dùng gì, tốn bao nhiêu."],
     ]
   : [
-      ["01", "Local-first", "Your configuration, memory, credentials, workspaces, and audit history live on your machine."],
-      ["02", "One boundary", "Tools, approvals, credentials, subjects, and egress are handled at the syscall layer."],
-      ["03", "Progressive", "Search the capability catalog first. Load full schemas only when a run needs them."],
-      ["04", "Open source", "Inspect the runtime, run it locally, and keep your agent system close to the data it serves."],
+      ["01", "You approve what matters", "When an agent wants to do something that counts, it asks first. You approve, deny, or remember your answer."],
+      ["02", "Your data stays with you", "Memory, files, and history live on your computer — not on someone else's server."],
+      ["03", "You can always look back", "Every run leaves a trace you can open: what it did, what it used, and what it cost."],
+    ];
+
+const examples = isVietnamese
+  ? [
+      { title: "Nghiên cứu theo yêu cầu", description: "Yêu cầu đào sâu một chủ đề. Agent tìm trên web, đọc nguồn và đưa bạn bản tóm tắt kèm trích dẫn để kiểm tra.", chips: ["web search", "web fetch", "citations"] },
+      { title: "Sự nghiệp và tài liệu", description: "Rà soát CV, chỉnh cho hợp một vị trí, hoặc biến ghi chú rời rạc thành tài liệu sạch sẽ.", chips: ["read files", "doc_search", "artifacts"] },
+      { title: "Theo dõi thị trường", description: "Bám sát cổ phiếu hoặc tin tức Việt Nam theo lịch, với báo cáo gửi tới kênh chat của bạn.", chips: ["web search", "schedule", "telegram"] },
+      { title: "Bản tin hằng ngày", description: "Tóm tắt inbox, lịch hoặc tài liệu vào buổi sáng — gửi đúng giờ bạn chọn.", chips: ["schedule", "knowledge vault", "notifications"] },
+    ]
+  : [
+      { title: "Research on call", description: "Ask for a deep dive on any topic. The agent searches the web, reads sources, and hands you a summary with citations to check.", chips: ["web search", "web fetch", "citations"] },
+      { title: "Career and documents", description: "Review a CV, tailor it for a role, or turn rough notes into a clean document.", chips: ["read files", "doc_search", "artifacts"] },
+      { title: "Market watching", description: "Track stocks or Vietnamese news on a schedule, with reports delivered to your chat channel.", chips: ["web search", "schedule", "telegram"] },
+      { title: "A daily brief", description: "A morning summary of your inbox, calendar, or documents — delivered at the time you choose.", chips: ["schedule", "knowledge vault", "notifications"] },
+    ];
+
+const steps = isVietnamese
+  ? [
+      ["Cài ứng dụng", "Tải CaberOS cho macOS hoặc Windows. Không cần Python, không cần terminal — lần chạy đầu tiên có hướng dẫn từng bước."],
+      ["Kết nối một AI", "Dùng dịch vụ cloud với key của riêng bạn, hoặc chạy model ngay trên máy. CaberOS kiểm tra những gì đã sẵn sàng."],
+      ["Tạo một agent", "Chọn những gì nó được phép làm, những gì cần bạn duyệt, và nơi nó làm việc. Rồi giao việc cho nó."],
+    ]
+  : [
+      ["Install the app", "Download CaberOS for macOS or Windows. No Python, no terminal — first launch walks you through setup."],
+      ["Connect an AI", "Use a cloud service with your own key, or run a model on your machine. CaberOS checks what is ready."],
+      ["Create an agent", "Choose what it may do, what needs your approval, and where it works. Then give it a job."],
+    ];
+
+const features = isVietnamese
+  ? [
+      { icon: "inbox", kicker: "Hôm nay", title: "Bắt đầu từ chỗ cần bạn", description: "Approval đang chờ, run thất bại, thông báo chưa đọc — dải Needs You đưa tất cả lên trước mắt bạn." },
+      { icon: "activity", kicker: "Trace", title: "Xem run như một timeline", description: "Mở bất kỳ run nào thành cây span và waterfall: tool call, approval, thinking, token và chi phí theo đúng thứ tự." },
+      { icon: "book", kicker: "Knowledge Vault", title: "Tài liệu agent có thể trích dẫn", description: "Tải file vào scope dùng chung hoặc riêng của agent. Retrieval local mặc định; hybrid embedding chỉ khi bạn bật." },
+      { icon: "spark", kicker: "Skill tiến hóa", title: "Playbook tự cải thiện", description: "Sau khi session đóng, một reflection có giới hạn có thể đề xuất chỉnh sửa skill của agent — mọi revision đều xem lại được." },
+      { icon: "globe", kicker: "Browser", title: "Trình duyệt cho agent", description: "Trình duyệt được quản lý có thể mở trang, click và trích xuất — trong phạm vi domain và cổng approval của bạn." },
+      { icon: "clock", kicker: "Scheduler", title: "Run sống qua restart", description: "Chạy một lần, theo interval hoặc cron với timezone thật. Run lỡ được phục hồi khi khởi động; overlap và retry là chính sách rõ ràng." },
+    ] as const
+  : [
+      { icon: "inbox", kicker: "Today", title: "Start where you're needed", description: "Waiting approvals, failed runs, unread notices — the Needs You strip puts them in front of you first." },
+      { icon: "activity", kicker: "Traces", title: "Watch a run like a timeline", description: "Open any run as a span tree and waterfall: tool calls, approvals, thinking, tokens, and cost in order." },
+      { icon: "book", kicker: "Knowledge Vault", title: "Documents agents can cite", description: "Upload files into shared or agent-private scopes. Local full-text retrieval by default; hybrid embeddings only if you opt in." },
+      { icon: "spark", kicker: "Evolving skills", title: "Playbooks that improve themselves", description: "After a session closes, a bounded reflection can propose staged edits to the agent's own skills — every revision inspectable." },
+      { icon: "globe", kicker: "Browser", title: "A browser agents can use", description: "A managed browser opens pages, clicks, and extracts — inside domain leashes and your approval gates." },
+      { icon: "clock", kicker: "Scheduler", title: "Runs that survive restarts", description: "Once, interval, or cron with real time zones. Missed runs recover on startup; overlap and retry are explicit policies." },
+    ] as const;
+
+const comparison = isVietnamese
+  ? {
+      headers: ["", "CaberOS", "Trợ lý AI thông thường", "Script tự viết"],
+      rows: [
+        ["File và bộ nhớ ở đâu", "Trên máy của bạn", "Trên server của provider", "Tùy bạn để đâu"],
+        ["Ai duyệt hành động", "Bạn, từng hành động một", "Tùy sản phẩm", "Bạn phải tự xây"],
+        ["Ghi lại những gì đã xảy ra", "Có sẵn", "Tùy sản phẩm", "Bạn phải tự xây"],
+        ["Chọn model AI", "Cloud hoặc local", "Thường một provider", "Bất kỳ"],
+        ["Cài đặt", "Cài app là xong", "Đăng ký tài khoản", "Viết code"],
+      ],
+    }
+  : {
+      headers: ["", "CaberOS", "Typical AI assistants", "Do-it-yourself scripts"],
+      rows: [
+        ["Where files and memory live", "On your computer", "On the provider's servers", "Wherever you put them"],
+        ["Who approves actions", "You, action by action", "Varies by product", "You have to build it"],
+        ["Record of what happened", "Built in", "Varies by product", "You have to build it"],
+        ["Choice of AI model", "Cloud or local", "Usually one provider", "Any"],
+        ["Setup", "Install the app", "Sign up", "Write code"],
+      ],
+    };
+
+const faqs = isVietnamese
+  ? [
+      ["Tôi có cần biết lập trình không?", "Không. CaberOS chạy như một app desktop với hướng dẫn cài đặt từng bước; bạn mô tả agent bằng ngôn ngữ thường."],
+      ["Dữ liệu của tôi có rời khỏi máy không?", "File, bộ nhớ và lịch sử ở lại trên máy. Prompt chỉ đi tới AI provider bạn tự kết nối — ranh giới được hiển thị rõ, không giấu."],
+      ["Chạy trên máy nào?", "App desktop phát hành cho macOS Apple Silicon và Windows x64. Docker và cài từ source hỗ trợ macOS, Linux và Windows (WSL2)."],
+      ["Tôi có tin được việc agent làm không?", "Bạn không cần tin — bạn kiểm tra. Approval chặn các hành động quan trọng và mọi run đều có trace mở ra xem được."],
+    ]
+  : [
+      ["Do I need to know how to code?", "No. CaberOS runs as a desktop app with guided setup; you describe agents in plain words."],
+      ["Does my data leave my computer?", "Files, memory, and history stay on your machine. Prompts go only to the AI provider you connect — the boundary is shown, not hidden."],
+      ["Which computers does it run on?", "The desktop app ships for macOS Apple Silicon and Windows x64. Docker and source installs cover macOS, Linux, and Windows (WSL2)."],
+      ["Can I trust what an agent does?", "You don't have to trust it — check it. Approvals gate consequential actions and every run keeps an inspectable trace."],
     ];
 ---
 
@@ -48,92 +109,175 @@ const principles = isVietnamese
 >
   <div class="announcement container" data-reveal>
     <span class="announcement-mark" aria-hidden="true"></span>
-    <span>{isVietnamese ? `${releaseTag} đã có cho macOS Apple Silicon` : `${releaseTag} is available for macOS Apple Silicon`}</span>
+    <span>{isVietnamese ? `${releaseTag} đã có cho macOS và Windows` : `${releaseTag} is available for macOS and Windows`}</span>
     <a href={releaseUrl}>{isVietnamese ? "Xem bản phát hành" : "View release"} <Icon name="arrow" size={15} /></a>
   </div>
 
   <section class="hero" aria-labelledby="hero-title">
     <div class="container hero-grid">
       <div class="hero-copy">
-        <p class="eyebrow"><span class="eyebrow-line"></span>{isVietnamese ? "Runtime agent local-first" : "Local-first agent runtime"}</p>
-        <h1 id="hero-title">{isVietnamese ? "Trao cho agent " : "Give your agents "}<span>{isVietnamese ? "không gian hành động." : "room to act."}</span></h1>
+        <p class="eyebrow"><span class="eyebrow-line"></span>{isVietnamese ? "Mã nguồn mở · local-first" : "Open source · local-first"}</p>
+        <h1 id="hero-title">{isVietnamese ? "Agent của bạn." : "Your agents."} <span>{isVietnamese ? "Máy của bạn." : "Your machine."}</span> {isVietnamese ? "Luật của bạn." : "Your rules."}</h1>
         <p class="hero-lead">
-          {isVietnamese ? "CaberOS là hệ điều hành mã nguồn mở cho agent AI cá nhân. Cung cấp bộ nhớ, công cụ, tích hợp và workspace, đồng thời giữ mọi hành động quan trọng minh bạch và được cấp quyền." : "CaberOS is an open-source operating system for personal AI agents. Give them memory, tools, integrations, and workspaces—while keeping every meaningful action visible and permissioned."}
+          {isVietnamese ? "CaberOS chạy agent AI cá nhân trên chính máy của bạn. Chúng nghiên cứu, viết và canh chừng thay bạn — và không việc gì quan trọng xảy ra mà thiếu sự cho phép của bạn." : "CaberOS runs personal AI agents on your own computer. They research, write, and keep watch for you — and nothing important happens without your approval."}
         </p>
         <div class="hero-actions">
           <a class="button button-primary" href={localizedPath("/download/")}>
-            {isVietnamese ? "Tải" : "Download"} {releaseTag}
+            {isVietnamese ? "Tải CaberOS" : "Download CaberOS"}
             <Icon name="download" size={17} />
           </a>
           <a class="button button-secondary" href={localizedPath("/docs/")}>
-            {isVietnamese ? "Đọc tài liệu" : "Read the docs"}
+            {isVietnamese ? "Xem cách hoạt động" : "See how it works"}
             <Icon name="arrow" size={17} />
           </a>
         </div>
         <div class="hero-facts" aria-label={isVietnamese ? "Thông tin sản phẩm" : "Product facts"}>
-          <span><i class="fact-dot"></i>macOS ARM64</span>
-          <span><i class="fact-dot"></i>{isVietnamese ? "Mã nguồn mở" : "Open source"}</span>
-          <span><i class="fact-dot"></i>{isVietnamese ? "Không cần cài Python" : "No Python required"}</span>
+          <span><i class="fact-dot"></i>{isVietnamese ? "Miễn phí, mã nguồn mở" : "Free, open source"}</span>
+          <span><i class="fact-dot"></i>{isVietnamese ? "Không cần biết code" : "No coding needed"}</span>
+          <span><i class="fact-dot"></i>{isVietnamese ? "Chi phí dừng trên máy bạn" : "Costs stay on your machine"}</span>
         </div>
       </div>
 
-      <div class="hero-product" aria-label={isVietnamese ? "Ảnh xem trước sản phẩm CaberOS" : "CaberOS product preview"}>
-        <div class="product-window actual-product-window">
-          <img src="/images/product/agents.png" alt={isVietnamese ? "Dashboard CaberOS hiển thị agent, workspace và điều hướng cấu hình" : "CaberOS agent dashboard showing configured agents and workspace navigation"} />
+      <div class="hero-map" aria-label={isVietnamese ? "Sơ đồ agent CaberOS kết nối công cụ và dữ liệu" : "CaberOS agent map connecting tools and data"}>
+        <svg class="map-wires" viewBox="0 0 560 400" fill="none" aria-hidden="true">
+          <path class="edge" pathLength="100" style="--d:0" d="M206 200 C 186 200 162 200 144 200" />
+          <path class="edge" pathLength="100" style="--d:1" d="M352 178 C 392 154 440 110 476 90" />
+          <path class="edge" pathLength="100" style="--d:2" d="M354 200 C 380 200 404 200 428 200" />
+          <path class="edge" pathLength="100" style="--d:3" d="M352 222 C 394 252 444 290 476 310" />
+          <path class="edge" pathLength="100" style="--d:4" d="M208 222 C 166 252 116 290 84 310" />
+          <rect class="gate" x="413.2" y="265.2" width="8.6" height="8.6" transform="rotate(45 417.5 269.5)" />
+          <g class="edge-dots">
+            <circle cx="144" cy="200" r="3" />
+            <circle cx="476" cy="90" r="3" />
+            <circle cx="428" cy="200" r="3" />
+            <circle cx="476" cy="310" r="3" />
+            <circle cx="84" cy="310" r="3" />
+          </g>
+          <circle class="flow-dot" r="3.1">
+            <animateMotion dur="7s" repeatCount="indefinite" path="M206 200 C 186 200 162 200 144 200" />
+          </circle>
+          <circle class="flow-dot" r="3.1">
+            <animateMotion dur="6.2s" begin="-2s" repeatCount="indefinite" path="M352 178 C 392 154 440 110 476 90" />
+          </circle>
+          <circle class="flow-dot" r="3.1">
+            <animateMotion dur="5.4s" begin="-3.6s" repeatCount="indefinite" path="M354 200 C 380 200 404 200 428 200" />
+          </circle>
+          <circle class="flow-dot" r="3.1">
+            <animateMotion dur="7.8s" begin="-1.4s" repeatCount="indefinite" path="M352 222 C 394 252 444 290 476 310" />
+          </circle>
+          <circle class="flow-dot" r="3.1">
+            <animateMotion dur="8.6s" begin="-4.8s" repeatCount="indefinite" path="M208 222 C 166 252 116 290 84 310" />
+          </circle>
+          <circle class="flow-dot in" r="2.4">
+            <animateMotion dur="9.5s" begin="-6s" repeatCount="indefinite" path="M144 200 C 162 200 186 200 206 200" />
+          </circle>
+          <circle class="flow-dot in" r="2.4">
+            <animateMotion dur="11s" begin="-2.8s" repeatCount="indefinite" path="M476 90 C 440 110 392 154 352 178" />
+          </circle>
+        </svg>
+
+        <span class="map-chip" style="--x:33%;--y:39.5%">{isVietnamese ? "ở lại máy" : "stays local"}</span>
+        <span class="map-chip" style="--x:73%;--y:29.5%">{isVietnamese ? "key của bạn" : "your key"}</span>
+        <span class="map-chip" style="--x:70%;--y:44%">grants</span>
+        <span class="map-chip" style="--x:73.5%;--y:66.5%">approvals</span>
+        <span class="map-chip" style="--x:26.5%;--y:66.5%">{isVietnamese ? "xem lại được" : "inspectable"}</span>
+
+        <div class="map-node" style="--x:14.3%;--y:50%;--i:0">
+          <span class="node-icon"><Icon name="layers" size={15} /></span>
+          <span class="node-text"><b>{isVietnamese ? "bộ nhớ" : "memory"}</b><i>{isVietnamese ? "& file" : "& files"}</i></span>
         </div>
-        <p class="product-caption"><span class="caption-line"></span>{isVietnamese ? "Giao diện CaberOS thực tế: agent, workspace và cấu hình trong một khung nhìn." : "Real CaberOS interface: agents, workspace, and configuration at a glance."}</p>
+        <div class="map-node" style="--x:85.7%;--y:15.7%;--i:1">
+          <span class="node-icon"><Icon name="spark" size={15} /></span>
+          <span class="node-text"><b>AI provider</b><i>{isVietnamese ? "bạn chọn" : "you choose"}</i></span>
+        </div>
+        <div class="map-node" style="--x:87.5%;--y:50%;--i:2">
+          <span class="node-icon"><Icon name="plug" size={15} /></span>
+          <span class="node-text"><b>MCP tools</b><i>{isVietnamese ? "của bạn" : "yours"}</i></span>
+        </div>
+        <div class="map-node" style="--x:85.7%;--y:84.3%;--i:3">
+          <span class="node-icon"><Icon name="chat" size={15} /></span>
+          <span class="node-text"><b>{isVietnamese ? "kênh chat" : "chat apps"}</b><i>{isVietnamese ? "bạn bật" : "you enable"}</i></span>
+        </div>
+        <div class="map-node" style="--x:14.3%;--y:84.3%;--i:4">
+          <span class="node-icon"><Icon name="book" size={15} /></span>
+          <span class="node-text"><b>skills</b><i>{isVietnamese ? "tự tiến hóa" : "self-improving"}</i></span>
+        </div>
+
+        <span class="center-ping" aria-hidden="true"></span>
+        <div class="map-center" style="--x:50%;--y:50%">
+          <span class="center-icon"><img src={mark.src} alt="" width="19" height="19" /></span>
+          <b>CaberOS</b>
+          <i>{isVietnamese ? "agent sống ở đây" : "agents live here"}</i>
+        </div>
       </div>
     </div>
   </section>
 
-  <section class="principles-section" aria-label={isVietnamese ? "Nguyên tắc CaberOS" : "CaberOS principles"}>
-    <div class="container principle-grid">
-      {principles.map(([number, title, description], i) => (
-        <article class="principle" data-reveal style={`--reveal-delay: ${i * 100}ms`}>
-          <span class="principle-number mono">{number}</span>
-          <h2>{title}</h2>
-          <p>{description}</p>
-        </article>
-      ))}
+  <section class="promises-section" aria-label={isVietnamese ? "Ba cam kết của CaberOS" : "CaberOS promises"}>
+    <div class="container">
+      <p class="eyebrow"><span class="eyebrow-line"></span>{isVietnamese ? "Vì sao CaberOS" : "Why CaberOS"}</p>
+      <h2 class="section-title">{isVietnamese ? "Ba cam kết, nói thẳng." : "Three promises, in plain words."}</h2>
+      <div class="promise-grid">
+        {promises.map(([number, title, description], i) => (
+          <article class="promise" data-reveal style={`--reveal-delay: ${i * 100}ms`}>
+            <span class="promise-number mono">{number}</span>
+            <h3>{title}</h3>
+            <p>{description}</p>
+          </article>
+        ))}
+      </div>
     </div>
   </section>
 
-  <section class="section product-section" id="product" aria-labelledby="product-title">
+  <section class="section examples-section" id="use-cases" aria-labelledby="examples-title">
     <div class="container">
       <div class="section-intro" data-reveal>
-        <p class="eyebrow"><span class="eyebrow-line"></span>{isVietnamese ? "Vì sao cần agent OS?" : "Why an agent OS?"}</p>
-        <h2 id="product-title">{isVietnamese ? "Model có thể suy nghĩ." : "Models can think."}<br /><span>{isVietnamese ? "CaberOS cho agent một nơi để vận hành." : "CaberOS gives them a place to operate."}</span></h2>
-        <p>
-          {isVietnamese ? "Một cửa sổ chat không phải môi trường vận hành. CaberOS sở hữu lớp xung quanh model: identity, quyền hạn, bộ nhớ, workspace, tích hợp và lịch sử hoạt động." : "A chat window is not an operating environment. CaberOS owns the layer around the model: identity, permissions, memory, workspaces, integrations, and the record of what happened."}
-        </p>
+        <p class="eyebrow"><span class="eyebrow-line"></span>{isVietnamese ? "Thử ngay" : "Try these"}</p>
+        <h2 id="examples-title">{isVietnamese ? "Vài agent bạn có thể dựng." : "Agents you can set up."}</h2>
+        <p>{isVietnamese ? "Mỗi agent chỉ nhận đúng tool và quyền bạn cấp. Cấu hình mẫu bên dưới." : "Each agent only gets the tools and permissions you grant. Sample setups below."}</p>
       </div>
-
-      <div class="architecture-card" data-reveal style="--reveal-delay: 150ms">
-        <div class="architecture-copy">
-          <span class="card-kicker mono">{isVietnamese ? "LUỒNG THỰC THI" : "THE EXECUTION PATH"}</span>
-          <h3>{isVietnamese ? "Mọi hành động đều có ranh giới." : "Every action has a boundary."}</h3>
-          <p>{isVietnamese ? "Agent có thể tự do suy luận, nhưng hành động đi qua ranh giới rõ ràng nơi CaberOS resolve subject, kiểm tra authority, inject credential, xử lý approval và ghi lại kết quả." : "Agents can reason freely, but actions cross an explicit boundary where CaberOS resolves the subject, checks authority, injects credentials, gates approval, and records the result."}</p>
-          <a class="text-link" href={localizedPath("/docs/core-concepts/permissions/")}>{isVietnamese ? "Hiểu mô hình quyền hạn" : "Understand the permission model"} <Icon name="arrow" size={15} /></a>
-        </div>
-        <div class="architecture-flow" data-reveal aria-label={isVietnamese ? "Luồng thực thi agent" : "Agent execution path"}>
-          <div class="flow-node"><span>01</span><b>{isVietnamese ? "Model" : "Model"}</b><small>{isVietnamese ? "suy luận về task" : "reasons about the task"}</small></div>
-          <div class="flow-connector"><i></i><i></i><i></i></div>
-          <div class="flow-node emphasized"><span>02</span><b>Syscall layer</b><small>{isVietnamese ? "kiểm tra và mediation" : "checks and mediates"}</small></div>
-          <div class="flow-connector"><i></i><i></i><i></i></div>
-          <div class="flow-node"><span>03</span><b>{isVietnamese ? "Tài nguyên của bạn" : "Your resources"}</b><small>{isVietnamese ? "workspace · memory · tool" : "workspace · memory · tools"}</small></div>
-        </div>
+      <div class="example-list">
+        {examples.map((example, i) => (
+          <article class="example-row" data-reveal style={`--reveal-delay: ${i * 80}ms`}>
+            <div class="example-main">
+              <h3>{example.title}</h3>
+              <p>{example.description}</p>
+            </div>
+            <div class="example-chips">
+              {example.chips.map((chip) => <span class="chip mono">{chip}</span>)}
+            </div>
+          </article>
+        ))}
       </div>
     </div>
   </section>
 
-  <section class="section features-section" aria-labelledby="features-title">
+  <section class="section steps-section" id="how-it-works" aria-labelledby="steps-title">
+    <div class="container">
+      <div class="section-intro" data-reveal>
+        <p class="eyebrow"><span class="eyebrow-line"></span>{isVietnamese ? "Cách hoạt động" : "How it works"}</p>
+        <h2 id="steps-title">{isVietnamese ? "Chạy được trong ba bước." : "Up and running in three steps."}</h2>
+      </div>
+      <div class="step-grid">
+        {steps.map(([title, description], i) => (
+          <article class="step" data-reveal style={`--reveal-delay: ${i * 100}ms`}>
+            <span class="step-number">{i + 1}</span>
+            <h3>{title}</h3>
+            <p>{description}</p>
+          </article>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <section class="section features-section" id="product" aria-labelledby="features-title">
     <div class="container">
       <div class="section-heading-row" data-reveal>
         <div>
-          <p class="eyebrow"><span class="eyebrow-line"></span>{isVietnamese ? "Được xây dựng cho công việc thật" : "Built for actual work"}</p>
-          <h2 id="features-title">{isVietnamese ? "Những lớp xung quanh prompt cũng quan trọng." : "The pieces around the prompt matter."}</h2>
+          <p class="eyebrow"><span class="eyebrow-line"></span>{isVietnamese ? `Có gì trong ${releaseTag}` : `What's inside ${releaseTag}`}</p>
+          <h2 id="features-title">{isVietnamese ? "Những lớp xung quanh prompt mới là phần quan trọng." : "The pieces around the prompt are the product."}</h2>
         </div>
-        <p class="section-side-copy">{isVietnamese ? "Bắt đầu với một agent. Thêm context và capability theo nhu cầu công việc mà không mở toàn bộ hệ thống cùng lúc." : "Start with one agent. Add context and capability as your work demands it—without giving the whole system away at once."}</p>
+        <p class="section-side-copy">{isVietnamese ? "Bắt đầu với một agent. Thêm context và capability theo nhu cầu công việc — không cần mở toàn bộ hệ thống cùng lúc." : "Start with one agent. Add context and capability as your work demands it — without giving the whole system away at once."}</p>
       </div>
       <div class="feature-grid">
         {features.map((feature, i) => (
@@ -148,52 +292,31 @@ const principles = isVietnamese
     </div>
   </section>
 
-  <section class="section progressive-section" aria-labelledby="progressive-title">
-    <div class="container split-grid">
-      <div class="split-copy" data-reveal>
-        <p class="eyebrow"><span class="eyebrow-line"></span>{isVietnamese ? "Progressive disclosure" : "Progressive disclosure"}</p>
-        <h2 id="progressive-title">{isVietnamese ? "Nhiều tool hơn không có nghĩa là nhiều nhiễu hơn." : "More tools should not mean more noise."}</h2>
-        <p>
-          {isVietnamese ? "MCP server lớn có thể cung cấp hàng trăm tool. CaberOS tách permission ceiling khỏi schema visibility để agent khám phá điều được phép mà không phải trả toàn bộ context cost trong mỗi turn." : "Large MCP servers can expose hundreds of tools. CaberOS separates the permission ceiling from schema visibility, so agents can discover what is allowed without paying the full context cost on every turn."}
-        </p>
-        <a class="text-link" href={localizedPath("/docs/core-concepts/capabilities/")}>{isVietnamese ? "Khám phá capability" : "Explore capabilities"} <Icon name="arrow" size={15} /></a>
-      </div>
-      <div class="context-card" data-reveal style="--reveal-delay: 150ms" aria-label={isVietnamese ? "Ví dụ về visibility của capability" : "Capability visibility example"}>
-        <div class="context-head"><span class="card-kicker mono">CAPABILITY CATALOG</span><span class="context-count mono">03 / 128 {isVietnamese ? "hiển thị" : "visible"}</span></div>
-        <div class="context-row always"><span class="visibility-marker"></span><div><b>read_file</b><small>{isVietnamese ? "kiểm tra workspace" : "workspace inspection"}</small></div><em>always</em></div>
-        <div class="context-row on-demand"><span class="visibility-marker"></span><div><b>notion.search</b><small>{isVietnamese ? "tìm trang đã kết nối" : "search connected pages"}</small></div><em>on demand</em></div>
-        <div class="context-row on-demand"><span class="visibility-marker"></span><div><b>github.create_issue</b><small>{isVietnamese ? "ghi vào repository" : "write to repository"}</small></div><em>on demand</em></div>
-        <div class="context-row denied"><span class="visibility-marker"></span><div><b>shell.open_network</b><small>{isVietnamese ? "agent này chưa được cấp quyền" : "not granted to this agent"}</small></div><em>{isVietnamese ? "không được phép" : "not permitted"}</em></div>
-        <div class="context-footer"><span class="context-bar"><i></i></span><span class="mono">{isVietnamese ? "chỉ load schema khi cần" : "schemas loaded only when needed"}</span></div>
-      </div>
-    </div>
-  </section>
-
   <section class="section security-section" id="security" aria-labelledby="security-title">
     <div class="container">
       <div class="security-card" data-reveal>
         <div class="security-heading">
           <div class="feature-icon dark-icon"><Icon name="shield" size={24} /></div>
-          <p class="eyebrow light-eyebrow"><span class="eyebrow-line"></span>{isVietnamese ? "Mô hình local-first rõ ràng" : "A clear local-first model"}</p>
-          <h2 id="security-title">{isVietnamese ? "Quyền kiểm soát bắt đầu từ việc biết dữ liệu nào rời khỏi máy." : "Control starts with knowing what leaves the machine."}</h2>
-          <p>{isVietnamese ? "Local-first không có nghĩa là giả vờ cloud provider đang chạy local. CaberOS làm rõ ranh giới này." : "Local-first does not mean pretending cloud providers are local. CaberOS makes the boundary explicit."}</p>
+          <p class="eyebrow light-eyebrow"><span class="eyebrow-line"></span>{isVietnamese ? "Riêng tư & kiểm soát" : "Privacy & control"}</p>
+          <h2 id="security-title">{isVietnamese ? "Biết chính xác cái gì rời khỏi máy." : "Know exactly what leaves your computer."}</h2>
+          <p>{isVietnamese ? "Local-first không có nghĩa là giả vờ cloud là local. CaberOS vẽ rõ ranh giới, và công tắc nằm trong tay bạn." : "Local-first doesn't mean pretending the cloud is local. CaberOS draws the line — and you hold the switches."}</p>
         </div>
         <div class="security-columns">
           <div>
-            <span class="security-label mono">{isVietnamese ? "Ở LẠI TRÊN MÁY" : "STAYS HERE"}</span>
+            <span class="security-label mono">{isVietnamese ? "Ở LẠI TRÊN MÁY" : "STAYS ON YOUR MACHINE"}</span>
             <ul>
-              <li>{isVietnamese ? "Agent config và identity" : "Agent configuration and identity"}</li>
-              <li>{isVietnamese ? "Memory và tài liệu knowledge" : "Memory and knowledge documents"}</li>
-              <li>{isVietnamese ? "Credential và file workspace" : "Credentials and workspace files"}</li>
-              <li>{isVietnamese ? "Lịch sử run và audit record" : "Run history and audit records"}</li>
+              <li><Icon name="check" size={15} />{isVietnamese ? "Cấu hình agent và bộ nhớ" : "Agent setup and memory"}</li>
+              <li><Icon name="check" size={15} />{isVietnamese ? "Tài liệu và file workspace" : "Documents and workspace files"}</li>
+              <li><Icon name="check" size={15} />{isVietnamese ? "Mật khẩu và service key" : "Passwords and service keys"}</li>
+              <li><Icon name="check" size={15} />{isVietnamese ? "Toàn bộ lịch sử run" : "The full record of what happened"}</li>
             </ul>
           </div>
           <div>
-            <span class="security-label mono">{isVietnamese ? "THEO CẤU HÌNH CỦA BẠN" : "FOLLOWS YOUR CONFIGURATION"}</span>
+            <span class="security-label mono">{isVietnamese ? "CHỈ RA NGOÀI KHI BẠN KẾT NỐI" : "GOES OUT ONLY IF YOU CONNECT IT"}</span>
             <ul>
-              <li>{isVietnamese ? "Prompt gửi tới model provider đã chọn" : "Prompts sent to your chosen model provider"}</li>
-              <li>{isVietnamese ? "Request gửi tới MCP service đã kết nối" : "Requests sent to connected MCP services"}</li>
-              <li>{isVietnamese ? "Message gửi qua channel đã bật" : "Messages delivered through enabled channels"}</li>
+              <li><span class="toggle-dot"></span>{isVietnamese ? "Prompt gửi tới AI service bạn chọn" : "Prompts to the AI service you choose"}</li>
+              <li><span class="toggle-dot"></span>{isVietnamese ? "Request gửi tới tool bạn kết nối" : "Requests to tools you connect"}</li>
+              <li><span class="toggle-dot off"></span>{isVietnamese ? "Tin nhắn qua chat app bạn bật" : "Messages through chat apps you enable"}</li>
             </ul>
           </div>
         </div>
@@ -202,25 +325,66 @@ const principles = isVietnamese
     </div>
   </section>
 
-  <section class="section gallery-section" aria-labelledby="gallery-title">
+  <section class="section compare-section" aria-labelledby="compare-title">
     <div class="container">
-      <div class="section-intro compact-intro" data-reveal>
-        <p class="eyebrow"><span class="eyebrow-line"></span>{isVietnamese ? "Bên trong dashboard" : "Inside the dashboard"}</p>
-        <h2 id="gallery-title">{isVietnamese ? "Một giao diện bình tĩnh cho một hệ thống phức tạp." : "A calm surface for a complex system."}</h2>
+      <div class="section-intro" data-reveal>
+        <p class="eyebrow"><span class="eyebrow-line"></span>{isVietnamese ? "So sánh" : "How it compares"}</p>
+        <h2 id="compare-title">{isVietnamese ? "Điểm CaberOS khác biệt." : "Where CaberOS is different."}</h2>
       </div>
-      <div class="gallery-grid">
-        <figure class="gallery-feature" data-reveal>
-          <div class="image-frame"><img src="/images/product/chat.png" alt={isVietnamese ? "Giao diện conversation CaberOS hiển thị phản hồi agent và hoạt động tool" : "CaberOS conversation view showing an agent response and tool activity"} loading="lazy" /></div>
-          <figcaption><b>{isVietnamese ? "Conversation" : "Conversation"}</b><span>{isVietnamese ? "Stream response, thinking, tool, approval và elicitation trong đúng ngữ cảnh." : "Stream responses, thinking, tools, approvals, and elicitation in context."}</span></figcaption>
-        </figure>
-        <figure data-reveal style="--reveal-delay: 120ms">
-          <div class="image-frame"><img src="/images/product/providers.png" alt={isVietnamese ? "Màn hình provider và model settings của CaberOS" : "CaberOS providers and model settings screen"} loading="lazy" /></div>
-          <figcaption><b>{isVietnamese ? "Provider và model" : "Providers and models"}</b><span>{isVietnamese ? "Kết nối model transport mà agent của bạn sẽ sử dụng." : "Connect the model transport your agent should use."}</span></figcaption>
-        </figure>
-        <figure data-reveal style="--reveal-delay: 240ms">
-          <div class="image-frame"><img src="/images/product/observability.png" alt={isVietnamese ? "Dashboard observability của CaberOS" : "CaberOS observability dashboard"} loading="lazy" /></div>
-          <figcaption><b>Observability</b><span>{isVietnamese ? "Kiểm tra run, audit record, health và spend." : "Inspect runs, audit records, health, and spend."}</span></figcaption>
-        </figure>
+      <div class="compare-wrap" data-reveal>
+        <table class="compare-table">
+          <thead>
+            <tr>
+              {comparison.headers.map((header, i) => <th class={i === 1 ? "col-caberos" : ""}>{header}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {comparison.rows.map((row) => (
+              <tr>
+                {row.map((cell, i) => (
+                  i === 0
+                    ? <th scope="row">{cell}</th>
+                    : <td class={i === 1 ? "col-caberos" : ""}>{cell}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="free-section" aria-labelledby="free-title">
+    <div class="container free-inner" data-reveal>
+      <div>
+        <h2 id="free-title" class="free-word">Free<span class="free-dot">.</span></h2>
+      </div>
+      <div class="free-copy">
+        <p>{isVietnamese ? "Mã nguồn mở theo giấy phép MIT. Dùng AI service cloud thì bạn trả provider cho phần bạn dùng. Model local thì không có hóa đơn provider." : "Open source under the MIT license. With a cloud AI service you pay that provider for what you use. A local model has no provider bill."}</p>
+        <div class="hero-actions">
+          <a class="button button-primary" href={localizedPath("/download/")}>{isVietnamese ? "Tải CaberOS" : "Download CaberOS"} <Icon name="download" size={17} /></a>
+          <a class="button button-secondary" href={repositoryUrl}>{isVietnamese ? "Xem trên GitHub" : "View on GitHub"} <Icon name="github" size={17} /></a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section faq-section" aria-labelledby="faq-title">
+    <div class="container">
+      <div class="section-intro" data-reveal>
+        <p class="eyebrow"><span class="eyebrow-line"></span>{isVietnamese ? "Câu hỏi" : "Questions"}</p>
+        <h2 id="faq-title">{isVietnamese ? "Hỏi hay, trả ngắn." : "Good questions, short answers."}</h2>
+      </div>
+      <div class="faq-list" data-reveal>
+        {faqs.map(([question, answer]) => (
+          <details class="faq-item">
+            <summary>
+              <span>{question}</span>
+              <span class="faq-chevron" aria-hidden="true"><Icon name="arrow" size={15} /></span>
+            </summary>
+            <p>{answer}</p>
+          </details>
+        ))}
       </div>
     </div>
   </section>
@@ -228,12 +392,11 @@ const principles = isVietnamese
   <section class="closing-section">
     <div class="container closing-card" data-reveal>
       <span class="closing-mark"><Icon name="spark" size={25} /></span>
-      <p class="eyebrow"><span class="eyebrow-line"></span>{isVietnamese ? "Bắt đầu với một agent có chủ đích" : "Start with one deliberate agent"}</p>
-      <h2>{isVietnamese ? "Xây dựng agent mà bạn thực sự có thể kiểm tra." : "Build an agent you can actually inspect."}</h2>
-      <p>{isVietnamese ? "Tải CaberOS cho Apple Silicon hoặc đọc hướng dẫn trước khi bắt đầu." : "Download CaberOS for Apple Silicon, or read the guide before you begin."}</p>
+      <h2>{isVietnamese ? "Bắt đầu với một agent bạn có thể kiểm tra." : "Start with one agent you can inspect."}</h2>
+      <p>{isVietnamese ? "Tải CaberOS cho macOS hoặc Windows, hoặc đọc hướng dẫn trước." : "Download CaberOS for macOS or Windows, or read the guide first."}</p>
       <div class="hero-actions centered-actions">
-        <a class="button button-primary" href={localizedPath("/download/")}>{isVietnamese ? "Tải" : "Download"} {releaseTag} <Icon name="download" size={17} /></a>
-        <a class="button button-secondary" href={repositoryUrl}>{isVietnamese ? "Xem trên GitHub" : "View on GitHub"} <Icon name="github" size={17} /></a>
+        <a class="button button-primary" href={localizedPath("/download/")}>{isVietnamese ? "Tải CaberOS" : "Download CaberOS"} <Icon name="download" size={17} /></a>
+        <a class="button button-secondary" href={localizedPath("/docs/")}>{isVietnamese ? "Đọc hướng dẫn" : "Read the guide"} <Icon name="arrow" size={17} /></a>
       </div>
     </div>
   </section>
@@ -260,9 +423,8 @@ const principles = isVietnamese
 </script>
 
 <style>
-  /* ── Animation system ── */
+  /* ── Reveal + entrance animations ── */
 
-  /* Scroll reveal: elements start hidden, animate in when [data-revealed] is set */
   [data-reveal] {
     opacity: 0;
     transform: translateY(22px);
@@ -276,25 +438,14 @@ const principles = isVietnamese
     transform: translateY(0);
   }
 
-  /* Hero entrance on page load — staggered keyframes */
   @keyframes hero-fade-up {
     from { opacity: 0; transform: translateY(26px); }
     to { opacity: 1; transform: translateY(0); }
   }
 
-  @keyframes hero-fade-in {
-    from { opacity: 0; }
-    to { opacity: 1; }
-  }
-
   @keyframes hero-scale-in {
-    from { opacity: 0; transform: translateY(40px) scale(0.97); }
+    from { opacity: 0; transform: translateY(30px) scale(0.97); }
     to { opacity: 1; transform: translateY(0) scale(1); }
-  }
-
-  @keyframes float-gentle {
-    0%, 100% { transform: rotate(1.1deg) translateY(0); }
-    50% { transform: rotate(1.1deg) translateY(-8px); }
   }
 
   .hero-copy > * {
@@ -306,60 +457,30 @@ const principles = isVietnamese
   .hero-copy > .hero-actions { animation-delay: 240ms; }
   .hero-copy > .hero-facts { animation-delay: 320ms; }
 
-  .hero-product {
+  .hero-map {
+    position: relative;
+    aspect-ratio: 56 / 40;
     animation: hero-scale-in 1000ms cubic-bezier(0.22, 1, 0.36, 1) 200ms both;
   }
 
-  .product-window.actual-product-window {
-    animation: float-gentle 6s ease-in-out 1.2s infinite;
-  }
-
-  /* Flow nodes: sequential reveal when the flow container is revealed */
-  .architecture-flow[data-reveal] .flow-node,
-  .architecture-flow[data-reveal] .flow-connector {
+  .map-node {
     opacity: 0;
-    transform: translateY(14px);
-    transition:
-      opacity 500ms cubic-bezier(0.22, 1, 0.36, 1),
-      transform 500ms cubic-bezier(0.22, 1, 0.36, 1);
+    animation: node-pop 600ms cubic-bezier(0.22, 1, 0.36, 1) forwards,
+      node-bob 5.5s ease-in-out infinite alternate;
+    animation-delay: calc(700ms + var(--i, 0) * 140ms),
+      calc(1.5s + var(--i, 0) * 0.8s);
   }
 
-  .architecture-flow[data-reveal][data-revealed] .flow-node:nth-child(1) { opacity: 1; transform: translateY(0); transition-delay: 0ms; }
-  .architecture-flow[data-reveal][data-revealed] .flow-node:nth-child(3) { opacity: 1; transform: translateY(0); transition-delay: 200ms; }
-  .architecture-flow[data-reveal][data-revealed] .flow-node:nth-child(5) { opacity: 1; transform: translateY(0); transition-delay: 400ms; }
-  .architecture-flow[data-reveal][data-revealed] .flow-connector:nth-child(2) { opacity: 1; transform: translateY(0); transition-delay: 100ms; }
-  .architecture-flow[data-reveal][data-revealed] .flow-connector:nth-child(4) { opacity: 1; transform: translateY(0); transition-delay: 300ms; }
-
-  /* Feature card hover lift */
-  .feature-card {
-    transition: transform 300ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 300ms ease;
+  @keyframes node-bob {
+    from { margin-top: 0; }
+    to { margin-top: -4px; }
   }
 
-  .feature-card:hover {
-    transform: translateY(-4px);
-    box-shadow: 0 12px 32px rgba(17, 17, 16, 0.06);
+  @keyframes node-pop {
+    from { opacity: 0; transform: translate(-50%, calc(-50% + 8px)); }
+    to { opacity: 1; transform: translate(-50%, -50%); }
   }
 
-  /* Principle hover */
-  .principle {
-    transition: background 300ms ease;
-  }
-
-  .principle:hover {
-    background: var(--olive-soft);
-  }
-
-  /* Context row hover */
-  .context-row {
-    transition: background 200ms ease, padding-left 200ms ease;
-  }
-
-  .context-row:hover {
-    background: var(--paper);
-    padding-left: 4px;
-  }
-
-  /* Button hover lift */
   .button-primary,
   .button-secondary {
     transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1), background 180ms ease, border-color 180ms ease, color 180ms ease, box-shadow 200ms ease;
@@ -374,7 +495,29 @@ const principles = isVietnamese
     transform: translateY(-2px);
   }
 
-  /* Closing mark pulse */
+  .feature-card,
+  .example-row,
+  .faq-item {
+    transition: transform 300ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 300ms ease, background 300ms ease, border-color 200ms ease;
+  }
+
+  .feature-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 12px 32px rgba(17, 17, 16, 0.06);
+  }
+
+  .example-row:hover {
+    border-color: var(--olive);
+  }
+
+  .faq-item:hover {
+    border-color: var(--olive);
+  }
+
+  .promise:hover {
+    background: var(--olive-soft);
+  }
+
   @keyframes mark-pulse {
     0%, 100% { box-shadow: 0 0 0 0 var(--olive-soft); }
     50% { box-shadow: 0 0 0 8px transparent; }
@@ -384,6 +527,8 @@ const principles = isVietnamese
     animation: mark-pulse 2.5s ease-in-out infinite;
   }
 
+  /* ── Layout primitives ── */
+
   .announcement {
     display: flex;
     align-items: center;
@@ -391,19 +536,14 @@ const principles = isVietnamese
     gap: 10px;
     padding-top: 26px;
     color: var(--ink-2);
-    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-family: "Geist Mono", ui-monospace, monospace;
     font-size: 10px;
     letter-spacing: 0.03em;
     text-transform: uppercase;
   }
 
   .announcement-mark,
-  .fact-dot,
-  .window-live i,
-  .mock-pulse,
-  .audit-status i,
-  .event-dot,
-  .mock-cursor {
+  .fact-dot {
     display: inline-block;
     border-radius: 999px;
   }
@@ -433,14 +573,14 @@ const principles = isVietnamese
   }
 
   .hero {
-    padding: 86px 0 92px;
+    padding: 76px 0 84px;
   }
 
   .hero-grid {
     display: grid;
-    grid-template-columns: minmax(0, 0.83fr) minmax(520px, 1.17fr);
+    grid-template-columns: minmax(0, 0.9fr) minmax(460px, 1.1fr);
     align-items: center;
-    gap: 70px;
+    gap: 60px;
   }
 
   .eyebrow {
@@ -449,7 +589,7 @@ const principles = isVietnamese
     gap: 9px;
     margin: 0 0 22px;
     color: var(--olive-dark);
-    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-family: "Geist Mono", ui-monospace, monospace;
     font-size: 10px;
     font-weight: 600;
     letter-spacing: 0.09em;
@@ -479,13 +619,12 @@ const principles = isVietnamese
   h1 {
     max-width: 620px;
     margin-bottom: 25px;
-    font-size: clamp(3.4rem, 5.8vw, 5.7rem);
+    font-size: clamp(3.2rem, 5.6vw, 5.4rem);
     font-weight: 600;
     line-height: 0.98;
   }
 
-  h1 span,
-  .section-intro h2 span {
+  h1 span {
     color: var(--olive);
   }
 
@@ -544,7 +683,7 @@ const principles = isVietnamese
     gap: 15px;
     margin-top: 25px;
     color: var(--ink-3);
-    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-family: "Geist Mono", ui-monospace, monospace;
     font-size: 10px;
   }
 
@@ -560,1207 +699,864 @@ const principles = isVietnamese
     background: var(--olive);
   }
 
-  .product-window {
-    overflow: hidden;
-    border: 1px solid #2d3024;
-    border-radius: 9px;
-    background: #171914;
-    box-shadow: var(--shadow);
-    transform: rotate(1.1deg);
+  /* ── Hero map diagram ── */
+
+  .map-wires {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
   }
 
-  .actual-product-window {
-    max-height: 330px;
+  .edge {
+    stroke: var(--line);
+    stroke-width: 1.4;
+    stroke-dasharray: 100;
+    stroke-dashoffset: 100;
+    animation: edge-draw 900ms ease-out forwards;
+    animation-delay: calc(400ms + var(--d, 0) * 120ms);
+  }
+
+  @keyframes edge-draw {
+    to { stroke-dashoffset: 0; }
+  }
+
+  .edge-dots circle {
+    fill: var(--ink-3);
+    opacity: 0;
+    animation: fade-in 400ms ease-out forwards;
+    animation-delay: 1.3s;
+  }
+
+  @keyframes fade-in {
+    to { opacity: 1; }
+  }
+
+  .gate {
+    fill: var(--paper);
+    stroke: var(--olive);
+    stroke-width: 1.4;
+    opacity: 0;
+    animation: fade-in 400ms ease-out forwards;
+    animation-delay: 1.15s;
+  }
+
+  .flow-dot {
+    fill: var(--olive);
+  }
+
+  .flow-dot.in {
+    fill: var(--ink-3);
+    opacity: 0.75;
+  }
+
+  .map-chip {
+    position: absolute;
+    left: var(--x);
+    top: var(--y);
+    z-index: 2;
+    transform: translate(-50%, -50%);
+    padding: 4px 9px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--paper);
+    color: var(--ink-3);
+    font-family: "Geist Mono", ui-monospace, monospace;
+    font-size: 9px;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+    opacity: 0;
+    animation: chip-in 450ms ease-out forwards;
+    animation-delay: 1.45s;
+  }
+
+  @keyframes chip-in {
+    from { opacity: 0; transform: translate(-50%, calc(-50% + 5px)); }
+    to { opacity: 1; transform: translate(-50%, -50%); }
+  }
+
+  .map-node {
+    position: absolute;
+    left: var(--x);
+    top: var(--y);
+    z-index: 2;
+    transform: translate(-50%, -50%);
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 8px 14px 8px 8px;
+    border: 1px solid var(--line);
+    border-radius: 11px;
+    background: var(--white);
+    box-shadow: 0 6px 18px rgba(22, 21, 15, 0.05);
+  }
+
+  .node-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 29px;
+    height: 29px;
+    border-radius: 8px;
+    background: var(--olive-soft);
+    color: var(--olive-dark);
+  }
+
+  .node-text {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.28;
+  }
+
+  .node-text b {
+    color: var(--ink);
+    font-size: 12.5px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+    white-space: nowrap;
+  }
+
+  .node-text i {
+    color: var(--ink-3);
+    font-family: "Geist Mono", ui-monospace, monospace;
+    font-size: 9px;
+    font-style: normal;
+    white-space: nowrap;
+  }
+
+  .center-ping {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    z-index: 2;
+    width: 150px;
+    height: 106px;
+    border: 1.5px solid var(--olive);
+    border-radius: 18px;
+    opacity: 0;
+    animation: center-ping 4.2s ease-out infinite;
+    animation-delay: 1.6s;
+  }
+
+  @keyframes center-ping {
+    0% { opacity: 0; transform: translate(-50%, -50%) scale(0.92); }
+    12% { opacity: 0.55; }
+    60%, 100% { opacity: 0; transform: translate(-50%, -50%) scale(1.4); }
+  }
+
+  .map-center {
+    position: absolute;
+    left: var(--x);
+    top: var(--y);
+    z-index: 3;
+    transform: translate(-50%, -50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    width: 148px;
+    padding: 15px 12px 12px;
+    border-radius: 14px;
+    background: var(--ink);
+    box-shadow: 0 16px 40px rgba(22, 21, 15, 0.2);
+  }
+
+  .center-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    margin-bottom: 3px;
+    border-radius: 9px;
     background: var(--white);
   }
 
-  .actual-product-window img {
-    display: block;
-    width: 100%;
-    height: auto;
-  }
-
-  .window-topbar {
-    display: flex;
-    align-items: center;
-    min-height: 38px;
-    padding: 0 13px;
-    border-bottom: 1px solid #303329;
-    color: #8f9784;
-    font-size: 9px;
-  }
-
-  .window-controls {
-    display: flex;
-    gap: 5px;
-    margin-right: 13px;
-  }
-
-  .window-controls i {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: #484c3f;
-  }
-
-  .window-title {
-    color: #b1b9a4;
-    font-size: 9px;
-  }
-
-  .window-live {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    margin-left: auto;
-    color: #9fac84;
-    font-size: 8px;
-  }
-
-  .window-live i {
-    width: 5px;
-    height: 5px;
-    background: #9ab846;
-  }
-
-  .window-body {
-    display: grid;
-    grid-template-columns: 126px minmax(0, 1fr) 142px;
-    min-height: 360px;
-  }
-
-  .mock-sidebar,
-  .mock-audit {
-    background: #1d2019;
-  }
-
-  .mock-sidebar {
-    padding: 19px 10px;
-    border-right: 1px solid #303329;
-  }
-
-  .mock-label,
-  .mock-overline,
-  .card-kicker,
-  .security-label {
-    color: #7d866f;
-    font-size: 8px;
-    font-weight: 600;
-    letter-spacing: 0.1em;
-  }
-
-  .mock-label-spaced {
-    margin-top: 26px;
-  }
-
-  .mock-agent {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    margin-top: 11px;
-    padding: 7px 6px;
-    border: 1px solid transparent;
-    border-radius: 4px;
-    color: #aeb6a3;
-    font-size: 9px;
-  }
-
-  .mock-agent.active {
-    border-color: #3a4523;
-    background: #27301d;
-  }
-
-  .mock-avatar {
-    display: grid;
-    flex: none;
-    width: 20px;
-    height: 20px;
-    place-items: center;
-    border-radius: 5px;
-    background: #8aa52f;
-    color: #18200f;
-    font-family: "JetBrains Mono", ui-monospace, monospace;
-    font-size: 9px;
+  .map-center b {
+    color: var(--white);
+    font-size: 15px;
     font-weight: 700;
-  }
-
-  .mock-avatar.muted {
-    background: #3c4438;
-    color: #acb3a4;
-  }
-
-  .mock-agent b,
-  .mock-agent small {
-    display: block;
-  }
-
-  .mock-agent b {
-    color: #d0d6c8;
-    font-size: 8px;
-    font-weight: 600;
-  }
-
-  .mock-agent small {
-    margin-top: 2px;
-    color: #6d7765;
-    font-size: 7px;
-  }
-
-  .mock-pulse {
-    width: 5px;
-    height: 5px;
-    margin-left: auto;
-    background: #a8c04a;
-  }
-
-  .mock-nav {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 7px 7px;
-    color: #76806f;
-    font-size: 8px;
-  }
-
-  .mock-nav span {
-    width: 5px;
-    height: 5px;
-    border: 1px solid #66705a;
-    border-radius: 1px;
-  }
-
-  .mock-nav.active-nav {
-    color: #cad2bd;
-  }
-
-  .mock-nav.active-nav span {
-    border-color: #a8c04a;
-    background: #a8c04a;
-  }
-
-  .mock-sidebar-bottom {
-    margin-top: 60px;
-    padding: 9px 7px;
-    border-top: 1px solid #303329;
-    color: #606a58;
-    font-size: 8px;
-  }
-
-  .mock-chat {
-    min-width: 0;
-    background: #24271f;
-  }
-
-  .mock-chat-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    padding: 19px 18px 14px;
-    border-bottom: 1px solid #303329;
-  }
-
-  .mock-chat-head b {
-    display: block;
-    margin-top: 6px;
-    color: #dfe5d8;
-    font-size: 11px;
-    font-weight: 600;
     letter-spacing: -0.02em;
   }
 
-  .mock-chip {
-    padding: 5px 7px;
-    border: 1px solid #48523a;
-    border-radius: 3px;
-    color: #acbd78;
-    font-family: "JetBrains Mono", ui-monospace, monospace;
-    font-size: 7px;
-  }
-
-  .mock-messages {
-    padding: 17px 18px;
-  }
-
-  .mock-message {
-    display: flex;
-    gap: 8px;
-    margin-bottom: 15px;
-    color: #aeb7a7;
+  .map-center i {
+    color: #a8bd45;
+    font-family: "Geist Mono", ui-monospace, monospace;
     font-size: 9px;
-    line-height: 1.55;
-  }
-
-  .mock-message p {
-    margin: 0;
-  }
-
-  .user-message {
-    max-width: 81%;
-    margin-left: auto;
-    padding: 9px 10px;
-    border: 1px solid #3c4535;
-    border-radius: 5px 5px 1px 5px;
-    background: #30372a;
-    color: #d5dccb;
-  }
-
-  .assistant-message {
-    color: #b8c1b2;
-  }
-
-  .message-mark {
-    display: grid;
-    flex: none;
-    width: 17px;
-    height: 17px;
-    place-items: center;
-    border-radius: 4px;
-    background: #8aa52f;
-    color: #1a2110;
-    font-family: "JetBrains Mono", ui-monospace, monospace;
-    font-size: 8px;
-    font-weight: 700;
-  }
-
-  .mock-tool {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    margin-top: 9px;
-    padding: 7px 8px;
-    border: 1px solid #3b4535;
-    border-radius: 4px;
-    background: #292e25;
-  }
-
-  .tool-icon {
-    display: grid;
-    width: 18px;
-    height: 18px;
-    place-items: center;
-    border-radius: 3px;
-    background: #39482a;
-    color: #a8c04a;
-  }
-
-  .mock-tool b,
-  .mock-tool small {
-    display: block;
-  }
-
-  .mock-tool b {
-    color: #cbd7b1;
-    font-family: "JetBrains Mono", ui-monospace, monospace;
-    font-size: 8px;
-    font-weight: 500;
-  }
-
-  .mock-tool small {
-    margin-top: 2px;
-    color: #76816c;
-    font-size: 7px;
-  }
-
-  .mock-tool em {
-    margin-left: auto;
-    color: #9eb35d;
-    font-family: "JetBrains Mono", ui-monospace, monospace;
-    font-size: 7px;
     font-style: normal;
+    letter-spacing: 0.04em;
   }
 
-  .mock-cursor {
-    width: 2px;
-    height: 10px;
-    margin-left: 2px;
-    vertical-align: middle;
-    background: #a8c04a;
+  :root[data-theme="dark"] .map-center {
+    background: var(--paper-strong);
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(168, 189, 69, 0.35);
   }
 
-  .mock-input {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    margin: 0 15px 14px;
-    padding: 9px 9px 9px 11px;
-    border: 1px solid #49513f;
-    border-radius: 4px;
-    color: #687367;
-    font-size: 8px;
+  :root[data-theme="dark"] .map-center b {
+    color: var(--ink);
   }
 
-  .mock-send {
-    display: grid;
-    width: 19px;
-    height: 19px;
-    place-items: center;
-    border-radius: 3px;
-    background: #8aa52f;
-    color: #1b2112;
+  :root[data-theme="dark"] .center-icon {
+    background: var(--olive-soft);
   }
 
-  .mock-audit {
-    padding: 19px 12px;
-    border-left: 1px solid #303329;
-  }
-
-  .audit-status {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    margin: 15px 0 20px;
-    color: #bdd477;
-    font-size: 8px;
-  }
-
-  .audit-status i {
-    width: 6px;
-    height: 6px;
-    background: #a8c04a;
-  }
-
-  .audit-status small {
-    margin-left: auto;
-    color: #687365;
-    font-family: "JetBrains Mono", ui-monospace, monospace;
-    font-size: 7px;
-  }
-
-  .audit-row {
-    display: flex;
-    justify-content: space-between;
-    gap: 5px;
-    padding: 7px 0;
-    border-bottom: 1px solid #303329;
-    color: #76806e;
-    font-size: 7px;
-  }
-
-  .audit-row b {
-    color: #c4cdbb;
-    font-family: "JetBrains Mono", ui-monospace, monospace;
-    font-size: 7px;
-    font-weight: 500;
-  }
-
-  .green-text {
-    color: #a7c06a !important;
-  }
-
-  .audit-rule {
-    height: 1px;
-    margin: 21px 0 13px;
-    background: #303329;
-  }
-
-  .audit-event {
-    display: flex;
-    gap: 7px;
-    margin: 11px 0;
-  }
-
-  .event-dot {
-    flex: none;
-    width: 5px;
-    height: 5px;
-    margin-top: 3px;
-    background: #656d5c;
-  }
-
-  .event-dot.olive {
-    background: #a8c04a;
-  }
-
-  .audit-event b,
-  .audit-event small {
-    display: block;
-  }
-
-  .audit-event b {
-    color: #b8c3af;
-    font-family: "JetBrains Mono", ui-monospace, monospace;
-    font-size: 7px;
-    font-weight: 500;
-  }
-
-  .audit-event small {
-    margin-top: 3px;
-    color: #697466;
-    font-size: 7px;
-  }
-
-  .product-caption {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 9px;
-    margin: 17px 5px 0;
-    color: var(--ink-3);
-    font-family: "JetBrains Mono", ui-monospace, monospace;
-    font-size: 9px;
-  }
-
-  .caption-line {
-    display: inline-block;
-    width: 30px;
-    height: 1px;
-    background: var(--line);
-  }
-
-  .principles-section {
-    border-top: 1px solid var(--line);
-    border-bottom: 1px solid var(--line);
-    background: rgba(255, 255, 255, 0.42);
-  }
-
-  .principle-grid {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-  }
-
-  .principle {
-    min-height: 184px;
-    padding: 27px 27px 25px 0;
-    border-right: 1px solid var(--line);
-  }
-
-  .principle + .principle {
-    padding-left: 27px;
-  }
-
-  .principle:last-child {
-    border-right: 0;
-  }
-
-  .principle-number {
+  :root[data-theme="dark"] .map-center i {
     color: var(--olive);
-    font-size: 10px;
   }
 
-  .principle h2 {
-    margin: 25px 0 8px;
-    font-size: 18px;
-    font-weight: 600;
-  }
-
-  .principle p {
-    max-width: 230px;
-    margin-bottom: 0;
-    color: var(--ink-2);
-    font-size: 12px;
-    line-height: 1.62;
-  }
+  /* ── Sections ── */
 
   .section {
-    padding: 116px 0;
+    padding: 92px 0;
+  }
+
+  .section-title {
+    margin-bottom: 42px;
+    font-size: clamp(1.9rem, 3.4vw, 2.7rem);
+    font-weight: 600;
+    line-height: 1.08;
   }
 
   .section-intro {
-    max-width: 720px;
+    max-width: 640px;
+    margin-bottom: 44px;
   }
 
-  .section-intro h2,
-  .split-copy h2,
-  .section-heading-row h2,
-  .security-heading h2,
-  .closing-card h2 {
-    margin-bottom: 21px;
-    font-size: clamp(2.3rem, 4vw, 4rem);
+  .section-intro h2 {
+    margin-bottom: 14px;
+    font-size: clamp(1.9rem, 3.4vw, 2.7rem);
     font-weight: 600;
-    line-height: 1.03;
+    line-height: 1.08;
   }
 
-  .section-intro > p:last-child,
-  .split-copy > p,
-  .section-side-copy {
+  .section-intro p {
     color: var(--ink-2);
-    font-size: 16px;
-    line-height: 1.72;
-  }
-
-  .architecture-card {
-    display: grid;
-    grid-template-columns: 0.75fr 1.25fr;
-    gap: 50px;
-    align-items: center;
-    margin-top: 64px;
-    padding: 38px;
-    border: 1px solid var(--line);
-    background: var(--white);
-  }
-
-  .architecture-copy h3 {
-    margin: 17px 0 12px;
-    font-size: 25px;
-    font-weight: 600;
-  }
-
-  .architecture-copy p {
-    margin-bottom: 20px;
-    color: var(--ink-2);
-    font-size: 13px;
-    line-height: 1.7;
-  }
-
-  .text-link {
-    font-size: 12px;
-  }
-
-  .architecture-flow {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 10px;
-    min-height: 215px;
-    padding: 24px 12px;
-    background: var(--paper);
-  }
-
-  .flow-node {
-    min-width: 119px;
-    padding: 16px 13px;
-    border: 1px solid var(--line);
-    background: var(--white);
-  }
-
-  .flow-node.emphasized {
-    border-color: var(--olive);
-    box-shadow: 0 0 0 4px var(--olive-soft);
-  }
-
-  .flow-node span,
-  .flow-node b,
-  .flow-node small {
-    display: block;
-  }
-
-  .flow-node span {
-    margin-bottom: 25px;
-    color: var(--olive);
-    font-family: "JetBrains Mono", ui-monospace, monospace;
-    font-size: 9px;
-  }
-
-  .flow-node b {
-    font-size: 12px;
-    font-weight: 600;
-  }
-
-  .flow-node small {
-    margin-top: 5px;
-    color: var(--ink-3);
-    font-size: 9px;
-    line-height: 1.4;
-  }
-
-  .flow-connector {
-    display: flex;
-    gap: 3px;
-  }
-
-  .flow-connector i {
-    width: 4px;
-    height: 1px;
-    background: var(--olive);
-  }
-
-  .features-section {
-    background: var(--paper-strong);
+    font-size: 15px;
+    line-height: 1.68;
   }
 
   .section-heading-row {
     display: flex;
     align-items: flex-end;
     justify-content: space-between;
-    gap: 50px;
-    margin-bottom: 48px;
+    gap: 40px;
+    margin-bottom: 44px;
   }
 
   .section-heading-row h2 {
-    max-width: 610px;
-    margin-bottom: 0;
+    margin: 0;
+    font-size: clamp(1.9rem, 3.4vw, 2.7rem);
+    font-weight: 600;
+    line-height: 1.08;
+    max-width: 560px;
   }
 
   .section-side-copy {
-    max-width: 310px;
-    margin-bottom: 0;
-    font-size: 13px;
+    max-width: 330px;
+    margin: 0;
+    color: var(--ink-2);
+    font-size: 13.5px;
+    line-height: 1.66;
   }
+
+  /* Promises */
+
+  .promises-section {
+    padding: 20px 0 84px;
+  }
+
+  .promise-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+  }
+
+  .promise {
+    padding: 26px 24px 24px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--white);
+    transition: background 300ms ease;
+  }
+
+  .promise-number {
+    display: block;
+    margin-bottom: 40px;
+    color: var(--olive);
+    font-size: 11px;
+  }
+
+  .promise h3 {
+    margin-bottom: 10px;
+    font-size: 19px;
+    font-weight: 650;
+  }
+
+  .promise p {
+    margin: 0;
+    color: var(--ink-2);
+    font-size: 13.5px;
+    line-height: 1.66;
+  }
+
+  /* Examples */
+
+  .example-list {
+    display: grid;
+    gap: 10px;
+  }
+
+  .example-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 30px;
+    padding: 22px 24px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--white);
+  }
+
+  .example-main h3 {
+    margin-bottom: 6px;
+    font-size: 17px;
+    font-weight: 650;
+  }
+
+  .example-main p {
+    margin: 0;
+    max-width: 560px;
+    color: var(--ink-2);
+    font-size: 13.5px;
+    line-height: 1.64;
+  }
+
+  .example-chips {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 6px;
+    max-width: 300px;
+  }
+
+  .chip {
+    padding: 5px 9px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--paper);
+    color: var(--ink-2);
+    font-size: 9.5px;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+  }
+
+  /* Steps */
+
+  .steps-section {
+    background: var(--olive-soft);
+  }
+
+  .step-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+  }
+
+  .step {
+    padding: 30px 26px 26px;
+    border-radius: 10px;
+    background: var(--white);
+  }
+
+  .step-number {
+    display: block;
+    margin-bottom: 46px;
+    color: var(--olive);
+    font-size: clamp(2.6rem, 4vw, 3.4rem);
+    font-weight: 600;
+    letter-spacing: -0.05em;
+    line-height: 1;
+  }
+
+  .step h3 {
+    margin-bottom: 8px;
+    font-size: 18px;
+    font-weight: 650;
+  }
+
+  .step p {
+    margin: 0;
+    color: var(--ink-2);
+    font-size: 13.5px;
+    line-height: 1.66;
+  }
+
+  /* Features */
 
   .feature-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
-    gap: 1px;
-    border: 1px solid var(--line);
-    background: var(--line);
+    gap: 12px;
   }
 
   .feature-card {
-    min-height: 270px;
-    padding: 26px 25px;
+    padding: 24px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
     background: var(--white);
   }
 
   .feature-icon {
-    display: grid;
-    width: 44px;
-    height: 44px;
-    margin-bottom: 29px;
-    place-items: center;
-    border: 1px solid #d5daba;
-    border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    margin-bottom: 40px;
+    border-radius: 9px;
     background: var(--olive-soft);
     color: var(--olive-dark);
+  }
+
+  .card-kicker {
+    display: block;
+    margin-bottom: 8px;
+    color: var(--ink-3);
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
   }
 
   .feature-card h3 {
-    margin: 12px 0 9px;
-    font-size: 19px;
-    font-weight: 600;
+    margin-bottom: 8px;
+    font-size: 17px;
+    font-weight: 650;
   }
 
   .feature-card p {
-    max-width: 290px;
-    margin-bottom: 0;
+    margin: 0;
     color: var(--ink-2);
-    font-size: 13px;
-    line-height: 1.65;
+    font-size: 13.5px;
+    line-height: 1.64;
   }
 
-  .progressive-section {
-    background: var(--paper);
-  }
-
-  .split-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 0.8fr) minmax(430px, 1.2fr);
-    align-items: center;
-    gap: 90px;
-  }
-
-  .split-copy h2 {
-    max-width: 470px;
-  }
-
-  .split-copy > p {
-    max-width: 500px;
-    margin-bottom: 22px;
-  }
-
-  .context-card {
-    padding: 25px;
-    border: 1px solid var(--line);
-    background: var(--white);
-    box-shadow: var(--shadow);
-  }
-
-  .context-head,
-  .context-row,
-  .context-footer {
-    display: flex;
-    align-items: center;
-  }
-
-  .context-head {
-    justify-content: space-between;
-    padding-bottom: 18px;
-    border-bottom: 1px solid var(--line);
-  }
-
-  .context-count {
-    color: var(--ink-3);
-    font-size: 9px;
-  }
-
-  .context-row {
-    gap: 12px;
-    padding: 16px 0;
-    border-bottom: 1px solid var(--line);
-  }
-
-  .visibility-marker {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--ink-3);
-  }
-
-  .context-row.always .visibility-marker {
-    background: var(--olive);
-  }
-
-  .context-row.on-demand .visibility-marker {
-    border: 1px solid var(--amber);
-    background: transparent;
-  }
-
-  .context-row.denied .visibility-marker {
-    background: var(--line);
-  }
-
-  .context-row div {
-    flex: 1;
-  }
-
-  .context-row b,
-  .context-row small {
-    display: block;
-  }
-
-  .context-row b {
-    font-family: "JetBrains Mono", ui-monospace, monospace;
-    font-size: 11px;
-    font-weight: 500;
-  }
-
-  .context-row small {
-    margin-top: 4px;
-    color: var(--ink-3);
-    font-size: 11px;
-  }
-
-  .context-row em {
-    padding: 5px 7px;
-    border-radius: 3px;
-    background: var(--paper);
-    color: var(--ink-2);
-    font-family: "JetBrains Mono", ui-monospace, monospace;
-    font-size: 8px;
-    font-style: normal;
-  }
-
-  .context-row.always em {
-    background: var(--olive-soft);
-    color: var(--olive-dark);
-  }
-
-  .context-row.on-demand em {
-    background: #fff7e8;
-    color: #a45f00;
-  }
-
-  .context-footer {
-    gap: 11px;
-    padding-top: 19px;
-    color: var(--ink-3);
-    font-size: 8px;
-  }
-
-  .context-bar {
-    display: block;
-    width: 80px;
-    height: 4px;
-    overflow: hidden;
-    border-radius: 999px;
-    background: var(--paper-strong);
-  }
-
-  .context-bar i {
-    display: block;
-    width: 27%;
-    height: 100%;
-    background: var(--olive);
-  }
-
-  .security-section {
-    padding-top: 0;
-    background: var(--paper);
-  }
+  /* Security */
 
   .security-card {
-    display: grid;
-    grid-template-columns: 0.92fr 1.08fr;
-    gap: 60px;
-    padding: 55px 60px 48px;
-    background: var(--ink);
-    color: var(--white);
-  }
-
-  :root[data-theme="dark"] .security-card {
-    background: #10140d;
-    color: #f5f5f3;
+    --card-ink: #16150f;
+    --card-paper: #f7f6f2;
+    --card-soft: #ecefd9;
+    --card-olive: #a8bd45;
+    padding: 52px 54px 46px;
+    border-radius: 14px;
+    background: var(--card-ink);
+    color: var(--card-paper);
   }
 
   .dark-icon {
-    border-color: #4a552e;
-    background: #29321c;
-    color: #b0c95b;
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--card-olive);
   }
 
   .light-eyebrow {
-    color: #a8c04a;
+    color: var(--card-olive);
+  }
+
+  .security-heading {
+    max-width: 620px;
   }
 
   .security-heading h2 {
-    max-width: 490px;
-    font-size: clamp(2.1rem, 3.4vw, 3.4rem);
+    margin-bottom: 14px;
+    font-size: clamp(1.8rem, 3.2vw, 2.5rem);
+    font-weight: 600;
+    line-height: 1.1;
   }
 
-  .security-heading > p:last-child {
-    max-width: 420px;
-    margin-bottom: 0;
-    color: #a5ad9d;
-    font-size: 14px;
-    line-height: 1.7;
+  .security-heading p {
+    color: rgba(245, 245, 243, 0.66);
+    font-size: 14.5px;
+    line-height: 1.68;
   }
 
   .security-columns {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 32px;
-    padding-top: 27px;
+    gap: 40px;
+    margin: 40px 0 32px;
+    padding-top: 32px;
+    border-top: 1px solid rgba(245, 245, 243, 0.14);
   }
 
   .security-label {
-    color: #9eaf6a;
+    display: block;
+    margin-bottom: 16px;
+    color: var(--card-olive);
+    font-size: 9px;
+    letter-spacing: 0.1em;
   }
 
   .security-columns ul {
-    margin: 17px 0 0;
+    display: grid;
+    gap: 10px;
+    margin: 0;
     padding: 0;
     list-style: none;
   }
 
   .security-columns li {
-    position: relative;
-    padding: 0 0 12px 16px;
-    color: #d1d7c9;
-    font-size: 12px;
-    line-height: 1.45;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: rgba(245, 245, 243, 0.82);
+    font-size: 13.5px;
   }
 
-  .security-columns li::before {
+  .security-columns li svg {
+    flex-shrink: 0;
+    color: var(--card-olive);
+  }
+
+  .toggle-dot {
+    position: relative;
+    flex-shrink: 0;
+    width: 26px;
+    height: 15px;
+    border-radius: 999px;
+    background: var(--card-olive);
+  }
+
+  .toggle-dot::after {
     position: absolute;
-    top: 7px;
-    left: 0;
-    width: 5px;
-    height: 5px;
+    top: 2px;
+    right: 2px;
+    width: 11px;
+    height: 11px;
     border-radius: 50%;
-    background: #a8c04a;
+    background: var(--card-paper);
     content: "";
   }
 
-  .security-columns > div:last-child li::before {
-    background: #d8a14d;
+  .toggle-dot.off {
+    background: rgba(245, 245, 243, 0.22);
   }
 
-  .light-link {
-    grid-column: 2;
-    justify-self: start;
-    margin-top: -4px;
-    color: #d0e18f;
-    font-size: 12px;
+  .toggle-dot.off::after {
+    right: auto;
+    left: 2px;
   }
 
-  .gallery-section {
-    background: var(--paper-strong);
+  .security-card .light-link {
+    color: var(--card-olive);
   }
 
-  .compact-intro {
-    max-width: 600px;
-    margin-bottom: 48px;
+  .security-card .light-link:hover {
+    color: var(--card-paper);
   }
 
-  .gallery-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    align-items: start;
-    max-width: 900px;
-    gap: 18px;
-  }
+  /* Comparison */
 
-  .gallery-feature {
-    grid-column: 1 / -1;
-  }
-
-  .gallery-grid figure {
-    margin: 0;
-  }
-
-  .image-frame {
-    overflow: hidden;
+  .compare-wrap {
+    overflow-x: auto;
     border: 1px solid var(--line);
+    border-radius: 10px;
     background: var(--white);
   }
 
-  .image-frame img {
-    display: block;
+  .compare-table {
     width: 100%;
-    height: auto;
-    transition: transform 400ms ease;
+    min-width: 640px;
+    border-collapse: collapse;
+    font-size: 13.5px;
   }
 
-  .gallery-grid figure:hover img {
-    transform: scale(1.015);
+  .compare-table th,
+  .compare-table td {
+    padding: 15px 20px;
+    text-align: left;
+    border-bottom: 1px solid var(--line);
   }
 
-  .gallery-grid figcaption {
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-    padding-top: 14px;
+  .compare-table tr:last-child th,
+  .compare-table tr:last-child td {
+    border-bottom: 0;
   }
 
-  .gallery-grid figcaption b {
-    font-size: 13px;
+  .compare-table thead th {
+    color: var(--ink-3);
+    font-family: "Geist Mono", ui-monospace, monospace;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .compare-table thead .col-caberos {
+    color: var(--olive-dark);
+  }
+
+  .compare-table tbody th {
+    color: var(--ink);
     font-weight: 600;
   }
 
-  .gallery-grid figcaption span {
+  .compare-table td {
     color: var(--ink-2);
-    font-size: 11px;
-    line-height: 1.5;
   }
 
+  .compare-table td.col-caberos {
+    background: var(--olive-soft);
+    color: var(--ink);
+    font-weight: 600;
+  }
+
+  /* Free */
+
+  .free-section {
+    padding: 30px 0 92px;
+  }
+
+  .free-inner {
+    display: grid;
+    grid-template-columns: auto minmax(0, 480px);
+    align-items: end;
+    gap: 60px;
+  }
+
+  .free-word {
+    margin: 0;
+    font-size: clamp(5rem, 12vw, 10rem);
+    font-weight: 700;
+    letter-spacing: -0.06em;
+    line-height: 0.9;
+  }
+
+  .free-dot {
+    color: var(--olive);
+  }
+
+  .free-copy p {
+    margin-bottom: 22px;
+    color: var(--ink-2);
+    font-size: 14.5px;
+    line-height: 1.7;
+  }
+
+  /* FAQ */
+
+  .faq-list {
+    display: grid;
+    gap: 10px;
+    max-width: 780px;
+  }
+
+  .faq-item {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--white);
+  }
+
+  .faq-item summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 18px 22px;
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .faq-item summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .faq-chevron {
+    display: inline-flex;
+    flex-shrink: 0;
+    color: var(--ink-3);
+    transform: rotate(90deg);
+    transition: transform 200ms ease;
+  }
+
+  .faq-item[open] .faq-chevron {
+    transform: rotate(-90deg);
+    color: var(--olive-dark);
+  }
+
+  .faq-item p {
+    margin: 0;
+    padding: 0 22px 20px;
+    max-width: 640px;
+    color: var(--ink-2);
+    font-size: 13.5px;
+    line-height: 1.68;
+  }
+
+  /* Closing */
+
   .closing-section {
-    padding: 0 0 116px;
-    background: var(--paper-strong);
+    padding: 0 0 96px;
   }
 
   .closing-card {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding: 74px 24px 80px;
-    border-top: 1px solid var(--line);
+    padding: 64px 30px 58px;
+    border-radius: 16px;
+    background: var(--olive-soft);
     text-align: center;
   }
 
   .closing-mark {
-    display: grid;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     width: 52px;
     height: 52px;
-    margin-bottom: 27px;
-    place-items: center;
-    border: 1px solid #d5daba;
-    border-radius: 8px;
-    background: var(--olive-soft);
+    margin-bottom: 22px;
+    border-radius: 14px;
+    background: var(--white);
     color: var(--olive-dark);
   }
 
-  .closing-card .eyebrow {
-    margin-bottom: 20px;
-  }
-
   .closing-card h2 {
-    max-width: 650px;
-    margin-bottom: 14px;
+    margin-bottom: 12px;
+    font-size: clamp(1.9rem, 3.6vw, 2.8rem);
+    font-weight: 600;
+    letter-spacing: -0.04em;
   }
 
-  .closing-card > p:not(.eyebrow) {
+  .closing-card p {
     margin-bottom: 26px;
     color: var(--ink-2);
-    font-size: 15px;
+    font-size: 14.5px;
   }
 
   .centered-actions {
     justify-content: center;
   }
 
-  @media (max-width: 1080px) {
+  .mono {
+    font-family: "Geist Mono", ui-monospace, monospace;
+  }
+
+  /* ── Responsive ── */
+
+  @media (max-width: 980px) {
     .hero-grid {
       grid-template-columns: 1fr;
-      gap: 60px;
+      gap: 44px;
     }
 
-    .hero-copy {
-      max-width: 680px;
+    .hero-map {
+      max-width: 560px;
     }
 
-    .hero-product {
-      max-width: 780px;
-    }
-
-    .product-caption {
-      justify-content: flex-start;
-    }
-  }
-
-  @media (max-width: 900px) {
-    .architecture-card,
-    .security-card,
-    .split-grid {
-      grid-template-columns: 1fr;
-    }
-
-    .architecture-flow {
-      min-height: 0;
-    }
-
-    .security-card {
-      gap: 30px;
-      padding: 42px 36px;
-    }
-
-    .light-link {
-      grid-column: 1;
-    }
-  }
-
-  @media (max-width: 700px) {
-    .announcement {
-      justify-content: flex-start;
-      padding-top: 20px;
-      font-size: 8px;
-    }
-
-    .announcement a {
-      margin-left: auto;
-    }
-
-    .hero {
-      padding: 64px 0 72px;
-    }
-
-    h1 {
-      font-size: clamp(3rem, 14vw, 4.5rem);
-    }
-
-    .hero-lead {
-      font-size: 15px;
-    }
-
-    .window-body {
-      grid-template-columns: 88px minmax(0, 1fr);
-    }
-
-    .mock-audit {
-      display: none;
-    }
-
-    .mock-sidebar {
-      padding-inline: 7px;
-    }
-
-    .mock-agent {
-      padding-inline: 3px;
-    }
-
-    .mock-agent span:not(.mock-avatar),
-    .mock-nav,
-    .mock-label-spaced,
-    .mock-sidebar-bottom {
-      display: none;
-    }
-
-    .mock-agent {
-      justify-content: center;
-    }
-
-    .mock-pulse {
-      display: none;
-    }
-
-    .principle-grid {
-      grid-template-columns: 1fr 1fr;
-    }
-
-    .principle,
-    .principle + .principle {
-      min-height: 170px;
-      padding: 21px 15px;
-      border-bottom: 1px solid var(--line);
-    }
-
-    .principle:nth-child(2) {
-      border-right: 0;
-    }
-
-    .principle:nth-child(3),
-    .principle:nth-child(4) {
-      border-bottom: 0;
-    }
-
-    .principle h2 {
-      margin-top: 19px;
-      font-size: 16px;
-    }
-
-    .principle p {
-      font-size: 11px;
-    }
-
-    .section {
-      padding: 78px 0;
-    }
-
-    .section-intro h2,
-    .split-copy h2,
-    .section-heading-row h2,
-    .security-heading h2,
-    .closing-card h2 {
-      font-size: 2.45rem;
-    }
-
-    .architecture-card {
-      margin-top: 38px;
-      padding: 24px;
-    }
-
-    .architecture-flow {
-      align-items: stretch;
-      flex-direction: column;
-    }
-
-    .flow-node {
-      min-width: 0;
-    }
-
-    .flow-node span {
-      margin-bottom: 12px;
-    }
-
-    .flow-connector {
-      justify-content: center;
-      transform: rotate(90deg);
-    }
-
-    .section-heading-row {
-      display: block;
-      margin-bottom: 32px;
-    }
-
-    .section-side-copy {
-      margin-top: 18px;
-    }
-
+    .promise-grid,
+    .step-grid,
     .feature-grid {
-      grid-template-columns: 1fr;
-    }
-
-    .feature-card {
-      min-height: 0;
-    }
-
-    .split-grid {
-      gap: 42px;
-    }
-
-    .context-card {
-      padding: 17px;
-    }
-
-    .security-card {
-      padding: 30px 23px;
+      grid-template-columns: 1fr 1fr;
     }
 
     .security-columns {
       grid-template-columns: 1fr;
-      gap: 22px;
+      gap: 26px;
     }
 
-    .gallery-grid {
+    .free-inner {
+      grid-template-columns: 1fr;
+      gap: 20px;
+      align-items: start;
+    }
+
+    .section-heading-row {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 14px;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .hero {
+      padding: 52px 0 60px;
+    }
+
+    .section {
+      padding: 64px 0;
+    }
+
+    .promise-grid,
+    .step-grid,
+    .feature-grid {
       grid-template-columns: 1fr;
     }
 
-    .closing-section {
-      padding-bottom: 78px;
+    .example-row {
+      grid-template-columns: 1fr;
+      gap: 14px;
     }
 
-    .closing-card {
-      padding: 58px 10px 62px;
+    .example-chips {
+      justify-content: flex-start;
+    }
+
+    .security-card {
+      padding: 34px 24px 30px;
+    }
+
+    .hero-map {
+      aspect-ratio: auto;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 0;
+    }
+
+    .map-wires,
+    .map-chip,
+    .center-ping {
+      display: none;
+    }
+
+    .map-center {
+      position: static;
+      order: -1;
+      flex-basis: 100%;
+      width: auto;
+      max-width: 200px;
+      margin: 0 auto 8px;
+      transform: none;
+    }
+
+    .map-node {
+      position: static;
+      transform: none;
+      opacity: 1;
+      animation: none;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+
+    [data-reveal] {
+      opacity: 1;
+      transform: none;
+    }
+
+    .flow-dot {
+      display: none;
     }
   }
 </style>

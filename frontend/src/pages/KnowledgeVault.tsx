@@ -125,6 +125,7 @@ function KnowledgeOverview() {
   };
 
   const uploadShared = async (files: FileList | File[]) => {
+    if (uploading) return;
     setUploading(true);
     setError("");
     try {
@@ -140,6 +141,13 @@ function KnowledgeOverview() {
       setUploading(false);
     }
   };
+
+  // Native Tauri drops bypass DOM drag events — the webview intercepts them.
+  useDesktopFileDrop({
+    onFiles: (files) => { if (!uploading) void uploadShared(files); },
+    onDraggingChange: setDragActive,
+    onError: (e) => setError(String(e)),
+  });
 
   return (
     <Shell {...navigation}>

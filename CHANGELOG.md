@@ -1,144 +1,196 @@
 # Changelog
 
-All notable changes to CaberOS are documented here.
+All notable changes to CaberOS are documented here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
+[Semantic Versioning](https://semver.org/).
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+Each GitHub release attaches the same desktop artifacts: a macOS Apple Silicon
+`.dmg`, a Windows x64 `-setup.exe`, signed updater archives for both platforms,
+and `latest.json` — the manifest the in-app updater polls to discover new
+versions.
 
-## [Unreleased]
+## [Unreleased] — 0.2.0 "Agent Workbench"
 
-### Added
-
-- Windows x64 desktop app (Tier 2, beta): NSIS installer, packaged gateway, WebView2 bootstrapper, per-user install
-- Prioritized shell-sandbox backends with graceful degradation: Seatbelt (macOS) or bwrap (Linux) first, then a Docker fallback on those platforms
-- Windows shell sandbox without Docker or WSL: the installer bundles Microsoft Execution Containers (MXC, MIT, hash-pinned at build time), auto-selected on Windows and reported as `experimental` because Microsoft does not yet call it a security boundary
-- MXC sandbox gets an allowlisted environment: host variables (API keys, tokens) are never forwarded to sandboxed commands
-- First-run "Enable shell sandbox" button in Observability → Health runs MXC's one-time elevated host setup (Windows shows its own permission prompt)
-- `GET /api/health` reports `sandbox` (`kind`, `state`, `reason`, `setup_required`) and the gateway `version`; the dashboard flags a shell/gateway version mismatch
-- Multi-platform release matrix; the updater manifest is built in a dedicated job that fails when a platform is missing
-- `docs/platform-support.md` — canonical platform and sandbox-backend contract
-
-### Fixed
-
-- `get_backend()` raised `RuntimeError` on Windows and any non-macOS/Linux platform instead of degrading
-- An "unavailable" sandbox result was cached for the life of the process, so starting a missing dependency never took effect without restarting the app; unavailable results are now re-probed on each call
-- MXC policy blocked the UI subsystem, so ordinary console programs (`whoami`, PowerShell) died with `STATUS_DLL_INIT_FAILED`; the policy now enables UI while keeping clipboard and input injection blocked
-- Packaged gateway lookup on Windows joined the `.exe` name to the directory name
-- Windows process cleanup left orphaned gateways holding the fixed port; the gateway now runs inside a kill-on-close Job Object
-- `RunEvent::Reopen` was compiled on every platform though it exists only on macOS
-- Bundled YAML/JSON/manifest reads used the locale codepage on Windows (mojibake); now explicit UTF-8
-- The Fernet key was left readable by other local users on Windows, where `chmod(0o600)` is a no-op; now restricted with an ACL
-- Open-mode shell used `/bin/sh` on Windows; now `cmd.exe /c`
-- `scripts/smoke.py` granted a non-existent capability name so the shell step silently did nothing
-- `check-version.sh` assumed `python3`, which Windows does not provide
-
-## [0.1.8] - Unreleased
+Integrated on `feat/v0.2.0`; release pending.
 
 ### Added
 
-- Approval batches for multiple tool calls emitted in one model turn, with decisions collected before approved calls execute
-- Vietnamese (`vi`) public website and documentation routes with locale navigation, canonical URLs, and `hreflang` metadata
+- **Agent Workbench UI**: the dashboard was rebuilt around the new shell —
+  Today home, session chat with composer and attachments, trace inspection,
+  Knowledge Vault, Skills Studio, browser, scheduler, channels, notifications,
+  and settings — on the warm light/olive design system with dark mode.
+- **Today — the operator home**: a "Needs you" strip collecting pending
+  approvals, agent questions, failed runs, and unread notifications with deep
+  links to the exact chat, trace, or setting that resolves them; a rollup of
+  agent activity since you last looked; a rail listing what can leave the
+  machine; and a composer that sends a task to any agent.
+- **Trace inspection**: every run renders as a span tree + waterfall with an
+  observation inspector — model calls, tool calls, approvals, and context are
+  inspectable from the `model_calls` ledger with exact `call_id` correlation.
+- **Knowledge Vault**: upload documents, search them with FTS5 lexical
+  retrieval (hybrid embeddings opt-in, egress-consented), cite passages, and
+  manage index generations. `.xlsx`/`.csv` uploads are refused with a clear
+  reason pending the deferred row-query layer.
+- **Evolving skills (RSI)**: after a session closes, a bounded reflection run
+  can inspect frozen session evidence and stage edits to agent-local skills;
+  published skills resolve versioned per run. The reflection concurrency cap
+  drains oversized tool-call batches instead of failing them.
+- **Managed browser automation**: Chrome-for-Testing under operator control —
+  explicit first-use install consent, headless/visible modes, domain-scoped
+  profiles, approval-gated actions, takeover requests, and download staging.
+- **Durable scheduler**: once/interval/cron schedules with IANA timezones,
+  persisted `next_fire_at`, missed-run sweep on restart, overlap and bounded
+  retry policies. Heartbeat is now a facade over a managed schedule row.
+- **Artifact Studio**: agents create and revise tracked deliverables
+  (docx/xlsx/pptx/pdf) from structured specs with immutable revisions,
+  restore-as-new, and external-edit conflict detection.
+- **Notifications**: toast + inbox with SSE-first delivery, deep links, and
+  unread dedupe.
+- **Guided onboarding**: first-launch wizard for provider setup, first agent,
+  and first run.
+- **Windows x64 desktop build**: NSIS current-user installer
+  (`-setup.exe`, no admin needed); no Python, Docker, or WSL required.
+- **Attachments-only composer**: messages can send files without text; native
+  drag-and-drop in the Migration and Knowledge Vault views on the desktop app.
 
 ### Changed
 
-- SQLite control-plane writes retry complete transactions after rollback with bounded exponential backoff
-- Exhausted database contention returns a retryable `503 database_busy` response with `Retry-After`
-- Website and documentation keep English as the default locale while providing Vietnamese content for every documentation route
+- Sessions close on an idle deadline and write a learning pass (summary +
+  durable facts) instead of expiring silently.
+- Orchestration directives: models that emit parallel action plans are nudged
+  back to sequential reasoning instead of fanning out.
 
 ### Fixed
 
-- Preserve strict reason → act → observe → repeat execution boundaries while retaining same-turn tool concurrency
-- Persist elicitation responses before waking the waiting agent run
-- Make capability-save failures visible and restore server-confirmed state after a failed write
-- Persist MCP connection failure notifications and startup reconciliation safely during transient database contention
-- Honor a configurable MCP connection timeout and surface expired OAuth refresh tokens as explicit re-authentication failures instead of generic timeouts
-- Automatically connect and discover MCP tools after successful OAuth authorization
+- Empty thinking blocks: reasoning-capable calls now request reasoning
+  summaries so reported thinking tokens produce visible content.
+- Re-clicking the active session no longer blanks the chat view.
 
-### Security
+### Platform notes
 
-- Approval and denial decisions remain persisted before in-process waiters are released
+- **Windows shell sandbox** uses bundled Microsoft Execution Containers (MXC):
+  experimental, requires Windows 11 24H2 (build 26100+), one-time elevated
+  setup, system-drive workspaces only. Other capabilities work on Windows 10+.
+- **macOS** desktop builds require Apple Silicon (macOS 13+) and use Seatbelt
+  sandboxing with Docker fallback.
+- **Linux** runs via Docker or source install (Bubblewrap sandbox with Docker
+  fallback); no native desktop build yet.
 
-## [0.1.6] - Released
-
-### Added
-
-- Guided first-run setup for provider, model, and initial agent configuration
-- Stable loopback gateway port for the Tauri desktop app
-- Persistent operator notifications for run failures, approvals, MCP failures, and OAuth re-authentication
-- Dedicated Notifications page with unread filtering and related-page actions
-- Live system health status in the observability dashboard
-- Expanded MCP catalog with setup-required entries for account-specific integrations
-- Configurable logging levels and bounded desktop gateway log rotation
+## [0.1.9] — 2026-09-14
 
 ### Fixed
 
-- OAuth access tokens refresh proactively using the provider-reported expiration
-- Rotated OAuth refresh tokens are persisted for providers such as Notion
-- OAuth callback URLs follow the configured gateway port
-- Desktop app close confirmation uses the application confirmation UI
-
-### Security
-
-- Sanitized SQLite integrity-check and provider-validation failures so raw exception details remain in server logs instead of API responses or notifications
-
-## [0.1.5] - Released
+- `web_fetch` in the bundled gateway: trafilatura `settings.cfg` now ships in
+  the PyInstaller bundle, with a BeautifulSoup fallback on extract errors.
+- Empty chat view when re-clicking the active session.
+- URL-substring alert matching made explicit in tests.
 
 ### Added
 
-- Knowledge Vault document re-indexing for explicitly imported documents
-- Persisted document sources and citation inspection in chat
-- Focused frontend component tests with Vitest and React Testing Library
+- `scripts/release.sh` — one-command version bump + tag + push, with a
+  two-phase flow for protected `main`.
+- Faster notifications: 5s polling plus instant refetch on SSE lifecycle events.
 
-### Security
-
-- Hardened archive, skill, workspace, sandbox, and database identifier path boundaries
-- Sanitized OAuth redirect errors and user-facing internal failures
-- Restricted CI workflow permissions to the jobs that need write access
-- Validated browser URLs before opening them
-
-## [0.1.0] - 2025-08-18
+## [0.1.8] — 2026-09-08
 
 ### Added
 
-- Local-first AI Agent Operating System with headless FastAPI gateway
-- React 19 dashboard with dark-only, conversation-first design
-- Tauri desktop app (macOS Apple Silicon)
-- Agent configuration system — agents are versioned DB rows, not code
-- Three-layer memory: working memory (FTS5), MEMORY.md, knowledge graph (triples)
-- Skills system with progressive disclosure (menu → load → read resource)
-- MCP client infrastructure (stdio + HTTP, credentials, OAuth flow)
-- Four external channels: Telegram, Discord, Zalo OA, Zalo Bot Platform
-- Syscall boundary with approval flow, sandboxing, and audit logging
-- Provider management with encrypted API keys (Fernet)
-- Model discovery for OpenAI, Anthropic, Gemini, Ollama, OpenRouter, and 20+ more
-- Non-chat models (embeddings, TTS, STT, image gen) filtered from discovery
-- Observability dashboard with runs, syscall log, spend tracking, and health
-- Scheduler with heartbeat mode
-- Sub-agent support (`run_subagent`, `read_subagent`)
-- Guardrails (secret detection, path injection, prompt injection)
-- SSE streaming (typing, thinking, tokens, tool calls, turn complete)
-- Attachment support (images, URLs, files)
-- Thinking/reasoning controls (effort slider, brain icon)
-- Copy-to-clipboard on rendered Markdown code blocks
-- GitHub Actions CI (pytest, ruff, frontend build + lint)
-- GitHub Actions release workflow (tag-triggered DMG build)
-- SECURITY.md with GitHub private vulnerability reporting
+- Public marketing + documentation website (English and Vietnamese), deployed
+  as a Cloudflare static asset Worker.
+- On-demand capability controls in the dashboard.
 
-### Security
+### Fixed
 
-- Provider API keys encrypted at rest (Fernet, AES-128-CBC + HMAC-SHA256)
-- MCP credentials injected at runtime, never exposed in API responses
-- Webhook endpoints validate configured secrets (timing-safe comparison)
-- OAuth state validation (CSRF protection)
-- Workspace path traversal protection (path relationship validation)
-- Secret key file permissions enforced (0o600)
-- Operator authentication (bcrypt, session + bearer token)
+- Execution and MCP recovery stability pass.
+- Dashboard theme polish, sidebar persistence, chat styling.
 
-### Known Limitations
+## [0.1.7] — 2026-09-03
 
-- macOS Apple Silicon only (no Intel or Windows builds yet)
-- Single-operator (no multi-tenancy)
-- Sessions stored in memory (lost on restart)
-- Knowledge Vault UI deferred to v0.2
-- CLI/TUI deferred to v0.2
-- Cron/event triggers deferred to v0.5
+### Added
+
+- Progressive capability discovery persisted in run traces; on-demand
+  capability controls.
+- MCP grants preserved across discovery and migration; unavailable capability
+  schemas invalidated before model turns.
+
+### Fixed
+
+- Packaged gateway startup failure.
+
+## [0.1.6] — 2026-08-28
+
+### Added
+
+- Guided setup and notification workspace.
+- Configurable bounded gateway logging.
+- Stable desktop OAuth callback port.
+
+### Fixed
+
+- API errors no longer expose exception details.
+- MCP OAuth and server cleanup; default agents preserved after local reset.
+
+## [0.1.5] — 2026-08-27
+
+### Added
+
+- Knowledge experience: document upload, retrieval, and citation groundwork.
+- Channel enable toggle moved beside settings.
+
+## [0.1.4] — 2026-08-25
+
+### Added
+
+- Trusted knowledge foundation for the vault pipeline.
+
+### Fixed
+
+- Path-taint findings in knowledge uploads.
+
+## [0.1.3] — 2026-08-24
+
+### Fixed
+
+- Slow startup: LiteLLM remote fetch skipped, channel loading moved to
+  background.
+- `web_search` switched to the `ddgs` package; auth rollback handling.
+
+## [0.1.2] — 2026-08-20
+
+### Added
+
+- Data migration page with preview, merge, and replace modes.
+- Persistent channel sessions with live dashboard streaming.
+- Zalo Bot markdown rendering.
+
+### Fixed
+
+- MCP v2 (`mcp` package upgrade) OAuth token refresh across restarts.
+- `web_search` POST queries and shared SSL/User-Agent for `web_fetch`.
+
+## [0.1.1] — 2026-08-19
+
+### Fixed
+
+- `mcp` v2 client renames and unpack fixes; CI caching for uv, PyInstaller,
+  and Rust builds.
+
+## [0.1.0] — 2026-08-18
+
+### Added
+
+- First public release: FastAPI gateway, agent workspaces, capability
+  mediation, approvals, audit trail, chat UI, channels, and Tauri desktop app
+  for macOS.
+
+[Unreleased]: https://github.com/cabernect/caberos/compare/v0.1.9...HEAD
+[0.1.9]: https://github.com/cabernect/caberos/compare/v0.1.8...v0.1.9
+[0.1.8]: https://github.com/cabernect/caberos/compare/v0.1.7...v0.1.8
+[0.1.7]: https://github.com/cabernect/caberos/compare/v0.1.6...v0.1.7
+[0.1.6]: https://github.com/cabernect/caberos/compare/v0.1.5...v0.1.6
+[0.1.5]: https://github.com/cabernect/caberos/compare/v0.1.4...v0.1.5
+[0.1.4]: https://github.com/cabernect/caberos/compare/v0.1.3...v0.1.4
+[0.1.3]: https://github.com/cabernect/caberos/compare/v0.1.2...v0.1.3
+[0.1.2]: https://github.com/cabernect/caberos/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/cabernect/caberos/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/cabernect/caberos/releases/tag/v0.1.0

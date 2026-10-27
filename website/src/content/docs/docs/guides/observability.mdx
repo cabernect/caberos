@@ -74,13 +74,13 @@ Select a run to open full detail.
 
 ## Run detail
 
-A run is one inbound user message or heartbeat processed through the agent pipeline. Detail records:
+A run is one inbound user message, channel message, scheduled fire, or internal pass (heartbeat, reflection) processed through the agent pipeline. Detail records:
 
 | Field | What it tells you |
 | --- | --- |
 | Run, agent, and session IDs | Which execution and conversation produced the record. |
 | Status and error | Whether the run completed, failed, stopped, or remains active. |
-| Trigger | User message or heartbeat automation. |
+| Trigger | User message, channel, heartbeat, schedule, or reflection. |
 | Start/completion time and latency | When execution occurred and total duration. |
 | Input/output tokens | Model usage accumulated across turns. |
 | Cost | Provider-reported or calculated run cost. |
@@ -91,7 +91,7 @@ A run is one inbound user message or heartbeat processed through the agent pipel
 | Messages | Persisted user, assistant, thinking, heartbeat, and tool-call records. |
 | Audit records | Allowed and denied mediated capability invocations. |
 
-Use the **Timeline** view to understand execution order and **Messages** to inspect persisted content.
+The run detail opens on a span tree with a waterfall of timed work. Select a span to inspect its observation — inputs, results, denials — in the inspector panel. The timeline projects the persisted record in order: audit roots to tool-call tombstones to still-pending approvals. Thinking rows appear when the model streamed reasoning content, and **Messages** shows the persisted content directly.
 
 ## Diagnose capability discovery
 
@@ -222,7 +222,7 @@ Check `http://127.0.0.1:51718/health` and the desktop gateway log. If the minima
 
 ### A running task is missing after restart
 
-Active-run tracking is process-local. Persisted completed run records remain, but the current implementation is not a durable restartable job queue.
+Every run is a persisted row. On startup, runs left marked `running` by a dead process reconcile to `interrupted` — the record remains, marked honestly. Only live event streaming is process-local; run status and history still read from the database after restart.
 
 ### Cost is zero
 

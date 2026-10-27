@@ -278,52 +278,22 @@ jobs:
 
           cat latest.json
 
+      # The release body is curated, not scraped: scripts/release-body.py pulls
+      # the tag's section from CHANGELOG.md and fails when it is missing, so a
+      # release can never go out with auto-generated commit noise for notes.
+      - name: Compose release body from CHANGELOG.md
+        run: |
+          set -euo pipefail
+          python3 scripts/release-body.py \
+            --version "${GITHUB_REF_NAME#v}" \
+            --out release-body.md
+          cat release-body.md
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: CaberOS ${{ github.ref_name }}
-          body: |
-            **Local-first AI Agent Operating System.**
-
-            ### Download
-
-            - **macOS Apple Silicon (ARM64)** — the `.dmg` file below.
-            - **Windows x64** — the `-setup.exe` file below.
-
-            > macOS Intel, Windows on ARM, and Linux builds are not yet available.
-            > See `docs/platform-support.md` for the full support matrix.
-
-            ### Install — macOS
-
-            1. Open the `.dmg` and drag **CaberOS** to Applications
-            2. If macOS reports that CaberOS is damaged, verify the download came
-               from this release, then run:
-               `xattr -dr com.apple.quarantine /Applications/CaberOS.app`
-            3. Launch CaberOS — the gateway starts automatically
-
-            ### Install — Windows
-
-            1. Run the `-setup.exe` installer (installs for the current user, no admin needed)
-            2. Windows SmartScreen may warn on first run while the signature builds
-               reputation — choose **More info → Run anyway**
-            3. Launch CaberOS — the gateway starts automatically
-
-            **Shell commands on Windows need no Docker and no WSL.** The installer
-            bundles Microsoft Execution Containers (MXC). The first time, open
-            Observability → Health and click **Enable shell sandbox** — Windows asks
-            for permission once, then agent commands run in a restricted container.
-            MXC is experimental: Microsoft does not yet call it a security boundary,
-            and it can only reach workspaces on the system drive. Until it is
-            enabled, shell is off with a clear reason; every other capability still
-            works. See `docs/platform-support.md` for details.
-
-            ### First login
-
-            Default credentials: `admin` / `admin` — change them immediately.
-
-            ---
-            **License:** MIT — Copyright (c) 2025 HoangPH25
-          generate_release_notes: true
+          body_path: release-body.md
           files: |
             artifacts/**/*.dmg
             artifacts/**/*-setup.exe

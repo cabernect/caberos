@@ -16,17 +16,21 @@ username: admin
 password: admin
 ```
 
-Hãy đổi mật khẩu ngay trong khu vực account hoặc settings.
+Luồng onboarding sẽ yêu cầu thay credential mặc định ngay trong wizard — hãy làm việc đó trước khi tiếp tục. Bạn có thể đổi lại sau trong Settings.
 
-## 2. Làm theo setup guide
+## 2. Làm theo onboarding guide
 
-Setup guide kiểm tra bạn có:
+Wizard lần chạy đầu dẫn qua các bước:
 
-- ít nhất một model provider;
-- provider API key hoặc kết nối tới local model;
-- một agent đã chọn provider và model.
+- **Welcome** — CaberOS là gì và những gì ở lại trên máy này.
+- **Protect your workspace** — thay credential đăng nhập mặc định.
+- **Get your machine ready** — kiểm tra readiness thật qua các probe health và dependency local, gồm managed browser và command sandbox; các runtime tùy chọn có thể cài hoặc bỏ qua.
+- **Connect an AI** — thêm API key của model provider hoặc endpoint model local và kiểm tra kết nối.
+- **Choose what agents may do** — posture permission mặc định.
+- **Meet your agents** — xem lại các agent có sẵn.
+- **Ready** — bạn đến trang **Today**, màn hình chính của operator hiển thị agent đã làm gì và đang cần bạn ở đâu.
 
-Bạn có thể import backup hoặc tài liệu knowledge ban đầu trong onboarding, hoặc làm sau.
+Sau onboarding, Today đề xuất một tour ngắn ba bước qua các màn hình chính. Bạn có thể chạy lại bất cứ lúc nào từ **Settings → General → Guidance → Replay tour**.
 
 ## 3. Gửi message đầu tiên
 

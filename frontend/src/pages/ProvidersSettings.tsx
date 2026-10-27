@@ -26,6 +26,7 @@ import {
 import { api } from "@/lib/api";
 import { useConfirm } from "@/lib/confirmHook";
 import { openUrl } from "@/lib/openUrl";
+import { useDesktopFileDrop } from "@/lib/desktopFileDrop";
 import { CHROME_PATH_EXAMPLE } from "@/lib/platform";
 import type { Agent, Provider, ModelInfo, Operator } from "@/lib/types";
 import {
@@ -1764,17 +1765,29 @@ function MigrationTab() {
     input.click();
   };
 
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragActive(false);
+  // One entry for DOM drops and native Tauri drops — validate + busy guard.
+  const acceptDroppedFiles = (files: File[]) => {
     if (busy) return;
-    const file = e.dataTransfer.files?.[0];
+    const file = files[0];
     if (!file) return;
     if (!file.name.toLowerCase().endsWith(".zip")) {
       toast("Import expects a .zip archive from Export");
       return;
     }
     void startPreview(file);
+  };
+
+  // Native Tauri file drops bypass DOM drag events — the webview takes them.
+  useDesktopFileDrop({
+    onFiles: acceptDroppedFiles,
+    onDraggingChange: (d) => setDragActive(d && !busy),
+    onError: () => toast("Could not read the dropped file"),
+  });
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragActive(false);
+    acceptDroppedFiles(Array.from(e.dataTransfer.files ?? []));
   };
 
   const handleImport = (importMode: "replace" | "merge") => {

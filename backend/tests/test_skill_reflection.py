@@ -2,6 +2,7 @@
 (restrictions + SkillEditSession delegation) through agentos.reflection;
 no real provider."""
 
+import asyncio
 import uuid
 
 import pytest
@@ -205,3 +206,92 @@ async def test_reflect_inspection_does_not_count_as_activation(db, tmp_path, mon
     assert refl.outcome == "no_change"
     activations = list(await db.scalars(select(SkillActivation)))
     assert activations == []
+
+
+@pytest.mark.asyncio
+async def test_reflect_oversized_tool_batch_drains_not_fails(db, tmp_path, monkeypatch):
+    """A restricted reflection turn returning >4 tool calls must not hit the
+    fatal per-turn cap — calls drain through bounded concurrency and the
+    model still sees one matched result per call."""
+    cfg = await _seed(db, tmp_path, monkeypatch, [CapabilityGrant(name="read_file")])
+    session = await db.get(Session, "s1")
+
+    calls = [_mkcall("read_file", {"path": "skills/evolve/SKILL.md"}) for _ in range(6)]
+    model = ScriptedModel(
+        [ScriptedResponse(tool_calls=calls), ScriptedResponse(content="no change needed")]
+    )
+    _patch_provider(monkeypatch, model)
+
+    from agentos.reflection import reflect_session
+
+    refl = await asyncio.wait_for(reflect_session(db, cfg, session, "c1", ["r1"]), timeout=10)
+    assert refl is not None
+    assert refl.outcome == "no_change", refl.error
+    run = await db.get(Run, refl.run_id)
+    assert run.status == "completed"
+
+    # The model received a matched tool-result row for every call id, each
+    # carrying the real read output (no placeholder empties).
+    second = model.seen_calls[1]["messages"]
+    results = {m["tool_call_id"]: m for m in second if m.get("role") == "tool"}
+    assert set(results) == {c["id"] for c in calls}
+    assert all("PROC" in m["content"] for m in results.values())
+    # Persisted: 6 tool_call rows + real mediation AuditRecords on the run.
+    tool_msgs = list(
+        await db.scalars(
+            select(Message).where(Message.run_id == refl.run_id, Message.role == "tool_call")
+        )
+    )
+    assert len(tool_msgs) == 6
+    from agentos.models.audit import AuditRecord
+
+    audits = list(await db.scalars(select(AuditRecord).where(AuditRecord.run_id == refl.run_id)))
+    assert len(audits) >= 6
+    # Ledgered as reflection-purpose model calls on the reflection run.
+    ledger = list(await db.scalars(select(ModelCall).where(ModelCall.run_id == refl.run_id)))
+    assert ledger and all(c.purpose == "reflection" for c in ledger)
+
+
+@pytest.mark.asyncio
+async def test_reflect_batch_denies_out_of_scope_calls_individually(db, tmp_path, monkeypatch):
+    """Out-of-capability calls inside a big batch are denied per call —
+    allowed reads still land, no workspace escape."""
+    cfg = await _seed(
+        db,
+        tmp_path,
+        monkeypatch,
+        [CapabilityGrant(name="read_file"), CapabilityGrant(name="write_file")],
+    )
+    session = await db.get(Session, "s1")
+
+    calls = [
+        _mkcall("read_file", {"path": "skills/evolve/SKILL.md"}),
+        _mkcall("terminal", {"command": "echo hi"}),
+        _mkcall("write_file", {"path": "../escape.txt", "content": "x"}),
+        _mkcall("read_file", {"path": "skills/evolve/SKILL.md"}),
+        _mkcall("read_file", {"path": "skills/evolve/SKILL.md"}),
+    ]
+    model = ScriptedModel([ScriptedResponse(tool_calls=calls), ScriptedResponse(content="done")])
+    _patch_provider(monkeypatch, model)
+
+    from agentos.reflection import reflect_session
+
+    refl = await asyncio.wait_for(reflect_session(db, cfg, session, "c1", ["r1"]), timeout=10)
+    assert refl is not None
+    second = model.seen_calls[1]["messages"]
+    results = {m["tool_call_id"]: m for m in second if m.get("role") == "tool"}
+    assert len(results) == len(calls)
+    # Terminal call was denied by the capability ceiling, not executed.
+    term = results[calls[1]["id"]]
+    assert "denied" in term["content"].lower() or "not permitted" in term["content"].lower()
+    # The ../escape write is rejected at the boundary, not executed —
+    # the staged-edit path validator refuses it as an invalid resource path.
+    write = results[calls[2]["id"]]
+    assert (
+        "denied" in write["content"].lower()
+        or "not permitted" in write["content"].lower()
+        or "invalid" in write["content"].lower()
+        or "error" in write["content"].lower()
+    )
+    assert not (tmp_path / "ws" / "escape.txt").exists()
+    assert not (tmp_path / "escape.txt").exists()
