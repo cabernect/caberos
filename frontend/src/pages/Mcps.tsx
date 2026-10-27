@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plug, Plus, Trash2, RefreshCw, Key, Search, Store, AlertTriangle, X, MoreHorizontal, Play } from "lucide-react";
+import { Plug, Plus, Trash2, RefreshCw, Key, Search, Store, AlertTriangle, X, Play } from "lucide-react";
 import { DashboardSidebar, NAV_ROUTES, type NavKey } from "@/components/DashboardSidebar";
 import { PageIntro } from "@/components/guidance/PageIntro";
 import { INTRO_BY_KEY } from "@/components/guidance/tourStops";
@@ -30,7 +30,6 @@ export function Mcps() {
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [usedBy, setUsedBy] = useState<Record<string, string[]>>({});
-  const [menuFor, setMenuFor] = useState<string | null>(null);
   const navigate = useNavigate();
   const { confirm, toast } = useConfirm();
 
@@ -194,13 +193,7 @@ export function Mcps() {
                     server={server}
                     selected={selected?.id === server.id}
                     usedBy={usedBy[server.id]}
-                    menuOpen={menuFor === server.id}
                     onSelect={() => setSelectedId(server.id)}
-                    onMenu={(open) => setMenuFor(open ? server.id : null)}
-                    onDelete={() => {
-                      setMenuFor(null);
-                      handleDelete(server.id, server.name);
-                    }}
                     onEnabledChange={(enabled) => handleEnabledChange(server.id, enabled)}
                   />
                 );
@@ -596,19 +589,13 @@ function ServerRow({
   server,
   selected,
   usedBy,
-  menuOpen,
   onSelect,
-  onMenu,
-  onDelete,
   onEnabledChange,
 }: {
   server: McpServerInfo;
   selected: boolean;
   usedBy?: string[];
-  menuOpen: boolean;
   onSelect: () => void;
-  onMenu: (open: boolean) => void;
-  onDelete: () => void;
   onEnabledChange: (enabled: boolean) => void;
 }) {
   const subtitle =
@@ -626,7 +613,7 @@ function ServerRow({
   return (
     <div
       onClick={onSelect}
-      className={`relative flex cursor-pointer items-center gap-3 rounded-xl border px-4 py-3 transition-colors ${
+      className={`flex cursor-pointer items-center gap-3 rounded-xl border px-4 py-3 transition-colors ${
         selected ? "border-accent bg-surface" : "border-line bg-surface hover:border-ink-faint"
       }`}
     >
@@ -666,38 +653,6 @@ function ServerRow({
         aria-label={server.enabled ? "Disable server" : "Enable server"}
         title={server.enabled ? "Disable server" : "Enable server"}
       />
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onMenu(!menuOpen);
-        }}
-        className="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md border-none bg-transparent text-ink-muted transition-colors hover:bg-sunken hover:text-ink"
-        title="Server actions"
-      >
-        <MoreHorizontal className="h-4 w-4" />
-      </button>
-      {menuOpen && (
-        <>
-          <div
-            className="fixed inset-0 z-10 cursor-default"
-            onClick={(e) => {
-              e.stopPropagation();
-              onMenu(false);
-            }}
-          />
-          <div className="absolute right-3 top-full z-20 mt-1 min-w-[140px] overflow-hidden rounded-lg border border-line bg-surface py-1 shadow-lg">
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onDelete();
-              }}
-              className="flex w-full cursor-pointer items-center gap-2 border-none bg-transparent px-3 py-2 text-left text-[12px] font-medium text-danger transition-colors hover:bg-sunken"
-            >
-              <Trash2 className="h-3.5 w-3.5" /> Remove
-            </button>
-          </div>
-        </>
-      )}
     </div>
   );
 }
@@ -1251,23 +1206,25 @@ function CredentialManager({
               className="flex items-center gap-2 rounded-[5px] px-3 py-2"
               style={{ background: "var(--ground)" }}
             >
-              <span className="font-mono text-[11px]" style={{ color: "var(--ink-2)" }}>
+              <span
+                className="min-w-0 break-all font-mono text-[11px]"
+                style={{ color: "var(--ink-2)" }}
+              >
                 {c.credential_type}
               </span>
-              <span className="font-mono text-[11px]" style={{ color: "var(--ink-3)" }}>
-                ••••••••
-              </span>
-              {c.label && (
-                <span className="text-[11px]" style={{ color: "var(--ink-3)" }}>
+              {c.label &&
+                c.label.trim().toLowerCase().replace(/[\s-]+/g, "_") !==
+                  c.credential_type.trim().toLowerCase() && (
+                <span className="min-w-0 flex-1 text-[11px] leading-tight" style={{ color: "var(--ink-3)" }}>
                   {c.label}
                 </span>
               )}
-              <span className="ml-auto text-[10px]" style={{ color: "var(--ink-3)" }}>
+              <span className="ml-auto shrink-0 text-[10px]" style={{ color: "var(--ink-3)" }}>
                 {new Date(c.created_at).toLocaleDateString()}
               </span>
               <button
                 onClick={() => handleDelete(c.id)}
-                className="rounded-[3px] p-0.5 transition"
+                className="shrink-0 rounded-[3px] p-0.5 transition"
                 style={{ background: "none", border: "none", cursor: "pointer" }}
                 title="Delete credential"
               >
