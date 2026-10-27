@@ -267,6 +267,15 @@ class LiteLLMAdapter:
             kwargs["stream"] = stream
 
     @staticmethod
+    def _missing_on_responses(exc: Exception) -> bool:
+        """True when the model doesn't exist on /v1/responses — chat-only
+        models (e.g. gpt-3.5-turbo) 404 there, so fall back to chat
+        completions. A genuinely bogus model name also lands here, but the
+        chat attempt then fails honestly with its own not-found error."""
+        msg = str(exc).lower()
+        return "model_not_found" in msg or "does not exist or you do not have access" in msg
+
+    @staticmethod
     def _needs_responses_api(exc: Exception) -> bool:
         """True when the server tells us to retry on the Responses API —
         e.g. 'use /v1/responses' for reasoning models given tools on
@@ -682,7 +691,15 @@ class LiteLLMAdapter:
 
         provider = await self._load_provider(agent_model.provider_id)
         if self._model_family(provider, agent_model.name) == "responses":
-            return await self._complete_responses(provider, agent_model, messages, tools)
+            try:
+                return await self._complete_responses(provider, agent_model, messages, tools)
+            except Exception as e:
+                if not self._missing_on_responses(e):
+                    raise
+                log.info(
+                    "model %s is not on the Responses API — falling back to chat completions",
+                    agent_model.name,
+                )
         orig_messages, orig_tools = messages, tools
 
         # Build the LiteLLM model string — may override the prefix for
@@ -826,11 +843,19 @@ class LiteLLMAdapter:
 
         provider = await self._load_provider(agent_model.provider_id)
         if self._model_family(provider, agent_model.name) == "responses":
-            async for event in self._complete_responses_stream(
-                provider, agent_model, messages, tools
-            ):
-                yield event
-            return
+            try:
+                async for event in self._complete_responses_stream(
+                    provider, agent_model, messages, tools
+                ):
+                    yield event
+                return
+            except Exception as e:
+                if not self._missing_on_responses(e):
+                    raise
+                log.info(
+                    "model %s is not on the Responses API — falling back to chat completions",
+                    agent_model.name,
+                )
         orig_messages, orig_tools = messages, tools
 
         model_str, api_base = self._route_model(provider, agent_model.name)

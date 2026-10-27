@@ -190,6 +190,7 @@ class TestProviderCRUD:
         assert response.json() == {
             "valid": False,
             "error": "The provider returned an unexpected error. Check the gateway logs.",
+            "probed_model": "test-model",
         }
         assert raw_error not in response.text
         assert raw_error in caplog.text

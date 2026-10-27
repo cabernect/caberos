@@ -653,7 +653,9 @@ export function StepProvider({
         setConnected(true); // no models to probe — key saved, verify on first run
         return;
       }
-      const v = await api.validateProviderModel(created.id, first);
+      // No model_name — the backend probes the cheapest tool-capable
+      // catalog model, which exercises the same path agent runs use.
+      const v = await api.validateProviderModel(created.id);
       if (!v.valid) {
         await api.deleteProvider(created.id).catch(() => {});
         setError(v.error || "The service rejected the key — check it and try again.");
@@ -661,7 +663,7 @@ export function StepProvider({
       }
       setProvider(created);
       setModels(r.models);
-      setModel(first);
+      setModel(v.probed_model || first);
       setConnected(true);
     } catch (e) {
       if (created) await api.deleteProvider(created.id).catch(() => {});
@@ -780,6 +782,11 @@ export function StepProvider({
                     </span>
                   )}
                 </div>
+                <p className="text-[11.5px] text-[var(--ink-3)]">
+                  Sends one tiny request (≈1 token) to prove the key works
+                  before your first agent run, then saves it — recorded as a
+                  probe call in the model ledger.
+                </p>
                 {connected && models.length > 0 && (
                   <Field label="Model for your agents">
                     <Select

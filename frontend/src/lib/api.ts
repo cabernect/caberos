@@ -1107,11 +1107,14 @@ export const api = {
     request<{ status: string }>(`/api/providers/${id}`, { method: "DELETE" }),
   /** Real 1-token probe against the provider (D40) — validates the
    * credential + model routing; every probe lands on the model-call ledger. */
-  validateProviderModel: (id: string, modelName: string) =>
-    request<{ valid: boolean; error?: string }>(`/api/providers/${id}/validate`, {
-      method: "POST",
-      body: JSON.stringify({ model_name: modelName }),
-    }),
+  validateProviderModel: (id: string, modelName?: string) =>
+    request<{ valid: boolean; error?: string; probed_model?: string }>(
+      `/api/providers/${id}/validate`,
+      {
+        method: "POST",
+        body: JSON.stringify(modelName ? { model_name: modelName } : {}),
+      },
+    ),
   listModels: (id: string) =>
     request<ProviderModelsResponse>(`/api/providers/${id}/models`),
   refreshProviderModels: (id: string) =>

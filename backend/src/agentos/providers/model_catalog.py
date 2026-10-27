@@ -920,10 +920,20 @@ class LiteLLMModelCatalog:
                 with capture_scope(
                     purpose="probe", agent_id=None, model=model_str, family="responses"
                 ):
-                    raw, cap_ref = await capture_dispatch(
-                        "responses_probe", kwargs, self.adapter.transport.responses
-                    )
-                return True
+                    try:
+                        raw, cap_ref = await capture_dispatch(
+                            "responses_probe", kwargs, self.adapter.transport.responses
+                        )
+                    except Exception as exc:
+                        if not self.adapter._missing_on_responses(exc):
+                            raise
+                        logger.info(
+                            "model %s is not on the Responses API — probing chat completions",
+                            model_name,
+                        )
+                        family = "chat"
+                    else:
+                        return True
 
             kwargs = {
                 "model": model_str,

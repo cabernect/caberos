@@ -458,6 +458,35 @@ async def set_model_metadata(
     return {"resolved": resolved, "revision": offering.revision}
 
 
+async def _pick_probe_model(db: AsyncSession, provider_id: str) -> str | None:
+    """Cheapest tool-capable, non-deprecated catalog model for a key probe.
+
+    The probe's job is proving the key completes a real call — a cheap
+    tool-capable text model exercises the same endpoint shape agent runs
+    use, instead of whatever happens to sort first alphabetically.
+    """
+    from ..providers.model_catalog import list_offerings
+
+    best: tuple[float, float, str] | None = None
+    first_id: str | None = None
+    # list_offerings (not the raw table) — catalog/custom models are virtual
+    # views materialized per provider, so a fresh provider has no stored rows.
+    for offering in await list_offerings(db, provider_id):
+        if first_id is None:
+            first_id = offering.model_id
+        resolved = json.loads(offering.resolved_json or "{}")
+        if resolved.get("lifecycle") == "deprecated" or resolved.get("tool_call") is not True:
+            continue
+        pricing = resolved.get("pricing") or {}
+        input_price = pricing.get("input")
+        if not isinstance(input_price, (int, float)):
+            continue
+        candidate = (float(input_price), float(pricing.get("output") or 0), offering.model_id)
+        if best is None or candidate < best:
+            best = candidate
+    return best[2] if best else first_id
+
+
 @router.post("/{provider_id}/validate")
 async def validate_model(
     provider_id: str,
@@ -466,7 +495,7 @@ async def validate_model(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Validate a model config with a cheap 1-token completion (D40)."""
-    model_name = body.get("model_name")
+    model_name = body.get("model_name") or await _pick_probe_model(db, provider_id)
     if not model_name:
         raise HTTPException(status_code=400, detail="model_name is required")
 
@@ -478,7 +507,7 @@ async def validate_model(
     adapter = LiteLLMAdapter(db)
     try:
         await adapter.validate_model(provider_id, model_name)
-        return {"valid": True}
+        return {"valid": True, "probed_model": model_name}
     except Exception as error:
         log.exception("Provider model validation failed for provider %s", provider.id)
         error_type, guidance = classify_provider_error(str(error))
@@ -492,7 +521,7 @@ async def validate_model(
             entity_id=provider.id,
         )
         await db.commit()
-        return {"valid": False, "error": guidance}
+        return {"valid": False, "error": guidance, "probed_model": model_name}
 
 
 class CustomModelIn(BaseModel):
