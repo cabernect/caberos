@@ -29,7 +29,7 @@ INSTALL_BLOCK = """\
 
 1. Open the `.dmg` and drag **CaberOS** to Applications
 2. If macOS reports that CaberOS is damaged, verify the download came
-   from this release, then run:
+   from this release, then open **Terminal** and run:
    `xattr -dr com.apple.quarantine /Applications/CaberOS.app`
 3. Launch CaberOS — the gateway starts automatically
 
