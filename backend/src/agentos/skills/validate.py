@@ -15,6 +15,9 @@ from .loader import _parse_frontmatter
 
 # Agent Skills spec: lowercase letters, numbers, hyphens; max 64 chars.
 _NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+# Path-safety constraint for ids/names joined into filesystem paths — the
+# same shape memory/core.py enforces on agent ids.
+_AGENT_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
 _MAX_NAME = 64
 _MAX_DESCRIPTION = 1024
 # Import/size sanity caps — the same limits guard ZIP and URL installs.

@@ -29,6 +29,7 @@ from ..config import settings
 from ..models.skill import Skill, SkillAssignment, SkillRevision
 from .builtins import hash_skill_dir
 from .resolution import ResolvedSkill
+from .validate import _AGENT_ID_RE, _NAME_RE
 
 log = logging.getLogger(__name__)
 
@@ -60,6 +61,8 @@ def live_local_dir(skill: Skill) -> Path:
     """An agent-local skill's live workspace dir — the scanned location."""
     if not skill.owner_agent_id:
         raise SkillError("agent-local skill has no owner agent")
+    if not _NAME_RE.fullmatch(skill.name) or not _AGENT_ID_RE.fullmatch(skill.owner_agent_id):
+        raise SkillError("agent-local skill identity is not path-safe")
     return Path(settings.workspace_root) / skill.owner_agent_id / "skills" / skill.name
 
 
@@ -152,8 +155,6 @@ async def create_draft(
     Agent-owned drafts live in the workspace `skill-drafts/` (the builder
     flow); ownerless drafts live in `data/skills-drafts/` (manual creation).
     """
-    from .validate import _NAME_RE
-
     if not _NAME_RE.match(name):
         raise SkillError(f"Invalid skill name '{name}' — lowercase letters, numbers, hyphens only")
     if owner_agent_id:
@@ -199,8 +200,6 @@ async def import_draft(
     Ownerless imports use `skills_drafts_root/{name}` (with a suffix on
     collision); agent-owned imports use the workspace `skill-drafts/` dir.
     """
-    from .validate import _NAME_RE
-
     if not _NAME_RE.match(name):
         raise SkillError(f"Invalid skill name '{name}' — lowercase letters, numbers, hyphens only")
     if owner_agent_id:

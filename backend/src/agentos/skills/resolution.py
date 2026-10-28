@@ -26,6 +26,7 @@ from ..config import settings
 from ..models.skill import Skill, SkillAssignment, SkillRevision
 from .builtins import hash_skill_dir
 from .loader import _load_skill_from_dir
+from .validate import _AGENT_ID_RE
 
 PIN_REVISION = "rev:"
 PIN_LIVE = "live:"
@@ -59,6 +60,10 @@ def revision_path(scope: str, storage_path: str) -> Path:
 
 
 def _agent_skills_dir(agent_id: str) -> Path:
+    if not _AGENT_ID_RE.fullmatch(agent_id):
+        from .service import SkillError
+
+        raise SkillError("invalid agent id")
     return Path(settings.workspace_root) / agent_id / "skills"
 
 
