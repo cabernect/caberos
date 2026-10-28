@@ -225,6 +225,10 @@ async def fetch_archive(repo_url: str) -> bytes:
     try:
         async with httpx.AsyncClient(timeout=ARCHIVE_TIMEOUT) as client:
             for _ in range(MAX_REDIRECTS + 1):
+                # url is validated by _assert_public_url() before the loop and
+                # re-validated on every redirect hop — the assertion guard just
+                # isn't a sanitizer CodeQL's taint model recognizes.
+                # codeql[py/full-ssrf]
                 async with client.stream("GET", url, follow_redirects=False) as resp:
                     if resp.is_redirect:
                         location = resp.headers.get("location")
