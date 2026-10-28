@@ -42,6 +42,7 @@ from ..services.accounting_projection import project_call_detail
 from ..services.observability_filters import filter_runs
 from ..services.observability_spend import platform_spend
 from ..services.observability_timeline import build_run_timeline
+from ._time import as_utc, local_date, operator_tz
 
 log = logging.getLogger(__name__)
 
@@ -971,14 +972,24 @@ class DashboardStats(BaseModel):
 @router.get("/stats")
 async def get_dashboard_stats(
     days: int = Query(7, ge=1, le=90),
+    tz: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
     _op=Depends(require_operator),
 ) -> DashboardStats:
     """Dashboard overview stats — KPIs, time-series, per-agent, recent runs."""
     from datetime import timedelta
 
+    zone = operator_tz(tz)
     now = datetime.now(UTC)
-    since = now - timedelta(days=days)
+    # "Last N days" = N operator-local calendar days — the window starts at
+    # local midnight, and the series buckets on local dates so UTC boundaries
+    # can't split one local day across two chart cells.
+    now_local = now.astimezone(zone)
+    since = (
+        (now_local - timedelta(days=days - 1))
+        .replace(hour=0, minute=0, second=0, microsecond=0)
+        .astimezone(UTC)
+    )
 
     # --- KPIs ---
     kpi_result = await db.execute(
@@ -994,35 +1005,30 @@ async def get_dashboard_stats(
     error_rate = (error_count / total_runs * 100) if total_runs > 0 else 0.0
 
     # --- Time series (daily aggregation) ---
-    # Use func.date to truncate to day
-    date_col = func.date(Run.started_at).label("run_date")
-    ts_result = await db.execute(
-        select(
-            date_col,
-            func.count(Run.id),
-            func.coalesce(func.sum(Run.cost), 0.0),
-            func.coalesce(func.sum(Run.tokens_in + Run.tokens_out), 0),
-            func.count(Run.id).filter(Run.status == "failed"),
+    # func.date would bucket on the stored UTC day — bucket in Python with the
+    # operator zone instead (IANA zones handle DST; a fixed offset would not).
+    ts_rows = await db.execute(
+        select(Run.started_at, Run.cost, Run.tokens_in, Run.tokens_out, Run.status).where(
+            Run.is_test.is_(False),
+            Run.started_at >= since,
         )
-        .where(Run.is_test == False, Run.started_at >= since)  # noqa: E712
-        .group_by(date_col)
-        .order_by(date_col)
     )
     ts_map: dict[str, TimeSeriesPoint] = {}
-    for row in ts_result.all():
-        d = str(row[0])
-        ts_map[d] = TimeSeriesPoint(
-            date=d,
-            runs=row[1],
-            cost=row[2] or 0.0,
-            tokens=row[3] or 0,
-            errors=row[4],
-        )
+    for started_at, cost, tokens_in, tokens_out, status in ts_rows.all():
+        d = local_date(started_at, zone).isoformat()
+        p = ts_map.get(d)
+        if p is None:
+            p = ts_map[d] = TimeSeriesPoint(date=d, runs=0, cost=0.0, tokens=0, errors=0)
+        p.runs += 1
+        p.cost += cost or 0.0
+        p.tokens += (tokens_in or 0) + (tokens_out or 0)
+        if status == "failed":
+            p.errors += 1
 
     # Fill missing days with zeros
     time_series: list[TimeSeriesPoint] = []
     for i in range(days):
-        day = (now - timedelta(days=days - 1 - i)).strftime("%Y-%m-%d")
+        day = (now_local - timedelta(days=days - 1 - i)).date().isoformat()
         if day in ts_map:
             time_series.append(ts_map[day])
         else:
@@ -1057,7 +1063,7 @@ async def get_dashboard_stats(
             total_cost=cost,
             total_tokens=tokens,
             error_count=errors,
-            last_active=last_active,
+            last_active=as_utc(last_active) if last_active else None,
         )
         for aid, count, cost, tokens, errors, last_active in agent_rows
     ]
@@ -1105,11 +1111,12 @@ async def get_dashboard_stats(
 @router.get("/stats/export.xlsx")
 async def export_stats_xlsx(
     days: int = Query(7, ge=1, le=90),
+    tz: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
     _op=Depends(require_operator),
 ) -> StreamingResponse:
     """Export dashboard stats as .xlsx — KPI, daily series, and per-agent sheets."""
-    stats = await get_dashboard_stats(days=days, db=db, _op=_op)
+    stats = await get_dashboard_stats(days=days, tz=tz, db=db, _op=_op)
     overview: list[list[Any]] = [
         ["Metric", "Value"],
         ["Days", days],

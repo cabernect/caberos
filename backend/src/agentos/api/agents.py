@@ -4,7 +4,7 @@ import json
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,6 +28,7 @@ from ..db import get_db
 from ..models.agent import Agent, AgentVersion
 from ..models.mcp import McpServer, McpTool
 from ..models.operator import Operator
+from ._time import as_utc, local_date, operator_tz
 
 router = APIRouter(prefix="/api/agents", tags=["agents"])
 
@@ -150,6 +151,7 @@ async def list_agents(
 
 @router.get("/activity")
 async def agent_activity(
+    tz: str | None = Query(None),
     operator: Operator = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -164,6 +166,7 @@ async def agent_activity(
     from ..models.run import Run
     from ..models.session import Session
 
+    zone = operator_tz(tz)
     now = datetime.now(UTC)
     week_ago = now - timedelta(days=7)
     two_weeks_ago = now - timedelta(days=14)
@@ -180,7 +183,8 @@ async def agent_activity(
         ).group_by(Session.agent_id)
     )
     sessions_by_agent: dict[str, dict] = {
-        aid: {"count": c, "last": last} for aid, c, last in session_rows.all()
+        aid: {"count": c, "last": as_utc(last) if last else None}
+        for aid, c, last in session_rows.all()
     }
 
     # 7-day sparkline buckets (sessions started per day, oldest→today)
@@ -188,11 +192,11 @@ async def agent_activity(
         select(Session.agent_id, Session.started_at).where(Session.started_at >= week_ago)
     )
     spark: dict[str, list[int]] = {aid: [0] * 7 for aid in agent_ids}
-    today = now.date()
+    today = now.astimezone(zone).date()
     for aid, started in day_rows.all():
         if aid not in spark:
             continue
-        idx = 6 - (today - started.date()).days
+        idx = 6 - (today - local_date(started, zone)).days
         if 0 <= idx <= 6:
             spark[aid][idx] += 1
 

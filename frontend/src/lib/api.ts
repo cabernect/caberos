@@ -67,6 +67,10 @@ export interface PreviewSource {
   revision?: number;
 }
 
+/** Operator's IANA zone — endpoints that bucket by calendar day want local days. */
+const _operatorTz = () =>
+  Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+
 function sourceQuery(opts: PreviewSource): string {
   const params = new URLSearchParams();
   if (opts.path) params.set("path", opts.path);
@@ -434,12 +438,16 @@ export const api = {
     }),
 
   // Today home aggregate — one payload for the landing page + sidebar badges
-  getHome: (signal?: AbortSignal) => request<HomeData>("/api/home", { signal }),
+  getHome: (signal?: AbortSignal) =>
+    request<HomeData>(`/api/home?tz=${encodeURIComponent(_operatorTz())}`, { signal }),
 
   // Agents
   listAgents: () => request<Agent[]>("/api/agents"),
   getAgentActivity: (signal?: AbortSignal) =>
-    request<AgentActivityData>("/api/agents/activity", { signal }),
+    request<AgentActivityData>(
+      `/api/agents/activity?tz=${encodeURIComponent(_operatorTz())}`,
+      { signal },
+    ),
   getAgent: (id: string) => request<Agent>(`/api/agents/${id}`),
   listCapabilities: () => request<CapabilityInfo[]>("/api/agents/capabilities"),
   createAgent: (data: {
@@ -1625,10 +1633,12 @@ export const api = {
     ),
   getHealth: () => request<HealthStatus>("/api/health"),
   getDashboardStats: (days = 7) =>
-    request<DashboardStats>(`/api/stats?days=${days}`),
+    request<DashboardStats>(
+      `/api/stats?days=${days}&tz=${encodeURIComponent(_operatorTz())}`,
+    ),
   exportStatsXlsx: (days = 7) =>
     downloadFile(
-      `/api/stats/export.xlsx?days=${days}`,
+      `/api/stats/export.xlsx?days=${days}&tz=${encodeURIComponent(_operatorTz())}`,
       "caberos-observability.xlsx",
     ),
 

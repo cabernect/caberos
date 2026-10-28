@@ -220,6 +220,96 @@ async def test_home_happened_groups_terminal_runs(client, seeded, db):
 
 
 @pytest.mark.asyncio
+async def test_home_happened_buckets_by_operator_local_day(client, seeded, db):
+    """Runs straddling UTC midnight are one day in +07 — ?tz= decides."""
+    utc_midnight = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    await _run(db, "a1", "completed", id="r-late", started_at=utc_midnight - timedelta(hours=1))
+    await _run(db, "a1", "completed", id="r-early", started_at=utc_midnight + timedelta(hours=1))
+    await db.commit()
+
+    # UTC (default): two different calendar days → two groups
+    groups_utc = (await client.get("/api/home")).json()["happened"]
+    assert [g["count"] for g in groups_utc] == [1, 1]
+
+    # Asia/Ho_Chi_Minh: both runs land on the same local day → one group
+    groups_vn = (await client.get("/api/home?tz=Asia/Ho_Chi_Minh")).json()["happened"]
+    assert len(groups_vn) == 1
+    assert groups_vn[0]["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_home_happened_window_times_serialize_with_offset(client, seeded, db):
+    """Column selects bypass the UTC load hook — naive output would make the
+    browser render the UTC wall clock as local time."""
+    await _run(db, "a1", "completed", id="r-tz")
+    await db.commit()
+
+    body = (await client.get("/api/home")).json()
+    group = body["happened"][0]
+    for key in ("window_start", "window_end"):
+        parsed = datetime.fromisoformat(group[key])
+        assert parsed.tzinfo is not None, f"{key} serialized naive: {group[key]}"
+        assert parsed.utcoffset() == timedelta(0)
+    for agent in body["agents"]:
+        if agent["last_run_at"]:
+            assert datetime.fromisoformat(agent["last_run_at"]).tzinfo is not None
+
+
+@pytest.mark.asyncio
+async def test_stats_time_series_buckets_by_operator_local_day(client, seeded, db):
+    """GET /api/stats — daily series uses the operator's calendar, not UTC."""
+    utc_midnight = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    await _run(db, "a1", "completed", id="r-late", started_at=utc_midnight - timedelta(hours=1))
+    await _run(db, "a1", "completed", id="r-early", started_at=utc_midnight + timedelta(hours=1))
+    await db.commit()
+
+    series_utc = (await client.get("/api/stats?days=2")).json()["time_series"]
+    utc_runs = {p["date"]: p["runs"] for p in series_utc}
+    assert utc_runs[(utc_midnight - timedelta(days=1)).date().isoformat()] == 1
+    assert utc_runs[utc_midnight.date().isoformat()] == 1
+
+    series_vn = (await client.get("/api/stats?days=2&tz=Asia/Ho_Chi_Minh")).json()["time_series"]
+    vn_runs = {p["date"]: p["runs"] for p in series_vn}
+    # +07 shifts both runs onto the same local calendar day
+    assert vn_runs.get(utc_midnight.date().isoformat()) == 2
+
+
+@pytest.mark.asyncio
+async def test_agent_activity_sparkline_uses_local_day(client, seeded, db):
+    """Sparkline cells are operator-local days — UTC midnight doesn't split."""
+    from zoneinfo import ZoneInfo
+
+    hcm = ZoneInfo("Asia/Ho_Chi_Minh")
+    # Anchor to *local* midnight: one session each side of it. In +07 they
+    # split across yesterday/today; in UTC they share a single day.
+    local_midnight = (
+        datetime.now(UTC).astimezone(hcm).replace(hour=0, minute=0, second=0, microsecond=0)
+    )
+    for i, delta in enumerate((-timedelta(hours=2), timedelta(hours=2))):
+        db.add(
+            Session(
+                id=f"sess-edge-{i}",
+                contact_id="contact-1",
+                agent_id="a1",
+                # Columns are naive-UTC storage — bind UTC instants like
+                # production does; a non-UTC aware datetime stores its
+                # wall-clock and silently drops the offset.
+                started_at=(local_midnight + delta).astimezone(UTC),
+            )
+        )
+    await db.commit()
+
+    body_vn = (await client.get("/api/agents/activity?tz=Asia/Ho_Chi_Minh")).json()
+    # idx 5 = yesterday, idx 6 = today (+ seeded sess-1, started now)
+    assert body_vn["agents"]["a1"]["sessions_7d"] == [0, 0, 0, 0, 0, 1, 2]
+
+    # Same data under UTC: the pair collapses into one cell.
+    body_utc = (await client.get("/api/agents/activity")).json()
+    assert sum(body_utc["agents"]["a1"]["sessions_7d"]) == 3
+    assert max(body_utc["agents"]["a1"]["sessions_7d"]) >= 2
+
+
+@pytest.mark.asyncio
 async def test_agent_activity_rollup(client, seeded, db):
     """GET /api/agents/activity — per-agent sessions, sparkline, running."""
     # a1: 2 sessions this week, one running run

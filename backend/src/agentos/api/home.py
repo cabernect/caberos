@@ -12,7 +12,7 @@ Composes existing list surfaces into a single read model:
 
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,6 +32,7 @@ from ..models.notification import Notification
 from ..models.provider import Provider
 from ..models.run import Run
 from ..models.skill import Skill
+from ._time import as_utc, local_date, operator_tz
 
 router = APIRouter(prefix="/api/home", tags=["home"])
 
@@ -106,9 +107,11 @@ async def _notification_is_live(db: AsyncSession, n: Notification) -> bool:
 
 @router.get("")
 async def get_home(
+    tz: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
     _op=Depends(require_operator),
 ) -> HomeOut:
+    zone = operator_tz(tz)
     # -- agents + live-run state ------------------------------------------
     agents = (await db.execute(select(Agent).order_by(Agent.name))).scalars().all()
 
@@ -124,7 +127,7 @@ async def get_home(
         .where(Run.is_test.is_(False), Run.trigger != "reflection")
         .group_by(Run.agent_id)
     )
-    last_run_by_agent = {agent_id: ts for agent_id, ts in last_run_rows.all()}
+    last_run_by_agent = {agent_id: as_utc(ts) for agent_id, ts in last_run_rows.all() if ts}
 
     home_agents: list[HomeAgent] = []
     for agent in agents:
@@ -211,7 +214,15 @@ async def get_home(
         )
 
     # -- what happened ------------------------------------------------------
-    since = datetime.now(UTC) - timedelta(days=HAPPENED_LOOKBACK_DAYS)
+    # Rollup buckets are operator-local calendar days — a UTC date boundary
+    # splits one local evening into two groups. The lookback starts at local
+    # midnight so "7 days" means seven local days.
+    now_local = datetime.now(UTC).astimezone(zone)
+    since = (
+        (now_local - timedelta(days=HAPPENED_LOOKBACK_DAYS - 1))
+        .replace(hour=0, minute=0, second=0, microsecond=0)
+        .astimezone(UTC)
+    )
     terminal_runs = (
         await db.execute(
             select(Run.agent_id, Run.status, Run.started_at, Run.completed_at)
@@ -228,14 +239,15 @@ async def get_home(
     agent_names = {a.id: a.name for a in agents}
     groups: dict[tuple[str, str, str], HappenedGroup] = {}
     for agent_id, status, started_at, completed_at in terminal_runs:
-        day = started_at.date().isoformat()
+        started_at = as_utc(started_at)
+        day = local_date(started_at, zone).isoformat()
         outcome = (
             "completed"
             if status == "completed"
             else ("failed" if status == "failed" else "stopped")
         )
         key = (agent_id, day, outcome)
-        end = completed_at or started_at
+        end = as_utc(completed_at or started_at)
         if key not in groups:
             groups[key] = HappenedGroup(
                 agent_id=agent_id,

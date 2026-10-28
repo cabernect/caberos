@@ -197,11 +197,16 @@ export function Traces() {
   // gaps under 10 minutes — a config problem signature, not model error.
   const failureCluster = useMemo(() => {
     if (statusFilter === "failed") return null;
+    const dayKey = (iso: string) => {
+      const d = new Date(iso);
+      const p = (n: number) => String(n).padStart(2, "0");
+      return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+    };
     const failed = [...clusterSource].sort((a, b) => a.started_at.localeCompare(b.started_at));
     let best: RunSummary[] = [];
     for (const r of failed) {
-      const day = r.started_at.slice(0, 10);
-      const same = failed.filter((x) => x.trigger === r.trigger && x.started_at.startsWith(day));
+      const day = dayKey(r.started_at);
+      const same = failed.filter((x) => x.trigger === r.trigger && dayKey(x.started_at) === day);
       let cluster = [same[0]];
       for (let i = 1; i < same.length; i++) {
         const gap = new Date(same[i].started_at).getTime() - new Date(same[i - 1].started_at).getTime();

@@ -648,6 +648,17 @@ async def _notify_failure(db: AsyncSession, sched: Schedule) -> None:
     from .notifications import create_notification
 
     agent = await get_agent(db, sched.agent_id)
+    # Dedupe per the schedule's own calendar day (its configured zone) — a
+    # streak spanning local midnight still counts as one day, UTC doesn't.
+    day = _now().date()
+    rev = await current_revision(db, sched)
+    if rev is not None:
+        try:
+            tz_name = (_rev_config(rev).get("trigger") or {}).get("timezone")
+            if tz_name:
+                day = _now().astimezone(ZoneInfo(str(tz_name))).date()
+        except Exception:
+            pass
     await create_notification(
         db,
         notification_type="schedule_failed",
@@ -660,7 +671,7 @@ async def _notify_failure(db: AsyncSession, sched: Schedule) -> None:
         agent_id=sched.agent_id,
         # Deterministic daily key — an identical error on a NEW streak still
         # notifies (the content-hash fallback would dedup it away).
-        event_id=f"schedule_failed:{sched.id}:{_now().date().isoformat()}",
+        event_id=f"schedule_failed:{sched.id}:{day.isoformat()}",
     )
     log.warning(
         "Schedule %s (%s) failed %d times (threshold=%d) — %s",
