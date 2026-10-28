@@ -1,114 +1,146 @@
 # CaberOS Design System — Master File
 
-> **Source of truth:** `frontend/src/index.css` defines the actual CSS variables.
-> This document describes the design language as implemented. If the code and
-> this document disagree, the code wins.
+> **Source of truth:** `frontend/src/index.css` defines the actual CSS variables
+> (`@theme inline` maps them to Tailwind utilities); `frontend/src/components/ui/`
+> holds the shared primitives. If code and this document disagree, code wins.
+>
+> **Line:** v0.2 "Agent Workbench" — the W13 token set + page anatomy.
 
 ---
 
 ## Design language
 
-**Style:** Warm light, conversation-first, Claude/Linear-inspired
+**Style:** Warm, conversation-first, Claude/Linear-inspired — now in both light
+and dark themes.
 
-**Keywords:** warm, off-white, olive accent, minimal chrome, conversational, functional, professional
+**Keywords:** warm, paper-like surfaces (light) / olive-dark surfaces (dark),
+olive accent, minimal chrome, inspectable, functional, professional
 
-**Inspiration:** Claude (warmth, typography), Linear (clean surfaces, density)
-
-**Philosophy:** The UI stays out of the way. The conversation is the product.
-Surfaces are warm and paper-like. The olive accent is used sparingly — for
-primary actions, active states, and focus rings. Everything else is muted
-grays and warm off-whites.
+**Philosophy:** The UI stays out of the way. The conversation and the audit
+record are the product. Surfaces are warm; the olive accent is used sparingly —
+primary actions, active states, focus rings. Everything else is muted.
 
 ---
 
 ## Color palette
 
-Light theme only (v0.1). Dark mode is a future consideration.
+Canonical tokens (use these — see *Legacy aliases* below). Light values are on
+`:root`; dark values on `:root[data-theme="dark"]`.
 
-| Role | CSS Variable | Hex | Usage |
-|------|-------------|-----|-------|
-| Surface | `--surface` | `#F5F5F3` | Full viewport background, warm off-white |
-| Sidebar | `--sidebar` | `#EFEFED` | Sidebar, secondary surfaces |
-| Border | `--border` | `#E0DFDC` | Subtle borders, dividers, input borders |
-| Ink (primary text) | `--ink` | `#111110` | Headings, primary text, dark buttons |
-| Ink-2 (secondary) | `--ink-2` | `#6B6B68` | Secondary text, labels, muted UI |
-| Ink-3 (tertiary) | `--ink-3` | `#9B9B97` | Tertiary text, placeholders, scrollbar |
-| Accent | `--accent` | `#6A8216` | Primary actions, active states, focus rings, links |
-| Accent bg | `--accent-bg` | `#F0F2E2` | Accent-tinted backgrounds (sidebar active, hover) |
-| Tool bg | `--tool-bg` | `#F0EDE8` | Tool call blocks, code blocks, inline code |
-| Thinking bg | `--thinking-bg` | `#FFFBF0` | Thinking/reasoning blocks (warm cream) |
-| Thinking border | `--thinking-border` | `#FDE68A` | Thinking block left border (amber) |
-| Success | `--success` | `#16A34A` | Approved syscalls, enabled agents, heartbeat ok |
-| Danger | `--danger` | `#DC2626` | Denied syscalls, errors, destructive actions |
-| Warning | `--warning` | `#D97706` | Pending approvals, warnings |
-| White | `--white` | `#FFFFFF` | Cards, message bubbles, inputs |
-| Brand | `--brand` | `#6A8216` | Logo, brand elements (same as accent in light mode) |
-| Brand-2 | `--brand-2` | `#A8C04A` | Lifted olive (for future dark mode) |
+| Role | Token | Light | Dark | Usage |
+|------|-------|-------|------|-------|
+| Ground | `--ground` | `#f7f6f2` | `#151511` | Viewport/page background |
+| Surface | `--surface` | `#ffffff` | `#1e1e19` | Cards, sections, menus, inputs |
+| Sunken | `--sunken` | `#f0efe9` | `#26261f` | Recessed fills: tool blocks, hovers, icon tiles |
+| Track | `--track` | `#e5e4e2` | `#2d2d25` | Segmented-control track, toggle off state |
+| Line | `--line` | `#e8e6de` | `#2d2d25` | Borders, dividers |
+| Ink | `--ink` | `#16150f` | `#f2f0e6` | Primary text, dark buttons, titles |
+| Ink muted | `--ink-muted` | `#6b6a60` | `#a5a396` | Secondary text, sub-labels |
+| Ink faint | `--ink-faint` | `#6f6e64` | `#8f8d81` | Tertiary text, placeholders, scrollbar |
+| Accent | `--accent` | `#5b6b1f` | `#a8bd45` | Links, active states, focus, sparkline brand |
+| Accent tint | `--accent-tint` | `#ecefd9` | `#2a3b16` | Accent-tinted fills (active nav, icon tiles, user bubble in dark) |
+| Warning | `--warning` | `#a4560a` | `#e8a15c` | Pending/attention states, paused |
+| Warning tint | `--warning-tint` | `#f6e3c4` | `#33260f` | Warning banners, thinking blocks |
+| Danger | `--danger` | `#b3261e` | `#ff8f85` | Errors, destructive actions |
+| Danger tint | `--danger-tint` | `#fbede7` | `#2e1a14` | Danger banners |
+| Success | `--success` | `#3e8e4f` | `#5fbf74` | Running/healthy/approved states |
+
+In dark mode only: `--accent-foreground: var(--ground)` — text/icons placed *on*
+an accent fill use the dark ground, not white.
+
+### Legacy aliases
+
+Old v0.1 names still resolve to canonical tokens — unswept code keeps working,
+**new code must use canonical names**:
+
+| Alias | → Canonical |
+|-------|-------------|
+| `--sidebar` | `--ground` |
+| `--border` | `--line` |
+| `--ink-2` | `--ink-muted` |
+| `--ink-3` | `--ink-faint` |
+| `--accent-bg` | `--accent-tint` |
+| `--hover`, `--tool-bg` | `--sunken` |
+| `--thinking-bg` | `--warning-tint` |
+| `--thinking-border` | `warning 45% on warning-tint` |
+| `--white`, `--brand` | `--surface`, `--accent` |
 
 ### Color usage rules
 
-- **Accent (`#6A8216`) is used sparingly.** Primary buttons, active nav items, focus rings, links in markdown, streaming cursor. Never for large fills.
-- **Ink (`#111110`) is the "dark" color.** Dark buttons (Add Agent, Send) use ink, not accent. This keeps the accent special.
-- **Surfaces are warm, not cold.** `#F5F5F3` has a slight warmth vs pure `#F5F5F5`. This is intentional.
-- **Tool blocks use `--tool-bg`** (`#F0EDE8`) — a warm beige that distinguishes them from the surface without being loud.
-- **Thinking blocks use `--thinking-bg`** (`#FFFBF0`) — a warm cream with an amber left border. Visually distinct from tool blocks.
+- **Accent is sparing.** Links, active nav (`accent-tint` bg + accent text),
+  focus rings, charts, toggles-on. Never large fills.
+- **Primary buttons are ink, not accent** (`--primary: var(--ink)`). Exception
+  in dark mode: a primary CTA may use `dark:bg-accent` +
+  `dark:text-[var(--accent-foreground)]` when an ink fill would render as a
+  bright slab (e.g. New chat).
+- **Status = shape + word + color — never color alone** (`StatusWord`).
+- **Surfaces are warm** — `#f7f6f2`/`#151511` both lean warm, not gray.
+- **Inverted fills** (`bg-ink text-surface`, e.g. filter pills, user bubble in
+  light mode) always pair with a `dark:` override — ink goes near-white in dark.
+
+### Dark mode mechanics
+
+- `caberos-theme` localStorage: `light | dark | system`
+  (`lib/themeState.ts`, `ThemeProvider` in `lib/theme.tsx`).
+- Applies `data-theme` attr + `.dark` class + `style.colorScheme` on `<html>`.
+- `dark:` utilities work via `@custom-variant dark (&:is(.dark *))` in index.css.
+- Temporary remediation (retires with the page sweep): dark mode re-points
+  `.text-white → --ground`, `.bg-white → --surface`,
+  `bg-[var(--accent)]` children → `--accent-foreground`, and
+  `ring-offset` to `--ground` instead of white.
 
 ---
 
 ## Typography
 
-| Element | Font | Usage |
-|---------|------|-------|
-| Headings | Inter | Page titles, section headings, agent names |
-| Body | Inter | All body text, messages, labels |
-| Mono | JetBrains Mono | Shell output, code blocks, tool calls, timestamps |
+| Face | Font | Usage |
+|------|------|-------|
+| Sans | **Geist** | Everything — headings, body, labels |
+| Mono | **Geist Mono** | IDs, code, model names, timestamps, section labels, badges |
 
-**Google Fonts import:**
 ```css
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap");
 ```
 
-**Font weights:** 400 (body), 500 (labels, medium), 600 (headings, semibold). No 700+ in the UI.
+**Weights:** 400 body, 500 medium/labels, 600 semibold/headings. No 700+.
 
-**Font sizes (as used in components):**
+**Sizes (as used):**
 
 | Size | Usage |
 |------|-------|
-| 12px (`text-xs`) | Timestamps, metadata, tertiary text |
-| 13px | Secondary labels, sidebar items |
-| 14px (`text-sm`) | Body small, input text, labels |
-| 16px (`text-base`) | Body, message text |
-| 18px | Section headings, sidebar title |
-| 20px (`text-xl`) | Page titles |
-| 24px (`text-2xl`) | Agent name in conversation header |
+| 11px mono | Nav section labels, badges, micro-metadata |
+| 12px | Captions, sublabels, metadata, hints |
+| 13px | Secondary labels, sidebar items, list-row subs |
+| 14px | Body text, inputs, row titles |
+| 16px | Section card titles (`SectionCard`), agent names |
+| 24px (`text-2xl`) | Stat card values |
+| 30px | Page titles (`PageHeader`) |
+
+Line-heights pair as `leading-4/18px/20px/5/6/9` — 12→16, 13→18, 14→20, 16→24,
+24→30, 30→36.
 
 ---
 
 ## Spacing
 
-CaberOS uses Tailwind's spacing scale (4px base). Common values:
-
-| Token | Value | Usage |
-|-------|-------|-------|
-| `gap-1` | 4px | Icon-to-text, tight gaps |
-| `gap-2` | 8px | Inline spacing, message padding |
-| `p-3` | 12px | Card padding |
-| `p-4` | 16px | Standard padding, section padding |
-| `p-6` | 24px | Large section padding, conversation padding |
-| `p-8` | 32px | Page-level padding |
+Tailwind 4px scale. Conventions: `px-8` page gutter, `px-4 py-3` row/section
+padding, `gap-4` grids, `gap-3` rows, `gap-2` inline. Content rails center with
+`mx-auto max-w-*`: `max-w-6xl` (Today), `max-w-5xl` (Scheduler, Vault detail),
+`max-w-3xl` (MCP list+settings bodies), `max-w-sm` (auth cards).
 
 ---
 
 ## Border radius
 
+Spec scale (`@theme`): **sm 6 / md 10 / lg 16** / xl 20 / 2xl 24 / 3xl 28 / 4xl 32.
+`--radius` base = 10px (md).
+
 | Token | Value | Usage |
 |-------|-------|-------|
-| `--radius-sm` | 2.25px | Small elements, inline code |
-| `--radius-md` | 3px | Buttons, inputs |
-| `--radius-lg` | 6px | Cards, tool blocks, message bubbles |
-| `rounded-full` | 9999px | Status dots, avatars, spinners |
-
-Base radius: `--radius: 0.375rem` (6px). All other radii are calculated from this.
+| `rounded-md` | 10px | Buttons(legacy wrappers), icon tiles, banners, dropdowns |
+| `rounded-lg` | 16px | Cards, agent cards, stat cards, message bubbles |
+| `rounded-xl` | 20px | `Card` primitive, modals |
+| `rounded-full` | — | Pills, toggles, status dots, segmented filters |
 
 ---
 
@@ -117,187 +149,156 @@ Base radius: `--radius: 0.375rem` (6px). All other radii are calculated from thi
 ### App shell
 
 ```
-┌─────────────────────────────────────────────────────┐
-│  Sidebar (collapsible)  │  Main content             │
-│  --sidebar: #EFEFED     │  --surface: #F5F5F3       │
-│  240px / 56px collapsed │                           │
-│                         │                           │
-│  • Agents               │  (page content)           │
-│  • Providers            │                           │
-│  • MCP                  │                           │
-│  • Channels             │                           │
-│  • Observability        │                           │
-│  • Skills               │                           │
-│  • Scheduler            │                           │
-│                         │                           │
-└─────────────────────────┴───────────────────────────┘
+┌────────────────────────────────────────────────────────┐
+│ DashboardSidebar │  PageHeader (sticky)                 │
+│ 240px / 48px     │  breadcrumbs → 30px title → actions  │
+│                  │  trailing: command bar               │
+│                  ├────────────────────────────────────── │
+│                  │  PageIntro (first-run guidance)      │
+│                  │  StatCard row (if any)               │
+│                  │  FilterPills row (if any)            │
+│                  │  content (list rows / CardGrid)      │
+└──────────────────┴──────────────────────────────────────┘
 ```
 
-- **Sidebar:** Fixed left, collapsible (240px → 56px). Background `--sidebar`. Border-right `--border`.
-- **Main content:** Fills remaining width. Background `--surface`. Full height, overflow hidden (scroll within content areas).
-- **No top bar** — navigation is entirely in the sidebar.
+- **Sidebar:** `DashboardSidebar` — expanded 240px (`--sidebar` → ground),
+  collapsed to a 48px icon strip (persisted). Sections: *Workspace* (Today,
+  Agents, Scheduler), *Capabilities* (MCPs, Skills, Channels, Knowledge Vault),
+  *Observability* (Overview, Traces). Footer: "Running locally" status card,
+  NotificationCenter, Settings, Sign out. Below 768px the strip is permanent
+  and the expanded nav opens as a fixed overlay + scrim.
+- **PageHeader:** breadcrumbs (13px muted, chevron separators) → title
+  (30/36 semibold) + optional subtitle (14px muted) → right-aligned `actions`;
+  `trailing` on the breadcrumb line carries the `CommandBar` (⌘K).
+- **FilterPills:** `pills` = rounded chips, active = `bg-ink text-surface`;
+  `segmented` = connected `--track` control, active = surface chip + shadow.
+- **Content rule:** lists are **rows** (`ListRow` in `divide-y divide-line`),
+  not cards. Cards are for openable entities (CardGrid) and stats.
 
-### Conversation layout
+### Page index
 
-```
-┌──────────────────────────────────────────────────────┐
-│  Sidebar       │  Chat sidebar    │  Conversation    │
-│  (nav)         │  (sessions)      │  (messages)      │
-│                │  240px           │                  │
-│                │                  │  ┌─────────────┐ │
-│                │  + New session   │  │ Messages    │ │
-│                │  Session 1       │  │ (scroll)    │ │
-│                │  Session 2       │  │             │ │
-│                │  Session 3       │  └─────────────┘ │
-│                │                  │  ┌─────────────┐ │
-│                │                  │  │ Input bar   │ │
-│                │                  │  └─────────────┘ │
-└────────────────┴──────────────────┴──────────────────┘
-```
-
-- **Chat sidebar:** Session list, new session button. Toggleable.
-- **Conversation:** Scrollable message area + fixed input bar at bottom.
-- **Input bar:** Multi-line text input, attachment button, send button, model selector, thinking toggle.
+| Route | Page | Spec |
+|-------|------|------|
+| `/` | Today | `pages/today.md` |
+| `/agents` | Agents | `pages/agent-list.md` |
+| `/agents/:id/chat` | Conversation | `pages/conversation.md` |
+| `/scheduler` | Scheduler | `pages/scheduler.md` |
+| `/mcps` | MCP servers | `pages/mcps.md` |
+| `/skills` | Skills | `pages/skills.md` |
+| `/channels` | Channels | `pages/channels.md` |
+| `/vault` | Knowledge Vault | `pages/knowledge-vault.md` |
+| `/observability` | Overview | `pages/observability.md` |
+| `/traces` | Traces + run detail | `pages/traces.md` |
+| `/notifications` | Notifications | `pages/notifications.md` |
+| `/settings` | Settings | `pages/settings.md` |
+| `/login`, onboarding | Auth + first-run | `pages/login-onboarding.md` |
 
 ---
 
-## Components
+## Components (`frontend/src/components/ui/`)
 
-### Message bubbles
+| Primitive | Purpose / anatomy |
+|-----------|-------------------|
+| `Button` | base-ui + cva. Variants: `default` (primary/ink), `outline`, `secondary`, `ghost`, `destructive`, `link`. Sizes: `xs` `sm` `default`(h-8) `lg` + `icon` `icon-xs` `icon-sm` `icon-lg`. Focus-visible ring `--ring`, press `translate-y-px`. |
+| `ListRow` | `[leading] title / sub [trailing]`. Title 14px medium ink, sub 13px muted, `px-4 py-3 gap-3`. Clickable rows hover `bg-sunken`. Dividers via parent `divide-y divide-line`. |
+| `IconTile` | Rounded-square icon holder. Sizes `sm` 28 / `md` 36 / `lg` 44 px. Tones: `sunken` `accent` `warning` `danger` `surface` (tint bg + tone fg). |
+| `EmptyState` | Dashed-border box: tile icon + 14px semibold title + 13px muted guidance + optional action. **Rule: explain what to do next.** |
+| `WarningBanner` | Inline banner, tones `warning`/`danger`/`info` (tint bg + tone icon/text). |
+| `StatusWord` | Dot + word + tone: running(success, pulsing), idle(ink-faint), paused/needs_setup(warning), failed(danger), success. Never color alone. |
+| `SectionCard` | `rounded-md border-line bg-surface`; header = 16px semibold + optional action over `border-b`; body holds ListRows. |
+| `CardGrid` | `repeat(auto-fill, minmax(Npx,1fr))` grid for openable entity cards. |
+| `StatCard` | 12px muted caption → 24/30 semibold value → 12px faint sublabel. |
+| `KeyValueRow` | Label (13 muted, left) / value (14 ink, right, `mono` → Geist Mono). |
+| `FilterPills` | See above; optional count in `ink-faint`. |
+| `CommandBar` | Fake search field — opens CommandPalette (⌘K/Ctrl+K). |
+| `Toggle` | Track `--track` off / `bg-accent` on, white thumb; `sm`/`md`. |
+| `Select` | Styled dropdown (portal, edge-flip) — replaces native `<select>` for Chrome/WKWebView parity. |
+| `Input` / `Textarea` | `border-input`, transparent bg, `focus-visible` ring `--ring`. |
+| `ApprovalCard` | Warning/danger header + mono detail + Approve/Deny + footer slot. |
+| `Card` | shadcn-style (`rounded-xl`, `ring-1 ring-foreground/10`) — CardHeader/Title/Description/Action/Content/Footer. |
 
-- **User:** Right-aligned, `--white` background, `--border` border, `--radius-lg` radius.
-- **Assistant:** Left-aligned, no bubble background (transparent on `--surface`). Markdown rendered.
-- **Timestamps:** 12px, `--ink-3`, below the message.
+Also: `PageHeader`, `Breadcrumb`s; `guidance/` primitives — `PageIntro`
+(first-run explainer), `TourSpotlight`, `GuidanceHost`.
 
-### Tool call blocks
+---
 
-- Background: `--tool-bg` (`#F0EDE8`)
-- Border: 1px `--border`
-- Radius: `--radius-lg` (6px)
-- Header: capability name + status badge
-- Status colors: pending (`--ink-3`), running (`--warning`), approved (`--success`), denied (`--danger`), complete (`--ink-3`)
-- Body: collapsible arguments + result, monospace
+## Conversation stream anatomy
 
-### Thinking blocks
-
-- Background: `--thinking-bg` (`#FFFBF0`, warm cream)
-- Left border: 3px `--thinking-border` (`#FDE68A`, amber)
-- Radius: `--radius-lg`
-- Content: italic, `--ink-2`
-- Collapsible, with duration badge
-
-### Approval prompts
-
-- Inline in the conversation flow (not a modal)
-- Background: `--white`, border: 1px `--border`
-- Approve button: `--success` background, `--white` text
-- Reject button: `--danger` background, `--white` text
-- "Remember" checkbox with scope selector
-
-### Buttons
-
-| Type | Background | Text | Border |
-|------|-----------|------|--------|
-| Primary (dark) | `--ink` | `--white` | `--ink` |
-| Accent | `--accent` | `--white` | none |
-| Secondary | `--white` | `--ink` | `--border` |
-| Ghost | transparent | `--ink-2` | none |
-| Danger | `--danger` | `--white` | none |
-
-Primary buttons use `--ink` (dark), not `--accent`. The accent is reserved for focus rings, active states, and links.
-
-### Cards (agent list, settings)
-
-- Background: `--white`
-- Border: 1px `--border`
-- Radius: `--radius-lg` (6px)
-- Padding: `p-4` (16px)
-- Hover: border darkens slightly
-
-### Status dots
-
-- Enabled/active: `--success` (green)
-- Disabled/inactive: `--ink-3` (gray)
-- Pending: `--warning` (amber)
-- Error: `--danger` (red)
-- Size: 8px circle, `rounded-full`
+- **User bubble:** right-aligned, `bg-ink text-surface` (light) →
+  `dark:bg-[var(--accent-tint)] dark:text-ink` (dark) — olive wash, not a
+  white slab.
+- **Assistant text:** left-aligned, transparent on ground, full markdown.
+- **Thinking block:** `--thinking-bg` (warning-tint) + amber-ish left border,
+  italic muted text, collapsible + duration badge.
+- **Tool call block:** `--tool-bg` (sunken), capability name + status badge,
+  collapsible mono args/result.
+- **Approval prompt:** `ApprovalCard`, inline in the flow — never a modal.
+- **Elicitation card:** question + input/options, inline.
+- **Streaming cursor:** 2px `--accent` bar, blink.
+- **Timestamps:** 10–12px `ink-faint`, mono.
 
 ---
 
 ## Animations
 
-### Pulse (thinking dots, running tools)
+| Keyframe | Use |
+|----------|-----|
+| `pulse` (1.5s) | thinking dots, running status |
+| `bounce` (1s, 3 staggered dots) | typing indicator |
+| `blink` (1s) | streaming cursor |
+| `screen-in` | boot → login → app fades |
+| `logo-land` + `rise-in` | boot handoff / login card |
+| `stage-fade`, `ob-step-in/out-fwd/back` | onboarding stepper, direction-aware |
 
-```css
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
-}
-/* 1.5s ease-in-out infinite */
-```
-
-### Bounce dots (typing indicator)
-
-Three dots, 6px each, `--ink-3`, staggered 0.15s delays.
-
-### Streaming cursor
-
-Blinking 2px-wide bar, `--accent` color, at the end of streaming text.
-
-### Reduced motion
-
-All animations disabled via `@media (prefers-reduced-motion: reduce)`.
+All disabled under `prefers-reduced-motion`.
 
 ---
 
 ## Scrollbars
 
-Thin, 4px wide. Track: transparent. Thumb: `--border`, hover: `--ink-3`.
+4px thin. Transparent track, `--border` thumb, `--ink-3` hover.
 
 ---
 
 ## Markdown rendering
 
-Assistant messages render full Markdown (via `react-markdown` + `remark-gfm`):
-
-- **Code (inline):** `--tool-bg` background, 3px radius, JetBrains Mono
-- **Code blocks:** `--tool-bg` background, 6px radius, horizontal scroll
-- **Blockquotes:** 3px left border (`--border`), `--ink-2` text
-- **Links:** `--accent` color, underline
-- **Tables:** `--border` borders, `--sidebar` header background
-- **Lists:** Standard disc/decimal markers, 1.5em left padding
+`react-markdown` + `remark-gfm`, `.markdown-body` styles in index.css:
+inline code `--tool-bg` + 3px radius Geist Mono; code blocks `--tool-bg` +
+6px; blockquote 3px `--border` left + `ink-2`; links `--accent` underlined;
+tables `--border` cells, `--sidebar` header; strong = 600.
 
 ---
 
 ## shadcn/ui mapping
 
-CaberOS uses shadcn/ui components with CSS variables mapped to the design system:
-
-| shadcn token | CaberOS token |
-|---|---|
-| `--background` | `--surface` |
+| shadcn | CaberOS |
+|--------|---------|
+| `--background` | `--ground` |
 | `--foreground` | `--ink` |
-| `--card` | `--white` |
-| `--primary` | `--accent` |
-| `--secondary` | `--sidebar` |
-| `--muted` | `--sidebar` |
-| `--muted-foreground` | `--ink-2` |
+| `--card` | `--surface` |
+| `--primary` | `--ink` (!) |
+| `--secondary` | `--surface` |
+| `--muted` | `--sunken` |
+| `--muted-foreground` | `--ink-muted` |
 | `--destructive` | `--danger` |
-| `--border` | `--border` |
-| `--input` | `--border` |
+| `--border`, `--input` | `--line` |
 | `--ring` | `--accent` |
-| `--radius` | `6px` |
+| `--radius` | `10px` |
+| `--chart-1..5` | accent, warning, success, danger, ink-faint |
 
 ---
 
 ## Icons
 
-CaberOS uses [lucide-react](https://lucide.dev/) for all icons. Icon size is typically 16px or 20px, matching the surrounding text size.
+[lucide-react](https://lucide.dev/) — 14–20px typical, matching text size.
+Mono font accompanies icon badges/labels.
 
 ---
 
 ## What's NOT in the design system (yet)
 
-- **Dark mode** — `--brand-2` (`#A8C04A`) is defined for future dark mode but not wired up.
-- **Mobile responsive** — the app is desktop-first. Mobile layouts are not yet designed.
-- **Animations beyond pulse/bounce/blink** — no page transitions, no slide-in panels, no skeleton loaders.
+- **Mobile layouts** — desktop-first; <768px gets the icon-strip sidebar but
+  page bodies aren't mobile-designed.
+- **Density/compact mode**, **high-contrast theme** — not designed.
+- **Legacy alias retirement** — the sweep is incomplete; unswept surfaces still
+  reference `--ink-2`, `--tool-bg`, etc.

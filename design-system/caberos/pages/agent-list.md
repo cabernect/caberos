@@ -1,55 +1,61 @@
-# Page: Agent List
+# Page: Agents
 
 > **Route:** `/agents`
 > **Overrides:** `design-system/caberos/MASTER.md`
+> **Breadcrumbs:** Workspace › Agents
 
-## Layout
+## Anatomy
+
+PageHeader ("Agents" + subtitle + ⌘K command bar, actions: **Import** (outline)
++ **New agent** (primary)) → `PageIntro` → 4 `StatCard`s → `FilterPills`
+(segmented) + Sort select → `CardGrid` of `AgentCard`s.
 
 ```
-┌──────────────────────────────────────────────────────┐
-│  Sidebar       │  Your Agents                        │
-│  (nav)         │                                     │
-│                │  ┌──────────┐ ┌──────────┐ ┌──────┐│
-│  Agents  ←    │  │ ◉ Caber  │ │ ◉ Agent  │ │  +   ││
-│  Providers    │  │   $0.42  │ │  Builder │ │ New  ││
-│  MCP          │  │   today  │ │   $0.00  │ │      ││
-│  Channels     │  │   3 sess │ │   1 sess │ │      ││
-│  Observability│  └──────────┘ └──────────┘ └──────┘│
-│  Skills       │                                     │
-│  Scheduler    │                                     │
-│                │                                     │
-└────────────────┴─────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│ Agents                         [Import] [+ New agent]    │
+│ ──────────────────────────────────────────────────────── │
+│ PageIntro strip (first-run guidance)                     │
+│ ┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐                      │
+│ │Active│ │Runn..│ │Sess..│ │Needs │   ← 4 StatCards      │
+│ └──────┘ └──────┘ └──────┘ └──────┘                      │
+│ ( All | Active | Needs setup | Disabled )      Sort: ▾   │
+│ ┌─────────┐ ┌─────────┐ ┌─────────┐                      │
+│ │ ◉ Caber │ │ ◉ Scout │ │ ◉ …     │   ← AgentCard grid   │
+│ │ gpt-5   │ │ No model│ │         │                      │
+│ │ status  │ │ status  │ │         │                      │
+│ │ spark   │ │         │ │         │                      │
+│ └─────────┘ └─────────┘ └─────────┘                      │
+└──────────────────────────────────────────────────────────┘
 ```
 
-### Grid
+## StatCards
 
-- **Tailwind:** `grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3`
-- **Gap:** `gap-4` (16px)
-- **Card min-height:** ~180px
+`grid grid-cols-2 lg:grid-cols-4`, `gap-3`: **Active agents** (of N),
+**Running now** (names sublabel), **Sessions this week** (± vs last week),
+**Needs attention** (warning-colored value when > 0).
 
-### Agent card
+## Filter row
 
-- Background: `--white`
-- Border: 1px `--border`
-- Radius: `--radius-lg` (6px)
-- Padding: `p-4`
-- Hover: border darkens, cursor pointer
-- Content:
-  - Status dot (8px, `--success` if enabled, `--ink-3` if disabled)
-  - Agent name (18px, font-semibold, `--ink`)
-  - Spend today (13px, `--ink-2`)
-  - Session count (13px, `--ink-3`)
-  - Heartbeat badge if configured (13px, `--accent`)
-- Click → navigates to `/agents/{id}/chat`
-- Settings gear → opens `SettingsOverlay`
+- `FilterPills variant="segmented"` — All / Active / Needs setup / Disabled,
+  each with count.
+- Right side: `Sort:` label + `Select` (recent activity | name A–Z).
 
-### New agent card
+## AgentCard
 
-- Dashed border, `--border`
-- Centered "+" icon and "New Agent" text
-- Click → opens `CreateAgentModal`
+- `rounded-[16px] border-line bg-surface p-5`; paused → `opacity-70`.
+- Header: `IconTile`-style avatar — 44px `rounded-[12px] bg-accent-tint`
+  first-letter (17px semibold accent) → name (16/24 semibold) + model
+  (12px mono muted, "No model" if unset) → `StatusWord`.
+- Body: persona/task line + 7-day session sparkline + session count.
+- `…` menu → Settings (opens `SettingsOverlay`), Enable (paused agents).
+- Click → `/agents/{id}/chat`.
 
-### Empty state
+## Empty state
 
-- "No agents yet" message
-- "Create your first agent" button
+`EmptyState` — "No agents yet" + "New agent" action; filtered-empty variant
+says "No agents match this filter".
+
+## Related surfaces
+
+- `CreateAgentModal` — form | yaml modes; created → navigate to chat.
+- `SettingsOverlay` — per-agent config (model, permissions, limits, heartbeat).
