@@ -12,6 +12,7 @@ import json
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlparse
 
 import litellm
 from sqlalchemy import select
@@ -226,7 +227,10 @@ class LiteLLMAdapter:
         """
         if provider["type"] == "openai":
             base = (provider.get("base_url") or "").lower()
-            if not base or "api.openai.com" in base:
+            if not base:
+                return "responses"
+            host = urlparse(base if "://" in base else f"https://{base}").hostname or ""
+            if host == "api.openai.com":
                 return "responses"
         return provider["type"]
 
