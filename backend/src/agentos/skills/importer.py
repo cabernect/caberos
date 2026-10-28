@@ -191,14 +191,15 @@ def archive_url_for(repo_url: str) -> str:
     )
 
 
-def _assert_public_url(url: str) -> None:
-    """Reject fetches aimed at private/loopback/reserved targets (SSRF).
+def _pinned_request(url: str) -> tuple[str, dict[str, str], str]:
+    """Bind a fetch to a DNS-validated public IP (SSRF + rebinding guard).
 
-    Direct .zip links are operator-supplied and otherwise unchecked, so the
-    hostname must resolve to globally-routable addresses only. DNS rebinding
-    between this check and connect time is a residual gap — acceptable for a
-    local-first desktop gateway where the caller is the authenticated
-    operator, but worth noting for any future multi-tenant deployment.
+    Direct .zip links are operator-supplied, so before any request the
+    hostname is resolved and every answer must be globally routable. The
+    request then connects to that verified IP — DNS cannot re-resolve to a
+    different address between check and connect — while SNI and the Host
+    header keep the real hostname so TLS and virtual hosting still work.
+    Returns (pinned_url, headers, sni_hostname).
     """
     parsed = urlparse(url)
     if parsed.scheme != "https":
@@ -207,29 +208,47 @@ def _assert_public_url(url: str) -> None:
     if not host:
         raise ImportRejected("archive URL has no host")
     try:
-        infos = socket.getaddrinfo(host, parsed.port or 443, proto=socket.IPPROTO_TCP)
+        port = parsed.port or 443
+    except ValueError as e:
+        raise ImportRejected("archive URL has an invalid port") from e
+    try:
+        infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
     except socket.gaierror as e:
         raise ImportRejected(f"cannot resolve archive host {host!r}") from e
-    ips = {ipaddress.ip_address(info[4][0]) for info in infos}
-    if not ips or not all(ip.is_global for ip in ips):
+    ips = {info[4][0] for info in infos}
+    if not ips or not all(ipaddress.ip_address(ip).is_global for ip in ips):
         raise ImportRejected("archive URL resolves to a private or local address")
+    ip = sorted(ips)[0]
+    ip_netloc = f"[{ip}]" if ":" in ip else ip
+    host_header = host if port == 443 else f"{host}:{port}"
+    path = parsed.path or "/"
+    if parsed.query:
+        path += f"?{parsed.query}"
+    return f"https://{ip_netloc}{path}", {"Host": host_header}, host
 
 
 async def fetch_archive(repo_url: str) -> bytes:
     """Download a repo archive over HTTP with a size cap + timeout.
 
-    Redirects are followed manually so every hop is re-validated — an
-    allowed host bouncing to an internal address is still rejected."""
+    Redirects are followed manually so every hop is re-resolved, re-validated,
+    and pinned to its own verified IP — an allowed host bouncing to an
+    internal address is still rejected."""
     url = archive_url_for(repo_url)
-    _assert_public_url(url)
     try:
         async with httpx.AsyncClient(timeout=ARCHIVE_TIMEOUT) as client:
             for _ in range(MAX_REDIRECTS + 1):
-                # url is validated by _assert_public_url() before the loop and
-                # re-validated on every redirect hop — the assertion guard just
-                # isn't a sanitizer CodeQL's taint model recognizes.
+                # Each request connects to an IP already verified global with
+                # the real hostname held in SNI/Host — the pin just is not a
+                # sanitizer CodeQL's taint model recognizes.
                 # codeql[py/full-ssrf]
-                async with client.stream("GET", url, follow_redirects=False) as resp:
+                pinned, headers, sni = _pinned_request(url)
+                async with client.stream(
+                    "GET",
+                    pinned,
+                    headers=headers,
+                    extensions={"sni_hostname": sni},
+                    follow_redirects=False,
+                ) as resp:
                     if resp.is_redirect:
                         location = resp.headers.get("location")
                         if not location:
@@ -237,7 +256,6 @@ async def fetch_archive(repo_url: str) -> bytes:
                                 "archive host returned a redirect with no location"
                             )
                         url = urljoin(url, location)
-                        _assert_public_url(url)
                         continue
                     if resp.status_code != 200:
                         raise ImportRejected(
