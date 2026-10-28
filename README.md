@@ -21,6 +21,11 @@ CaberOS is an open-source, local-first AI Agent Operating System. It hosts perso
 
 **Local storage, governed egress.** Agents, memory, workspace, and the audit trail live on your machine. Model providers (OpenAI, Anthropic, Google, Ollama, OpenRouter) receive the inputs you configure them to see under your permission policy — egress capabilities (web fetch, browser, shell, remote embeddings) cross an approval boundary, and remembered scopes let you skip re-prompting where you choose.
 
+<div align="center">
+  <video src="https://caberos.cabernect.workers.dev/videos/caberos-promises.mp4" poster="https://caberos.cabernect.workers.dev/videos/caberos-promises-poster.jpg" width="720" controls></video>
+  <p><em>One real run, 48 seconds — one agent, one approval, one deliverable.</em></p>
+</div>
+
 ## Why "OS"?
 
 An operating system's job is identity, permissions, resource accounting, mediated access to resources, and audit — for processes. CaberOS does the same job for agents. Every capability call crosses a single boundary (the **syscall layer**) which resolves who the caller is, checks permission, injects credentials, executes, and writes an audit record.
