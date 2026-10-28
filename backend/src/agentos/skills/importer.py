@@ -10,16 +10,21 @@ gets a pick-list) and extracts selected subtrees under these guarantees:
 - uncompressed-size, file-count, and per-file caps enforced on *actual*
   streamed bytes, not just declared headers
 - `__MACOSX`/dotfile junk skipped
-- remote fetches are https-only, streamed with a download cap + timeout
+- remote fetches are https-only, streamed with a download cap + timeout,
+  and validated against private/loopback/reserved targets — including
+  every redirect hop (SSRF)
 
 Nothing here publishes — callers land results as drafts.
 """
 
 import io
+import ipaddress
 import re
+import socket
 import stat
 import zipfile
 from pathlib import Path
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
@@ -29,6 +34,7 @@ from .validate import MAX_FILE_BYTES, MAX_FILE_COUNT, MAX_TOTAL_BYTES
 # Compressed-archive download cap for remote installs.
 MAX_ARCHIVE_BYTES = 50 * 1024 * 1024
 ARCHIVE_TIMEOUT = 30.0
+MAX_REDIRECTS = 5
 
 _JUNK_PARTS = {"__MACOSX", ".git", "__pycache__", ".DS_Store"}
 
@@ -185,27 +191,66 @@ def archive_url_for(repo_url: str) -> str:
     )
 
 
-async def fetch_archive(repo_url: str) -> bytes:
-    """Download a repo archive over HTTP with a size cap + timeout."""
-    url = archive_url_for(repo_url)
+def _assert_public_url(url: str) -> None:
+    """Reject fetches aimed at private/loopback/reserved targets (SSRF).
+
+    Direct .zip links are operator-supplied and otherwise unchecked, so the
+    hostname must resolve to globally-routable addresses only. DNS rebinding
+    between this check and connect time is a residual gap — acceptable for a
+    local-first desktop gateway where the caller is the authenticated
+    operator, but worth noting for any future multi-tenant deployment.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme != "https":
+        raise ImportRejected("only https:// URLs are supported")
+    host = parsed.hostname
+    if not host:
+        raise ImportRejected("archive URL has no host")
     try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=ARCHIVE_TIMEOUT) as client:
-            async with client.stream("GET", url) as resp:
-                if resp.status_code != 200:
-                    raise ImportRejected(
-                        f"archive fetch failed (HTTP {resp.status_code}) — "
-                        "check the URL/branch, or the repo may be private"
-                    )
-                chunks: list[bytes] = []
-                total = 0
-                async for chunk in resp.aiter_bytes(65536):
-                    total += len(chunk)
-                    if total > MAX_ARCHIVE_BYTES:
+        infos = socket.getaddrinfo(host, parsed.port or 443, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as e:
+        raise ImportRejected(f"cannot resolve archive host {host!r}") from e
+    ips = {ipaddress.ip_address(info[4][0]) for info in infos}
+    if not ips or not all(ip.is_global for ip in ips):
+        raise ImportRejected("archive URL resolves to a private or local address")
+
+
+async def fetch_archive(repo_url: str) -> bytes:
+    """Download a repo archive over HTTP with a size cap + timeout.
+
+    Redirects are followed manually so every hop is re-validated — an
+    allowed host bouncing to an internal address is still rejected."""
+    url = archive_url_for(repo_url)
+    _assert_public_url(url)
+    try:
+        async with httpx.AsyncClient(timeout=ARCHIVE_TIMEOUT) as client:
+            for _ in range(MAX_REDIRECTS + 1):
+                async with client.stream("GET", url, follow_redirects=False) as resp:
+                    if resp.is_redirect:
+                        location = resp.headers.get("location")
+                        if not location:
+                            raise ImportRejected(
+                                "archive host returned a redirect with no location"
+                            )
+                        url = urljoin(url, location)
+                        _assert_public_url(url)
+                        continue
+                    if resp.status_code != 200:
                         raise ImportRejected(
-                            f"archive exceeds the {MAX_ARCHIVE_BYTES // 1024 // 1024} MB "
-                            "download cap"
+                            f"archive fetch failed (HTTP {resp.status_code}) — "
+                            "check the URL/branch, or the repo may be private"
                         )
-                    chunks.append(chunk)
+                    chunks: list[bytes] = []
+                    total = 0
+                    async for chunk in resp.aiter_bytes(65536):
+                        total += len(chunk)
+                        if total > MAX_ARCHIVE_BYTES:
+                            raise ImportRejected(
+                                f"archive exceeds the {MAX_ARCHIVE_BYTES // 1024 // 1024} MB "
+                                "download cap"
+                            )
+                        chunks.append(chunk)
+                    return b"".join(chunks)
+            raise ImportRejected("too many redirects fetching archive")
     except httpx.HTTPError as e:
         raise ImportRejected(f"archive fetch failed: {e}") from e
-    return b"".join(chunks)

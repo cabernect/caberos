@@ -887,7 +887,9 @@ async def test_embed_call_ledger_records_failure(db, monkeypatch):
     provider = await _local_provider(db)
     resource = await _ready_resource(db, provider)
 
-    with pytest.raises(EmbeddingUnavailable, match="provider boom"):
+    # The raised message is sanitized for operator-facing surfaces; the
+    # ledger keeps the raw provider error for internal audit.
+    with pytest.raises(EmbeddingUnavailable, match="RuntimeError"):
         await embed_texts(db, resource, ["x"], operation="repair")
     await db.flush()
 

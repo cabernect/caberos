@@ -202,7 +202,12 @@ async def embed_texts(
                 model_str=kwargs["model"],
                 cost_receipt=error_receipt,
             )
-            raise EmbeddingUnavailable(str(error)) from error
+            # Only the exception category reaches operator-facing surfaces
+            # (resource.last_error, API responses) — raw provider errors can
+            # carry request internals.
+            raise EmbeddingUnavailable(
+                f"embedding request failed ({type(error).__name__})"
+            ) from error
         # Canonical legacy fields from assessment.usage — the normalizer's
         # native tokens only (embedding family total_tokens fallback),
         # never raw SDK attribute reads.

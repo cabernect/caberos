@@ -7,6 +7,7 @@ legacy migration, and repo-archive import hardening (draft-only).
 """
 
 import io
+import ipaddress
 import json
 import zipfile
 from pathlib import Path
@@ -640,6 +641,74 @@ class TestImporter:
         assert importer.archive_url_for("o/r") == ("https://codeload.github.com/o/r/zip/HEAD")
         with pytest.raises(ImportRejected):
             importer.archive_url_for("http://github.com/o/r")  # https only
+
+    def test_assert_public_url_rejects_private_targets(self, monkeypatch):
+        """SSRF guard: literal IPs and DNS answers in private/local ranges
+        are refused before any request leaves."""
+        monkeypatch.setattr(
+            importer.socket,
+            "getaddrinfo",
+            lambda *a, **k: [(None, None, None, None, ("10.0.0.9", 443))],
+        )
+        for url in (
+            "https://internal.corp/x.zip",  # DNS → 10/8
+            "https://169.254.169.254/latest/meta-data.zip",  # link-local
+            "https://127.0.0.1:8081/x.zip",  # loopback
+            "https://[::1]/x.zip",  # v6 loopback
+        ):
+            with pytest.raises(ImportRejected, match="private|resolve"):
+                importer._assert_public_url(url)
+        with pytest.raises(ImportRejected, match="https"):
+            importer._assert_public_url("http://x.example.com/a.zip")
+
+        monkeypatch.setattr(
+            importer.socket,
+            "getaddrinfo",
+            lambda *a, **k: [(None, None, None, None, ("93.184.216.34", 443))],
+        )
+        importer._assert_public_url("https://x.example.com/a.zip")  # public ok
+
+    @pytest.mark.asyncio
+    async def test_fetch_archive_revalidates_redirect_hops(self, monkeypatch):
+        """An allowed host redirecting to a private target is rejected."""
+
+        # Hostnames resolve public; literal IPs resolve to themselves.
+        def _fake_getaddrinfo(host, *a, **k):
+            try:
+                ip = str(ipaddress.ip_address(host))
+            except ValueError:
+                ip = "93.184.216.34"
+            return [(None, None, None, None, (ip, 443))]
+
+        monkeypatch.setattr(importer.socket, "getaddrinfo", _fake_getaddrinfo)
+
+        class FakeResp:
+            status_code = 302
+            is_redirect = True
+            headers = {"location": "https://169.254.169.254/x.zip"}
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+        class FakeClient:
+            def __init__(self, **k):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            def stream(self, method, url, **k):
+                return FakeResp()
+
+        monkeypatch.setattr(importer.httpx, "AsyncClient", FakeClient)
+        with pytest.raises(ImportRejected, match="private"):
+            await importer.fetch_archive("https://github.com/o/r")
 
 
 # ---------------------------------------------------------------------------
