@@ -1,8 +1,11 @@
 import { useState, useRef, useEffect, useImperativeHandle, useCallback, forwardRef } from "react";
-import { Paperclip, FileText, Image as ImageIcon, Link, Wrench, ArrowUp, HelpCircle, Check, Sparkles, Square } from "lucide-react";
-import { ModelSelector } from "@/components/ModelSelector";
+import { Paperclip, FileText, Image as ImageIcon, Link, Wrench, ArrowUp, HelpCircle, Check, Sparkles, Square, Flame } from "lucide-react";
+import { ModelPicker, type SelectedModel } from "@/components/ModelPicker";
 import { ThinkingToggle } from "@/components/ThinkingToggle";
+import { AttachmentCard } from "@/components/AttachmentCard";
+import { Markdown } from "@/components/Markdown";
 import { api } from "@/lib/api";
+import { fileHash, formatAttachmentSize, moveItem } from "@/lib/attachmentUtils";
 import type { SkillInfo } from "@/lib/types";
 
 export interface Attachment {
@@ -10,10 +13,22 @@ export interface Attachment {
   mimeType: string;
   data: string; // base64 for uploaded files/images, URL for URL attachments
   filename: string;
+  /** Stable key — async preview/hash updates match on this, not index. */
+  id?: string;
+  /** Card metadata — populated when the attachment is staged. */
+  size?: number;
+  hash?: string;
+  /** Object URL for image thumbnails — revoked on remove/send. */
+  previewUrl?: string;
+  /** Backend-rendered mini preview (e.g. PDF page 1 as data-url). */
+  thumb?: string;
+  /** Fetched <title> for URL attachments — falls back to the domain. */
+  urlTitle?: string;
 }
 
 export interface ChatInputBarHandle {
-  addFiles: (files: File[]) => void;
+  addFiles: (files: File[]) => Promise<void>;
+  prefill: (text: string) => void;
 }
 
 export interface ContextItem {
@@ -36,19 +51,28 @@ export interface ActiveElicitation {
 
 interface ChatInputBarProps {
   agentId: string;
+  /** Display name for the "Ask {name} anything…" placeholder. */
+  agentName?: string;
+  /** YOLO mode — tools run without approval. Effective per-agent + global. */
+  yoloMode?: boolean;
+  /** Locked on by the global override — per-agent toggle can't undo it. */
+  yoloLocked?: boolean;
+  onToggleYolo?: () => void;
+  /** Selected model — the composer's own selector emits via onModelChange. */
+  model?: SelectedModel | null;
   defaultProviderId: string | null;
   defaultModelName: string | null;
   defaultThinkingEnabled?: boolean | null;
   defaultThinkingEffort?: string | null;
   disabled?: boolean;
-  onModelChange?: (hasModel: boolean) => void;
+  onModelChange?: (model: SelectedModel | null) => void;
   onSend: (
     text: string,
-    modelOverride: { provider_id: string; name: string } | null,
+    model: { provider_id: string; name: string } | null,
     context: ContextItem[],
     attachments?: Attachment[],
     skill?: string,
-  ) => void;
+  ) => boolean | void | Promise<boolean | void>;
   onStop?: () => void;
   activeElicitation?: ActiveElicitation | null;
   onElicitationRespond?: (response: string) => void;
@@ -62,6 +86,11 @@ interface ChatInputBarProps {
 
 export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(function ChatInputBar({
   agentId,
+  agentName,
+  yoloMode,
+  yoloLocked,
+  onToggleYolo,
+  model: controlledModel,
   defaultProviderId,
   defaultModelName,
   defaultThinkingEnabled,
@@ -79,20 +108,19 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
   contextBreakdown,
 }, ref) {
   const [text, setText] = useState("");
-  const [modelOverride, setModelOverride] = useState<{
-    provider_id: string;
-    name: string;
-    supports_vision?: boolean;
-    supports_thinking?: boolean;
-    thinking_efforts?: string[];
-  } | null>(null);
+  // Model is selected in the header chip (W13) — composer only reads it.
+  const model = controlledModel ?? null;
   const [thinkingEnabled, setThinkingEnabled] = useState<boolean | null>(defaultThinkingEnabled ?? null);
   const [thinkingEffort, setThinkingEffort] = useState<string>(defaultThinkingEffort || "medium");
   const [contextItems, setContextItems] = useState<ContextItem[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [pendingFiles, setPendingFiles] = useState(0);
+  // Transient tray note — e.g. "duplicate skipped". Auto-clears.
+  const [trayNote, setTrayNote] = useState<string | null>(null);
   const [showContextMenu, setShowContextMenu] = useState(false);
   const [showUrlInput, setShowUrlInput] = useState(false);
   const [urlValue, setUrlValue] = useState("");
+  const attachAreaRef = useRef<HTMLDivElement>(null);
   const [selectedOptions, setSelectedOptions] = useState<Set<number>>(new Set());
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [skillIndex, setSkillIndex] = useState(0);
@@ -102,21 +130,17 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
 
   const isElicitation = !!activeElicitation;
 
-  // Notify parent whether a model is available (default or user-selected)
+  // Default config still counts as "a model" for thinking param fallback.
   const hasDefaultModel = !!(defaultProviderId && defaultModelName);
-  const hasModel = hasDefaultModel || !!modelOverride;
-  useEffect(() => {
-    onModelChange?.(hasModel);
-  }, [hasModel, onModelChange]);
 
   // Sync thinking effort when the model changes — the default "medium"
   // may not be in the new model's supported effort list
   useEffect(() => {
-    const efforts = modelOverride?.thinking_efforts;
+    const efforts = model?.thinking_efforts;
     if (efforts && efforts.length > 0 && !efforts.includes(thinkingEffort)) {
       setThinkingEffort(efforts[0]);
     }
-  }, [modelOverride, thinkingEffort]);
+  }, [model, thinkingEffort]);
 
   // Sync thinking from agent defaults whenever they change (e.g. after
   // saving in Settings). The user can still override per-message by
@@ -175,7 +199,44 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
     }
   }, [activeElicitation?.id, isElicitation]);
 
-  const handleSend = () => {
+  // Auto-clear tray notes.
+  useEffect(() => {
+    if (!trayNote) return;
+    const t = setTimeout(() => setTrayNote(null), 4000);
+    return () => clearTimeout(t);
+  }, [trayNote]);
+
+  // Object URLs outlive their cards only while the attachment exists —
+  // revoked on remove and after a successful send.
+  const revokePreviewUrls = useCallback((list: Attachment[]) => {
+    for (const a of list) {
+      if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+    }
+  }, []);
+
+  // Unmount cleanup — any staged attachments' object URLs are released.
+  const attachmentsRef = useRef<Attachment[]>([]);
+  attachmentsRef.current = attachments;
+  useEffect(() => {
+    return () => revokePreviewUrls(attachmentsRef.current);
+  }, [revokePreviewUrls]);
+
+  // Outside press closes the attach menu / URL input — keeps the paperclip
+  // a real toggle (no invisible overlay eating clicks on the trigger).
+  useEffect(() => {
+    if (!showContextMenu && !showUrlInput) return;
+    const onDown = (e: MouseEvent) => {
+      if (attachAreaRef.current && !attachAreaRef.current.contains(e.target as Node)) {
+        setShowContextMenu(false);
+        setShowUrlInput(false);
+        setUrlValue("");
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [showContextMenu, showUrlInput]);
+
+  const handleSend = async () => {
     if (isElicitation) {
       // Elicitation mode — send as elicitation response
       if (activeElicitation?.multiSelect && activeElicitation.options) {
@@ -193,7 +254,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
       setSelectedOptions(new Set());
       return;
     }
-    if (!text.trim() || disabled) return;
+    if ((!text.trim() && attachments.length === 0) || disabled || pendingFiles > 0) return;
 
     // Slash command detection: /skillname rest of message
     // Extracts the skill name and passes it separately to the backend
@@ -208,8 +269,8 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
     // Attach thinking params to the model override.
     // When using the default model (no override), still send an override
     // with the default provider/model so thinking params reach the backend.
-    const baseModel = modelOverride
-      ? modelOverride
+    const baseModel = model
+      ? model
       : hasDefaultModel
         ? { provider_id: defaultProviderId!, name: defaultModelName! }
         : null;
@@ -221,9 +282,18 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
         }
       : null;
 
-    onSend(messageText, overrideWithThinking, contextItems, attachments.length > 0 ? attachments : undefined, skill);
+    const sent = await onSend(
+      messageText,
+      overrideWithThinking,
+      contextItems,
+      attachments.length > 0 ? attachments : undefined,
+      skill,
+    );
+    // Failed sends keep the draft and the tray — nothing is silently lost.
+    if (sent === false) return;
     setText("");
     setContextItems([]);
+    revokePreviewUrls(attachments);
     setAttachments([]);
   };
 
@@ -256,129 +326,195 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
     });
   }, []);
 
-  // Process dropped/selected files and add them as attachments.
+  // Process dropped/pasted/selected files into the attachment tray.
   // Exposed via ref so the parent (Conversation) can forward drops
   // from the entire chat view, not just the input bar.
+  //
+  // Read bytes, dedupe, then stage the card so failed reads cannot be sent.
+  // PDF/Office thumbnail previews load separately and never block sending.
   const addFiles = useCallback(async (files: File[]) => {
     if (isElicitation) return;
-    for (const file of files) {
-      if (file.type.startsWith("image/")) {
-        const base64 = await fileToBase64(file);
-        setAttachments((prev) => [...prev, {
-          type: "image",
-          mimeType: file.type || "image/png",
-          data: base64,
-          filename: file.name,
-        }]);
-      } else if (file.type.startsWith("text/") || file.type === "application/json") {
-        const content = await file.text();
-        setAttachments((prev) => [...prev, {
-          type: "file",
-          mimeType: file.type || "text/plain",
-          data: content,
-          filename: file.name,
-        }]);
-      } else {
-        const base64 = await fileToBase64(file);
-        setAttachments((prev) => [...prev, {
-          type: "file",
-          mimeType: file.type || "application/octet-stream",
-          data: base64,
-          filename: file.name,
-        }]);
-      }
-      setContextItems((prev) => [...prev, { type: "file", label: file.name }]);
-    }
-  }, [fileToBase64, isElicitation]);
+    setPendingFiles((n) => n + 1);
+    try {
+      // Staged hashes live outside state — React batches the setAttachments
+      // calls below, so the ref alone can't catch dupes within one batch.
+      const staged = new Set<string>();
+      for (const file of files) {
+        // Read the transport payload BEFORE staging a card — a failed read
+        // must never leave a card whose bytes are empty. Text goes as text,
+        // everything else base64.
+        const isImage = file.type.startsWith("image/");
+        const isText = file.type.startsWith("text/") || file.type === "application/json";
+        let data: string;
+        try {
+          data = isText ? await file.text() : await fileToBase64(file);
+        } catch {
+          setTrayNote(`Could not read "${file.name}".`);
+          continue;
+        }
 
-  useImperativeHandle(ref, () => ({ addFiles }), [addFiles]);
+        // Content-hash dedupe — same bytes pasted/dropped twice collapse.
+        let hash = "";
+        try {
+          hash = await fileHash(file);
+        } catch {}
+        const dupe =
+          hash &&
+          (staged.has(hash) || attachmentsRef.current.some((a) => a.hash === hash));
+        if (dupe) {
+          setTrayNote(`"${file.name}" already attached — duplicate skipped`);
+          continue;
+        }
+        if (hash) staged.add(hash);
+
+        const att: Attachment = {
+          type: isImage ? "image" : "file",
+          mimeType: file.type || (isImage ? "image/png" : "application/octet-stream"),
+          data,
+          filename: file.name || "pasted-image.png",
+          id: crypto.randomUUID(),
+          size: file.size,
+          hash,
+          previewUrl: isImage ? URL.createObjectURL(file) : undefined,
+        };
+        setAttachments((prev) => [...prev, att]);
+        setContextItems((prev) => [
+          ...prev,
+          {
+            type: isImage ? "image" : "file",
+            label: att.filename,
+            title: `${att.filename} · ${formatAttachmentSize(file.size)}`,
+          },
+        ]);
+
+        // Lazy bounded preview for non-image kinds (PDF first page, Office
+        // first slide/sheet/elements) — best-effort card thumbnail.
+        if (!isImage && agentId) {
+          api
+            .previewAttachment(agentId, file)
+            .then((p) => {
+              if (p.thumb_png) {
+                setAttachments((prev) =>
+                  prev.map((a) =>
+                    a.id === att.id
+                      ? { ...a, thumb: `data:image/png;base64,${p.thumb_png}` }
+                      : a,
+                  ),
+                );
+              }
+            })
+            .catch(() => {});
+        }
+      }
+    } finally {
+      setPendingFiles((n) => Math.max(0, n - 1));
+    }
+  }, [fileToBase64, isElicitation, agentId]);
+
+  const prefill = useCallback((value: string) => {
+    setText(value);
+    textareaRef.current?.focus();
+  }, []);
+
+  useImperativeHandle(ref, () => ({ addFiles, prefill }), [addFiles, prefill]);
 
   const handleImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
-    if (!files) return;
-    for (const file of Array.from(files)) {
-      const base64 = await fileToBase64(file);
-      const att: Attachment = {
-        type: "image",
-        mimeType: file.type || "image/png",
-        data: base64,
-        filename: file.name,
-      };
-      setAttachments((prev) => [...prev, att]);
-      setContextItems((prev) => [...prev, { type: "image", label: file.name }]);
-    }
+    if (files) await addFiles(Array.from(files));
     setShowContextMenu(false);
     if (imageInputRef.current) imageInputRef.current.value = "";
   };
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
-    if (!files) return;
-    for (const file of Array.from(files)) {
-      if (file.type.startsWith("text/") || file.type === "application/json") {
-        // Text file — read as text
-        const content = await file.text();
-        setAttachments((prev) => [...prev, {
-          type: "file",
-          mimeType: file.type || "text/plain",
-          data: content,
-          filename: file.name,
-        }]);
-      } else {
-        // Binary file (PDF, docx, image, etc.) — read as base64, backend saves to workspace
-        const base64 = await fileToBase64(file);
-        setAttachments((prev) => [...prev, {
-          type: "file",
-          mimeType: file.type || "application/octet-stream",
-          data: base64,
-          filename: file.name,
-        }]);
-      }
-      setContextItems((prev) => [...prev, { type: "file", label: file.name }]);
-    }
+    if (files) await addFiles(Array.from(files));
     setShowContextMenu(false);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
+  const addUrlAttachment = useCallback(
+    (url: string) => {
+      let label = url;
+      try {
+        label = new URL(url).hostname;
+      } catch {}
+      const att: Attachment = {
+        type: "url",
+        mimeType: "text/uri-list",
+        data: url,
+        filename: "",
+        id: crypto.randomUUID(),
+      };
+      setAttachments((prev) => [...prev, att]);
+      setContextItems((prev) => [...prev, { type: "url", label, title: url }]);
+      // Best-effort <title> fetch — the card upgrades from bare domain.
+      if (agentId) {
+        api
+          .previewUrl(agentId, url)
+          .then((meta) => {
+            if (meta.title) {
+              setAttachments((prev) =>
+                prev.map((a) => (a.id === att.id ? { ...a, urlTitle: meta.title! } : a)),
+              );
+              setContextItems((prev) =>
+                prev.map((c) =>
+                  c.type === "url" && c.title === url
+                    ? { ...c, label: meta.title || c.label }
+                    : c,
+                ),
+              );
+            }
+          })
+          .catch(() => {});
+      }
+    },
+    [agentId],
+  );
+
   const handleUrlSubmit = () => {
     const url = urlValue.trim();
     if (!url) return;
-    let label = url;
-    try {
-      label = new URL(url).hostname;
-    } catch {}
-    setAttachments((prev) => [...prev, {
-      type: "url",
-      mimeType: "text/uri-list",
-      data: url,
-      filename: "",
-    }]);
-    setContextItems((prev) => [...prev, { type: "url", label, title: url }]);
+    addUrlAttachment(url);
     setUrlValue("");
     setShowUrlInput(false);
     setShowContextMenu(false);
   };
 
   const removeAttachment = (index: number) => {
+    const att = attachments[index];
+    if (att?.previewUrl) URL.revokeObjectURL(att.previewUrl);
     setAttachments(attachments.filter((_, i) => i !== index));
     setContextItems(contextItems.filter((_, i) => i !== index));
   };
 
-  // Pasting a bare URL auto-attaches it as a chip (labelled by domain) instead
-  // of dropping it into the text. URLs inside longer pasted text stay in text.
+  // Keyboard-accessible reorder — attachments and their context chips
+  // move together so the parallel arrays never drift.
+  const moveAttachment = (index: number, delta: number) => {
+    setAttachments((prev) => moveItem(prev, index, delta));
+    setContextItems((prev) => moveItem(prev, index, delta));
+  };
+
+  // Clipboard handling (W3c): files in the clipboard (screenshots, copied
+  // images, dragged files) become attachments instead of dead base64.
+  // Mixed text+image pastes attach the image AND insert the text — the
+  // event isn't consumed so the text still lands in the textarea.
+  // A bare URL alone still becomes a URL chip.
   const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (isElicitation) return;
+    const files = Array.from(e.clipboardData.files || []);
+    if (files.length > 0) {
+      const clipboardText = e.clipboardData.getData("text").trim();
+      if (!clipboardText) {
+        // Pure file paste — consume so nothing tries to insert a path.
+        e.preventDefault();
+      }
+      void addFiles(files);
+      return;
+    }
     const pasted = e.clipboardData.getData("text").trim();
     if (!/^https?:\/\/\S+$/.test(pasted)) return;
     e.preventDefault();
-    let label = pasted;
-    try {
-      label = new URL(pasted).hostname;
-    } catch {}
-    setAttachments((prev) => [
-      ...prev,
-      { type: "url", mimeType: "text/uri-list", data: pasted, filename: "" },
-    ]);
-    setContextItems((prev) => [...prev, { type: "url", label, title: pasted }]);
+    addUrlAttachment(pasted);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -496,10 +632,6 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
       onDragOver={handleDragOver}
       onDrop={handleDrop}
       className="relative px-4 py-3"
-      style={{
-        borderTop: "1px solid var(--border)",
-        background: "var(--sidebar)",
-      }}
     >
       {/* Elicitation panel — shown when agent asks a question */}
       {isElicitation && activeElicitation && (
@@ -511,8 +643,8 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
             style={{ borderBottom: "1px solid var(--border)" }}
           >
             <HelpCircle className="mt-0.5 h-4 w-4 shrink-0" style={{ color: "var(--warning)" }} />
-            <div className="text-[13px] leading-[1.5]" style={{ color: "var(--ink)" }}>
-              {activeElicitation.question}
+            <div className="markdown-body text-[13px] leading-[1.5]" style={{ color: "var(--ink)" }}>
+              <Markdown>{activeElicitation.question}</Markdown>
             </div>
           </div>
 
@@ -570,84 +702,62 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
       )}
 
       {/* Vision warning — image attached but selected model doesn't support vision */}
-      {!isElicitation && modelOverride && modelOverride.supports_vision === false &&
+      {!isElicitation && model && model.supports_vision === false &&
         attachments.some((a) => a.type === "image") && (
         <div className="mx-auto mb-2 flex max-w-[672px] items-center gap-2 rounded-[5px] border px-3 py-1.5 text-[12px]"
           style={{ borderColor: "var(--warning)", background: "var(--surface)", color: "var(--ink-2)" }}
         >
           <ImageIcon className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--warning)" }} />
           <span>
-            <strong>{modelOverride.name}</strong> may not support image input.
+            <strong>{model.name}</strong> may not support image input.
             The image will be sent as text metadata instead.
           </span>
         </div>
       )}
 
-      {/* Model selector + thinking controls + context indicator — above the input bar */}
-      {!isElicitation && (
-        <div className="mx-auto flex max-w-[672px] items-center gap-1.5 pb-1.5">
-          <ModelSelector
-            defaultProviderId={defaultProviderId}
-            defaultModelName={defaultModelName}
-            onChange={setModelOverride}
-          />
-          {/* Thinking toggle — only show when the selected model supports thinking */}
-          {modelOverride?.supports_thinking && (
-            <ThinkingToggle
-              enabled={thinkingEnabled}
-              effort={thinkingEffort}
-              efforts={modelOverride.thinking_efforts || ["low", "medium", "high"]}
-              onToggle={(enabled) => setThinkingEnabled(enabled)}
-              onEffortChange={setThinkingEffort}
-            />
+
+
+      {/* Attachment tray (W3c) — cards with thumbnails, size, kind,
+          reorder, remove. Attachments and context chips share index
+          order; the card reads from the richer attachment record. */}
+      {!isElicitation && (attachments.length > 0 || trayNote) && (
+        <div className="mx-auto mb-1.5 max-w-[672px]">
+          {trayNote && (
+            <p className="mb-1 text-[11px] text-[var(--ink-3)]" role="status">
+              {trayNote}
+            </p>
           )}
-          {contextTokens != null && maxContextTokens != null && maxContextTokens > 0 && (
-            <ContextCircle
-              contextTokens={contextTokens}
-              cachedTokens={cachedTokens}
-              maxContextTokens={maxContextTokens}
-              compacted={compacted}
-              breakdown={contextBreakdown}
-            />
-          )}
+          <div className="flex flex-wrap gap-1.5">
+            {attachments.map((att, i) => {
+              const item = contextItems[i];
+              return (
+                <AttachmentCard
+                  key={att.id || i}
+                  type={att.type}
+                  filename={att.filename}
+                  mimeType={att.mimeType}
+                  size={att.size}
+                  url={att.type === "url" ? att.data : undefined}
+                  title={att.type === "url" ? att.urlTitle || item?.label : undefined}
+                  thumbUrl={att.previewUrl || att.thumb}
+                  controls={{
+                    onMoveLeft: () => moveAttachment(i, -1),
+                    onMoveRight: () => moveAttachment(i, 1),
+                    onRemove: () => removeAttachment(i),
+                    canMoveLeft: i > 0,
+                    canMoveRight: i < attachments.length - 1,
+                  }}
+                />
+              );
+            })}
+          </div>
         </div>
       )}
 
-      {/* Attachment chips stay in normal flow below the model controls. */}
-      {!isElicitation && contextItems.length > 0 && (
-        <div className="mx-auto mb-1 flex max-w-[672px] flex-wrap gap-1.5">
-          {contextItems.map((item, i) => (
-            <span
-              key={i}
-              className="flex items-center gap-1 rounded-[5px] border px-2 py-1 text-[11px]"
-              style={{
-                borderColor: "var(--border)",
-                background: "var(--white)",
-                color: "var(--ink-2)",
-              }}
-            >
-              {item.type === "file" && <FileText className="h-3 w-3" />}
-              {item.type === "image" && <ImageIcon className="h-3 w-3" />}
-              {item.type === "url" && <Link className="h-3 w-3" />}
-              {item.type === "skill" && <Wrench className="h-3 w-3" />}
-              <span className="max-w-[150px] truncate font-mono" title={item.title}>
-                {item.label}
-              </span>
-              <button
-                onClick={() => removeAttachment(i)}
-                className="text-[var(--ink-3)] hover:text-[var(--ink)]"
-              >
-                ×
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
-
-      <div className="relative mx-auto flex max-w-[672px] items-end gap-2">
+      <div className="relative mx-auto flex max-w-[672px] flex-wrap items-center gap-x-2 rounded-[16px] border border-line bg-surface/85 px-3 pb-2.5 pt-2.5 shadow-[0_1px_8px_-2px_rgba(0,0,0,0.08)] backdrop-blur-xl">
         {/* Attach button + context menu — hidden during elicitation */}
         {!isElicitation && (
-        <div className="relative shrink-0">
+        <div ref={attachAreaRef} className="relative order-2 shrink-0">
           {/* Hidden file inputs */}
           <input
             ref={imageInputRef}
@@ -667,18 +777,11 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
           />
           <button
             onClick={() => setShowContextMenu((open) => !open)}
-            className="flex h-8 w-8 items-center justify-center rounded-[5px] border text-[var(--ink-2)] transition"
+            className="flex h-8 w-8 items-center justify-center rounded-[8px] text-ink-faint transition-colors hover:bg-sunken hover:text-ink"
             style={{
-              borderColor: showContextMenu ? "var(--accent)" : "var(--border)",
-              background: showContextMenu ? "var(--surface)" : "none",
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.borderColor = "var(--ink-3)";
-              e.currentTarget.style.color = "var(--ink)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.borderColor = showContextMenu ? "var(--accent)" : "var(--border)";
-              e.currentTarget.style.color = "var(--ink-2)";
+              background: showContextMenu ? "var(--sunken)" : "none",
+              border: "none",
+              cursor: "pointer",
             }}
             title="Add attachment"
             aria-label="Add attachment"
@@ -688,21 +791,16 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
             <Paperclip className="h-3.5 w-3.5" />
           </button>
           {showContextMenu && (
-            <>
-              <div
-                className="fixed inset-0 z-40"
-                onClick={() => setShowContextMenu(false)}
-              />
-              <div
-                className="absolute bottom-full left-0 z-50 mb-2 min-w-[236px] rounded-lg border p-1.5 shadow-lg"
-                style={{
-                  borderColor: "var(--border)",
-                  background: "var(--white)",
-                  boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
-                }}
-                role="menu"
-                aria-label="Add attachment"
-              >
+            <div
+              className="absolute bottom-full left-0 z-50 mb-2 min-w-[236px] rounded-lg border p-1.5 shadow-lg"
+              style={{
+                borderColor: "var(--border)",
+                background: "var(--white)",
+                boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
+              }}
+              role="menu"
+              aria-label="Add attachment"
+            >
                 <div className="px-2.5 pb-1.5 pt-1 text-[11px] font-medium uppercase tracking-wide" style={{ color: "var(--ink-3)" }}>
                   Add attachment
                 </div>
@@ -724,23 +822,17 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
                   description="Read a webpage with the agent"
                   onClick={() => { setShowUrlInput(true); setShowContextMenu(false); }}
                 />
-              </div>
-            </>
+            </div>
           )}
           {showUrlInput && (
-            <>
-              <div
-                className="fixed inset-0 z-40"
-                onClick={() => { setShowUrlInput(false); setUrlValue(""); }}
-              />
-              <div
-                className="absolute bottom-full left-0 z-50 mb-2 w-[280px] rounded-lg border p-3 shadow-lg"
-                style={{
-                  borderColor: "var(--border)",
-                  background: "var(--white)",
-                  boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
-                }}
-              >
+            <div
+              className="absolute bottom-full left-0 z-50 mb-2 w-[280px] rounded-lg border p-3 shadow-lg"
+              style={{
+                borderColor: "var(--border)",
+                background: "var(--white)",
+                boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
+              }}
+            >
                 <div className="mb-2 flex items-center justify-between">
                   <div>
                     <div className="text-[13px] font-medium" style={{ color: "var(--ink)" }}>Add web URL</div>
@@ -780,8 +872,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
                     Add
                   </button>
                 </div>
-              </div>
-            </>
+            </div>
           )}
         </div>
         )}
@@ -851,19 +942,72 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
             ? (activeElicitation?.multiSelect
               ? "Add your own answer or select options above…"
               : "Or type your own answer…")
-            : "Ask…"
+            : `Ask ${agentName || "the agent"} anything, or type / for skills…`
           }
           rows={1}
-          className="max-h-[120px] flex-1 resize-none rounded-[5px] py-1.5 px-3 font-sans text-[13px] leading-[1.6] outline-none transition"
-          style={{
-            background: "var(--white)",
-            border: "1px solid var(--border)",
-            color: "var(--ink)",
-          }}
-          onFocus={(e) => (e.currentTarget.style.borderColor = "var(--accent)")}
-          onBlur={(e) => (e.currentTarget.style.borderColor = "var(--border)")}
+          className="order-1 max-h-[140px] w-full resize-none py-1 font-sans text-[13px] leading-[1.6] outline-none placeholder:text-ink-faint"
+          style={{ color: "var(--ink)" }}
         />
 
+        {/* Toolbar row — model/thinking controls + send hint + send,
+            laid out below the full-width textarea via flex order. */}
+        {!isElicitation && onToggleYolo && (
+          <button
+            type="button"
+            onClick={onToggleYolo}
+            disabled={yoloLocked}
+            title={
+              yoloLocked
+                ? "YOLO mode is forced on for all agents — turn off the global override in Settings → General"
+                : yoloMode
+                  ? "YOLO mode on — tools execute immediately without approval. Click to restore approval gates."
+                  : "YOLO mode — skip approval gates for this agent. Tools execute immediately without confirmation."
+            }
+            className={`order-3 flex items-center gap-1.5 rounded-[8px] border px-2.5 py-1.5 text-[12px] font-medium transition-colors ${
+              yoloMode
+                ? "border-danger/50 bg-danger-tint text-danger"
+                : "border-line bg-surface text-ink-muted hover:text-ink"
+            } ${yoloLocked ? "cursor-not-allowed opacity-70" : "cursor-pointer"}`}
+          >
+            <Flame className="h-3.5 w-3.5" />
+            YOLO
+          </button>
+        )}
+        {!isElicitation && (
+          <div className="order-3 flex items-center gap-1.5">
+            {model?.supports_thinking && (
+              <ThinkingToggle
+                enabled={thinkingEnabled}
+                effort={thinkingEffort}
+                efforts={model.thinking_efforts || ["low", "medium", "high"]}
+                onToggle={(enabled) => setThinkingEnabled(enabled)}
+                onEffortChange={setThinkingEffort}
+              />
+            )}
+            {contextTokens != null && maxContextTokens != null && maxContextTokens > 0 && (
+              <ContextCircle
+                contextTokens={contextTokens}
+                cachedTokens={cachedTokens}
+                maxContextTokens={maxContextTokens}
+                compacted={compacted}
+                breakdown={contextBreakdown}
+              />
+            )}
+          </div>
+        )}
+        {/* Right cluster — picker + send share one flex item in the outer
+            wrap so send pins to the row's right edge; the send keyhint lives
+            on the button tooltip to keep everything on one line at 672px. */}
+        <div className="order-4 ml-auto flex min-w-0 items-center gap-2">
+        {!isElicitation && (
+          <div className="flex min-w-0 items-center">
+            <ModelPicker
+              defaultProviderId={defaultProviderId}
+              defaultModelName={defaultModelName}
+              onChange={(m) => onModelChange?.(m)}
+            />
+          </div>
+        )}
         {/* Send / Stop — stop button replaces send while a run is active */}
         {(() => {
           // Show stop button when a run is active (disabled && not elicitation)
@@ -872,7 +1016,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
             return (
               <button
                 onClick={onStop}
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[5px] border transition"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[12px] border transition"
                 style={{
                   background: "var(--danger, #dc2626)",
                   color: "var(--white)",
@@ -894,12 +1038,13 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
           // Send button
           const canSend = isElicitation
             ? (text.trim() || selectedOptions.size > 0)
-            : (text.trim() && !disabled);
+            : ((text.trim() || attachments.length > 0) && !disabled && pendingFiles === 0);
           return (
           <button
             onClick={handleSend}
             disabled={!canSend}
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[5px] border transition"
+            title="Send · ↵ (⇧↵ new line)"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[12px] border transition"
             style={{
               background: "var(--ink)",
               color: "var(--white)",
@@ -922,6 +1067,13 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
           </button>
           );
         })()}
+        </div>
+      </div>
+
+      {/* Keyhint — lives under the card so the toolbar row can stay a
+          single line at the composer's fixed 672px width. */}
+      <div className="mx-auto mt-1.5 flex max-w-[672px] select-none justify-end text-[10px] text-ink-faint">
+        ↵ send · ⇧↵ new line
       </div>
 
       {/* Drag-and-drop overlay */}
@@ -991,7 +1143,7 @@ function ContextCircle({
   const ratio = contextTokens / maxContextTokens;
   const isWarning = ratio > 0.7;
   const color = isWarning ? "var(--warning)" : "var(--brand-2)";
-  const trackColor = "#E0DFDC";
+  const trackColor = "var(--border)";
   const radius = 7;
   const circumference = 2 * Math.PI * radius;
   const dashOffset = circumference - (pct / 100) * circumference;
@@ -1059,7 +1211,7 @@ function ContextCircle({
 
           {/* Stacked bar showing section proportions */}
           {sections.length > 0 && (
-            <div className="mb-2.5 flex h-2 w-full overflow-hidden rounded-full" style={{ background: "#E0DFDC" }}>
+            <div className="mb-2.5 flex h-2 w-full overflow-hidden rounded-full" style={{ background: "var(--border)" }}>
               {sections.map((s) => (
                 <div
                   key={s.label}

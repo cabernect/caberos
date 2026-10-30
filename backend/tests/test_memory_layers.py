@@ -2,14 +2,14 @@
 
 Layers:
 1. Episodic — session summaries (FTS5) + raw messages (FTS5)
-2. Working — run-scoped memory_entries, deleted at run end
-3. Semantic — MEMORY.md (file, auto-extracted at run end)
-4. KG — memory_triples (auto-extracted at session close)
+2. Working — run-scoped scratch, retained until clean session-close learning
+3. Core — bounded MEMORY.md with curated updates
+4. KG — memory_triples maintained through explicit memory tools
 
 Also tests:
 - search_history tool (episodic — exact recall)
 - search_session_summaries (episodic — topical recall)
-- close_session (summary + KG extraction)
+- close_session (summary + validated durable learning)
 - find_idle_sessions (sweeper query)
 - clear_run_entries (working memory cleanup)
 """
@@ -74,6 +74,26 @@ class TestEpisodicIndexing:
         results = await search_history(db, "test-agent", "connection string")
         assert len(results) == 1
         assert "postgres://localhost:5432" in results[0]["content"]
+
+    async def test_search_history_natural_language(self, db):
+        """A query full of FTS5 operators must not raise 'no such column'."""
+        from agentos.memory.episodic import index_message, search_history
+
+        await index_message(
+            db,
+            message_id="m1",
+            run_id="r1",
+            session_id="s1",
+            agent_id="a1",
+            content="the deployment failed with ECONNREFUSED on port 443",
+        )
+        await db.commit()
+
+        results = await search_history(db, "a1", 'why did "deploy" fail: ECONNREFUSED?')
+        assert any("ECONNREFUSED" in r["content"] for r in results)
+
+        # Pure-symbol input returns [] instead of erroring.
+        assert await search_history(db, "a1", "::: --- (((") == []
 
     async def test_search_history_no_results(self, db):
         from agentos.memory.episodic import search_history
@@ -349,7 +369,35 @@ class TestSearchHistoryTool:
     async def test_search_history_tool_executes(self, db):
         from agentos.capabilities.tools.memory import search_history
         from agentos.memory.episodic import index_message
+        from agentos.models.run import Message, Run
+        from agentos.models.session import Session
 
+        # Scoped history joins real Session/Run rows — seed the chain.
+        db.add(
+            Session(
+                id="sess-1",
+                agent_id="test-agent",
+                contact_id="contact-1",
+            )
+        )
+        db.add(
+            Run(
+                id="run-1",
+                session_id="sess-1",
+                contact_id="contact-1",
+                agent_id="test-agent",
+                status="completed",
+            )
+        )
+        db.add(
+            Message(
+                id="msg-1",
+                run_id="run-1",
+                role="user",
+                content="Error: connection refused on port 5432",
+                seq=0,
+            )
+        )
         await index_message(
             db,
             message_id="msg-1",

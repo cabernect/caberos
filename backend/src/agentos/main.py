@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 
 # Fix SSL certificate verification for LiteLLM's remote model catalog fetch
 # and httpx requests. On macOS behind a corporate firewall/proxy, the system
@@ -26,16 +27,20 @@ from .api import (  # noqa: E402
     agent_files,
     agents,
     approvals,
+    browser,
     channels,
     chat,
     data,
+    dependencies,
     elicitation,
+    home,
     knowledge,
     mcp,
     notifications,
     observability,
     providers,
     scheduler,
+    schedules,
     settings,
     skills,
 )
@@ -49,33 +54,244 @@ configure_logging()
 # Background sweeper task handle
 _sweeper_task: asyncio.Task | None = None
 
+# The sweeper sleeps until the next idle deadline instead of polling on a
+# fixed tick. These bounds apply when no deadline is nearer: a floor so a
+# wake can't spin, and a cap so a missed poke self-heals within 5 minutes.
+_SWEEP_MIN_SLEEP_SECONDS = 5.0
+_SWEEP_FALLBACK_SECONDS = 300.0
+# Retry scan for reflections skipped because the agent was busy at close:
+# bounded to recently-closed dashboard sessions so the pass stays cheap.
+_REFLECTION_RETRY_LOOKBACK_DAYS = 7
+_REFLECTION_RETRY_LIMIT = 50
+
 
 async def _session_sweeper() -> None:
-    """Periodic sweeper (Trigger 2): close idle sessions every 5 minutes.
+    """Deadline-driven sweeper (Trigger 2): wake when a session's idle
+    deadline arrives, close what's due, retry skipped reflections, repeat.
 
-    Catches sessions that were abandoned (user never came back) — the case
-    the lazy trigger at run start can't handle. Costs one indexed query
-    per sweep; does real work only when it finds stale sessions.
+    Deadlines derive from persisted ``last_activity_at`` + the agent's live
+    ``limits.session_idle_timeout_min``, so a restart loses nothing —
+    overdue sessions are simply due on the first pass. Producers poke the
+    wake event when deadline-relevant state changes (session created or
+    resumed, run finished, agent config saved).
     """
+    from .memory import episodic
+
+    wake = asyncio.Event()
+    episodic.register_session_wake(wake)
+    try:
+        while True:
+            wake.clear()
+            try:
+                wait_seconds = await _sweep_once()
+            except Exception as e:
+                print(f"[sweeper] Error: {e}")
+                wait_seconds = _SWEEP_FALLBACK_SECONDS
+            try:
+                await asyncio.wait_for(wake.wait(), timeout=wait_seconds)
+            except TimeoutError:
+                pass
+    finally:
+        episodic.register_session_wake(None)
+
+
+async def _sweep_once() -> float:
+    """One sweep pass: close due sessions, retry pending reflections, and
+    return seconds until the next idle deadline."""
+    from .agent_service import get_active_config
     from .db import async_session_factory
+    from .memory.episodic import (
+        close_session,
+        find_idle_sessions,
+        session_idle_age_minutes,
+    )
+    from .models.session import Session
 
-    while True:
-        await asyncio.sleep(300)  # 5 minutes
+    now = datetime.now(UTC)
+
+    # Snapshot tuples only — close attempts run on their OWN DB sessions so
+    # a failing close never starves the rest of the pass.
+    async with async_session_factory() as db:
+        open_sessions = [
+            (s.id, s.agent_id, s.contact_id, s.last_activity_at)
+            for s in await find_idle_sessions(db)
+        ]
+        configs: dict[str, object] = {}
+        for _, aid, _, _ in open_sessions:
+            if aid not in configs:
+                configs[aid] = await get_active_config(db, aid)
+
+    due: list[tuple[str, str, str]] = []
+    next_deadline = _SWEEP_FALLBACK_SECONDS
+    for sid, aid, cid, last_activity in open_sessions:
+        cfg = configs.get(aid)
+        timeout_min = cfg.limits.session_idle_timeout_min if cfg is not None else 30
+        last = last_activity
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=UTC)
+        remaining = timeout_min * 60 - (now - last).total_seconds()
+        if remaining <= 0:
+            due.append((sid, aid, cid))
+        else:
+            next_deadline = min(next_deadline, remaining)
+
+    for sid, aid, cid in due:
         try:
-            from .agent_service import get_active_config
-            from .memory.episodic import close_session, find_idle_sessions
+            async with async_session_factory() as owned:
+                sess = await owned.get(Session, sid)
+                if sess is None:
+                    continue
+                agent_config = await get_active_config(owned, aid)
+                if agent_config is None:
+                    continue
+                # Re-check under a fresh read — activity may have landed
+                # between the scan and this close attempt.
+                if session_idle_age_minutes(sess) < agent_config.limits.session_idle_timeout_min:
+                    continue
+                await close_session(owned, agent_config, sess, cid)
+        except Exception as exc:
+            # Generic type only — provider bodies may carry private
+            # content; the pass continues with the next candidate.
+            print(f"[sweeper] Idle close failed for session {sid}: {type(exc).__name__}")
+    if due:
+        print("[sweeper] Idle session pass finished")
 
-            async with async_session_factory() as db:
-                idle = await find_idle_sessions(db, idle_minutes=30)
-                for session in idle:
-                    agent_config = await get_active_config(db, session.agent_id)
-                    if agent_config:
-                        await close_session(db, agent_config, session, session.contact_id)
-                await db.commit()
-                if idle:
-                    print(f"[sweeper] Closed {len(idle)} idle session(s)")
-        except Exception as e:
-            print(f"[sweeper] Error: {e}")
+    await _retry_pending_reflections()
+    return max(_SWEEP_MIN_SLEEP_SECONDS, next_deadline)
+
+
+async def _retry_pending_reflections() -> None:
+    """Retry closed sessions whose reflection was skipped while the agent
+    was busy — an unclaimed evidence fingerprint is the pending marker, and
+    reflect_session self-gates on claimed evidence, busy agents, and
+    sessions with nothing to reflect on."""
+    from sqlalchemy import select
+
+    from .agent_service import get_active_config
+    from .db import async_session_factory
+    from .memory.episodic import TERMINAL_RUN_STATUSES, terminal_run_ids
+    from .models.contact import Contact
+    from .models.run import Run
+    from .models.session import Session
+    from .reflection import reflect_session
+
+    cutoff = datetime.now(UTC) - timedelta(days=_REFLECTION_RETRY_LOOKBACK_DAYS)
+    async with async_session_factory() as db:
+        meta = [
+            (s.id, s.agent_id, s.contact_id)
+            for s in await db.scalars(
+                select(Session)
+                .join(Contact, Contact.id == Session.contact_id)
+                .where(
+                    Session.closed.is_(True),
+                    Contact.channel == "dashboard_chat",
+                    Session.last_activity_at >= cutoff,
+                )
+                .order_by(Session.last_activity_at.desc())
+                .limit(_REFLECTION_RETRY_LIMIT)
+            )
+        ]
+
+    busy_agents: set[str] = set()
+    checked_agents: set[str] = set()
+    for sid, aid, cid in meta:
+        try:
+            if aid in busy_agents:
+                continue
+            if aid not in checked_agents:
+                async with async_session_factory() as db:
+                    active = await db.scalar(
+                        select(Run.id)
+                        .where(
+                            Run.agent_id == aid,
+                            Run.trigger != "reflection",
+                            Run.is_test.is_(False),
+                            Run.status.not_in(TERMINAL_RUN_STATUSES),
+                        )
+                        .limit(1)
+                    )
+                checked_agents.add(aid)
+                if active is not None:
+                    busy_agents.add(aid)
+                    continue
+            async with async_session_factory() as owned:
+                sess = await owned.get(Session, sid)
+                agent_config = await get_active_config(owned, aid)
+                if sess is None or agent_config is None:
+                    continue
+                await reflect_session(
+                    owned, agent_config, sess, cid, await terminal_run_ids(owned, sess, cid)
+                )
+        except Exception as exc:
+            print(f"[sweeper] Reflection retry failed for session {sid}: {type(exc).__name__}")
+
+
+async def reconcile_pending_approvals(db) -> int:
+    """Mark every still-pending ApprovalRequest interrupted at startup.
+
+    The wait lives in an in-memory asyncio.Event (B42) — a restart orphans
+    the row even when its Run row already carries a terminal status. Left
+    pending, a stale card still renders approve/deny and the click writes
+    a successful decision on a dead run.
+
+    Also writes a ``tool_call`` row per stale approval so the run's timeline
+    shows the parked call as interrupted instead of vanishing silently —
+    tool_call messages persist only on terminal status, and a killed
+    pending call never gets one. Returns the count marked.
+    """
+    import json
+    import uuid
+
+    from sqlalchemy import func, select, update
+
+    from .models.approval import ApprovalRequest
+    from .models.run import Message
+
+    stale = (
+        (await db.execute(select(ApprovalRequest).where(ApprovalRequest.status == "pending")))
+        .scalars()
+        .all()
+    )
+    if not stale:
+        return 0
+
+    next_seq: dict[str, int] = {}
+    for approval in stale:
+        if approval.run_id not in next_seq:
+            next_seq[approval.run_id] = (
+                await db.scalar(
+                    select(func.coalesce(func.max(Message.seq), -1)).where(
+                        Message.run_id == approval.run_id
+                    )
+                )
+                or -1
+            ) + 1
+        db.add(
+            Message(
+                id=str(uuid.uuid4()),
+                run_id=approval.run_id,
+                role="tool_call",
+                content=json.dumps(
+                    {
+                        "id": f"interrupted-{approval.id}",
+                        "capability": approval.capability_name,
+                        "args": json.loads(approval.args or "{}"),
+                        "status": "interrupted",
+                        "result": "Gateway restarted while awaiting approval",
+                        "approval_id": approval.id,
+                    }
+                ),
+                seq=next_seq[approval.run_id],
+            )
+        )
+        next_seq[approval.run_id] += 1
+
+    await db.execute(
+        update(ApprovalRequest)
+        .where(ApprovalRequest.id.in_([a.id for a in stale]))
+        .values(status="interrupted", decided_by="system_restart")
+    )
+    return len(stale)
 
 
 @asynccontextmanager
@@ -112,10 +328,26 @@ async def lifespan(app: FastAPI):
     async with async_session_factory() as db:
 
         async def _reconcile_runs() -> None:
-            # Find orphaned running runs
+            # Find orphaned runs — pending/awaiting_approval rows are just as
+            # dead as running ones: their in-memory execution context is gone,
+            # so they would sit as zombie "running" rows forever.
             orphaned = await db.execute(
-                select(Run.id, Run.agent_id, Run.session_id).where(Run.status == "running")
+                select(Run.id, Run.agent_id, Run.session_id).where(
+                    Run.status.in_(["pending", "running", "awaiting_approval"])
+                )
             )
+            # Pending approvals die with the process — their wait lives in an
+            # in-memory asyncio.Event (B42), so every pending row is stale at
+            # boot even if its run row already carries a terminal status.
+            marked = await reconcile_pending_approvals(db)
+            if marked:
+                # Commit here — the run-reconcile below early-returns without
+                # committing when no orphaned runs exist.
+                await db.commit()
+                logging.getLogger("agentos.main").info(
+                    "[startup] Marked %d pending approval(s) interrupted", marked
+                )
+
             orphaned_rows = orphaned.all()
             if not orphaned_rows:
                 return
@@ -148,10 +380,79 @@ async def lifespan(app: FastAPI):
                     message="A background run was interrupted by a gateway restart.",
                     action_path=f"/agents/{row.agent_id}/chat?session={row.session_id}",
                     entity_id=row.id,
+                    entity_type="run",
+                    agent_id=row.agent_id,
                 )
             await db.commit()
 
         await retry_locked_transaction(_reconcile_runs, db, "startup_reconcile_runs")
+
+        from .models.skill_reflection import SkillReflection
+
+        async def _reconcile_reflections() -> None:
+            await db.execute(
+                update(SkillReflection)
+                .where(
+                    SkillReflection.outcome == "running",
+                    SkillReflection.run_id.in_(
+                        select(Run.id).where(Run.status.in_(("interrupted", "failed", "stopped")))
+                    ),
+                )
+                .values(outcome="failed", error="interrupted", completed_at=datetime.now(UTC))
+            )
+            await db.commit()
+
+        await retry_locked_transaction(_reconcile_reflections, db, "startup_reconcile_reflections")
+
+        # Retention — the inbox is append-only otherwise (B47).
+        from .notifications import prune_notifications
+
+        async def _prune_notifications() -> None:
+            deleted = await prune_notifications(db)
+            await db.commit()
+            if deleted:
+                logging.getLogger("agentos.main").info(
+                    "[startup] Pruned %d notification(s) older than 30d", deleted
+                )
+
+        try:
+            await retry_locked_transaction(_prune_notifications, db, "startup_prune_notifications")
+        except Exception:
+            logging.getLogger("agentos.main").debug(
+                "[startup] notification prune failed", exc_info=True
+            )
+
+        # Index generations: a gateway kill mid-build leaves a committed
+        # 'building' row that would 409 every future rebuild — reconcile to
+        # 'failed' (same dead-context argument as interrupted runs).
+        from .knowledge.indexing import reconcile_stale_builds
+
+        stale = await reconcile_stale_builds(db)
+        if stale:
+            logging.getLogger("agentos.main").info(
+                "[startup] Marked %d stale index generation(s) failed",
+                stale,
+            )
+
+        # Terminal processes never survive a gateway restart — reconcile
+        # persisted `running` rows to `interrupted`.
+        from .terminal.registry import terminal_registry
+
+        interrupted = await terminal_registry.reconcile_startup(db)
+        if interrupted:
+            logging.getLogger("agentos.main").info(
+                "[startup] Marked %d terminal(s) interrupted from previous run",
+                interrupted,
+            )
+        await db.commit()
+
+    # Sync skills on disk into Skill/SkillRevision rows (W6): seeds built-ins,
+    # migrates legacy imports out of skills/, indexes agent-local workspace dirs.
+    from .skills.reconcile import reconcile_skills
+
+    async with async_session_factory() as db:
+        await retry_locked_transaction(lambda: reconcile_skills(db), db, "startup_reconcile_skills")
+        await db.commit()
 
     # Clean up expired auth sessions from previous runs
     from .auth import cleanup_expired_sessions
@@ -215,7 +516,40 @@ async def lifespan(app: FastAPI):
         lambda t: t.exception() if not t.cancelled() and t.exception() else None
     )
 
+    # W11 catalog worker — polls the auto-refresh toggle (60s tick), never
+    # blocks on network. Schedules configured-provider discovery in the
+    # background so the picker has local offerings without a live fetch.
+    from .models.provider import Provider
+    from .providers.catalog import start_catalog_worker, stop_catalog_worker
+    from .providers.model_catalog import schedule_provider_refresh
+
+    start_catalog_worker()
+
+    async def _discover_providers() -> None:
+        async with async_session_factory() as db:
+            result = await db.execute(select(Provider.id))
+            for (pid,) in result.all():
+                schedule_provider_refresh(pid)
+
+    asyncio.create_task(_discover_providers())
+
     yield
+
+    await stop_catalog_worker()
+
+    # Shutdown: kill every background terminal process group and browser
+    # session first — agents must not orphan processes on gateway exit.
+    from .terminal.registry import terminal_registry
+
+    await terminal_registry.shutdown_all()
+    from .runtime_installer import _INSTALLER
+
+    if _INSTALLER is not None:
+        await _INSTALLER.shutdown()
+
+    from .browser.registry import browser_registry
+
+    await browser_registry.shutdown_all()
 
     # Shutdown: disconnect all MCP servers
     await mcp_registry.disconnect_all()
@@ -290,17 +624,21 @@ app.include_router(providers.router)
 app.include_router(agents.router)
 app.include_router(agent_files.router)
 app.include_router(chat.router)
+app.include_router(home.router)
 app.include_router(approvals.router)
 app.include_router(elicitation.router)
 app.include_router(knowledge.router)
 app.include_router(skills.router)
 app.include_router(scheduler.router)
+app.include_router(schedules.router)
 app.include_router(mcp.router)
 app.include_router(notifications.router)
 app.include_router(channels.router)
 app.include_router(observability.router)
 app.include_router(settings.router)
 app.include_router(data.router)
+app.include_router(browser.router)
+app.include_router(dependencies.router)
 
 
 @app.get("/health")

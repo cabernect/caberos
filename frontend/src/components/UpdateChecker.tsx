@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Download, RotateCcw, X } from "lucide-react";
+import { api } from "@/lib/api";
 import {
   downloadAndInstallUpdate,
   isDesktopMode,
@@ -25,6 +26,23 @@ export function UpdateChecker() {
     }, 3000);
     return () => clearTimeout(timer);
   }, []);
+
+  // W9 — route through the notification pipeline so the event lands in
+  // the inbox with dedup (one row per version) + prefs like every event.
+  useEffect(() => {
+    if (!updater.info?.available) return;
+    void api
+      .emitNotification({
+        notification_type: "update_available",
+        severity: "info",
+        title: "Update available",
+        message: `v${updater.info.latestVersion} is ready to install.`,
+        entity_type: "app",
+        entity_id: "caberos",
+        event_id: `update_available:${updater.info.latestVersion}`,
+      })
+      .catch(() => {});
+  }, [updater.info?.available, updater.info?.latestVersion]);
 
   if (!updater.info?.available || dismissed) return null;
 

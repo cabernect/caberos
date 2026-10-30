@@ -4,6 +4,7 @@ import asyncio
 import uuid
 from types import SimpleNamespace
 
+import litellm
 import pytest
 
 from agentos.config import settings
@@ -42,9 +43,11 @@ async def test_streaming_model_idle_timeout_ends_stalled_stream(monkeypatch):
     adapter = LiteLLMAdapter(db=None)
 
     async def load_provider(_provider_id):
+        # Custom base_url keeps this on the chat-completions path —
+        # api.openai.com providers default to the Responses API now.
         return {
             "api_key": "",
-            "base_url": None,
+            "base_url": "http://localhost:9/compat",
             "org_id": None,
             "extra_params": {},
             "type": "openai",
@@ -212,12 +215,12 @@ def test_workspace_attachment_references_are_used():
                 "type": "file",
                 "mime_type": "text/plain",
                 "filename": "notes.txt",
-                "path": "attachments/attachment_1_notes.txt",
+                "path": "attachments/notes.txt",
             }
         ],
     )
     content = history[1]["content"]
-    assert "attachments/attachment_1_notes.txt" in content
+    assert "attachments/notes.txt" in content
     assert "Hello world" not in content
 
 
@@ -313,6 +316,302 @@ def test_litellm_cached_token_usage_is_extracted():
     assert LiteLLMAdapter._cached_tokens(anthropic_usage) == 275
 
 
+def test_litellm_reasoning_tokens_extraction():
+    """Object or dict usage; value, explicit 0, and missing-as-None."""
+    # Chat completions shape (attr objects).
+    assert (
+        LiteLLMAdapter._reasoning_tokens(
+            SimpleNamespace(completion_tokens_details=SimpleNamespace(reasoning_tokens=42))
+        )
+        == 42
+    )
+    # Responses API shape (dicts).
+    assert LiteLLMAdapter._reasoning_tokens({"output_tokens_details": {"reasoning_tokens": 7}}) == 7
+    # Top-level fallback.
+    assert LiteLLMAdapter._reasoning_tokens(SimpleNamespace(reasoning_tokens=5)) == 5
+    assert LiteLLMAdapter._reasoning_tokens({"reasoning_tokens": 3}) == 3
+    # Explicit 0 is preserved, not collapsed to None.
+    assert (
+        LiteLLMAdapter._reasoning_tokens(
+            SimpleNamespace(completion_tokens_details=SimpleNamespace(reasoning_tokens=0))
+        )
+        == 0
+    )
+    # Missing entirely → None.
+    assert LiteLLMAdapter._reasoning_tokens(SimpleNamespace(prompt_tokens=3)) is None
+    assert LiteLLMAdapter._reasoning_tokens({}) is None
+    assert LiteLLMAdapter._reasoning_tokens(None) is None
+
+
+class _FakeTransport:
+    """Minimal LiteLLMTransport stand-in — returns canned responses/streams."""
+
+    def __init__(self, completion=None, responses=None):
+        self._completion = completion
+        self._responses = responses
+
+    async def completion(self, **_kwargs):
+        result = self._completion() if callable(self._completion) else self._completion
+        return result
+
+    async def responses(self, **_kwargs):
+        result = self._responses() if callable(self._responses) else self._responses
+        return result
+
+
+def _chat_response(reasoning):
+    return SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content="hi", tool_calls=None),
+            )
+        ],
+        usage=SimpleNamespace(
+            prompt_tokens=10,
+            completion_tokens=5,
+            completion_tokens_details=SimpleNamespace(reasoning_tokens=reasoning),
+        ),
+        cost=0.0,
+    )
+
+
+def _chat_stream(reasoning):
+    async def gen():
+        yield SimpleNamespace(
+            choices=[SimpleNamespace(delta=SimpleNamespace(content="hi", tool_calls=None))],
+            usage=None,
+        )
+        yield SimpleNamespace(
+            choices=[],
+            usage=SimpleNamespace(
+                prompt_tokens=10,
+                completion_tokens=5,
+                completion_tokens_details={"reasoning_tokens": reasoning},
+            ),
+        )
+
+    return gen()
+
+
+def _responses_response(reasoning):
+    return SimpleNamespace(
+        output=[
+            SimpleNamespace(
+                type="message",
+                content=[SimpleNamespace(type="output_text", text="hi")],
+            )
+        ],
+        usage=SimpleNamespace(
+            input_tokens=10,
+            output_tokens=5,
+            output_tokens_details=SimpleNamespace(reasoning_tokens=reasoning),
+        ),
+        cost=0.0,
+    )
+
+
+def _responses_stream(reasoning):
+    async def gen():
+        yield SimpleNamespace(type="response.output_text.delta", delta="hi")
+        yield SimpleNamespace(
+            type="response.completed",
+            response=SimpleNamespace(
+                usage={
+                    "input_tokens": 10,
+                    "output_tokens": 5,
+                    "output_tokens_details": {"reasoning_tokens": reasoning},
+                }
+            ),
+        )
+
+    return gen()
+
+
+_CHAT_PROVIDER = {
+    "type": "openai",
+    "base_url": "http://localhost:9/compat",
+    "api_key": "k",
+    "org_id": None,
+    "extra_params": {},
+}
+_RESPONSES_PROVIDER = {
+    "type": "openai",
+    "base_url": None,
+    "api_key": "k",
+    "org_id": None,
+    "extra_params": {},
+}
+
+
+@pytest.mark.asyncio
+async def test_chat_complete_extracts_reasoning_tokens(monkeypatch):
+    adapter = LiteLLMAdapter(db=None, transport=_FakeTransport(completion=_chat_response(17)))
+
+    async def load_provider(_id):
+        return _CHAT_PROVIDER
+
+    monkeypatch.setattr(adapter, "_load_provider", load_provider)
+    result = await adapter.complete(
+        agent_model=ModelConfig(provider_id="p", name="m"),
+        messages=[{"role": "user", "content": "hi"}],
+    )
+    assert result.thinking_tokens == 17
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_extracts_reasoning_tokens(monkeypatch):
+    adapter = LiteLLMAdapter(db=None, transport=_FakeTransport(completion=lambda: _chat_stream(0)))
+
+    async def load_provider(_id):
+        return _CHAT_PROVIDER
+
+    monkeypatch.setattr(adapter, "_load_provider", load_provider)
+    final = None
+    async for kind, payload in adapter.complete_stream(
+        agent_model=ModelConfig(provider_id="p", name="m"),
+        messages=[{"role": "user", "content": "hi"}],
+    ):
+        if kind == "done":
+            final = payload
+    assert final is not None
+    # Explicit 0 from the usage chunk is preserved, not reported as missing.
+    assert final.thinking_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_responses_complete_extracts_reasoning_tokens(monkeypatch):
+    adapter = LiteLLMAdapter(db=None, transport=_FakeTransport(responses=_responses_response(9)))
+
+    async def load_provider(_id):
+        return _RESPONSES_PROVIDER
+
+    monkeypatch.setattr(adapter, "_load_provider", load_provider)
+    result = await adapter.complete(
+        agent_model=ModelConfig(provider_id="p", name="m"),
+        messages=[{"role": "user", "content": "hi"}],
+    )
+    assert result.thinking_tokens == 9
+
+
+@pytest.mark.asyncio
+async def test_responses_stream_extracts_reasoning_tokens(monkeypatch):
+    adapter = LiteLLMAdapter(
+        db=None, transport=_FakeTransport(responses=lambda: _responses_stream(23))
+    )
+
+    async def load_provider(_id):
+        return _RESPONSES_PROVIDER
+
+    monkeypatch.setattr(adapter, "_load_provider", load_provider)
+    final = None
+    async for kind, payload in adapter.complete_stream(
+        agent_model=ModelConfig(provider_id="p", name="m"),
+        messages=[{"role": "user", "content": "hi"}],
+    ):
+        if kind == "done":
+            final = payload
+    assert final is not None
+    assert final.thinking_tokens == 23
+
+
+@pytest.mark.asyncio
+async def test_responses_reasoning_request_asks_for_summary(monkeypatch):
+    """Without reasoning.summary the Responses API reports reasoning tokens in
+    usage but emits zero summary deltas — thinking never reaches the UI."""
+    captured: dict = {}
+
+    class _RecordingTransport:
+        async def responses(self, **kwargs):
+            captured.update(kwargs)
+            return _responses_response(0)
+
+    adapter = LiteLLMAdapter(db=None, transport=_RecordingTransport())
+
+    async def load_provider(_id):
+        return _RESPONSES_PROVIDER
+
+    monkeypatch.setattr(adapter, "_load_provider", load_provider)
+    await adapter.complete(
+        agent_model=ModelConfig(
+            provider_id="p", name="m", thinking_enabled=True, thinking_effort="high"
+        ),
+        messages=[{"role": "user", "content": "hi"}],
+    )
+    assert captured["reasoning"] == {"effort": "high", "summary": "auto"}
+
+
+@pytest.mark.asyncio
+async def test_responses_stream_reasoning_request_asks_for_summary(monkeypatch):
+    captured: dict = {}
+
+    class _RecordingTransport:
+        async def responses(self, **kwargs):
+            captured.update(kwargs)
+            return _responses_stream(0)
+
+    adapter = LiteLLMAdapter(db=None, transport=_RecordingTransport())
+
+    async def load_provider(_id):
+        return _RESPONSES_PROVIDER
+
+    monkeypatch.setattr(adapter, "_load_provider", load_provider)
+    async for _kind, _payload in adapter.complete_stream(
+        agent_model=ModelConfig(
+            provider_id="p", name="m", thinking_enabled=True, thinking_effort="high"
+        ),
+        messages=[{"role": "user", "content": "hi"}],
+    ):
+        pass
+    assert captured["reasoning"] == {"effort": "high", "summary": "auto"}
+
+
+@pytest.mark.asyncio
+async def test_responses_reasoning_disabled_omits_summary(monkeypatch):
+    """effort=none produces no reasoning — a summary request would be noise."""
+    captured: dict = {}
+
+    class _RecordingTransport:
+        async def responses(self, **kwargs):
+            captured.update(kwargs)
+            return _responses_response(0)
+
+    adapter = LiteLLMAdapter(db=None, transport=_RecordingTransport())
+
+    async def load_provider(_id):
+        return _RESPONSES_PROVIDER
+
+    monkeypatch.setattr(adapter, "_load_provider", load_provider)
+    await adapter.complete(
+        agent_model=ModelConfig(provider_id="p", name="m", thinking_enabled=False),
+        messages=[{"role": "user", "content": "hi"}],
+    )
+    assert captured["reasoning"] == {"effort": "none"}
+
+
+@pytest.mark.asyncio
+async def test_missing_reasoning_tokens_stays_none(monkeypatch):
+    adapter = LiteLLMAdapter(
+        db=None,
+        transport=_FakeTransport(
+            completion=SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="hi", tool_calls=None))],
+                usage=SimpleNamespace(prompt_tokens=10, completion_tokens=5),
+                cost=0.0,
+            )
+        ),
+    )
+
+    async def load_provider(_id):
+        return _CHAT_PROVIDER
+
+    monkeypatch.setattr(adapter, "_load_provider", load_provider)
+    result = await adapter.complete(
+        agent_model=ModelConfig(provider_id="p", name="m"),
+        messages=[{"role": "user", "content": "hi"}],
+    )
+    assert result.thinking_tokens is None
+
+
 @pytest.mark.asyncio
 async def test_harness_preserves_cached_token_usage(db, workspace):
     config = AgentConfig(
@@ -333,6 +632,110 @@ async def test_harness_preserves_cached_token_usage(db, workspace):
 
     assert result.tokens_in == 500
     assert result.cached_tokens == 350
+
+
+async def _make_run_rows(db, agent_id: str, run_id: str):
+    from agentos.models.agent import Agent
+    from agentos.models.contact import Contact
+    from agentos.models.run import Run
+    from agentos.models.session import Session
+
+    agent = Agent(id=agent_id, name="Test Agent", enabled=True)
+    contact = Contact(
+        id=f"c-{run_id}", channel="dashboard_chat", bot_id=agent_id, external_user_id="e"
+    )
+    session = Session(id=f"s-{run_id}", contact_id=contact.id, agent_id=agent_id)
+    run = Run(id=run_id, session_id=session.id, contact_id=contact.id, agent_id=agent_id)
+    db.add_all([agent, contact, session, run])
+    await db.commit()
+    return session
+
+
+@pytest.mark.asyncio
+async def test_harness_records_each_model_call(db, workspace):
+    """Every model request lands as a ModelCall row with turn, tokens, status."""
+    from sqlalchemy import select
+
+    from agentos.models.model_call import ModelCall
+    from agentos.syscall.mediator import SyscallHandler
+
+    await _make_run_rows(db, "a-mc", "r-mc")
+    config = AgentConfig(
+        id="a-mc",
+        name="MC Agent",
+        model=ModelConfig(provider_id="test-provider", name="test-model"),
+        capabilities=[CapabilityGrant(name="datetime_now")],
+    )
+    model = ScriptedModel(
+        [
+            ScriptedResponse(
+                tool_calls=[{"id": "t1", "name": "datetime_now", "args": {}}],
+                content="",
+                tokens_in=10,
+                tokens_out=5,
+            ),
+            ScriptedResponse(
+                tool_calls=[], content="done", tokens_in=20, tokens_out=8, thinking_tokens=4
+            ),
+        ]
+    )
+
+    result = await Harness(model=model).run(
+        agent_config=config,
+        session=None,
+        message="hi",
+        syscall_handler=SyscallHandler(db=db, workspace_path=workspace),
+        run_id="r-mc",
+    )
+    assert result.status == "completed"
+    assert result.thinking_tokens == 4
+
+    rows = (await db.execute(select(ModelCall).where(ModelCall.run_id == "r-mc"))).scalars().all()
+    assert len(rows) == 2
+    assert {r.turn for r in rows} == {1, 2}
+    assert all(r.status == "ok" for r in rows)
+    assert rows[0].tokens_in == 10
+    assert rows[1].tokens_in == 20
+    assert all(r.provider_id == "test-provider" for r in rows)
+    assert all(r.kind == "chat" for r in rows)
+    assert all(r.purpose == "reasoning" for r in rows)
+    assert rows[0].thinking_tokens is None
+    assert rows[1].thinking_tokens == 4
+
+
+@pytest.mark.asyncio
+async def test_harness_records_failed_model_call(db, workspace):
+    """A provider exception still leaves a ModelCall row with status=error."""
+    from sqlalchemy import select
+
+    from agentos.models.model_call import ModelCall
+    from agentos.syscall.mediator import SyscallHandler
+
+    await _make_run_rows(db, "a-mf", "r-mf")
+    config = AgentConfig(
+        id="a-mf",
+        name="MF Agent",
+        model=ModelConfig(provider_id="test-provider", name="test-model"),
+        capabilities=[],
+    )
+
+    class BrokenModel:
+        async def complete(self, **_kwargs):
+            raise RuntimeError("provider exploded")
+
+    result = await Harness(model=BrokenModel()).run(
+        agent_config=config,
+        session=None,
+        message="hi",
+        syscall_handler=SyscallHandler(db=db, workspace_path=workspace),
+        run_id="r-mf",
+    )
+    assert result.status == "failed"
+
+    row = await db.scalar(select(ModelCall).where(ModelCall.run_id == "r-mf"))
+    assert row is not None
+    assert row.status == "error"
+    assert "provider exploded" in row.error
 
 
 @pytest.mark.asyncio
@@ -613,8 +1016,154 @@ async def test_opencode_gpt_uses_responses_reasoning(monkeypatch):
     assert result.content == "done"
     assert captured["model"] == "openai/gpt-5.2"
     assert captured["api_base"] == "https://opencode.ai/zen/v1"
-    assert captured["reasoning"] == {"effort": "high"}
+    assert captured["reasoning"] == {"effort": "high", "summary": "auto"}
     assert "reasoning_effort" not in captured
+
+
+@pytest.mark.asyncio
+async def test_plain_openai_defaults_to_responses_api(monkeypatch):
+    """api.openai.com providers route through /v1/responses — reasoning models
+    only accept tools there, and every catalog model works on it."""
+    adapter = LiteLLMAdapter(db=None)
+    provider = {
+        "type": "openai",
+        "base_url": None,
+        "api_key": "sk-test",
+        "org_id": None,
+        "extra_params": {},
+    }
+
+    async def load_provider(_provider_id):
+        return provider
+
+    captured = {}
+
+    async def fake_aresponses(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            output=[
+                SimpleNamespace(
+                    type="message",
+                    content=[SimpleNamespace(type="output_text", text="hi")],
+                )
+            ],
+            usage=SimpleNamespace(input_tokens=3, output_tokens=1),
+            cost=0.0,
+        )
+
+    async def acompletion_should_not_run(**_kwargs):
+        raise AssertionError("chat completions must not be used for api.openai.com")
+
+    monkeypatch.setattr(adapter, "_load_provider", load_provider)
+    monkeypatch.setattr("agentos.harness.litellm_adapter.litellm.aresponses", fake_aresponses)
+    monkeypatch.setattr(
+        "agentos.harness.litellm_adapter.litellm.acompletion", acompletion_should_not_run
+    )
+
+    result = await adapter.complete(
+        agent_model=ModelConfig(provider_id="openai", name="gpt-6-luna"),
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {"name": "t", "parameters": {"type": "object", "properties": {}}},
+            }
+        ],
+    )
+
+    assert result.content == "hi"
+    assert captured["model"] == "openai/gpt-6-luna"
+    assert captured["api_base"] is None
+    assert captured["tools"] == [
+        {
+            "type": "function",
+            "name": "t",
+            "description": "",
+            "parameters": {"type": "object", "properties": {}},
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_chat_completions_retries_on_responses_hint(monkeypatch):
+    """Custom-base_url providers stay on chat completions, but a server error
+    pointing at /v1/responses triggers one transparent retry."""
+    adapter = LiteLLMAdapter(db=None)
+    provider = {
+        "type": "openai",
+        "base_url": "https://compat.example/v1",
+        "api_key": "k",
+        "org_id": None,
+        "extra_params": {},
+    }
+
+    async def load_provider(_provider_id):
+        return provider
+
+    async def acompletion(**_kwargs):
+        raise litellm.BadRequestError(
+            message=(
+                "Function tools with reasoning_effort are not supported for "
+                "new-model in /v1/chat/completions. To use function tools, use "
+                "/v1/responses or set reasoning_effort to 'none'."
+            ),
+            model="openai/new-model",
+            llm_provider="openai",
+        )
+
+    async def fake_aresponses(**kwargs):
+        return SimpleNamespace(
+            output=[
+                SimpleNamespace(
+                    type="message",
+                    content=[SimpleNamespace(type="output_text", text="via responses")],
+                )
+            ],
+            usage=SimpleNamespace(input_tokens=2, output_tokens=1),
+            cost=0.0,
+        )
+
+    monkeypatch.setattr(adapter, "_load_provider", load_provider)
+    monkeypatch.setattr("agentos.harness.litellm_adapter.litellm.acompletion", acompletion)
+    monkeypatch.setattr("agentos.harness.litellm_adapter.litellm.aresponses", fake_aresponses)
+
+    result = await adapter.complete(
+        agent_model=ModelConfig(provider_id="compat", name="new-model"),
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert result.content == "via responses"
+
+
+@pytest.mark.asyncio
+async def test_chat_completions_error_without_responses_hint_propagates(monkeypatch):
+    """Unrelated API errors surface honestly — no silent retry."""
+    adapter = LiteLLMAdapter(db=None)
+
+    async def load_provider(_provider_id):
+        return {
+            "type": "openai",
+            "base_url": "https://compat.example/v1",
+            "api_key": "k",
+            "org_id": None,
+            "extra_params": {},
+        }
+
+    async def acompletion(**_kwargs):
+        raise litellm.BadRequestError(
+            message="Unsupported parameter: 'max_tokens'",
+            model="openai/x",
+            llm_provider="openai",
+        )
+
+    monkeypatch.setattr(adapter, "_load_provider", load_provider)
+    monkeypatch.setattr("agentos.harness.litellm_adapter.litellm.acompletion", acompletion)
+
+    with pytest.raises(litellm.BadRequestError, match="max_tokens"):
+        await adapter.complete(
+            agent_model=ModelConfig(provider_id="compat", name="x"),
+            messages=[{"role": "user", "content": "hi"}],
+        )
 
 
 def test_opencode_zen_reasoning_fields_match_endpoint():
@@ -739,3 +1288,507 @@ async def test_agent_answers_question_using_doc_search(db, workspace, tmp_path):
     assert result.tool_calls_made[0]["name"] == "doc_search"
     assert result.tool_calls_made[0]["allowed"] is True
     assert result.tool_calls_made[0]["result"]["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_tool_result_hard_cap(db, workspace):
+    """A single tool result can never exceed TOOL_RESULT_MAX_CHARS in history."""
+    from agentos.harness.loop import TOOL_RESULT_MAX_CHARS
+    from agentos.syscall.protocol import SyscallResult
+
+    class RecordingModel(ScriptedModel):
+        def __init__(self, responses):
+            super().__init__(responses)
+            self.seen: list[list[dict]] = []
+
+        async def complete_stream(self, agent_model=None, messages=None, tools=None, **kw):
+            self.seen.append(messages)
+            async for item in super().complete_stream(
+                agent_model=agent_model, messages=messages, tools=tools
+            ):
+                yield item
+
+    class GiantSyscall:
+        async def mediate(self, call, **kwargs):
+            return SyscallResult(output={"content": "x" * 60_000}, allowed=True)
+
+    config = AgentConfig(
+        id="cap-test",
+        name="Cap Test",
+        model=ModelConfig(provider_id="test", name="scripted"),
+        capabilities=[CapabilityGrant(name="read_file")],
+    )
+    model = RecordingModel(
+        [
+            ScriptedResponse(
+                tool_calls=[{"id": "r1", "name": "read_file", "args": {"path": "big.txt"}}]
+            ),
+            ScriptedResponse(content="done"),
+        ]
+    )
+    result = await Harness(model=model).run(
+        agent_config=config,
+        session=None,
+        message="read big.txt",
+        syscall_handler=GiantSyscall(),
+        run_id=str(uuid.uuid4()),
+    )
+    assert result.status == "completed"
+    tool_msg = next(m for m in model.seen[1] if m["role"] == "tool")
+    assert len(tool_msg["content"]) < 60_000
+    assert "[truncated" in tool_msg["content"]
+    assert str(TOOL_RESULT_MAX_CHARS) in tool_msg["content"]
+
+
+@pytest.mark.asyncio
+async def test_context_overflow_forces_compaction_and_retries(db, workspace, monkeypatch):
+    """A mid-run context-window error triggers one forced compaction + retry."""
+    from types import SimpleNamespace
+
+    from agentos.harness import compaction as compaction_mod
+
+    async def fake_summary(
+        middle, previous_summary, model_str, api_key=None, base_url=None, use_responses=False, **_kw
+    ):
+        return "condensed earlier conversation"
+
+    monkeypatch.setattr(compaction_mod, "generate_summary", fake_summary)
+
+    class OverflowOnceModel(ScriptedModel):
+        def __init__(self, responses):
+            super().__init__(responses)
+            self.overflows = 0
+            self.seen: list[list[dict]] = []
+
+        async def complete_stream(self, agent_model=None, messages=None, tools=None, **kw):
+            if self.overflows == 0:
+                self.overflows += 1
+                raise Exception(
+                    "Error code: 400 — this model's maximum context length is 8192 tokens"
+                )
+            self.seen.append(messages)
+            async for item in super().complete_stream(
+                agent_model=agent_model, messages=messages, tools=tools
+            ):
+                yield item
+
+    # Prior messages fat enough that the token-budget tail walk stops before
+    # reaching the head — leaving a middle section for compaction to summarize
+    # (tail budget ≈ 18k tokens; ~4k chars ≈ ~1k tokens per message).
+    recent = [
+        SimpleNamespace(
+            role="user" if i % 2 == 0 else "assistant", content=f"msg {i} " + "y" * 4000
+        )
+        for i in range(26)
+    ]
+    config = AgentConfig(
+        id="overflow-test",
+        name="Overflow Test",
+        model=ModelConfig(provider_id="test", name="scripted"),
+        capabilities=[],
+    )
+    model = OverflowOnceModel([ScriptedResponse(content="recovered")])
+    result = await Harness(model=model).run(
+        agent_config=config,
+        session=None,
+        message="continue",
+        syscall_handler=StubSyscallHandler(db=db, workspace_path=workspace),
+        run_id=str(uuid.uuid4()),
+        recent_messages=recent,
+    )
+    assert result.status == "completed"
+    assert result.final_answer == "recovered"
+    assert result.compacted is True
+    assert model.overflows == 1
+    # The retry saw a compacted history — the summary stub replaced the middle.
+    retry_text = str(model.seen[0])
+    assert "condensed earlier conversation" in retry_text
+    assert "msg 25" in retry_text  # tail survived
+
+
+@pytest.mark.asyncio
+async def test_context_overflow_fails_clearly_when_unrecoverable(db, workspace):
+    """If compaction cannot shrink the context, the run fails with a clear message."""
+
+    class AlwaysOverflowModel:
+        async def complete_stream(self, **_kwargs):
+            raise Exception("request too large for model context window")
+            yield
+
+    config = AgentConfig(
+        id="overflow-fail",
+        name="Overflow Fail",
+        model=ModelConfig(provider_id="test", name="scripted"),
+        capabilities=[],
+    )
+    result = await Harness(model=AlwaysOverflowModel()).run(
+        agent_config=config,
+        session=None,
+        message="hi",
+        syscall_handler=StubSyscallHandler(db=db, workspace_path=workspace),
+        run_id=str(uuid.uuid4()),
+    )
+    assert result.status == "failed"
+    assert "context" in result.final_answer.lower()
+
+
+def test_is_context_overflow_patterns():
+    from agentos.harness.loop import _is_context_overflow
+
+    assert _is_context_overflow(Exception("maximum context length is 8192"))
+    assert _is_context_overflow(Exception("Request too large for model"))
+    assert _is_context_overflow(Exception("reduce the length of the messages"))
+
+    class ContextWindowExceededError(Exception):
+        pass
+
+    assert _is_context_overflow(ContextWindowExceededError("litellm style"))
+    assert not _is_context_overflow(Exception("rate limit exceeded"))
+    assert not _is_context_overflow(TimeoutError("idle"))
+
+
+@pytest.mark.asyncio
+async def test_responses_cost_recipe_nonstream(monkeypatch):
+    """litellm.completion_cost fixed 0.25 → litellm source; reported usage
+    zeros are honored (no char-estimate fallback), reasoning preserved."""
+    adapter = LiteLLMAdapter(
+        db=None,
+        transport=_FakeTransport(
+            responses=SimpleNamespace(
+                output=[
+                    SimpleNamespace(
+                        type="message",
+                        content=[SimpleNamespace(type="output_text", text="hi")],
+                    )
+                ],
+                usage=SimpleNamespace(
+                    input_tokens=0,
+                    output_tokens=0,
+                    output_tokens_details=SimpleNamespace(reasoning_tokens=0),
+                ),
+                cost=None,
+                _hidden_params={},
+            )
+        ),
+    )
+
+    async def load_provider(_id):
+        return _RESPONSES_PROVIDER
+
+    monkeypatch.setattr(adapter, "_load_provider", load_provider)
+    import litellm as _litellm
+
+    monkeypatch.setattr(
+        _litellm,
+        "completion_cost",
+        lambda **_: (_ for _ in ()).throw(AssertionError("SDK cost hit")),
+        raising=False,
+    )
+    result = await adapter.complete(
+        agent_model=ModelConfig(provider_id="p", name="m"),
+        messages=[{"role": "user", "content": "hi"}],
+    )
+    # W11: without a captured rate snapshot the SDK recipe is never billing.
+    assert result.cost == 0.0
+    assert result.cost_source == "unknown"
+    assert result.tokens_in == 0 and result.tokens_out == 0
+    assert result.thinking_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_responses_cost_recipe_stream_and_provider_precedence(monkeypatch):
+    """Stream path: cost comes from the final completed response object;
+    provider-reported cost (explicit 0) beats the litellm recipe."""
+
+    async def gen():
+        yield SimpleNamespace(type="response.output_text.delta", delta="hi")
+        yield SimpleNamespace(
+            type="response.completed",
+            response=SimpleNamespace(
+                usage={"input_tokens": 0, "output_tokens": 0},
+                cost=0.0,
+            ),
+        )
+
+    adapter = LiteLLMAdapter(db=None, transport=_FakeTransport(responses=lambda: gen()))
+
+    async def load_provider(_id):
+        return _RESPONSES_PROVIDER
+
+    monkeypatch.setattr(adapter, "_load_provider", load_provider)
+
+    # W11: an explicit provider-reported 0 wins — assessed against the
+    # frozen pre-call snapshot, never the SDK recipe.
+    class _A:
+        amount = 0
+        source = "provider"
+        usage = None
+
+    class _Snap:
+        def assess(self, raw, *, family):
+            return _A()
+
+        def receipt(self, a):
+            return {"cost_assessment": {"amount": "0", "source": a.source}}
+
+    from unittest.mock import AsyncMock as _AM
+
+    monkeypatch.setattr(
+        "agentos.harness.litellm_adapter.capture_call_rates",
+        _AM(return_value=_Snap()),
+    )
+    final = None
+    async for kind, payload in adapter.complete_stream(
+        agent_model=ModelConfig(provider_id="p", name="m"),
+        messages=[{"role": "user", "content": "hi"}],
+    ):
+        if kind == "done":
+            final = payload
+    assert final.cost == 0.0
+    assert final.cost_source == "provider"  # explicit provider 0 wins
+    assert final.tokens_out == 0
+    assert final.thinking_tokens is None
+
+
+@pytest.mark.asyncio
+async def test_responses_stream_no_completed_event_unknown_cost(monkeypatch):
+    async def gen():
+        yield SimpleNamespace(type="response.output_text.delta", delta="hi")
+        # stream ends without response.completed
+
+    adapter = LiteLLMAdapter(db=None, transport=_FakeTransport(responses=lambda: gen()))
+
+    async def load_provider(_id):
+        return _RESPONSES_PROVIDER
+
+    monkeypatch.setattr(adapter, "_load_provider", load_provider)
+    final = None
+    async for kind, payload in adapter.complete_stream(
+        agent_model=ModelConfig(provider_id="p", name="m"),
+        messages=[{"role": "user", "content": "hi"}],
+    ):
+        if kind == "done":
+            final = payload
+    assert final.cost == 0.0
+    assert final.cost_source == "unknown"
+
+
+def test_response_cost_rejects_nonfinite(monkeypatch):
+    """NaN/inf/negative are not costs — they fall through to unknown."""
+    import litellm as _litellm
+
+    from agentos.services.model_ledger import response_cost
+
+    monkeypatch.setattr(
+        _litellm, "completion_cost", lambda **_: (_ for _ in ()).throw(Exception("no price"))
+    )
+    for bad in (float("nan"), float("inf"), -0.5, "garbage"):
+        cost, source = response_cost({"cost": bad}, "m")
+        assert cost == 0.0 and source == "unknown"
+    # explicit 0 is a real cost
+    assert response_cost({"cost": 0.0}, "m") == (0.0, "provider")
+    # completion_cost returning None → unknown, not litellm-0
+    monkeypatch.setattr(_litellm, "completion_cost", lambda **_: None)
+    assert response_cost({}, "m") == (0.0, "unknown")
+
+
+@pytest.mark.asyncio
+async def test_restricted_tool_calls_bounded_concurrency_not_failed(db, tmp_path):
+    """A restricted turn with >4 tool calls drains through bounded
+    concurrency (<=4 in flight) — it is not a fatal per-turn limit."""
+    from agentos.syscall.protocol import ExecutionRestrictions
+
+    config = AgentConfig(id="a1", name="A1", model=ModelConfig(provider_id="p", name="m"))
+
+    class BoundedRecording:
+        def __init__(self):
+            self.active = 0
+            self.max_active = 0
+            self.calls: list[str] = []
+            self.restrictions = ExecutionRestrictions(capability_names=frozenset({"read_file"}))
+            self.db = db
+
+        async def mediate(self, call, **kwargs):
+            self.calls.append(call.id)
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            try:
+                await asyncio.sleep(0.01)
+                return SyscallResult(output={"ok": call.id}, allowed=True)
+            finally:
+                self.active -= 1
+
+    ids = [f"r-{i}" for i in range(7)]
+    model = ScriptedModel(
+        [
+            ScriptedResponse(
+                tool_calls=[{"id": i, "name": "read_file", "args": {"path": "x"}} for i in ids]
+            ),
+            ScriptedResponse(content="done"),
+        ]
+    )
+    handler = BoundedRecording()
+    result = await asyncio.wait_for(
+        Harness(model=model).run(
+            agent_config=config,
+            session=None,
+            message="go",
+            syscall_handler=handler,
+            run_id=str(uuid.uuid4()),
+        ),
+        timeout=10,
+    )
+    assert result.status == "completed"
+    assert len(handler.calls) == 7
+    assert sorted(handler.calls) == sorted(ids)
+    assert 1 < handler.max_active <= 4
+    # Results land in original call order regardless of completion order.
+    assert [c["id"] for c in result.tool_calls_made] == ids
+
+
+@pytest.mark.asyncio
+async def test_unrestricted_tool_calls_unbounded_still_works(db, tmp_path):
+    """Without restrictions the batch still runs concurrently with no cap."""
+    config = AgentConfig(id="a2", name="A2", model=ModelConfig(provider_id="p", name="m"))
+
+    class Unbounded:
+        def __init__(self):
+            self.active = 0
+            self.max_active = 0
+            self.db = db
+
+        async def mediate(self, call, **kwargs):
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            try:
+                await asyncio.sleep(0.01)
+                return SyscallResult(output={"ok": True}, allowed=True)
+            finally:
+                self.active -= 1
+
+    ids = [f"u-{i}" for i in range(6)]
+    model = ScriptedModel(
+        [
+            ScriptedResponse(
+                tool_calls=[{"id": i, "name": "read_file", "args": {"path": "x"}} for i in ids]
+            ),
+            ScriptedResponse(content="done"),
+        ]
+    )
+    handler = Unbounded()
+    result = await asyncio.wait_for(
+        Harness(model=model).run(
+            agent_config=config,
+            session=None,
+            message="go",
+            syscall_handler=handler,
+            run_id=str(uuid.uuid4()),
+        ),
+        timeout=10,
+    )
+    assert result.status == "completed"
+    assert handler.max_active == 6
+
+
+@pytest.mark.asyncio
+async def test_restricted_max_turns_one_stops_after_batch_drains(db):
+    """Restricted run with max_turns=1: an oversized batch drains through
+    bounded concurrency, then the loop stops before any second dispatch."""
+    from agentos.config_schema import Limits
+    from agentos.syscall.protocol import ExecutionRestrictions
+
+    config = AgentConfig(
+        id="rl1",
+        name="RL1",
+        model=ModelConfig(provider_id="p", name="m"),
+        limits=Limits(max_turns_per_run=1),
+    )
+
+    class Bounded:
+        def __init__(self):
+            self.calls: list[str] = []
+            self.restrictions = ExecutionRestrictions(capability_names=frozenset({"read_file"}))
+            self.db = db
+
+        async def mediate(self, call, **kwargs):
+            self.calls.append(call.id)
+            await asyncio.sleep(0)
+            return SyscallResult(output={"ok": True}, allowed=True)
+
+    model = ScriptedModel(
+        [
+            ScriptedResponse(
+                tool_calls=[
+                    {"id": f"t-{i}", "name": "read_file", "args": {"path": "x"}} for i in range(6)
+                ]
+            ),
+            ScriptedResponse(content="never reached"),
+        ]
+    )
+    handler = Bounded()
+    result = await asyncio.wait_for(
+        Harness(model=model).run(
+            agent_config=config,
+            session=None,
+            message="go",
+            syscall_handler=handler,
+            run_id=str(uuid.uuid4()),
+        ),
+        timeout=10,
+    )
+    assert result.status == "limit_exceeded"
+    assert len(handler.calls) == 6  # batch drained, then turn limit hit
+    assert len(model.seen_calls) == 1  # no second model dispatch
+
+
+@pytest.mark.asyncio
+async def test_restricted_cost_budget_denies_next_dispatch(db):
+    """Restricted run: once observed cost exceeds max_cost_per_run, the next
+    reasoning step is not dispatched — no extra model call."""
+    from agentos.config_schema import Limits
+    from agentos.syscall.protocol import ExecutionRestrictions
+
+    config = AgentConfig(
+        id="rl2",
+        name="RL2",
+        model=ModelConfig(provider_id="p", name="m"),
+        limits=Limits(max_cost_per_run=0.01),
+    )
+
+    class Bounded:
+        def __init__(self):
+            self.calls: list[str] = []
+            self.restrictions = ExecutionRestrictions(capability_names=frozenset({"read_file"}))
+            self.db = db
+
+        async def mediate(self, call, **kwargs):
+            self.calls.append(call.id)
+            await asyncio.sleep(0)
+            return SyscallResult(output={"ok": True}, allowed=True)
+
+    model = ScriptedModel(
+        [
+            ScriptedResponse(
+                tool_calls=[
+                    {"id": f"t-{i}", "name": "read_file", "args": {"path": "x"}} for i in range(6)
+                ],
+                cost=0.5,
+                cost_source="provider",
+            ),
+            ScriptedResponse(content="never reached"),
+        ]
+    )
+    handler = Bounded()
+    result = await asyncio.wait_for(
+        Harness(model=model).run(
+            agent_config=config,
+            session=None,
+            message="go",
+            syscall_handler=handler,
+            run_id=str(uuid.uuid4()),
+        ),
+        timeout=10,
+    )
+    assert result.status == "limit_exceeded"
+    assert len(handler.calls) == 6
+    assert len(model.seen_calls) == 1  # cost cap blocked the second dispatch

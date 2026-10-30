@@ -1,13 +1,24 @@
 import { useState } from "react";
-import { api } from "@/lib/api";
+import { CheckCircle2, ChevronDown, Eye, FileText, HelpCircle, Loader2, ShieldAlert, XCircle } from "lucide-react";
+import { api, type PreviewSource } from "@/lib/api";
 import { DiffBlock } from "@/components/DiffBlock";
 import { ThinkingBlock } from "@/components/ThinkingBlock";
+import { Select } from "@/components/ui/select";
 
 export interface ToolCallData {
   id: string;
   capability: string;
   args: Record<string, unknown>;
-  status: "pending" | "pending_approval" | "pending_input" | "running" | "complete" | "denied";
+  status:
+    | "pending"
+    | "pending_approval"
+    | "pending_input"
+    | "running"
+    | "complete"
+    | "denied"
+    | "failed"
+    | "timeout"
+    | "interrupted";
   result?: unknown;
   approval_id?: string;
   approval_batch_id?: string;
@@ -34,9 +45,198 @@ interface ThinkingBlockData {
 interface ToolCallBlockProps {
   call: ToolCallData;
   subagentStream?: SubAgentStreamData;
+  /** Opens the shared preview panel for the file/artifact this call touched. */
+  onPreview?: (source: PreviewSource) => void;
 }
 
-export function ToolCallBlock({ call, subagentStream }: ToolCallBlockProps) {
+/**
+ * Resolve the preview target a completed call touched, if any:
+ * artifact_* results carry artifact/revision ids; file tools carry a
+ * workspace path. Returns null when nothing previewable exists.
+ */
+export function previewSourceFor(call: ToolCallData): PreviewSource | null {
+  if (call.status !== "complete") return null;
+  const result = (call.result ?? {}) as Record<string, unknown>;
+  if (call.capability.startsWith("artifact_")) {
+    const artifactId = (result.pdf_artifact_id ?? result.artifact_id) as string | undefined;
+    if (artifactId) {
+      return {
+        artifactId,
+        revisionId: (result.revision_id as string | undefined) ?? undefined,
+      };
+    }
+  }
+  if (["read_file", "write_file"].includes(call.capability)) {
+    const path = call.args.path as string | undefined;
+    if (path) return { path };
+  }
+  return null;
+}
+
+export interface FileRef {
+  source: PreviewSource;
+  name: string;
+  /** true = the run created/modified the file; false = it only consulted it. */
+  produced: boolean;
+}
+
+const FILE_ARTIFACT_PRODUCERS = new Set([
+  "artifact_create",
+  "artifact_revise",
+  "artifact_restore",
+]);
+/**
+ * Collect the output files a set of completed tool calls produced — chips
+ * tag only files the run created/modified, never inputs it merely read
+ * (the user's own attachments are inputs, shown on their message card).
+ * Deduped by path/artifact; for artifacts the latest produced revision wins.
+ */
+export function collectFileRefs(calls: ToolCallData[]): FileRef[] {
+  const seen = new Map<string, FileRef>();
+  const base = (p: string) => p.split("/").pop() || p;
+  const add = (key: string, ref: FileRef) => {
+    const prev = seen.get(key);
+    if (!prev || ref.produced) seen.set(key, ref);
+  };
+  for (const call of calls) {
+    if (call.status !== "complete") continue;
+    const result = (call.result ?? {}) as Record<string, unknown>;
+    if (typeof result.error === "string") continue;
+
+    if (call.capability === "write_file") {
+      const path = (result.path ?? call.args.path) as string | undefined;
+      if (path && result.action !== "unchanged") {
+        add(`p:${path}`, { source: { path }, name: base(path), produced: true });
+      }
+    } else if (call.capability === "artifact_export_pdf") {
+      const id = result.pdf_artifact_id as string | undefined;
+      const path = result.pdf_path as string | undefined;
+      if (id) {
+        add(`a:${id}`, {
+          source: { artifactId: id },
+          name: path ? base(path) : "PDF export",
+          produced: true,
+        });
+      }
+    } else if (FILE_ARTIFACT_PRODUCERS.has(call.capability)) {
+      const id = (result.artifact_id ?? call.args.artifact_id) as string | undefined;
+      if (!id) continue;
+      const path = result.path as string | undefined;
+      add(`a:${id}`, {
+        source: {
+          artifactId: id,
+          revisionId: (result.revision_id as string | undefined) ?? undefined,
+        },
+        name: path ? base(path) : "artifact",
+        produced: true,
+      });
+    }
+  }
+  return [...seen.values()];
+}
+
+/** Output-file cards a run produced — click opens the workspace preview.
+    W13 mockup: accent-bordered card, icon tile, mono path, "Created in
+    workspace · {kind}", Open › affordance. */
+export function FileChips({
+  refs,
+  onPreview,
+}: {
+  refs: FileRef[];
+  onPreview?: (source: PreviewSource) => void;
+}) {
+  if (!onPreview || refs.length === 0) return null;
+  const kindOf = (name: string) => {
+    const ext = name.split(".").pop()?.toLowerCase() ?? "";
+    const kinds: Record<string, string> = {
+      md: "Markdown",
+      txt: "Text",
+      pdf: "PDF",
+      docx: "Word",
+      xlsx: "Spreadsheet",
+      pptx: "Slides",
+      png: "Image",
+      jpg: "Image",
+      jpeg: "Image",
+      csv: "CSV",
+      json: "JSON",
+      py: "Python",
+      ts: "TypeScript",
+      tsx: "TypeScript",
+      js: "JavaScript",
+      html: "HTML",
+    };
+    return kinds[ext] ?? (ext ? ext.toUpperCase() : "File");
+  };
+  return (
+    <div className="mb-3 mt-3 space-y-2">
+      {refs.map((ref, i) => (
+        <button
+          key={i}
+          onClick={() => onPreview(ref.source)}
+          title={`${ref.source.path ?? ref.name} — open in workspace`}
+          className="flex w-full cursor-pointer items-center gap-3 rounded-[12px] border px-3.5 py-2.5 text-left transition-colors hover:bg-accent-tint/40"
+          style={{
+            borderColor: "color-mix(in oklab, var(--accent) 45%, var(--line))",
+            background: "var(--surface)",
+          }}
+        >
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[9px] bg-accent-tint text-accent">
+            <FileText className="h-4 w-4" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate font-mono text-[13px] font-medium text-ink">
+              {ref.source.path ?? ref.name}
+            </span>
+            <span className="mt-0.5 block text-[11px] text-ink-muted">
+              Created in workspace · {kindOf(ref.name)}
+            </span>
+          </span>
+          <span className="shrink-0 text-[12px] font-medium text-accent">
+            Open ›
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+const TERMINAL_CAPS = new Set(["terminal", "read_terminal", "close_terminal"]);
+
+const TERMINAL_STATUS_COLORS: Record<string, string> = {
+  running: "var(--warning)",
+  completed: "var(--success)",
+  failed: "var(--danger)",
+  timeout: "var(--danger)",
+  closed: "var(--ink-3)",
+  interrupted: "var(--warning)",
+};
+
+function TerminalResult({ result }: { result: Record<string, unknown> }) {
+  const status = typeof result.status === "string" ? result.status : "completed";
+  const stdout = (result.stdout ?? result.stdout_tail ?? "") as string;
+  const stderr = (result.stderr ?? result.stderr_tail ?? "") as string;
+  const exitCode = result.exit_code as number | null | undefined;
+  const terminalId = result.terminal_id as string | undefined;
+
+  return (
+    <div
+      className="mb-2 overflow-x-auto rounded-[5px] p-2 font-mono text-[11px]"
+      style={{ background: "var(--white)", border: "1px solid var(--border)", color: "var(--ink-2)" }}
+    >
+      <div className="flex items-center gap-2">
+        <span style={{ color: TERMINAL_STATUS_COLORS[status] ?? "var(--ink-2)" }}>{status}</span>
+        {exitCode != null && <span className="text-[var(--ink-3)]">exit {exitCode}</span>}
+        {terminalId && <span className="text-[var(--ink-3)]">id {terminalId.slice(0, 8)}</span>}
+        {result.truncated === true && <span className="text-[var(--warning)]">truncated</span>}
+      </div>
+      {stdout && <pre className="mt-1 whitespace-pre-wrap break-words text-[var(--ink-1)]">{stdout}</pre>}
+      {stderr && <pre className="mt-1 whitespace-pre-wrap break-words text-[var(--danger)]">{stderr}</pre>}
+    </div>
+  );
+}
+
+export function ToolCallBlock({ call, subagentStream, onPreview }: ToolCallBlockProps) {
   const [expanded, setExpanded] = useState(false);
   const [subExpanded, setSubExpanded] = useState(false);
   const [remember, setRemember] = useState(false);
@@ -52,26 +252,34 @@ export function ToolCallBlock({ call, subagentStream }: ToolCallBlockProps) {
     pending_input: { symbol: "?", color: "var(--info, var(--warning))", label: "asking" },
     running: { symbol: "⋯", color: "var(--warning)", label: "run" },
     complete: { symbol: "✓", color: "var(--success)", label: "done" },
-    denied: { symbol: "✕", color: "var(--danger)", label: "error" },
+    denied: { symbol: "✕", color: "var(--danger)", label: "denied" },
+    failed: { symbol: "✕", color: "var(--danger)", label: "error" },
+    timeout: { symbol: "⏱", color: "var(--warning)", label: "timeout" },
+    interrupted: { symbol: "◼", color: "var(--warning)", label: "stopped" },
   };
 
   const config = statusConfig[call.status];
-  const argsStr = formatArgs(call.capability, call.args);
+  const { label, detail } = describeCall(call.capability, call.args);
   const hasResult =
     call.status === "complete" && call.result != null ||
-    call.status === "denied";
+    call.status === "denied" ||
+    call.status === "failed" ||
+    call.status === "timeout" ||
+    call.status === "interrupted";
 
   const isSubagent = call.capability === "run_subagent";
 
-  const handleApprove = async () => {
+  const approve = async (rememberFlag: boolean) => {
     if (!call.approval_id) return;
     try {
-      await api.approveCall(call.approval_id, remember, rememberScope, rememberPattern || undefined);
+      await api.approveCall(call.approval_id, rememberFlag, rememberScope, rememberPattern || undefined);
       setApprovalState("approved");
     } catch {
       setApprovalState("error");
     }
   };
+
+  const handleApprove = () => approve(remember);
 
   const handleReject = async () => {
     if (!call.approval_id) return;
@@ -88,101 +296,132 @@ export function ToolCallBlock({ call, subagentStream }: ToolCallBlockProps) {
       {!isSubagent && (
         <div
           onClick={() => hasResult && setExpanded(!expanded)}
-          className="mb-2 flex items-center gap-2 rounded-[5px] border px-2.5 py-1.5"
+          className="mb-2 flex items-center gap-2.5 rounded-[10px] border px-3 py-2"
           style={{
-            background: "var(--tool-bg)",
-            borderColor: call.status === "pending_approval" ? "var(--warning)" : "var(--border)",
+            background: "var(--surface)",
+            borderColor: call.status === "pending_approval" ? "var(--warning)" : "var(--line)",
             cursor: hasResult ? "pointer" : "default",
           }}
         >
-          <span className="font-mono text-[11px] text-[var(--ink-2)]">
-            {`${call.capability}(${argsStr})`}
-          </span>
-          <span
-            className={`ml-auto font-mono text-[11px] ${call.status === "running" ? "pulse" : ""}`}
-            style={{ color: config.color }}
-          >
-            {config.symbol}
-          </span>
+          {/* Status icon — mockup: green check done, spinner running,
+              ? waiting for approval, ✕ failed/denied. */}
+          {call.status === "complete" && (
+            <CheckCircle2 className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--success)" }} />
+          )}
+          {(call.status === "running" || call.status === "pending") && (
+            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" style={{ color: "var(--warning)" }} />
+          )}
+          {(call.status === "pending_approval" || call.status === "pending_input") && (
+            <HelpCircle className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--warning)" }} />
+          )}
+          {(call.status === "denied" || call.status === "failed" || call.status === "interrupted" || call.status === "timeout") && (
+            <XCircle className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--danger)" }} />
+          )}
+          <span className="text-[12px] font-medium text-ink">{label}</span>
+          {detail && (
+            <span className="min-w-0 truncate font-mono text-[11px] text-ink-muted">{detail}</span>
+          )}
+          {onPreview && previewSourceFor(call) && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                const src = previewSourceFor(call);
+                if (src) onPreview(src);
+              }}
+              title="Preview this file"
+              aria-label="Preview this file"
+              className="ml-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-[3px] text-[var(--ink-3)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--accent)]"
+              style={{ border: "none", background: "none", cursor: "pointer" }}
+            >
+              <Eye className="h-3.5 w-3.5" />
+            </button>
+          )}
+          {hasResult ? (
+            <ChevronDown
+              className={`ml-auto h-3.5 w-3.5 shrink-0 text-ink-faint transition-transform duration-150 ${expanded ? "rotate-180" : ""}`}
+            />
+          ) : (
+            <span
+              className={`ml-auto font-mono text-[11px] ${call.status === "running" ? "pulse" : ""}`}
+              style={{ color: config.color }}
+            >
+              {config.symbol}
+            </span>
+          )}
         </div>
       )}
 
-      {/* Approval buttons */}
+      {/* Raw signature — full audit detail one click away */}
+      {expanded && (
+        <div className="mb-1 truncate font-mono text-[10px] text-[var(--ink-3)]">
+          {`${call.capability}(${formatArgs(call.capability, call.args)})`}
+        </div>
+      )}
+
+      {/* Approval card — warning-tinted, pauses the run until decided. */}
       {call.status === "pending_approval" && call.approval_id && (
-        <div className="mb-2 rounded-[5px] border p-2"
-          style={{ borderColor: "var(--warning)", background: "var(--surface)" }}
+        <div
+          className="mb-2 rounded-[14px] border p-3.5"
+          style={{ borderColor: "var(--warning)", background: "var(--warning-tint)" }}
         >
-          <div className="flex items-center gap-2">
-            <span className="font-mono text-[11px] text-[var(--ink-2)]">
-              {approvalState === "pending" && "Requires approval"}
-              {approvalState === "approved" && (
-                call.approval_batch_size && call.approval_batch_size > 1
-                  ? "Approved — waiting for the action batch"
-                  : "Approved — executing..."
-              )}
-              {approvalState === "rejected" && "Rejected"}
-              {approvalState === "error" && "Error — try again"}
-            </span>
-            {approvalState === "pending" && (
-              <div className="ml-auto flex gap-1.5">
-                <button
-                  onClick={handleApprove}
-                  className="rounded-[4px] px-2.5 py-1 font-mono text-[11px] font-medium transition"
-                  style={{ background: "var(--success)", color: "var(--white)", border: "none", cursor: "pointer" }}
-                >
-                  Approve
-                </button>
-                <button
-                  onClick={handleReject}
-                  className="rounded-[4px] px-2.5 py-1 font-mono text-[11px] font-medium transition"
-                  style={{ background: "var(--danger)", color: "var(--white)", border: "none", cursor: "pointer" }}
-                >
-                  Deny
-                </button>
+          <div className="flex items-start gap-2.5">
+            <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" style={{ color: "var(--warning)" }} />
+            <div className="min-w-0 flex-1">
+              <div className="text-[13px] font-semibold text-ink">
+                Wants to {label.charAt(0).toLowerCase() + label.slice(1)}
               </div>
-            )}
-          </div>
-          {call.approval_batch_size && call.approval_batch_size > 1 && (
-            <div className="mt-1.5 font-mono text-[10px] text-[var(--ink-3)]">
-              This action has {call.approval_batch_size} approval requests. Nothing runs until all are decided.
-            </div>
-          )}
-          {approvalState === "pending" && (
-            <div className="mt-1.5">
-              <label className="flex items-center gap-1.5 font-mono text-[10px] text-[var(--ink-3)]"
-                style={{ cursor: "pointer", userSelect: "none" }}
-              >
-                <input
-                  type="checkbox"
-                  checked={remember}
-                  onChange={(e) => {
-                    setRemember(e.target.checked);
-                    if (!e.target.checked) setRememberScope("exact");
-                  }}
-                  style={{ cursor: "pointer" }}
-                />
-                Remember for this session
-              </label>
-              {remember && (
-                <>
-                  <select
-                    value={rememberScope}
-                    onChange={(e) => setRememberScope(e.target.value as "exact" | "same_verb" | "pattern" | "capability")}
-                    className="mt-1 rounded-[4px] border px-1.5 py-0.5 font-mono text-[10px]"
-                    style={{
-                      borderColor: "var(--border)",
-                      background: "var(--white)",
-                      color: "var(--ink-2)",
-                      cursor: "pointer",
-                    }}
+              <div className="mt-0.5 text-[12px] text-ink-muted">
+                The run is paused until you decide.
+              </div>
+              {detail && (
+                <div className="mt-2 break-all rounded-[8px] border border-line bg-surface px-2.5 py-1.5 font-mono text-[11px] text-ink-muted">
+                  {detail}
+                </div>
+              )}
+              <div className="mt-2 flex items-center gap-2">
+                <span className="font-mono text-[11px] text-ink-muted">
+                  {approvalState === "pending" && "Requires approval"}
+                  {approvalState === "approved" && (
+                    call.approval_batch_size && call.approval_batch_size > 1
+                      ? "Approved — waiting for the action batch"
+                      : "Approved — executing..."
+                  )}
+                  {approvalState === "rejected" && "Rejected"}
+                  {approvalState === "error" && "Error — try again"}
+                </span>
+              </div>
+              {approvalState === "pending" && (
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                  <button
+                    onClick={handleApprove}
+                    className="cursor-pointer rounded-[8px] bg-ink px-3 py-1.5 text-[12px] font-medium text-surface transition-opacity hover:opacity-85"
                   >
-                    <option value="exact">This exact call only</option>
-                    {call.capability === "terminal" && (
-                      <option value="same_verb">All "{(call.args?.command as string || "").trim().split(/\s+/)[0] || "cmd"}" commands</option>
-                    )}
-                    <option value="pattern">Custom pattern (wildcard)</option>
-                    <option value="capability">All {call.capability} calls</option>
-                  </select>
+                    Allow once
+                  </button>
+                  <button
+                    onClick={() => {
+                      setRemember(true);
+                      void approve(true);
+                    }}
+                    className="cursor-pointer rounded-[8px] border border-line bg-surface px-3 py-1.5 text-[12px] font-medium text-ink transition-colors hover:bg-sunken"
+                  >
+                    Always allow
+                  </button>
+                  <Select
+                    value={rememberScope}
+                    onChange={(v) => setRememberScope(v as "exact" | "same_verb" | "pattern" | "capability")}
+                    options={[
+                      { value: "exact", label: "this call" },
+                      ...(call.capability === "terminal"
+                        ? [{ value: "same_verb", label: `all "${(call.args?.command as string || "").trim().split(/\s+/)[0] || "cmd"}" commands` }]
+                        : []),
+                      { value: "pattern", label: "custom pattern" },
+                      { value: "capability", label: `all ${call.capability}` },
+                    ]}
+                    title="Scope for Always allow"
+                    className="cursor-pointer rounded-[8px] border border-line bg-surface px-1.5 py-1.5 font-mono text-[10px] text-ink-muted"
+                    panelClassName="whitespace-nowrap"
+                  />
                   {rememberScope === "pattern" && (
                     <input
                       type="text"
@@ -193,18 +432,24 @@ export function ToolCallBlock({ call, subagentStream }: ToolCallBlockProps) {
                           ? `${(call.args?.command as string || "").trim().split(/\s+/)[0] || "cmd"} *`
                           : "*"
                       }
-                      className="mt-1 w-full rounded-[4px] border px-1.5 py-0.5 font-mono text-[10px]"
-                      style={{
-                        borderColor: "var(--border)",
-                        background: "var(--white)",
-                        color: "var(--ink-2)",
-                      }}
+                      className="w-28 rounded-[8px] border border-line bg-surface px-1.5 py-1.5 font-mono text-[10px] text-ink-muted outline-none"
                     />
                   )}
-                </>
+                  <button
+                    onClick={handleReject}
+                    className="cursor-pointer rounded-[8px] border border-danger/40 bg-surface px-3 py-1.5 text-[12px] font-medium text-danger transition-colors hover:bg-danger-tint"
+                  >
+                    Deny
+                  </button>
+                </div>
+              )}
+              {call.approval_batch_size && call.approval_batch_size > 1 && (
+                <div className="mt-1.5 font-mono text-[10px] text-ink-faint">
+                  This action has {call.approval_batch_size} approval requests. Nothing runs until all are decided.
+                </div>
               )}
             </div>
-          )}
+          </div>
         </div>
       )}
 
@@ -232,21 +477,37 @@ export function ToolCallBlock({ call, subagentStream }: ToolCallBlockProps) {
 
       {/* Expanded result — hidden for write_file (diff block replaces it)
           and run_subagent (the nested sub-agent stream replaces it) */}
+      {expanded && hasResult && call.status === "complete" &&
+        TERMINAL_CAPS.has(call.capability) &&
+        typeof call.result === "object" && call.result !== null && (
+        <TerminalResult result={call.result as Record<string, unknown>} />
+      )}
+
       {expanded && hasResult &&
         !(call.capability === "write_file" && call.status === "complete" && typeof call.result === "object" && call.result !== null && "action" in (call.result as Record<string, unknown>)) &&
+        !(call.status === "complete" && TERMINAL_CAPS.has(call.capability) && typeof call.result === "object" && call.result !== null) &&
         !(isSubagent && subagentStream && (subagentStream.items.length > 0 || subagentStream.text)) && (
         <div
           className="mb-2 overflow-x-auto whitespace-pre-wrap break-words rounded-[5px] p-2 font-mono text-[11px]"
           style={{
             background: "var(--white)",
             border: "1px solid var(--border)",
-            color: call.status === "denied" ? "var(--danger)" : "var(--ink-2)",
+            color:
+              call.status === "denied" || call.status === "failed"
+                ? "var(--danger)"
+                : "var(--ink-2)",
           }}
         >
-          {call.status === "denied"
+          {call.status === "denied" || call.status === "failed" || call.status === "timeout" || call.status === "interrupted"
             ? typeof call.result === "string"
               ? call.result
-              : "Call was denied by the syscall layer."
+              : call.status === "denied"
+                ? "Call was denied by the syscall layer."
+                : call.status === "timeout"
+                  ? "Call timed out."
+                  : call.status === "interrupted"
+                    ? "Call was interrupted."
+                    : "Call failed."
             : formatResult(call.result)}
         </div>
       )}
@@ -306,6 +567,82 @@ export function ToolCallBlock({ call, subagentStream }: ToolCallBlockProps) {
       )}
     </div>
   );
+}
+
+/** Verb-first label + the one argument a user actually wants to glance at. */
+function describeCall(
+  capability: string,
+  args: Record<string, unknown>,
+): { label: string; detail?: string } {
+  const a = args;
+  const str = (v: unknown) => (typeof v === "string" ? v : undefined);
+  const short = (v: unknown) => (typeof v === "string" ? v.slice(0, 8) : undefined);
+  const trunc = (v: unknown, n = 80) => {
+    const s = str(v);
+    return s ? (s.length > n ? s.slice(0, n) + "…" : s) : undefined;
+  };
+
+  switch (capability) {
+    case "terminal":
+      return { label: "Run command", detail: trunc(a.command) };
+    case "read_terminal":
+      return { label: "Read terminal output", detail: short(a.terminal_id) };
+    case "close_terminal":
+      return { label: "Close terminal", detail: short(a.terminal_id) };
+    case "read_file":
+      return { label: "Read file", detail: trunc(a.path) };
+    case "write_file":
+      return { label: "Write file", detail: trunc(a.path) };
+    case "search_files":
+      return { label: "Search files", detail: trunc(a.pattern ?? a.query ?? a.path) };
+    case "web_search":
+      return { label: "Search the web", detail: trunc(a.query) };
+    case "web_fetch":
+      return { label: "Fetch page", detail: trunc(a.url) };
+    case "datetime_now":
+      return { label: "Check the time" };
+    case "agent_ask_user":
+      return { label: "Ask a question", detail: trunc(a.question) };
+    case "run_subagent":
+      return { label: "Delegate to sub-agent", detail: trunc(a.task, 60) };
+    case "read_subagent":
+      return { label: "Check sub-agent", detail: short(a.subagent_id ?? a.id) };
+    case "memory_recall":
+      return { label: "Recall memory", detail: trunc(a.query) };
+    case "memory_store":
+      return { label: "Store memory" };
+    case "memory_remember_fact":
+      return { label: "Remember a fact" };
+    case "memory_query_facts":
+      return { label: "Query memory" };
+    case "memory_update":
+      return { label: "Update memory" };
+    case "skills_list":
+      return { label: "List skills" };
+    case "skills_load":
+      return { label: "Load skill", detail: trunc(a.name ?? a.skill) };
+    case "skills_read_resource":
+      return { label: "Read skill resource", detail: trunc(a.path ?? a.resource) };
+    case "capabilities_search":
+      return { label: "Find a tool", detail: trunc(a.query) };
+    case "capabilities_load":
+      return { label: "Load tool", detail: trunc(JSON.stringify(a.names ?? a.capabilities ?? "")) };
+    case "doc_search":
+      return { label: "Search documents", detail: trunc(a.query) };
+    case "doc_list":
+      return { label: "List documents" };
+    case "doc_inspect":
+      return { label: "Inspect document", detail: trunc(a.doc_id ?? a.id ?? a.path) };
+    case "search_history":
+      return { label: "Search history", detail: trunc(a.query) };
+    default: {
+      // MCP tools and anything unregistered: humanize the name.
+      const words = capability.replace(/^mcp[._]/, "").replace(/[._-]+/g, " ").trim();
+      const label = words.charAt(0).toUpperCase() + words.slice(1);
+      const firstArg = Object.values(a).find((v) => typeof v === "string" && v.length > 0);
+      return { label, detail: trunc(firstArg) };
+    }
+  }
 }
 
 function formatArgs(

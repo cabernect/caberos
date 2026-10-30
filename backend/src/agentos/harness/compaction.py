@@ -10,11 +10,14 @@ The compacted context preserves the narrative thread while fitting within
 the model's context window budget.
 """
 
+import json
 import logging
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from typing import Any
 
 from ..config_schema import AgentConfig, CompactionConfig
+from .memory_prompts import SUMMARY_TEMPLATE, UPDATE_TEMPLATE
 
 logger = logging.getLogger(__name__)
 
@@ -33,17 +36,13 @@ def count_tokens(messages: list[dict[str, Any]], model: str = "gpt-4o") -> int:
 
         return litellm.token_counter(model=model, messages=messages)
     except Exception:
-        # Fallback: ~4 chars per token
-        total = 0
-        for msg in messages:
-            content = msg.get("content", "")
-            if isinstance(content, str):
-                total += len(content) // 4
-            elif isinstance(content, list):
-                for part in content:
-                    if isinstance(part, dict) and "text" in part:
-                        total += len(part["text"]) // 4
-        return total
+        # Fallback: conservative byte upper-bound of the serialized message
+        # structure (arguments, roles, nested parts — not just content).
+        return len(
+            json.dumps(messages, ensure_ascii=False, separators=(",", ":"), default=str).encode(
+                "utf-8"
+            )
+        )
 
 
 def count_text_tokens(text: str, model: str = "gpt-4o") -> int:
@@ -72,95 +71,33 @@ def count_tool_tokens(tools: list[dict[str, Any]], model: str = "gpt-4o") -> int
         return 0
 
 
-def get_model_max_tokens(model_str: str, override: int | None = None) -> int:
-    """Get the max input tokens for a model.
+def get_model_max_tokens(
+    model_str: str,
+    override: int | None = None,
+    *,
+    resolved_model: dict | None = None,
+    model_override: int | None = None,
+    output_tokens: int | None = None,
+) -> int:
+    """Resolved input budget via the catalog authority — never an SDK
+    registry, fuzzy name match, or a 200K default. ``model_str`` is a
+    routing/tokenizer name only, not a capability identity.
 
-    Resolution order:
-      1. Explicit override from agent config (max_context_tokens)
-      2. litellm's registry (exact match on model_str)
-      3. Fuzzy match — strip provider prefix and try known model families
-      4. Default (200K) — modern models typically have ≥200K context
-
-    Results are cached per model_str.
+    Args:
+        model_str: kept for signature compatibility — not consulted.
+        override: run-level input ceiling (limits.max_context_tokens).
+        resolved_model: resolved offering fields (limits with provenance).
+        model_override: explicit model-declared budget (wins over catalog).
+        output_tokens: output reserve.
     """
-    cache_key = f"{model_str}:{override or 'auto'}"
-    if cache_key in _token_cache:
-        return _token_cache[cache_key]
+    from ..providers.catalog_policy import resolve_input_budget
 
-    # 1. Explicit override
-    if override and override > 0:
-        _token_cache[cache_key] = override
-        return override
-
-    # 2. litellm registry — exact match
-    try:
-        import litellm
-
-        info = litellm.get_model_info(model_str)
-        max_tokens = info.get("max_input_tokens")
-        if max_tokens:
-            _token_cache[cache_key] = max_tokens
-            return max_tokens
-    except Exception:
-        pass
-
-    # 3. Fuzzy match — try to find a close match in litellm's registry
-    try:
-        import litellm
-
-        bare = model_str.split("/", 1)[-1] if "/" in model_str else model_str
-
-        # 3a. Try common provider prefixes with the bare name
-        for prefix in ("openai/", "anthropic/", "google/", "meta/", "mistral/", "deepseek/"):
-            try:
-                info = litellm.get_model_info(f"{prefix}{bare}")
-                max_tokens = info.get("max_input_tokens")
-                if max_tokens:
-                    _token_cache[cache_key] = max_tokens
-                    return max_tokens
-            except Exception:
-                continue
-
-        # 3b. Progressive suffix stripping — handle variant names like
-        # "deepseek-v4-flash-free" → "deepseek-v4-flash" → match
-        # "gpt-4o-2024-08-06-preview" → "gpt-4o" → match
-        parts = bare.split("-")
-        for i in range(len(parts) - 1, 0, -1):
-            candidate = "-".join(parts[:i])
-            # Try bare and with common prefixes
-            for name in [candidate, f"deepseek/{candidate}", f"openai/{candidate}"]:
-                try:
-                    info = litellm.get_model_info(name)
-                    max_tokens = info.get("max_input_tokens")
-                    if max_tokens:
-                        _token_cache[cache_key] = max_tokens
-                        return max_tokens
-                except Exception:
-                    continue
-
-        # 3c. Substring match against registry keys
-        # e.g. "big-pickle" won't match, but "deepseek-v4-flash-free" contains
-        # "deepseek-v4-flash" which is in the registry
-        lower = bare.lower()
-        # Sort by key length descending so we match the most specific entry first
-        sorted_keys = sorted(litellm.model_cost.keys(), key=len, reverse=True)
-        for key in sorted_keys:
-            key_lower = key.lower()
-            # Check if the bare name contains a known model name as a substring
-            # or vice versa
-            key_bare = key_lower.split("/", 1)[-1] if "/" in key_lower else key_lower
-            if key_bare in lower and len(key_bare) >= 8:  # min length to avoid false positives
-                entry = litellm.model_cost[key]
-                max_tokens = entry.get("max_input_tokens")
-                if max_tokens:
-                    _token_cache[cache_key] = max_tokens
-                    return max_tokens
-    except Exception:
-        pass
-
-    # 4. Default — modern models typically have ≥200K context
-    _token_cache[cache_key] = 200000
-    return 200000
+    return resolve_input_budget(
+        resolved_model,
+        model_override=model_override,
+        run_override=override,
+        output_tokens=output_tokens,
+    )["tokens"]
 
 
 # --- Phase 1: Prune old tool results ---
@@ -232,6 +169,7 @@ def determine_boundaries(
     config: CompactionConfig,
     threshold_tokens: int,
     model: str = "gpt-4o",
+    tail_token_budget: int | None = None,
 ) -> tuple[int, int]:
     """Phase 2: Determine head and tail boundaries.
 
@@ -249,12 +187,18 @@ def determine_boundaries(
     # Head: first N messages
     head_end = min(config.protect_first_n, n)
 
-    # If the conversation is short, everything is head+tail, no middle
+    # If the conversation is short, everything is head+tail, no middle:
+    # tail starts where head ends so the tail still covers the rest.
     if n <= head_end + config.protect_last_n:
-        return head_end, n  # no middle
+        return head_end, head_end  # no middle
 
-    # Tail: token-budget based
-    tail_budget = int(threshold_tokens * config.tail_budget_fraction)
+    # Tail: token-budget based — a caller-supplied allowance reserves room
+    # for the fixed system/tool section instead of sharing the full budget.
+    tail_budget = (
+        tail_token_budget
+        if tail_token_budget is not None
+        else int(threshold_tokens * config.tail_budget_fraction)
+    )
     tail_start = n
     tail_tokens = 0
 
@@ -284,65 +228,22 @@ def determine_boundaries(
     return head_end, tail_start
 
 
-# --- Phase 3: Structured summary ---
-
-
-SUMMARY_TEMPLATE = """You are a conversation summarizer. Summarize the conversation segment below into a structured summary.
-
-Use this exact format:
-
-## Goal
-What the user is trying to accomplish (1-2 sentences)
-
-## Constraints & Preferences
-Rules, formats, limits the user specified
-
-## Progress
-### Done
-- Completed steps
-### In Progress
-- Current work
-### Blocked
-- Obstacles encountered
-
-## Key Decisions
-Choices made during the conversation
-
-## Relevant Files
-Files created, read, or modified
-
-## Next Steps
-What's likely to happen next
-
-## Critical Context
-Anything else essential for continuing the conversation
-
-Keep each section concise. Omit empty sections. Do not include information that is not in the conversation.
-"""
-
-UPDATE_TEMPLATE = """You are updating a conversation summary. Below is the previous summary and new conversation messages. Update the summary to reflect the new messages.
-
-- Move items from "In Progress" to "Done" as they complete
-- Add new items to appropriate sections
-- Remove items that are no longer relevant
-- Keep the same format
-
-### Previous Summary
-{previous_summary}
-
-### New Conversation Messages
-{new_messages}
-
-Output the updated summary in the same format.
-"""
-
-
 async def generate_summary(
     middle_messages: list[dict[str, Any]],
     previous_summary: str | None,
     model_str: str,
     api_key: str | None = None,
     base_url: str | None = None,
+    extra_params: dict | None = None,
+    use_responses: bool = False,
+    accounting: Any | None = None,
+    provider_id: str | None = None,
+    input_budget: int | None = None,
+    model_name: str | None = None,
+    agent_id: str | None = None,
+    run_id: str | None = None,
+    session_id: str | None = None,
+    source_ids: list[str] | None = None,
 ) -> str:
     """Phase 3: Generate or update a structured summary of the middle messages.
 
@@ -351,8 +252,6 @@ async def generate_summary(
     """
     if not middle_messages:
         return previous_summary or ""
-
-    import litellm
 
     # Format middle messages as a conversation transcript
     transcript_lines = []
@@ -364,15 +263,15 @@ async def generate_summary(
             text_parts = [p.get("text", "") for p in content if isinstance(p, dict) and "text" in p]
             content = "\n".join(text_parts)
         if role == "tool":
-            # Include tool results (already pruned in Phase 1)
-            transcript_lines.append(f"[Tool result]: {content[:500]}")
+            # Tool results already pruned by Phase 1 — included in full.
+            transcript_lines.append(f"[Tool result]: {content}")
         elif role == "assistant" and msg.get("tool_calls"):
             tool_names = [tc.get("function", {}).get("name", "?") for tc in msg["tool_calls"]]
             transcript_lines.append(f"Assistant: [called {', '.join(tool_names)}]")
             if content:
-                transcript_lines.append(f"  {content[:300]}")
+                transcript_lines.append(f"  {content}")
         else:
-            transcript_lines.append(f"{role.capitalize()}: {content[:500]}")
+            transcript_lines.append(f"{role.capitalize()}: {content}")
 
     transcript = "\n\n".join(transcript_lines)
 
@@ -385,29 +284,174 @@ async def generate_summary(
         prompt = f"{SUMMARY_TEMPLATE}\n\n### Conversation to Summarize\n{transcript}"
 
     messages = [{"role": "user", "content": prompt}]
+    if input_budget is not None and count_tokens(messages, model_str) > input_budget:
+        # The rendered summary prompt alone exceeds the input budget — fail
+        # before any provider request; the caller retains originals.
+        raise RuntimeError("Summary prompt exceeds the model input budget")
 
-    kwargs: dict[str, Any] = {
-        "model": model_str,
-        "messages": messages,
-        "max_tokens": 1000,  # Summary should be compact
-    }
-    if api_key:
-        kwargs["api_key"] = api_key
-    if base_url:
-        kwargs["api_base"] = base_url
+    family = "responses" if use_responses else "chat"
+    raw: Any = None
+    error: Exception | None = None
+    cap_ref = None
+    started = time.monotonic()
+    from ..providers.litellm_transport import LiteLLMTransport
+    from ..services.context_capture import capture_dispatch, capture_scope
 
+    _transport = LiteLLMTransport()
     try:
-        response = await litellm.acompletion(**kwargs)
-        return response.choices[0].message.content or ""
+        if use_responses:
+            # Responses API — the default for api.openai.com models. Reasoning
+            # models reject max_tokens/chat-completions entirely, so summaries
+            # must go through /v1/responses too. Generous output cap: reasoning
+            # tokens share the budget with the summary text.
+            kwargs: dict[str, Any] = {
+                "model": model_str,
+                "input": messages,
+                "max_output_tokens": 2000,
+            }
+            if api_key:
+                kwargs["api_key"] = api_key
+            if base_url:
+                kwargs["api_base"] = base_url
+            # Provider extras (azure api_version, bedrock aws_*) — never
+            # let them reroute the counted request fields.
+            for k, v in (extra_params or {}).items():
+                if k not in ("model", "input", "messages", "tools", "stream"):
+                    kwargs[k] = v
+            with capture_scope(
+                purpose="compaction",
+                agent_id=agent_id,
+                run_id=run_id,
+                session_id=session_id,
+                model=model_str,
+                source_message_ids=source_ids or [],
+                source_message_ids_total=len(source_ids or []),
+            ):
+                raw, cap_ref = await capture_dispatch("responses", kwargs, _transport.responses)
+            content = ""
+            for item in getattr(raw, "output", []) or []:
+                if getattr(item, "type", "") == "message":
+                    for block in getattr(item, "content", []) or []:
+                        if getattr(block, "type", "") in ("output_text", "text"):
+                            content += getattr(block, "text", "") or ""
+            return content
+        kwargs = {
+            "model": model_str,
+            "messages": messages,
+            "max_tokens": 1000,  # Summary should be compact
+        }
+        if api_key:
+            kwargs["api_key"] = api_key
+        if base_url:
+            kwargs["api_base"] = base_url
+        for k, v in (extra_params or {}).items():
+            if k not in ("model", "input", "messages", "tools", "stream"):
+                kwargs[k] = v
+
+        with capture_scope(
+            purpose="compaction",
+            agent_id=agent_id,
+            run_id=run_id,
+            session_id=session_id,
+            model=model_str,
+            source_message_ids=source_ids or [],
+            source_message_ids_total=len(source_ids or []),
+        ):
+            raw, cap_ref = await capture_dispatch("chat", kwargs, _transport.completion)
+        return raw.choices[0].message.content or ""
     except Exception as e:
-        logger.warning(f"Compaction summary LLM call failed: {e}")
-        # Fallback: use previous summary or a minimal stub
-        if previous_summary:
-            return previous_summary
-        return f"[Compaction summary unavailable — {len(middle_messages)} messages compacted]"
+        error = e
+        logger.warning("Compaction summary LLM call failed (%s)", type(e).__name__)
+        # Never fabricate a summary — the caller returns the original
+        # history untouched with a generic error instead.
+        raise
+    finally:
+        # Exactly one ledger attempt per actual provider request — success,
+        # error, or timeout all record.
+        if raw is not None or error is not None:
+            await _record_summary_call(
+                accounting,
+                raw,
+                family,
+                provider_id=provider_id,
+                model_name=model_name,
+                agent_id=agent_id,
+                model_str=model_str,
+                error=error,
+                latency_ms=int((time.monotonic() - started) * 1000),
+                capture_ref=cap_ref or getattr(error, "capture_ref", None),
+            )
+
+
+async def _record_summary_call(
+    accounting: Any | None,
+    raw: Any,
+    family: str,
+    *,
+    provider_id: str | None,
+    model_name: str | None,
+    agent_id: str | None,
+    model_str: str | None,
+    error: Exception | None = None,
+    latency_ms: int = 0,
+    capture_ref: Any = None,
+) -> None:
+    """Ledger the summary aux call — one row per provider request, even
+    with no rate snapshot (genuine reported amounts still count)."""
+    try:
+        from ..harness.scripted_model import ScriptedResponse
+        from ..services.call_accounting import unknown_call_rates
+        from ..services.model_ledger import record_system_call
+
+        # No caller snapshot → an unknown-authority snapshot still yields
+        # normalized native usage/cost (incl. a genuine explicit amount).
+        snap = accounting or unknown_call_rates(provider_id or "", model_name or "", {"type": ""})
+        assessment = snap.assess(raw, family=family)
+        usage = getattr(assessment, "usage", None)
+        cost_receipt = snap.receipt(assessment)
+        response = None
+        if error is None:
+            cost = float(assessment.amount) if assessment.amount is not None else 0.0
+            response = ScriptedResponse(
+                tokens_in=int(usage.input_tokens or 0) if usage else 0,
+                tokens_out=int(usage.output_tokens or 0) if usage else 0,
+                cached_tokens=usage.cache_read_tokens if usage else None,
+                thinking_tokens=usage.reasoning_tokens if usage else None,
+                cost=cost,
+                cost_source=assessment.source,
+                cost_receipt=cost_receipt,
+            )
+        await record_system_call(
+            capture_ref=capture_ref,
+            kind="chat",
+            purpose="compaction",
+            provider_id=provider_id,
+            model_name=model_name,
+            model_str=model_str,
+            agent_id=agent_id,
+            response=response,
+            error=error,
+            latency_ms=latency_ms,
+            detail={
+                "operation": "compaction_summary",
+                "cost_source": assessment.source,
+                **(cost_receipt or {}),
+            },
+        )
+    except Exception:
+        logger.debug("summary accounting record failed", exc_info=True)
 
 
 # --- Phase 4: Reassemble ---
+
+
+def _align_boundary_forward(messages: list[dict[str, Any]], boundary: int) -> int:
+    """Move a HEAD boundary forward so no multi-tool batch is split: when an
+    assistant tool-call block ends the head, pull every following tool result
+    into the head as well (never leave a call without its results)."""
+    while boundary < len(messages) and messages[boundary].get("role") == "tool":
+        boundary += 1
+    return boundary
 
 
 def _sanitize_tool_pairs(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -508,6 +552,16 @@ def reassemble(
 # --- Main entry point ---
 
 
+def _summary_message(
+    summary: str, head: list[dict[str, Any]], tail: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Render a stored summary as exactly one model message."""
+    return {
+        "role": _choose_summary_role(head, tail),
+        "content": f"[Previous conversation summary]\n{summary}",
+    }
+
+
 @dataclass
 class CompactionResult:
     """Result of a compaction run."""
@@ -520,6 +574,12 @@ class CompactionResult:
     head_count: int
     middle_count: int
     tail_count: int
+    error: str | None = None
+    # Original (possibly pruned) head+tail messages WITHOUT any generated
+    # summary row — lets a Conversation render cleanly on later turns.
+    retained_messages: list[dict[str, Any]] = field(default_factory=list)
+    # DB Message ids covered by a successfully summarized middle slice.
+    covered_ids: set[str] = field(default_factory=set)
 
 
 async def compact_context(
@@ -529,7 +589,17 @@ async def compact_context(
     previous_summary: str | None = None,
     api_key: str | None = None,
     base_url: str | None = None,
+    extra_params: dict | None = None,
     force: bool = False,
+    use_responses: bool = False,
+    input_budget: int | None = None,
+    resolved_model: dict | None = None,
+    accounting: Any | None = None,
+    reserved_tokens: int = 0,
+    source_ids: list[set[str] | None] | None = None,
+    protected_tail_start: int | None = None,
+    run_id: str | None = None,
+    session_id: str | None = None,
 ) -> CompactionResult:
     """Run the 4-phase compaction pipeline.
 
@@ -547,15 +617,34 @@ async def compact_context(
         CompactionResult with the compacted messages and metadata.
     """
     config = agent_config.compaction
-    max_tokens = get_model_max_tokens(model_str)
+    model_cfg = agent_config.model
+    max_tokens = (
+        input_budget
+        if input_budget is not None
+        else get_model_max_tokens(
+            model_str,
+            agent_config.limits.max_context_tokens,
+            resolved_model=resolved_model,
+            model_override=(model_cfg.max_context_tokens if model_cfg else None),
+            output_tokens=(model_cfg.max_tokens if model_cfg else None),
+        )
+    )
     threshold_tokens = int(max_tokens * config.threshold)
 
-    original_tokens = count_tokens(messages, model_str)
+    # `messages` holds uncovered ORIGINALS only — a stored summary renders
+    # exactly once, in front of them, on every returned path.
+    rendered = (
+        [_summary_message(previous_summary, [], messages), *messages]
+        if previous_summary
+        else list(messages)
+    )
+    original_tokens = reserved_tokens + count_tokens(rendered, model_str)
 
-    # Check if compaction is needed
-    if not force and original_tokens <= threshold_tokens:
+    # Check if compaction is needed — auto-disabled config bypasses
+    # compaction entirely unless forced, but the summary still renders once.
+    if not force and (not config.auto_compaction or original_tokens <= threshold_tokens):
         return CompactionResult(
-            messages=messages,
+            messages=rendered,
             summary=previous_summary,
             compacted=False,
             original_tokens=original_tokens,
@@ -563,10 +652,32 @@ async def compact_context(
             head_count=0,
             middle_count=0,
             tail_count=len(messages),
+            retained_messages=list(messages),
         )
 
     # Phase 2: Determine boundaries
-    head_end, tail_start = determine_boundaries(messages, config, threshold_tokens, model_str)
+    prior_summary_tokens = (
+        count_tokens([_summary_message(previous_summary, [], messages)], model_str)
+        if previous_summary
+        else 0
+    )
+    tail_allowance = max(0, threshold_tokens - reserved_tokens - prior_summary_tokens)
+    head_end, tail_start = determine_boundaries(
+        messages, config, threshold_tokens, model_str, tail_token_budget=tail_allowance
+    )
+
+    # The current turn's protected rows must stay uncovered — clamp the tail
+    # start no later than the protected index, then re-align complete batches.
+    if protected_tail_start is not None and tail_start > protected_tail_start:
+        tail_start = _align_boundary_backward(messages, protected_tail_start)
+        if tail_start < head_end:
+            tail_start = head_end
+
+    # Align BOTH protected ranges so no multi-tool batch is split: head
+    # extends forward over tool results belonging to its last call...
+    head_end = _align_boundary_forward(messages, head_end)
+    if tail_start < head_end:
+        tail_start = head_end
 
     head = messages[:head_end]
     middle = messages[head_end:tail_start]
@@ -575,7 +686,7 @@ async def compact_context(
     # If no middle to summarize, return as-is
     if not middle:
         return CompactionResult(
-            messages=messages,
+            messages=rendered,
             summary=previous_summary,
             compacted=False,
             original_tokens=original_tokens,
@@ -583,6 +694,7 @@ async def compact_context(
             head_count=len(head),
             middle_count=0,
             tail_count=len(tail),
+            retained_messages=[*head, *tail],
         )
 
     # Phase 1: Prune old tool results in head and middle
@@ -594,24 +706,102 @@ async def compact_context(
         middle, tail_start=len(middle), prune_over=config.prune_tool_results_over
     )
 
-    # Phase 3: Generate structured summary
-    summary = await generate_summary(
-        pruned_middle,
-        previous_summary=previous_summary,
-        model_str=model_str,
-        api_key=api_key,
-        base_url=base_url,
-    )
+    # Summary aux call reserves a fixed 2000-token output inside the SAME
+    # resolved model ceiling — not the reasoning call's (possibly smaller)
+    # reservation. An invalid auxiliary reservation fails before dispatch.
+    try:
+        summary_input_ceiling = get_model_max_tokens(
+            model_str,
+            agent_config.limits.max_context_tokens,
+            resolved_model=resolved_model,
+            model_override=(model_cfg.max_context_tokens if model_cfg else None),
+            output_tokens=2000,
+        )
+    except Exception:
+        summary_input_ceiling = 0
+    if input_budget is not None:
+        summary_input_ceiling = min(summary_input_ceiling, input_budget)
+    if summary_input_ceiling <= 0:
+        return CompactionResult(
+            messages=rendered,
+            summary=previous_summary,
+            compacted=False,
+            original_tokens=original_tokens,
+            compacted_tokens=original_tokens,
+            head_count=0,
+            middle_count=0,
+            tail_count=len(messages),
+            error="Summary input budget could not be reserved",
+            retained_messages=list(messages),
+        )
+
+    # Phase 3: Generate structured summary — a failed or empty summary
+    # returns the ORIGINAL history untouched (never a fabricated stub);
+    # cancellation propagates.
+    try:
+        summary = await generate_summary(
+            pruned_middle,
+            input_budget=summary_input_ceiling,
+            previous_summary=previous_summary,
+            model_str=model_str,
+            api_key=api_key,
+            base_url=base_url,
+            extra_params=extra_params,
+            use_responses=use_responses,
+            accounting=accounting,
+            provider_id=(model_cfg.provider_id if model_cfg else None),
+            model_name=(model_cfg.name if model_cfg else None),
+            agent_id=agent_config.id,
+            run_id=run_id,
+            session_id=session_id,
+            source_ids=sorted({sid for group in (source_ids or []) for sid in (group or [])}),
+        )
+    except Exception:
+        summary = ""
+    if not summary or not summary.strip():
+        return CompactionResult(
+            messages=rendered,
+            summary=previous_summary,
+            compacted=False,
+            original_tokens=original_tokens,
+            compacted_tokens=original_tokens,
+            head_count=0,
+            middle_count=0,
+            tail_count=len(messages),
+            error="Conversation summary could not be generated",
+            retained_messages=list(messages),
+        )
 
     # Phase 4: Reassemble
     compacted = reassemble(pruned_head, summary, tail)
-    compacted_tokens = count_tokens(compacted, model_str)
+    compacted_tokens = reserved_tokens + count_tokens(compacted, model_str)
+    if compacted_tokens >= original_tokens:
+        # An ineffective summary must not advance coverage — originals
+        # stay with the prior summary untouched.
+        return CompactionResult(
+            messages=rendered,
+            summary=previous_summary,
+            compacted=False,
+            original_tokens=original_tokens,
+            compacted_tokens=compacted_tokens,
+            head_count=0,
+            middle_count=0,
+            tail_count=len(messages),
+            error="Summary did not reduce token usage",
+            retained_messages=list(messages),
+        )
 
     logger.info(
         f"Compaction: {len(messages)} msgs → {len(compacted)} msgs, "
         f"{original_tokens} → {compacted_tokens} tokens "
         f"(head={len(head)}, middle={len(middle)}, tail={len(tail)})"
     )
+
+    covered_ids: set[str] = set()
+    if source_ids:
+        for ids in source_ids[head_end:tail_start]:
+            if ids:
+                covered_ids.update(ids)
 
     return CompactionResult(
         messages=compacted,
@@ -622,4 +812,6 @@ async def compact_context(
         head_count=len(head),
         middle_count=len(middle),
         tail_count=len(tail),
+        retained_messages=[*pruned_head, *tail],
+        covered_ids=covered_ids,
     )

@@ -15,17 +15,75 @@ export interface Provider {
   org_id: string | null;
   extra_params: Record<string, unknown>;
   custom_models: string[];
+  /** Names of configured extra credentials (azure api_version, bedrock
+   *  aws_*). Values never leave the encrypted backend blob. */
+  credential_fields: string[];
+}
+
+export interface ModelProvenance {
+  value?: unknown;
+  source?: "models_dev" | "provider" | "user_override" | "unknown" | string;
+  as_of?: string | null;
+  confidence?:
+    | "catalog_documented"
+    | "provider_reported"
+    | "user_declared"
+    | "unknown"
+    | string;
 }
 
 export interface ModelInfo {
+  /** Exact request identifier — always forwarded to the provider as-is. */
   id: string;
+  /** Legacy display label — same as id; friendly labels use display_name. */
   name: string;
+  /** Friendly display label from the catalog (additive, W11). */
+  display_name?: string | null;
   supports_vision?: boolean;
   supports_thinking?: boolean;
   thinking_efforts?: string[];
   max_context_tokens?: number | null;
   context_window_tokens?: number | null;
   max_output_tokens?: number | null;
+  availability?: "available" | "unavailable" | "unknown" | null;
+  lifecycle?: string | null;
+  provenance?: Record<string, ModelProvenance> | null;
+  pricing?: Record<string, unknown> | null;
+  revision?: number | null;
+  snapshot_revision?: string | null;
+  discovery_error?: string | null;
+  stale?: boolean | null;
+  last_confirmed_at?: string | null;
+  /** Declared catalog identity for alias providers (azure deployment names,
+   * bedrock inference profiles) — set via the metadata endpoint. */
+  catalog_provider_id?: string | null;
+  catalog_model_id?: string | null;
+  catalog_mapping_explicit?: boolean;
+}
+
+/** GET /api/providers/{id}/models response — additive fields optional so
+ * older backends stay compatible. */
+export interface ProviderModelsResponse {
+  discovery: string;
+  models: ModelInfo[];
+  revision?: string;
+  snapshot_revision?: string | null;
+  fetched_at?: string | null;
+  refresh_in_progress?: boolean;
+}
+
+/** GET /api/dependencies row (W11 readiness — no installers yet). */
+export interface RuntimeDependency {
+  id: string;
+  label: string;
+  status: "ready" | "missing" | "incompatible" | "error" | string;
+  source: "override" | "system" | "managed" | "none" | string;
+  version: string | null;
+  executables: Record<string, string>;
+  detail: string | null;
+  unlocks: string;
+  managed_recipe_available: boolean;
+  guidance_url: string | null;
 }
 
 export interface Agent {
@@ -45,6 +103,7 @@ export interface Agent {
   compaction?: CompactionConfig;
   workspace?: string;
   sandbox_mode?: "strict" | "open";
+  yolo_mode?: boolean;
 }
 
 export interface CapabilityGrant {
@@ -70,6 +129,7 @@ export interface Limits {
   max_cost_per_run: number;
   session_idle_timeout_min: number;
   max_context_tokens: number | null;
+  core_max_tokens?: number;
 }
 
 export interface HeartbeatConfig {
@@ -97,25 +157,199 @@ export interface AgentVersion {
 }
 
 export interface Skill {
+  /** Governed Skill row id — null for loose file entries. */
+  id: string | null;
   name: string;
   type: "directory" | "file";
   description: string;
+  status?: string;
 }
 
+// W6 Skills Studio — DB-backed skill library.
+export type SkillScope = "built-in" | "global" | "agent-local";
+export type SkillStatus = "draft" | "published" | "disabled" | "archived";
+
 export interface SkillInfo {
+  id: string;
   name: string;
   description: string;
-  source: string;
-  path: string;
+  scope: SkillScope;
+  status: SkillStatus;
+  owner_agent_id: string | null;
+  owner_name: string | null;
+  availability: "all" | "selected";
+  assigned_agent_ids: string[];
+  assigned_names: string[];
+  current_revision: number | null;
   resource_count: number;
-  license?: string;
-  compatibility?: string;
+  builder_session_id: string | null;
+  updated_at: string | null;
+  activation_count: number;
+  last_used_at: string | null;
+}
+
+export interface SkillRevisionInfo {
+  id: string;
+  revision_number: number;
+  content_hash: string;
+  change_summary: string | null;
+  source_run_id: string | null;
+  validation_result: { errors?: string[]; warnings?: string[] };
+  is_current: boolean;
+  created_at: string | null;
+}
+
+export interface SkillDetail extends SkillInfo {
+  body: string;
+  license: string;
+  compatibility: string;
+  allowed_tools: string;
+  revisions: SkillRevisionInfo[];
+  validation: {
+    errors: string[];
+    warnings: string[];
+    stats: Record<string, number>;
+  };
+  usage: { run_id: string; status: string; created_at: string | null }[];
+}
+
+export interface EffectiveSkill {
+  name: string;
+  description: string;
+  scope: SkillScope;
+  skill_id: string | null;
+  revision_id: string | null;
+  pin: string;
+  shadows: string[];
+}
+
+export interface SkillCandidate {
+  path: string;
+  dir_name: string;
+  name: string;
+  description: string;
+}
+
+export interface SkillImportResult {
+  imported: { id: string; name: string }[];
+  errors?: string[];
+  candidates?: SkillCandidate[];
 }
 
 export interface WorkspaceEntry {
   name: string;
   type: "dir" | "file";
   size: number;
+}
+
+// --- File previews (W3) ---
+
+export interface ArtifactMeta {
+  id: string;
+  format: string;
+  tracking_status: string;
+  current_path: string;
+  current_revision_id: string | null;
+  current_revision_number: number | null;
+  revision_count: number;
+  viewing_revision_id: string | null;
+  viewing_revision_number: number | null;
+  newer_exists: boolean;
+}
+
+export interface PreviewElement {
+  type:
+    | "heading"
+    | "paragraph"
+    | "list"
+    | "table"
+    | "image"
+    | "chart"
+    | "notes"
+    | "page_break";
+  text?: string;
+  level?: number;
+  style?: string;
+  items?: string[];
+  header?: string[];
+  rows?: unknown[][];
+  data_url?: string;
+  categories?: string[];
+  series?: { name: string; values: number[] }[];
+}
+
+export interface PreviewSlide {
+  title: string | null;
+  elements: PreviewElement[];
+  truncated?: boolean;
+}
+
+export interface PreviewSheet {
+  name: string;
+  rows: unknown[][];
+  row_count: number;
+  truncated: boolean;
+}
+
+export interface PreviewPayload {
+  kind:
+    | "markdown"
+    | "code"
+    | "text"
+    | "json"
+    | "table"
+    | "image"
+    | "pdf"
+    | "document"
+    | "slides"
+    | "workbook"
+    | "media"
+    | "unknown";
+  size: number;
+  name: string;
+  path: string;
+  /** Operator-only absolute path — the desktop shell uses it for
+   *  open/reveal-in-finder. Always the live file, even for revision views. */
+  absolute_path?: string;
+  artifact: ArtifactMeta | null;
+  content?: string;
+  truncated?: boolean;
+  language?: string;
+  valid?: boolean;
+  header?: string[];
+  rows?: unknown[][];
+  total_rows?: number;
+  mime?: string;
+  svg?: boolean;
+  page_count?: number;
+  format?: string;
+  elements?: PreviewElement[];
+  slides?: PreviewSlide[];
+  slide_count?: number;
+  /** PPTX canvas dims in EMU — lets the panel frame slides at their true aspect. */
+  slide_width?: number;
+  slide_height?: number;
+  sheets?: PreviewSheet[];
+  formulas_recalculated?: boolean;
+  media?: "audio" | "video";
+  too_large?: boolean;
+  /** Ephemeral-upload previews only — first PDF page as base64 PNG. */
+  thumb_png?: string;
+  error?: string;
+}
+
+export interface ArtifactRevisionInfo {
+  revision_id: string;
+  revision_number: number;
+  content_hash: string;
+  byte_size: number;
+  change_summary: string | null;
+  created_by: string | null;
+  created_at: string | null;
+  source_run_id: string | null;
+  source_message_id: string | null;
+  base_revision_id: string | null;
+  current: boolean;
 }
 
 export interface KnowledgeScope {
@@ -152,6 +386,8 @@ export interface KnowledgeDocument {
 export interface KnowledgeResult {
   chunk_id: string;
   document_id: string;
+  /** Owning scope — null = Shared knowledge. */
+  agent_id?: string | null;
   text: string;
   source_path: string;
   storage_path: string;
@@ -159,6 +395,53 @@ export interface KnowledgeResult {
   page_number: number | null;
   sheet_name: string | null;
   source_location: string | null;
+}
+
+export interface KnowledgeGeneration {
+  id: string;
+  revision: number;
+  status: "building" | "active" | "superseded" | "failed";
+  profile_revision: number;
+  embedding_model: string | null;
+  dimensions: number | null;
+  adapter: string | null;
+  stats: {
+    embedded?: number;
+    failed?: number;
+    total?: number;
+    reason?: string;
+  };
+  /** Spend attributed to this generation's vector set (index/ingest/repair calls). */
+  cost?: number;
+  tokens_in?: number;
+  error: string | null;
+  activated_at: string | null;
+  created_at: string | null;
+}
+
+export interface KnowledgeEmbeddingResource {
+  configured: boolean;
+  id?: string;
+  provider_id?: string;
+  provider_name?: string | null;
+  provider_type?: string | null;
+  model_name?: string;
+  dimensions?: number | null;
+  status?: string;
+  last_error?: string | null;
+  last_validated_at?: string | null;
+  egress_allowed?: boolean;
+  provider_local?: boolean | null;
+  hint?: string;
+}
+
+export interface KnowledgeIndexOverview {
+  profile: { id: string; revision: number; config: Record<string, unknown> };
+  embedding_resource: KnowledgeEmbeddingResource;
+  active_generation: KnowledgeGeneration | null;
+  building_generation: KnowledgeGeneration | null;
+  documents: { pending: number };
+  embedding_spend: { calls: number; tokens_in: number; cost: number };
 }
 
 export interface Citation {
@@ -179,11 +462,20 @@ export interface Citation {
 
 export interface Message {
   id: string;
-  role: "user" | "assistant" | "system" | "tool" | "tool_call" | "thinking" | "heartbeat";
+  role:
+    | "user"
+    | "assistant"
+    | "system"
+    | "tool"
+    | "tool_call"
+    | "thinking"
+    | "heartbeat";
   content: string;
   created_at: string;
   run_id: string;
   run_status?: string;
+  trigger?: string;
+  is_test?: boolean;
   tokens_in?: number;
   tokens_out?: number;
   cost?: number;
@@ -203,6 +495,16 @@ export interface SessionInfo {
   external_user_id?: string | null;
   active_run_id?: string | null;
   active_run_status?: string | null;
+  learning?: boolean;
+}
+
+// Transient session-activity frame (close-time learning indicator)
+export interface SessionActivityEvent {
+  type: "session_activity";
+  kind: string;
+  phase: "started" | "finished" | "failed";
+  session_id: string;
+  agent_id: string;
 }
 
 // SSE event payloads
@@ -222,7 +524,15 @@ export interface ToolCallEvent {
   id: string;
   capability: string;
   args: Record<string, unknown>;
-  status: "pending" | "pending_approval" | "running" | "complete" | "denied";
+  status:
+    | "pending"
+    | "pending_approval"
+    | "running"
+    | "complete"
+    | "denied"
+    | "failed"
+    | "timeout"
+    | "interrupted";
   result?: unknown;
   approval_id?: string;
   approval_batch_id?: string;
@@ -290,6 +600,85 @@ export interface SchedulerAlert {
   timestamp: string;
 }
 
+export type ScheduleTriggerKind = "once" | "interval" | "cron";
+
+export interface ScheduleTrigger {
+  kind: ScheduleTriggerKind;
+  at?: string | null;
+  every_seconds?: number | null;
+  cron?: string | null;
+  timezone?: string | null;
+}
+
+export interface ScheduleFailurePolicy {
+  mode: "no_retry" | "bounded_retry";
+  max_attempts: number;
+  backoff_seconds: number;
+}
+
+export interface SchedulePolicies {
+  missed: "skip" | "run_once" | "catch_up";
+  overlap: "skip" | "queue" | "cancel_previous" | "allow_parallel";
+  failure: ScheduleFailurePolicy;
+}
+
+export interface Schedule {
+  id: string;
+  agent_id: string;
+  agent_name: string;
+  name: string;
+  enabled: boolean;
+  managed: string | null;
+  revision_number: number;
+  trigger: ScheduleTrigger | null;
+  task_prompt: string | null;
+  policies: SchedulePolicies | null;
+  auto_approve: string[];
+  max_cost: number | null;
+  plan_revision_id: string | null;
+  model_override: Record<string, string> | null;
+  skill: string | null;
+  next_fire_at: string | null;
+  last_fired_at: string | null;
+  last_status: string | null;
+  last_error: string | null;
+  consecutive_failures: number;
+  archived: boolean;
+  created_at: string | null;
+  preview?: string[];
+  occurrences?: ScheduleOccurrence[];
+}
+
+export interface ScheduleOccurrence {
+  id: string;
+  schedule_id: string;
+  revision_id: string;
+  run_id: string | null;
+  scheduled_for: string;
+  status: string;
+  attempt: number;
+  retry_of: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  error: string | null;
+}
+
+export interface SchedulePayload {
+  agent_id: string;
+  name: string;
+  enabled: boolean;
+  trigger: ScheduleTrigger;
+  task_prompt: string;
+  policies: SchedulePolicies;
+  auto_approve: string[];
+  max_cost: number | null;
+  // Not editable in the schedule dialog — echoed back on update so a
+  // full-replacement PUT doesn't wipe API-set values.
+  plan_revision_id?: string | null;
+  model_override?: Record<string, string> | null;
+  skill?: string | null;
+}
+
 export interface McpServerInfo {
   id: string;
   name: string;
@@ -346,6 +735,8 @@ export interface ChannelInfo {
   webhook_url: string;
   has_token: boolean;
   extra_config: Record<string, unknown> | null;
+  /** null = anyone may message the agent; a list (even empty) = only these chat IDs */
+  allowed_chat_ids: string[] | null;
 }
 
 // Observability (Ticket 09)
@@ -381,14 +772,73 @@ export interface AuditOut {
   id: string;
   run_id: string;
   agent_id: string;
+  sub_agent_id: string | null;
+  call_id: string | null;
   capability_name: string;
   allowed: boolean;
+  outcome: string;
   denied_reason: string | null;
   cost: number;
   latency_ms: number;
   args: string;
   result: string | null;
+  effects: string[] | null;
   created_at: string | null;
+}
+
+export interface ModelCallOut {
+  id: string;
+  run_id: string | null;
+  session_id: string | null;
+  agent_id: string | null;
+  sub_agent_id: string | null;
+  turn: number;
+  kind: string;
+  purpose: string;
+  provider_id: string | null;
+  model_name: string | null;
+  model_str: string | null;
+  streamed: boolean;
+  tokens_in: number;
+  tokens_out: number;
+  cached_tokens: number | null;
+  thinking_tokens: number | null;
+  detail: Record<string, unknown> | null;
+  cost: number;
+  latency_ms: number;
+  status: string;
+  error: string | null;
+  created_at: string;
+}
+
+export interface ManifestOut {
+  agent_version_id: string | null;
+  agent_version_number: number | null;
+  model_provider_id: string | null;
+  model_name: string | null;
+  plan_revision_id: string | null;
+  schedule_revision_id: string | null;
+  skill_revision_ids: Record<string, string> | string[];
+  retrieval_profile_revision_id: string | null;
+  knowledge_snapshot_ids: string[];
+  browser_profile_id: string | null;
+  artifact_base_revision_ids: string[];
+  core_revision_id?: string | null;
+  core_identity_source_version_id?: string | null;
+}
+
+export interface TimelineEvent {
+  id: string;
+  type: string;
+  at: string | null;
+  call_id: string | null;
+  sub_agent_id: string | null;
+  parent_id: string | null;
+  status: string | null;
+  data: Record<string, unknown>;
+  redacted: boolean;
+  truncated: boolean;
+  estimated_time: boolean;
 }
 
 export interface RunDetail {
@@ -409,10 +859,17 @@ export interface RunDetail {
   context_tokens: number;
   max_context_tokens: number;
   compacted: boolean;
-  context_breakdown: { system_prompt: number; conversation: number; tools: number };
+  context_breakdown: {
+    system_prompt: number;
+    conversation: number;
+    tools: number;
+  };
   loaded_capabilities: string[];
+  manifest: ManifestOut | null;
   messages: MessageOut[];
   audit_records: AuditOut[];
+  model_calls: ModelCallOut[];
+  timeline: TimelineEvent[];
 }
 
 export interface SpendBreakdown {
@@ -433,6 +890,69 @@ export interface SpendSummary {
   by_trigger: Record<string, number>;
 }
 
+export interface PlatformSpendRow {
+  agent_id?: string | null;
+  agent_name?: string | null;
+  provider_id?: string | null;
+  model_name?: string | null;
+  kind?: string;
+  call_count: number;
+  run_count: number;
+  total_cost: number;
+  tokens_in: number;
+  tokens_out: number;
+  thinking_tokens: number | null;
+  // v0.2 pricing coverage — optional for older backends
+  priced_calls?: number;
+  unpriced_calls?: number;
+  thinking_reported_calls?: number;
+}
+
+export interface PlatformSpendSummary {
+  scope: "platform";
+  since: string;
+  until: string | null;
+  total_cost: number;
+  total_calls: number;
+  total_runs: number;
+  total_tokens_in: number;
+  total_tokens_out: number;
+  thinking_tokens: number | null;
+  cached_tokens: number | null;
+  priced_calls?: number;
+  unpriced_calls?: number;
+  thinking_reported_calls?: number;
+  by_agent: PlatformSpendRow[];
+  by_provider: PlatformSpendRow[];
+  by_model: PlatformSpendRow[];
+  by_kind: PlatformSpendRow[];
+}
+
+export interface RunFilters {
+  agent_id?: string;
+  session_id?: string;
+  status?: string;
+  trigger?: string;
+  is_test?: boolean;
+  provider_id?: string;
+  model?: string;
+  purpose?: string;
+  kind?: string;
+  schedule_id?: string;
+  channel?: string;
+  capability?: string;
+  tool_status?: string;
+  browser_profile?: string;
+  artifact_format?: string;
+  retrieval_mode?: string;
+  retrieval_degraded?: boolean;
+  effect?: string;
+  since?: string;
+  until?: string;
+  limit?: number;
+  offset?: number;
+}
+
 export interface Notification {
   id: string;
   notification_type: string;
@@ -441,8 +961,40 @@ export interface Notification {
   message: string;
   action_path: string | null;
   entity_id: string | null;
+  entity_type: string | null;
+  /** Which agent produced the event (null for system-scoped events).
+   *  agent_name is a snapshot taken at emit time — it survives renames. */
+  agent_id: string | null;
+  agent_name: string | null;
+  event_id: string | null;
   read: boolean;
   created_at: string;
+}
+
+// W9 — per-event x per-surface prefs + quiet hours + permission state.
+export type NotifSurface = "inbox" | "toast" | "browser" | "system";
+export type SurfacePrefs = Record<NotifSurface, boolean>;
+
+export interface NotificationPrefs {
+  defaults: SurfacePrefs;
+  overrides: Record<string, Partial<SurfacePrefs>>;
+  quiet_hours: {
+    enabled: boolean;
+    start: string; // "HH:MM" local
+    end: string;
+    tz: string | null;
+  };
+  permissions: { browser_asked: boolean; tauri_asked: boolean };
+}
+
+/** Write-side shape for PUT /prefs — clients send only the fields they
+ *  mean to change; the backend merges onto the stored blob (B35). A null
+ *  override deletes that event's entry (omission can't express delete). */
+export interface NotificationPrefsPatch {
+  defaults?: Partial<SurfacePrefs>;
+  overrides?: Record<string, Partial<SurfacePrefs> | null>;
+  quiet_hours?: Partial<NotificationPrefs["quiet_hours"]>;
+  permissions?: Partial<NotificationPrefs["permissions"]>;
 }
 
 export interface OperatorAuditOut {
@@ -453,12 +1005,33 @@ export interface OperatorAuditOut {
   created_at: string;
 }
 
+export interface SandboxHealth {
+  kind: string;
+  /**
+   * available = a trusted, vendor-verified isolation boundary is working.
+   * experimental = commands genuinely run, but the backend's own vendor does
+   *   not yet call it a security boundary (see `reason` for the caveat). This
+   *   is the normal working state on Windows (MXC).
+   * unavailable = `terminal` is refused; every other capability still works.
+   */
+  state: "available" | "experimental" | "unavailable";
+  /** For unavailable: why, and how to fix it. For experimental: the trust
+   * caveat to show the operator. Null only when state is available. */
+  reason: string | null;
+  /** Unavailable only because a one-time, user-approved host setup has not run
+   * yet — the desktop app can offer to run it. */
+  setup_required?: boolean;
+}
+
 export interface HealthStatus {
   status: string;
   database: string;
   providers: number;
   agents: number;
   active_runs: number;
+  sandbox?: SandboxHealth | null;
+  /** Gateway version. Compared against the shell's own to catch a stale gateway after an update. */
+  version?: string | null;
   timestamp: string;
 }
 
@@ -490,4 +1063,51 @@ export interface DashboardStats {
   time_series: TimeSeriesPoint[];
   by_agent: AgentStat[];
   recent_runs: RunSummary[];
+}
+
+export interface InstallPlanDependency {
+  id: string;
+  label: string;
+  action: "install" | "reuse";
+  version: string | null;
+  publisher: string;
+  license: string | null;
+  verification: string | null;
+  download_url: string | null;
+  metadata_url: string | null;
+  sha256: string | null;
+  download_bytes: number | null;
+  destination: string | null;
+  unlocks: string;
+}
+
+export interface InstallPlan {
+  id: string;
+  operator_id: string;
+  platform: string | null;
+  expires_at: string;
+  recipe_sha256: string;
+  dependencies: InstallPlanDependency[];
+  total_download_bytes: number | null;
+}
+
+export interface InstallJobDep {
+  id: string;
+  action: string;
+  version: string | null;
+  status: string;
+  detail: string | null;
+}
+
+export interface InstallJob {
+  id: string;
+  plan_id: string;
+  operator_id: string;
+  state: string;
+  progress_bytes: number;
+  current_dep: string | null;
+  created_at: string;
+  completed_at?: string;
+  dependencies: InstallJobDep[];
+  log?: { at: string; text: string }[];
 }

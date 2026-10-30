@@ -1,7 +1,7 @@
 ---
 title: Tài liệu CaberOS
 description: Cài đặt, cấu hình, bảo mật và vận hành agent AI cá nhân local-first.
-template: splash
+template: doc
 ---
 
 CaberOS là hệ điều hành mã nguồn mở, local-first cho agent AI cá nhân. Nó cung cấp harness xung quanh model: identity, context, công cụ, bộ nhớ, quyền hạn, workspace, tích hợp, tự động hóa và audit trail.
@@ -16,7 +16,19 @@ Model đề xuất hành động. CaberOS quyết định hành động nào đ�
 4. [Tạo và kiểm tra agent đầu tiên](/vi/docs/getting-started/first-agent/).
 5. Xem lượt chạy đầu tiên trong [Observability và trace](/vi/docs/guides/observability/).
 
-## Các khái niệm quan trọng
+## Tính năng sản phẩm
+
+### Today — trang chủ của operator
+
+Trang Today là màn hình làm việc chính. Dải **Needs you** gom các approval đang chờ, câu hỏi của agent, run thất bại và notification chưa đọc — mỗi mục deep link tới đúng chat, trace hoặc setting để xử lý. Phía dưới là bản tổng hợp những gì agent đã làm từ lần cuối bạn xem, một cột liệt kê những gì có thể rời khỏi máy, và một ô nhập để giao task cho bất kỳ agent nào.
+
+[Hoàn tất lần khởi chạy đầu tiên →](/vi/docs/getting-started/first-launch/)
+
+### Hội thoại và điều khiển model
+
+Dùng nhiều session, stream run đang chạy, đổi model theo từng message, bật thinking control khi model hỗ trợ, đính kèm file local và URL, trả lời câu hỏi làm rõ của agent, duyệt các call quan trọng và kiểm tra citation.
+
+[Dùng hội thoại và attachment →](/vi/docs/guides/conversations/)
 
 ### Agent có thể cấu hình
 
@@ -36,17 +48,77 @@ Mọi capability call đều đi qua một syscall mediator để kiểm tra gra
 
 [Hiểu quyền hạn →](/vi/docs/core-concepts/permissions/)
 
+### Bộ nhớ phân lớp
+
+Kết hợp context của session hiện tại, `MEMORY.md` cho cả agent, recall snippet theo contact, structured fact, tìm kiếm chính xác trong history, episodic summary và trích xuất durable-memory tự động ở mức best-effort.
+
+[Chọn memory layer →](/vi/docs/core-concepts/memory/)
+
+### Knowledge Vault
+
+Upload file Markdown, text, PDF và DOCX vào Shared Knowledge hoặc scope riêng của một agent. Retrieval mặc định là FTS5 lexical search chạy local; hybrid embedding là tùy chọn và cần consent egress tường minh — agent chỉ nhận excerpt được truy xuất hoặc nội dung hình ảnh đã inspect. File dạng bảng như `.xlsx` và `.csv` bị từ chối lúc ingest, chờ lớp truy vấn theo hàng.
+
+[Dùng Knowledge Vault →](/vi/docs/guides/knowledge-vault/)
+
+### Skills
+
+Cài các workflow `SKILL.md` tái sử dụng kèm resource từ một thư viện có quản lý — skill built-in, global và agent-local được resolve theo precedence, và mỗi run pin revision mà nó dùng. Agent ban đầu chỉ thấy tên và mô tả skill, rồi load body hoặc resource khi cần. Sau khi session đóng, một reflection run có giới hạn có thể đề xuất chỉnh sửa skill agent-local dưới dạng staged. Skill định hướng hành vi nhưng không cấp tool.
+
+[Cài và dùng skill →](/vi/docs/guides/skills/)
+
+### Artifact Studio
+
+Biến kết quả run thành deliverable được theo dõi. Agent tạo artifact docx, xlsx, pptx và pdf với identity ổn định, revision bất biến, restore-as-new-revision và provenance theo run/message. Chỉnh sửa từ bên ngoài vào file được theo dõi sẽ hiện là conflict thay vì lặng lẽ lệch nhau, và file trong workspace hay skill được render dưới dạng preview có giới hạn.
+
+[Làm việc trong hội thoại →](/vi/docs/guides/conversations/)
+
+### Browser automation
+
+Cho agent điều khiển trình duyệt Chrome-for-Testing được quản lý khi task cần một trang thật: cài đặt có consent tường minh ở lần dùng đầu, session headless hoặc hiển thị, persistent profile theo phạm vi domain, action qua approval, và đường takeover để operator tự điều khiển khi cần.
+
+[Xem approval và sandbox →](/vi/docs/security/approvals-and-sandbox/)
+
 ### Tích hợp MCP
 
-Kết nối MCP server qua stdio hoặc HTTP, lưu credential API key/OAuth được mã hóa, khám phá tool và cấp quyền cho từng tool hoặc cả server.
+Kết nối MCP server qua stdio hoặc HTTP, import cấu hình JSON phổ biến, lưu credential API key/OAuth được mã hóa, khám phá tool và cấp quyền cho từng tool hoặc cả server.
 
 [Kết nối MCP server →](/vi/docs/guides/mcp/)
 
+### External channel
+
+Định tuyến message Telegram, Discord, Zalo OA và Zalo Bot qua cùng agent pipeline. Chọn polling cho các bot local được hỗ trợ hoặc triển khai HTTPS webhook được bảo vệ, rồi định nghĩa cách các call cần approval hành xử.
+
+[Cấu hình external channel →](/vi/docs/guides/channels/)
+
+### Schedule và heartbeat
+
+Chạy một agent prompt tự đủ một lần, theo interval cố định, hoặc theo cron expression trong timezone đã chọn. Schedule là row bền vững: thời điểm fire tiếp theo được persist, một startup sweep khôi phục các occurrence bị lỡ theo policy của schedule, và các policy overlap cùng bounded-retry quyết định mỗi lần fire làm gì. Heartbeat của agent vẫn hoạt động — mỗi heartbeat chiếu thành một managed schedule được sửa qua cấu hình heartbeat.
+
+[Cấu hình scheduler →](/vi/docs/guides/scheduler/)
+
+### Notification
+
+Approval, failure, schedule alert và sự kiện provider đến theo SSE — hiện dạng toast và gom trong hộp thư notification. Notification được dedupe theo type, entity và trạng thái chưa đọc; mỗi deep link dẫn tới đúng màn hình có thể xử lý nó.
+
+[Xem run hiện diện ở đâu →](/vi/docs/guides/observability/)
+
 ### Observability và spend
 
-Xem run, token, lỗi, độ trễ và chi phí. Mở trace để kiểm tra status, trigger, message, context breakdown, schema đã load và syscall được cho phép hoặc bị từ chối.
+Xem run, token, lỗi, độ trễ và chi phí tổng hợp. Mở trace của một agent để kiểm tra span tree và waterfall, observation của từng span, thinking đã persist, context breakdown, capability schema đã load và syscall được cho phép hay bị từ chối. Mọi model call đều ghi vào một ledger chung.
 
 [Xem observability và trace →](/vi/docs/guides/observability/)
+
+## Ranh giới tính năng
+
+| Tính năng | CaberOS sở hữu | Ranh giới quan trọng |
+| --- | --- | --- |
+| Model provider | Cấu hình local, key mã hóa, khám phá model, transport request | Provider hosted nhận prompt và context được chọn. |
+| Workspace | Lưu attachment và thư mục làm việc cho file/shell | Chế độ open sandbox cố ý cho phép đường dẫn filesystem rộng hơn. |
+| MCP | Cấu hình, credential, grant, kết nối, audit | Code và dịch vụ MCP của bên thứ ba có trust boundary riêng. |
+| Channel | Mapping contact/session và agent pipeline | Nền tảng nhắn tin lưu và truyền message trên nền tảng đó. |
+| Scheduler | Schedule in-process bền vững với trigger once, interval và cron | Chỉ fire khi gateway local và máy đang chạy; occurrence bị lỡ được khôi phục theo policy của từng schedule. |
+| Spend | Bản ghi token và cost theo run, theo tính toán hoặc do provider báo | Billing của provider vẫn là source of truth tài chính. |
+| Backup | Export và backup local | Backup có thể chứa history nhạy cảm và secret đã mã hóa. |
 
 ## Local-first, một cách chính xác
 
@@ -60,7 +132,7 @@ Dữ liệu có thể rời máy khi bạn cấu hình cloud model, gọi remote
 
 Bản desktop release dành cho **macOS ARM64 (Apple Silicon)**. Docker deployment và phát triển local có sẵn trên macOS, Linux, và Windows (qua WSL2). macOS Intel và Windows desktop build cần cross-compilation và chưa được thiết lập.
 
-CaberOS hiện chưa có product CLI/TUI, distributed job queue bền vững, cron scheduling đã triển khai hoặc event-trigger scheduler.
+CaberOS hiện chưa có product CLI/TUI, distributed job queue, hay trigger theo sự kiện cho schedule.
 
 ## Dành cho contributor
 

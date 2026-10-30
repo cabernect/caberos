@@ -25,7 +25,12 @@ async def client(db, monkeypatch, tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_settings_lists_skill_created_in_agent_workspace(client):
+async def test_settings_lists_skill_created_in_agent_workspace(client, db):
+    from agentos.models.agent import Agent
+
+    db.add(Agent(id="caber", name="Caber"))
+    await db.commit()
+
     skill_dir = settings.workspace_root / "caber" / "skills" / "release-notes"
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text(
@@ -36,21 +41,24 @@ async def test_settings_lists_skill_created_in_agent_workspace(client):
     response = await client.get("/api/agents/caber/skills")
 
     assert response.status_code == 200
-    assert response.json() == [
-        {
-            "name": "release-notes",
-            "type": "directory",
-            "description": "Create release notes.",
-        }
-    ]
+    listed = response.json()
+    assert len(listed) == 1
+    assert listed[0]["id"]  # governed row id — indexed on read
+    assert listed[0]["status"] == "published"
+    assert {k: v for k, v in listed[0].items() if k not in ("id", "status")} == {
+        "name": "release-notes",
+        "type": "directory",
+        "description": "Create release notes.",
+    }
 
     available = await client.get("/api/agents/caber/available-skills")
     assert available.status_code == 200
-    agent_skills = [skill for skill in available.json() if skill["source"] == "agent"]
+    agent_skills = [skill for skill in available.json() if skill["source"] == "agent-local"]
     assert agent_skills == [
         {
             "name": "release-notes",
             "description": "Create release notes.",
-            "source": "agent",
+            "source": "agent-local",
+            "shadows": [],
         }
     ]

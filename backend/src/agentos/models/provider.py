@@ -16,6 +16,11 @@ class Provider(Base, IdMixin, TimestampMixin):
     encrypted_key: Mapped[str | None] = mapped_column(
         Text, nullable=True
     )  # Fernet-encrypted API key
+    encrypted_credentials: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )  # Fernet-encrypted JSON dict — extra per-type credentials (azure
+    # api_version, bedrock aws_* keys/region). Secrets never live in
+    # extra_params; that column is plaintext.
     base_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
     org_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     extra_params: Mapped[str] = mapped_column(Text, default="{}")  # JSON

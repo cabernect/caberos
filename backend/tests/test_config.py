@@ -31,7 +31,8 @@ def test_config_validation():
         capabilities=[CapabilityGrant(name="terminal")],
     )
     assert config.id == "test-agent"
-    assert config.limits.max_turns_per_run == 15
+    assert config.limits.max_turns_per_run == 200
+    assert config.limits.session_idle_timeout_min == 5
     assert config.heartbeat.enabled is False
 
 
@@ -296,3 +297,69 @@ capabilities:
     assert config.capabilities[0].name == "read_file"
     assert config.capabilities[1].name == "terminal"
     assert config.capabilities[1].require_approval is True
+
+
+# -- model catalog auto-refresh setting (internal daily) -------------------------
+
+
+def test_catalog_auto_refresh_defaults_true(monkeypatch):
+    """The internal daily refresh is ON without any env pin."""
+    from agentos.config import Settings
+
+    monkeypatch.delenv("AGENTOS_MODEL_CATALOG_AUTO_REFRESH", raising=False)
+    s = Settings(_env_file=None)
+    assert s.model_catalog_auto_refresh is True
+
+
+def test_catalog_auto_refresh_env_opt_out(monkeypatch):
+    """Operator env var disables the daily refresh explicitly."""
+    from agentos.config import Settings
+
+    monkeypatch.setenv("AGENTOS_MODEL_CATALOG_AUTO_REFRESH", "false")
+    s = Settings(_env_file=None)
+    assert s.model_catalog_auto_refresh is False
+    monkeypatch.delenv("AGENTOS_MODEL_CATALOG_AUTO_REFRESH")
+
+
+def test_catalog_auto_refresh_persisted_override(tmp_path, monkeypatch):
+    """A persisted opt-out (app-settings.json) survives restart — the
+    operator's saved false is honoured over the new default."""
+    import json
+
+    from agentos.config import _apply_persisted_overrides
+    from agentos.config import settings as singleton
+
+    (tmp_path / "app-settings.json").write_text(json.dumps({"model_catalog_auto_refresh": False}))
+    monkeypatch.delenv("AGENTOS_MODEL_CATALOG_AUTO_REFRESH", raising=False)
+    prior_db = singleton.db_path
+    prior_val = singleton.model_catalog_auto_refresh
+    try:
+        monkeypatch.setattr(singleton, "db_path", tmp_path / "db.sqlite")
+        _apply_persisted_overrides()
+        assert singleton.model_catalog_auto_refresh is False
+    finally:
+        monkeypatch.setattr(singleton, "db_path", prior_db)
+        singleton.model_catalog_auto_refresh = prior_val
+
+
+def test_catalog_auto_refresh_env_pin_beats_persisted(tmp_path, monkeypatch):
+    """An env pin wins over a persisted overlay — ops configuration is
+    authoritative."""
+    import json
+
+    from agentos.config import _apply_persisted_overrides
+    from agentos.config import settings as singleton
+
+    (tmp_path / "app-settings.json").write_text(json.dumps({"model_catalog_auto_refresh": False}))
+    monkeypatch.setenv("AGENTOS_MODEL_CATALOG_AUTO_REFRESH", "true")
+    prior_db = singleton.db_path
+    prior_val = singleton.model_catalog_auto_refresh
+    try:
+        monkeypatch.setattr(singleton, "db_path", tmp_path / "db.sqlite")
+        singleton.model_catalog_auto_refresh = True  # pinned default
+        _apply_persisted_overrides()
+        assert singleton.model_catalog_auto_refresh is True
+    finally:
+        monkeypatch.delenv("AGENTOS_MODEL_CATALOG_AUTO_REFRESH")
+        monkeypatch.setattr(singleton, "db_path", prior_db)
+        singleton.model_catalog_auto_refresh = prior_val

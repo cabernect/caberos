@@ -49,9 +49,23 @@ MAIN_VER="$(git show origin/main:backend/pyproject.toml \
 
 # Phase 2 — the bump is already merged to main: tag it and push the tag.
 if [[ "$MAIN_VER" == "$VERSION" ]]; then
-  git tag -a "v${VERSION}" -m "v${VERSION}" origin/main
+  EXPECTED="$(git rev-parse origin/main)"
+  git tag -a "v${VERSION}" -m "v${VERSION}" "$EXPECTED"
   git push origin "v${VERSION}"
-  echo "✅ Tagged v${VERSION} on origin/main — release.yml is building the DMG + website."
+
+  # Verify the pushed tag actually points at the intended commit — a tag on
+  # the wrong commit silently builds and publishes the wrong code.
+  # `^{}` peels the annotated tag object to its commit.
+  ACTUAL="$(git ls-remote origin "refs/tags/v${VERSION}^{}" | awk '{print $1}')"
+  if [[ -z "$ACTUAL" ]]; then
+    ACTUAL="$(git ls-remote origin "refs/tags/v${VERSION}" | awk '{print $1}')"
+  fi
+  if [[ "$ACTUAL" != "$EXPECTED" ]]; then
+    echo "Error: pushed tag v${VERSION} resolves to ${ACTUAL:-<nothing>}, expected ${EXPECTED}." >&2
+    echo "Delete the remote tag (git push origin :refs/tags/v${VERSION}) and re-run." >&2
+    exit 1
+  fi
+  echo "✅ Tagged v${VERSION} at ${EXPECTED} — release.yml is building the DMG + website."
   exit 0
 fi
 
@@ -69,6 +83,19 @@ git checkout -b "$BRANCH" origin/main
 ./scripts/set-version.sh "$VERSION"
 ./scripts/check-version.sh
 
+# The release body comes from CHANGELOG.md, so the tag needs a real entry:
+# promote `## [Unreleased] — X.Y.Z` to `## [X.Y.Z] — <date>` when present,
+# and refuse to release without notes either way (release.yml also enforces).
+TODAY="$(date +%F)"
+if grep -qE "^## \[Unreleased\] — ${VERSION}" CHANGELOG.md; then
+  sed -i '' -E "s/^## \[Unreleased\] — ${VERSION}(.+)/## [${VERSION}] — ${TODAY}\1/" CHANGELOG.md
+  sed -i '' -E '/^Integrated on .*; release pending\.$/d' CHANGELOG.md
+elif ! grep -qE "^## \[${VERSION}\]" CHANGELOG.md; then
+  echo "Error: CHANGELOG.md has no entry for ${VERSION}." >&2
+  echo "Write the release notes section first, then re-run." >&2
+  exit 1
+fi
+
 # Only stage the manifest files set-version.sh touched — never sweep in
 # unrelated working-tree changes.
 MANIFESTS=(
@@ -79,6 +106,7 @@ MANIFESTS=(
   frontend/src-tauri/tauri.conf.json
   website/package.json
   website/package-lock.json
+  CHANGELOG.md
 )
 git add -- "${MANIFESTS[@]}"
 git commit -m "Bump version to ${VERSION}"

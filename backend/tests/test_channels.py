@@ -511,3 +511,82 @@ class TestChannelAPI:
             json={"message": {"text": "hi", "chat": {"id": 1}, "from": {"id": 1}, "message_id": 1}},
         )
         assert resp.status_code == 404
+
+    def test_allowed_chat_ids_roundtrip(self, client, db_session):
+        resp = client.post(
+            "/api/channels",
+            json={
+                "platform": "telegram",
+                "agent_id": "agent-1",
+                "bot_token": "token1",
+                "allowed_chat_ids": ["111"],
+            },
+        )
+        assert resp.status_code == 200
+        channel_id = resp.json()["id"]
+        assert resp.json()["allowed_chat_ids"] == ["111"]
+
+        # Restrict to a different list
+        resp = client.patch(
+            f"/api/channels/{channel_id}", json={"allowed_chat_ids": ["222", "333"]}
+        )
+        assert resp.status_code == 200
+        assert resp.json()["allowed_chat_ids"] == ["222", "333"]
+
+        # Omitting the field leaves it untouched
+        resp = client.patch(f"/api/channels/{channel_id}", json={"mode": "webhook"})
+        assert resp.json()["allowed_chat_ids"] == ["222", "333"]
+
+        # Explicit null removes the restriction (anyone may message)
+        resp = client.patch(f"/api/channels/{channel_id}", json={"allowed_chat_ids": None})
+        assert resp.status_code == 200
+        assert resp.json()["allowed_chat_ids"] is None
+
+    def test_update_agent_id_moves_channel(self, client, db_session):
+        resp = client.post(
+            "/api/channels",
+            json={"platform": "telegram", "agent_id": "agent-1", "bot_token": "t1"},
+        )
+        channel_id = resp.json()["id"]
+
+        resp = client.patch(f"/api/channels/{channel_id}", json={"agent_id": "agent-2"})
+        assert resp.status_code == 200
+        assert resp.json()["agent_id"] == "agent-2"
+        assert "agent_id=agent-2" in resp.json()["webhook_url"]
+
+    def test_update_agent_id_conflict(self, client, db_session):
+        client.post(
+            "/api/channels",
+            json={"platform": "telegram", "agent_id": "agent-2", "bot_token": "t2"},
+        )
+        resp = client.post(
+            "/api/channels",
+            json={"platform": "telegram", "agent_id": "agent-1", "bot_token": "t1"},
+        )
+        channel_id = resp.json()["id"]
+
+        resp = client.patch(f"/api/channels/{channel_id}", json={"agent_id": "agent-2"})
+        assert resp.status_code == 409
+
+
+class TestChatAllowList:
+    def test_none_allows_anyone(self):
+        from agentos.channels.telegram import TelegramChannel
+
+        ch = TelegramChannel(bot_token="t", agent_id="a")
+        assert ch.chat_allowed("any-chat") is True
+
+    def test_set_restricts_to_members(self):
+        from agentos.channels.telegram import TelegramChannel
+
+        ch = TelegramChannel(bot_token="t", agent_id="a")
+        ch.allowed_chat_ids = {"111", "222"}
+        assert ch.chat_allowed("111") is True
+        assert ch.chat_allowed("999") is False
+
+    def test_empty_set_blocks_everyone(self):
+        from agentos.channels.telegram import TelegramChannel
+
+        ch = TelegramChannel(bot_token="t", agent_id="a")
+        ch.allowed_chat_ids = set()
+        assert ch.chat_allowed("111") is False

@@ -130,7 +130,7 @@ async def test_doc_search_persists_sources_for_run(db, tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_web_search_persists_sources_for_run(db, monkeypatch):
+async def test_web_search_does_not_persist_sources(db, monkeypatch):
     async def fake_to_thread(_func):
         return [
             {
@@ -146,11 +146,10 @@ async def test_web_search_persists_sources_for_run(db, monkeypatch):
     await db.commit()
 
     assert result["count"] == 1
+    # Search hits are untrusted residue — only fetched/browsed URLs are
+    # citable references, so a bare search writes no WebSource rows.
     sources = list((await db.execute(select(WebSource))).scalars().all())
-    assert len(sources) == 1
-    assert sources[0].url == "https://example.com/caberos"
-    assert sources[0].title == "CaberOS"
-    assert sources[0].excerpt == "Agent OS documentation."
+    assert sources == []
 
 
 @pytest.mark.asyncio

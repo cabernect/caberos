@@ -1,9 +1,9 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import {
   X, Save, Copy, Download, Upload, Power, Trash2,
-  FileText, Folder, ChevronRight, ChevronDown, FolderOpen,
+  ChevronRight, ChevronDown,
 } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { useConfirm } from "@/lib/confirmHook";
 import type {
   Agent,
@@ -14,10 +14,12 @@ import type {
   Provider,
   Skill,
   SkillInfo,
-  WorkspaceEntry,
 } from "@/lib/types";
 import { ModelSelect } from "@/components/ModelSelect";
 import { ThinkingToggle } from "@/components/ThinkingToggle";
+import { Button } from "@/components/ui/button";
+import { FilterPills } from "@/components/ui/filter-pills";
+import { Select } from "@/components/ui/select";
 
 interface SettingsOverlayProps {
   agent: Agent | null;
@@ -27,7 +29,7 @@ interface SettingsOverlayProps {
   providers: Provider[];
 }
 
-const TABS = ["General", "Capabilities", "Memory", "Skills", "Workspace", "Channels"] as const;
+const TABS = ["General", "Capabilities", "Memory", "Skills", "Channels"] as const;
 type Tab = (typeof TABS)[number];
 
 export function SettingsOverlay({ agent, open, onClose, onSaved, providers }: SettingsOverlayProps) {
@@ -63,63 +65,50 @@ export function SettingsOverlay({ agent, open, onClose, onSaved, providers }: Se
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center"
-      style={{ background: "rgba(0,0,0,0.25)" }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/25"
       onClick={onClose}
     >
       <div
-        className="flex h-[80vh] w-full max-w-2xl flex-col rounded-lg border shadow-2xl"
-        style={{ background: "var(--white)", borderColor: "var(--border)" }}
+        className="flex h-[80vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div
-          className="flex shrink-0 items-center justify-between px-6 py-4"
-          style={{ borderBottom: "1px solid var(--border)" }}
-        >
-          <h2 className="text-[16px] font-semibold text-[var(--ink)]">
-            {effectiveAgent?.name || "Agent"} Settings
-          </h2>
+        <div className="flex shrink-0 items-center justify-between border-b border-line px-5 py-3.5">
+          <div>
+            <h2 className="text-[15px] font-semibold text-ink">
+              {effectiveAgent?.name || "Agent"} settings
+            </h2>
+            <p className="mt-0.5 text-[12px] text-ink-3">
+              Identity, model, capabilities, memory and data.
+            </p>
+          </div>
           <div className="flex items-center gap-3">
             {savedMsg && (
-              <span className="text-[12px] font-mono" style={{ color: "var(--success)" }}>
+              <span className="rounded-full bg-accent-tint px-2.5 py-0.5 text-[11px] font-medium text-accent">
                 {savedMsg}
               </span>
             )}
             <button
               onClick={onClose}
-              className="flex h-7 w-7 items-center justify-center rounded text-[var(--ink-2)] transition hover:bg-[var(--border)] hover:text-[var(--ink)]"
-              style={{ border: "none", background: "none", cursor: "pointer" }}
+              className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md border-none bg-transparent text-ink-muted transition-colors hover:bg-sunken hover:text-ink"
             >
               <X className="h-4 w-4" />
             </button>
           </div>
         </div>
 
-        {/* Tabs */}
-        <div
-          className="flex shrink-0 gap-1 overflow-x-auto px-6"
-          style={{ borderBottom: "1px solid var(--border)" }}
-        >
-          {TABS.map((t) => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className="whitespace-nowrap border-b-2 px-3 py-2.5 text-[13px] transition"
-              style={{
-                borderColor: tab === t ? "var(--accent)" : "transparent",
-                color: tab === t ? "var(--ink)" : "var(--ink-2)",
-                background: "none",
-                cursor: "pointer",
-              }}
-            >
-              {t}
-            </button>
-          ))}
+        {/* Tabs — segmented */}
+        <div className="shrink-0 border-b border-line px-5 py-3">
+          <FilterPills
+            pills={TABS.map((t) => ({ key: t, label: t }))}
+            active={tab}
+            onChange={(k) => setTab(k as Tab)}
+            variant="segmented"
+          />
         </div>
 
         {/* Content — scrollable */}
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto p-5">
           {tab === "General" && (
             <GeneralTab agent={effectiveAgent} providers={providers} onSaved={onSaved} onClose={onClose} showSaved={showSaved} />
           )}
@@ -128,7 +117,6 @@ export function SettingsOverlay({ agent, open, onClose, onSaved, providers }: Se
           )}
           {tab === "Memory" && <MemoryTab agentId={agent?.id || ""} onClose={onClose} showSaved={showSaved} />}
           {tab === "Skills" && <SkillsTab agentId={agent?.id || ""} showSaved={showSaved} />}
-          {tab === "Workspace" && <WorkspaceTab agentId={agent?.id || ""} />}
           {tab === "Channels" && <ChannelsTab agentId={agent?.id || ""} />}
         </div>
       </div>
@@ -159,10 +147,11 @@ function GeneralTab({
   const [soul, setSoul] = useState("");
   const [persona, setPersona] = useState("");
   const [task, setTask] = useState("");
-  const [maxTurns, setMaxTurns] = useState(15);
+  const [maxTurns, setMaxTurns] = useState(200);
   const [maxCost, setMaxCost] = useState(500);
-  const [idleTimeout, setIdleTimeout] = useState(60);
+  const [idleTimeout, setIdleTimeout] = useState(5);
   const [maxContext, setMaxContext] = useState<number | null>(null);
+  const [coreMax, setCoreMax] = useState<number | null>(null);
   const [sandboxMode, setSandboxMode] = useState<"strict" | "open">("strict");
   const [thinkingEnabled, setThinkingEnabled] = useState<boolean | null>(null);
   const [thinkingEffort, setThinkingEffort] = useState<string>("medium");
@@ -181,6 +170,7 @@ function GeneralTab({
         setMaxCost(agent.limits.max_cost_per_run);
         setIdleTimeout(agent.limits.session_idle_timeout_min);
         setMaxContext(agent.limits.max_context_tokens);
+        setCoreMax(agent.limits.core_max_tokens ?? 32768);
       }
       setSandboxMode(agent.sandbox_mode || "strict");
       setThinkingEnabled(agent.thinking_enabled ?? null);
@@ -188,17 +178,29 @@ function GeneralTab({
     }
   }, [agent]);
 
-  // Fetch models when provider changes
+  // Fetch models when provider changes — cancelled so a late response
+  // from the previous provider can't clobber the new one's list.
   useEffect(() => {
     if (!providerId) {
       setModels([]);
       return;
     }
+    let cancelled = false;
     setLoadingModels(true);
-    api.listModels(providerId)
-      .then((r) => setModels(r.models))
-      .catch(() => setModels([]))
-      .finally(() => setLoadingModels(false));
+    api
+      .listModels(providerId)
+      .then((r) => {
+        if (!cancelled) setModels(r.models);
+      })
+      .catch(() => {
+        if (!cancelled) setModels([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingModels(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [providerId]);
 
   const handleSave = async () => {
@@ -216,6 +218,7 @@ function GeneralTab({
           max_cost_per_run: maxCost,
           session_idle_timeout_min: idleTimeout,
           max_context_tokens: maxContext,
+          core_max_tokens: coreMax ?? 32768,
         },
       });
       onSaved();
@@ -274,7 +277,7 @@ function GeneralTab({
     input.click();
   };
 
-  if (!agent) return <p className="text-[13px] text-[var(--ink-2)]">Loading...</p>;
+  if (!agent) return <p className="text-[13px] text-ink-2">Loading...</p>;
 
   return (
     <div className="space-y-8">
@@ -284,31 +287,27 @@ function GeneralTab({
           <input
             value={agent.id}
             disabled
-            className="w-full rounded-[5px] border px-3 py-2 font-mono text-[12px] text-[var(--ink-3)]"
-            style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+            className="w-full rounded-md border px-3 py-2 font-mono text-[12px] text-ink-3"
+            style={{ borderColor: "var(--border)", background: "var(--ground)" }}
           />
         </Field>
         <Field label="Name">
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            className="w-full rounded-[5px] border px-3 py-2 text-[13px] text-[var(--ink)] outline-none"
-            style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+            className="w-full rounded-md border px-3 py-2 text-[13px] text-ink outline-none"
+            style={{ borderColor: "var(--border)", background: "var(--ground)" }}
           />
         </Field>
         <div className="grid grid-cols-2 gap-4">
           <Field label="Provider">
-            <select
+            <Select
               value={providerId}
-              onChange={(e) => setProviderId(e.target.value)}
-              className="w-full rounded-[5px] border px-3 py-2 text-[13px] text-[var(--ink)] outline-none"
-              style={{ borderColor: "var(--border)", background: "var(--surface)" }}
-            >
-              <option value="">— Select —</option>
-              {providers.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
+              onChange={setProviderId}
+              options={providers.map((p) => ({ value: p.id, label: p.name }))}
+              className="w-full rounded-md border border-[var(--border)] bg-ground px-3 py-2 text-[13px] text-ink outline-none"
+              align="left" panelClassName="text-[13px]"
+            />
           </Field>
           <Field label="Default Model">
             <ModelSelect
@@ -334,7 +333,7 @@ function GeneralTab({
                   onToggle={(enabled) => setThinkingEnabled(enabled)}
                   onEffortChange={setThinkingEffort}
                 />
-                <span className="text-[11px] text-[var(--ink-3)]">
+                <span className="text-[11px] text-ink-3">
                   {thinkingEnabled === null
                     ? "Model default — no explicit thinking"
                     : thinkingEnabled
@@ -355,8 +354,8 @@ function GeneralTab({
             onChange={(e) => setSoul(e.target.value)}
             placeholder="What this agent believes in, its core values and principles..."
             rows={4}
-            className="w-full resize-y rounded-[5px] border px-3 py-2 text-[13px] leading-[1.6] text-[var(--ink)] outline-none"
-            style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+            className="w-full resize-y rounded-md border px-3 py-2 text-[13px] leading-[1.6] text-ink outline-none"
+            style={{ borderColor: "var(--border)", background: "var(--ground)" }}
           />
         </Field>
         <Field label="Persona — tone, communication style">
@@ -365,8 +364,8 @@ function GeneralTab({
             onChange={(e) => setPersona(e.target.value)}
             placeholder="How this agent talks, its personality and communication style..."
             rows={4}
-            className="w-full resize-y rounded-[5px] border px-3 py-2 text-[13px] leading-[1.6] text-[var(--ink)] outline-none"
-            style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+            className="w-full resize-y rounded-md border px-3 py-2 text-[13px] leading-[1.6] text-ink outline-none"
+            style={{ borderColor: "var(--border)", background: "var(--ground)" }}
           />
         </Field>
         <Field label="Task — mission, instructions">
@@ -375,8 +374,8 @@ function GeneralTab({
             onChange={(e) => setTask(e.target.value)}
             placeholder="What this agent should do, its mission and instructions..."
             rows={4}
-            className="w-full resize-y rounded-[5px] border px-3 py-2 text-[13px] leading-[1.6] text-[var(--ink)] outline-none"
-            style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+            className="w-full resize-y rounded-md border px-3 py-2 text-[13px] leading-[1.6] text-ink outline-none"
+            style={{ borderColor: "var(--border)", background: "var(--ground)" }}
           />
         </Field>
       </Section>
@@ -384,15 +383,16 @@ function GeneralTab({
       {/* Section: Limits */}
       <Section title="Limits & Sandbox">
         <Field label="Sandbox mode">
-          <select
+          <Select
             value={sandboxMode}
-            onChange={(e) => setSandboxMode(e.target.value as "strict" | "open")}
-            className="w-full rounded-[5px] px-2.5 py-1.5 text-[13px]"
-            style={{ border: "1px solid var(--border)", background: "var(--surface)" }}
-          >
-            <option value="strict">Strict — workspace only</option>
-            <option value="open">Open — full filesystem access</option>
-          </select>
+            onChange={(v) => setSandboxMode(v as "strict" | "open")}
+            options={[
+              { value: "strict", label: "Strict — workspace only" },
+              { value: "open", label: "Open — full filesystem access" },
+            ]}
+            className="w-full rounded-md border border-line bg-ground px-2.5 py-1.5 text-[13px]"
+            align="left" panelClassName="text-[13px]"
+          />
         </Field>
         <div className="grid grid-cols-2 gap-4">
           <Field label="Max turns per run">
@@ -407,8 +407,11 @@ function GeneralTab({
           <Field label="Max context tokens">
             <NumberInput value={maxContext} onChange={setMaxContext} placeholder="auto (model default)" />
           </Field>
+          <Field label="Core memory ceiling (tokens)">
+            <NumberInput value={coreMax} onChange={(v) => setCoreMax(v ?? 32768)} placeholder="32768" />
+          </Field>
         </div>
-        <p className="text-[12px] text-[var(--ink-3)]">
+        <p className="text-[12px] text-ink-3">
           Heartbeat scheduling is configured in the{" "}
           <a href="/scheduler" className="underline" style={{ color: "var(--accent)" }}>Scheduler</a> page.
         </p>
@@ -431,21 +434,21 @@ function GeneralTab({
           </button>
           <button
             onClick={handleDuplicate}
-            className="flex items-center gap-1.5 rounded-[6px] px-3 py-2 text-[13px] text-[var(--ink-2)] transition"
+            className="flex items-center gap-1.5 rounded-[6px] px-3 py-2 text-[13px] text-ink-2 transition"
             style={{ border: "1px solid var(--border)", background: "none", cursor: "pointer" }}
           >
             <Copy className="h-3.5 w-3.5" /> Duplicate
           </button>
           <button
             onClick={handleExport}
-            className="flex items-center gap-1.5 rounded-[6px] px-3 py-2 text-[13px] text-[var(--ink-2)] transition"
+            className="flex items-center gap-1.5 rounded-[6px] px-3 py-2 text-[13px] text-ink-2 transition"
             style={{ border: "1px solid var(--border)", background: "none", cursor: "pointer" }}
           >
             <Download className="h-3.5 w-3.5" /> Export YAML
           </button>
           <button
             onClick={handleImport}
-            className="flex items-center gap-1.5 rounded-[6px] px-3 py-2 text-[13px] text-[var(--ink-2)] transition"
+            className="flex items-center gap-1.5 rounded-[6px] px-3 py-2 text-[13px] text-ink-2 transition"
             style={{ border: "1px solid var(--border)", background: "none", cursor: "pointer" }}
           >
             <Upload className="h-3.5 w-3.5" /> Import YAML
@@ -481,6 +484,7 @@ function capabilityState(agent: Agent | null, allCaps: CapabilityInfo[]) {
   const serverModes = new Map<string, GrantMode>();
   const approvals = new Set<string>();
   const serverApprovals = new Map<string, boolean>();
+  const denied = new Set<string>();
 
   if (agent?.capabilities) {
     for (const grant of agent.capabilities) {
@@ -493,7 +497,8 @@ function capabilityState(agent: Agent | null, allCaps: CapabilityInfo[]) {
       }
       const kind = allCaps.find((cap) => cap.name === grant.name)?.kind || "tool";
       const mode = grantMode(grant, kind);
-      if (mode !== "none") grantModes.set(grant.name, mode);
+      if (mode === "none") denied.add(grant.name);
+      else grantModes.set(grant.name, mode);
       if (grant.require_approval) approvals.add(grant.name);
     }
   } else {
@@ -505,7 +510,7 @@ function capabilityState(agent: Agent | null, allCaps: CapabilityInfo[]) {
     }
   }
 
-  return { grantModes, serverModes, approvals, serverApprovals };
+  return { grantModes, serverModes, approvals, serverApprovals, denied };
 }
 
 function CapabilitiesTab({
@@ -522,24 +527,48 @@ function CapabilitiesTab({
   const [serverModes, setServerModes] = useState<Map<string, GrantMode>>(new Map());
   const [approvals, setApprovals] = useState<Set<string>>(new Set());
   const [serverApprovals, setServerApprovals] = useState<Map<string, boolean>>(new Map());
+  const [denied, setDenied] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [allCaps, setAllCaps] = useState<CapabilityInfo[]>(FALLBACK_CAPABILITIES);
-  const [yoloMode, setYoloMode] = useState(false);
+  // Per-agent YOLO — skips approval gates for this agent only. The global
+  // AGENTOS_YOLO_MODE / persisted flag is an ops override: when it's on,
+  // every agent bypasses approvals and this toggle is advisory.
+  const [yoloMode, setYoloMode] = useState(agent?.yolo_mode ?? false);
+  const [globalYolo, setGlobalYolo] = useState(false);
 
-  // Fetch YOLO mode state
   useEffect(() => {
-    api.getYoloMode().then((r) => setYoloMode(r.yolo_mode)).catch(() => {});
+    setYoloMode(agent?.yolo_mode ?? false);
+  }, [agent?.yolo_mode]);
+
+  useEffect(() => {
+    api.getYoloMode().then((r) => setGlobalYolo(r.yolo_mode)).catch(() => {});
   }, []);
 
   const toggleYolo = async () => {
+    if (!agent) return;
     const next = !yoloMode;
     setYoloMode(next);
     try {
-      await api.setYoloMode(next);
+      await api.updateAgent(agent.id, { yolo_mode: next });
       showSaved(next ? "YOLO mode ON — approvals disabled" : "YOLO mode OFF");
+      window.dispatchEvent(
+        new CustomEvent("caberos:yolo-mode", {
+          detail: { agentId: agent.id, enabled: next },
+        }),
+      );
     } catch {
       setYoloMode(!next); // revert on error
+    }
+  };
+
+  const disableGlobalYolo = async () => {
+    try {
+      await api.setYoloMode(false);
+      setGlobalYolo(false);
+      showSaved("Global YOLO override off");
+    } catch {
+      showSaved("Global override is env-pinned — unset AGENTOS_YOLO_MODE");
     }
   };
 
@@ -554,11 +583,18 @@ function CapabilitiesTab({
     setServerModes(state.serverModes);
     setApprovals(state.approvals);
     setServerApprovals(state.serverApprovals);
+    setDenied(state.denied);
   }, [agent, allCaps]);
 
   const modeFor = (cap: CapabilityInfo): GrantMode => {
-    if (cap.server_id && serverModes.has(cap.server_id)) {
-      return serverModes.get(cap.server_id) || "none";
+    if (cap.kind === "mcp_tool") {
+      // Explicit entries beat the server wildcard (same precedence as backend).
+      if (denied.has(cap.name)) return "none";
+      if (grantModes.has(cap.name)) return grantModes.get(cap.name)!;
+      if (cap.server_id && serverModes.has(cap.server_id)) {
+        return serverModes.get(cap.server_id) || "none";
+      }
+      return "none";
     }
     return grantModes.get(cap.name) || "none";
   };
@@ -568,6 +604,7 @@ function CapabilitiesTab({
     serverModeMap: Map<string, GrantMode> = serverModes,
     approvalSet: Set<string> = approvals,
     serverApprovalMap: Map<string, boolean> = serverApprovals,
+    deniedSet: Set<string> = denied,
   ) => {
     if (!agent) return;
     setSaving(true);
@@ -596,7 +633,8 @@ function CapabilitiesTab({
       }
       for (const [serverId, serverCaps] of mcpServers) {
         const serverMode = serverModeMap.get(serverId) || "none";
-        if (serverId !== "other" && serverMode !== "none") {
+        const serverGranted = serverId !== "other" && serverMode !== "none";
+        if (serverGranted) {
           caps.push({
             name: `${SERVER_GRANT_PREFIX}${serverId}`,
             subject: "none",
@@ -604,9 +642,20 @@ function CapabilitiesTab({
               serverApprovalMap.get(serverId) ?? serverCaps.some((cap) => cap.egress),
             always_loaded: serverMode === "always",
           });
-          continue;
         }
         for (const cap of serverCaps) {
+          // Explicit deny overrides the wildcard — keep the grant so the
+          // backend honors it (exact match beats the server grant).
+          if (deniedSet.has(cap.name)) {
+            caps.push({
+              name: cap.name,
+              enabled: false,
+              subject: "none",
+              require_approval: false,
+              always_loaded: false,
+            });
+            continue;
+          }
           const mode = modeMap.get(cap.name) || "none";
           if (mode !== "none") {
             caps.push({
@@ -622,9 +671,8 @@ function CapabilitiesTab({
       await api.updateAgent(agent.id, { capabilities: caps });
       onSaved();
     } catch (error) {
-      const message = error instanceof Error ? error.message : "";
       setSaveError(
-        message.startsWith("503:")
+        error instanceof ApiError && error.status === 503
           ? "The database is busy. Nothing was saved; please retry."
           : "Could not save capability settings; please retry.",
       );
@@ -635,6 +683,7 @@ function CapabilitiesTab({
         setServerModes(state.serverModes);
         setApprovals(state.approvals);
         setServerApprovals(state.serverApprovals);
+        setDenied(state.denied);
         onSaved();
       } catch {
       }
@@ -644,11 +693,35 @@ function CapabilitiesTab({
   };
 
   const updateMode = (name: string, mode: GrantMode) => {
+    const cap = allCaps.find((c) => c.name === name);
     const next = new Map(grantModes);
-    if (mode === "none") next.delete(name);
-    else next.set(name, mode);
+    const nextDenied = new Set(denied);
+    const inherited =
+      cap?.kind === "mcp_tool" && cap.server_id
+        ? serverModes.get(cap.server_id) || "none"
+        : "none";
+    if (cap?.kind === "mcp_tool" && inherited !== "none") {
+      // Under a granted server: explicit entries only exist as overrides —
+      // matching the inherited mode falls back to inheriting, "none" writes
+      // an explicit deny, anything else writes an explicit grant.
+      if (mode === inherited) {
+        next.delete(name);
+        nextDenied.delete(name);
+      } else if (mode === "none") {
+        next.delete(name);
+        nextDenied.add(name);
+      } else {
+        next.set(name, mode);
+        nextDenied.delete(name);
+      }
+    } else {
+      if (mode === "none") next.delete(name);
+      else next.set(name, mode);
+      nextDenied.delete(name);
+    }
     setGrantModes(next);
-    void saveCapabilities(next, serverModes, approvals, serverApprovals);
+    setDenied(nextDenied);
+    void saveCapabilities(next, serverModes, approvals, serverApprovals, nextDenied);
   };
 
   const updateServerMode = (serverId: string, mode: GrantMode, caps: CapabilityInfo[]) => {
@@ -685,13 +758,25 @@ function CapabilitiesTab({
 
   const setAllModes = (caps: CapabilityInfo[], enable: boolean) => {
     const next = new Map(grantModes);
+    const nextDenied = new Set(denied);
     for (const cap of caps) {
       if (enable) next.set(cap.name, cap.kind === "mcp_tool" ? "on_demand" : "always");
       else next.delete(cap.name);
+      nextDenied.delete(cap.name);
     }
     setGrantModes(next);
-    void saveCapabilities(next, serverModes, approvals, serverApprovals);
+    setDenied(nextDenied);
+    void saveCapabilities(next, serverModes, approvals, serverApprovals, nextDenied);
   };
+
+  // A row inherits when the server wildcard covers it and it has no explicit
+  // grant or deny of its own (backend: exact match beats the wildcard).
+  const isInherited = (cap: CapabilityInfo) =>
+    cap.kind === "mcp_tool" &&
+    !!cap.server_id &&
+    serverModes.has(cap.server_id) &&
+    !denied.has(cap.name) &&
+    !grantModes.has(cap.name);
 
   // Group capabilities: built-in vs MCP (grouped by stable server ID)
   const builtinCaps = allCaps.filter((cap) => cap.kind !== "mcp_tool");
@@ -706,51 +791,59 @@ function CapabilitiesTab({
 
   return (
     <div className="space-y-3">
-      {/* YOLO mode banner */}
+      {/* YOLO mode banner — per-agent approval bypass */}
       <div
-        className="flex items-center justify-between rounded-[6px] border px-4 py-3"
-        style={{
-          borderColor: yoloMode ? "var(--danger)" : "var(--border)",
-          background: yoloMode ? "rgba(239,68,68,0.05)" : "transparent",
-        }}
+        className={`flex items-center justify-between rounded-lg border px-4 py-3 transition ${
+          yoloMode || globalYolo ? "border-danger bg-danger-tint" : "border-line"
+        }`}
       >
         <div>
           <div className="flex items-center gap-2">
-            <span className="text-[13px] font-semibold text-[var(--ink)]">YOLO Mode</span>
-            {yoloMode && (
-              <span
-                className="rounded-full px-2 py-0.5 text-[9px] font-mono uppercase"
-                style={{ background: "var(--danger)", color: "#fff" }}
-              >
+            <span className="text-[13px] font-semibold text-ink">YOLO Mode</span>
+            {(yoloMode || globalYolo) && (
+              <span className="rounded-full bg-danger px-2 py-0.5 text-[9px] font-mono uppercase text-white">
                 Active
               </span>
             )}
           </div>
-          <p className="mt-0.5 text-[11px] text-[var(--ink-3)]">
-            Skip all approval gates. Tools execute immediately without confirmation.
+          <p className="mt-0.5 text-[11px] text-ink-3">
+            Skip approval gates for this agent only. Tools execute immediately without confirmation.
           </p>
+          {globalYolo && (
+            <p className="mt-0.5 text-[11px] font-medium text-danger">
+              Forced on for all agents via the global YOLO setting.{" "}
+              <button
+                type="button"
+                onClick={disableGlobalYolo}
+                className="text-danger underline underline-offset-2"
+              >
+                turn off global override
+              </button>
+            </p>
+          )}
         </div>
         <button
+          type="button"
           onClick={toggleYolo}
-          className="rounded-[5px] px-3 py-1.5 text-[12px] font-medium transition"
-          style={{
-            border: "1px solid var(--border)",
-            background: yoloMode ? "var(--danger)" : "none",
-            color: yoloMode ? "#fff" : "var(--ink-2)",
-            cursor: "pointer",
-          }}
+          disabled={globalYolo}
+          className={`rounded-md border px-3 py-1.5 text-[12px] font-medium transition ${
+            yoloMode
+              ? "border-danger bg-danger text-white"
+              : "border-line text-ink-2 hover:border-ink-3"
+          } ${globalYolo ? "cursor-not-allowed opacity-50" : ""}`}
         >
           {yoloMode ? "Disable" : "Enable"}
         </button>
       </div>
 
-      <p className="text-[12px] text-[var(--ink-3)]">
+      <p className="text-[12px] text-ink-3">
         Permit tools directly or make large MCP integrations discoverable on demand. Egress tools can require approval.
       </p>
       <CapabilityGroup
         title="Built-in Tools"
         caps={builtinCaps}
         modeFor={modeFor}
+        isInherited={isInherited}
         onModeChange={updateMode}
         onSetAll={setAllModes}
         approvals={approvals}
@@ -767,6 +860,7 @@ function CapabilitiesTab({
             title={`MCP: ${serverName}`}
             caps={caps}
             modeFor={modeFor}
+            isInherited={isInherited}
             onModeChange={updateMode}
             onSetAll={setAllModes}
             approvals={approvals}
@@ -780,12 +874,12 @@ function CapabilitiesTab({
         );
       })}
       {saveError && (
-        <p role="alert" className="font-mono text-[11px]" style={{ color: "var(--danger)" }}>
+        <p role="alert" className="font-mono text-[11px] text-danger">
           {saveError}
         </p>
       )}
       {saving && (
-        <p className="font-mono text-[11px] text-[var(--ink-3)]">Saving…</p>
+        <p className="font-mono text-[11px] text-ink-3">Saving…</p>
       )}
     </div>
   );
@@ -795,6 +889,7 @@ function CapabilityGroup({
   title,
   caps,
   modeFor,
+  isInherited,
   onModeChange,
   onSetAll,
   approvals,
@@ -808,6 +903,7 @@ function CapabilityGroup({
   title: string;
   caps: CapabilityInfo[];
   modeFor: (cap: CapabilityInfo) => GrantMode;
+  isInherited: (cap: CapabilityInfo) => boolean;
   onModeChange: (name: string, mode: GrantMode) => void;
   onSetAll: (caps: CapabilityInfo[], enable: boolean) => void;
   approvals: Set<string>;
@@ -833,85 +929,80 @@ function CapabilityGroup({
   };
 
   return (
-    <div className="rounded-[6px] border" style={{ borderColor: "var(--border)" }}>
+    <div className="overflow-hidden rounded-lg border border-line bg-surface">
       <div
-        className="flex items-center gap-2 px-4 py-2.5 cursor-pointer"
+        className="flex cursor-pointer items-center gap-2 px-4 py-2.5 transition hover:bg-ground"
         onClick={() => setExpanded(!expanded)}
       >
         {expanded ? (
-          <ChevronDown className="h-3.5 w-3.5" style={{ color: "var(--ink-3)" }} />
+          <ChevronDown className="h-3.5 w-3.5 text-ink-3" />
         ) : (
-          <ChevronRight className="h-3.5 w-3.5" style={{ color: "var(--ink-3)" }} />
+          <ChevronRight className="h-3.5 w-3.5 text-ink-3" />
         )}
-        <span className="font-mono text-[12px] font-medium uppercase tracking-wider" style={{ color: "var(--ink-2)" }}>
+        <span className="font-mono text-[11px] font-medium uppercase tracking-[0.05em] text-ink-2">
           {title}
         </span>
-        <span className="font-mono text-[11px]" style={{ color: "var(--ink-3)" }}>
+        <span className="font-mono text-[11px] text-ink-3">
           {grantedCount}/{caps.length}
         </span>
         {serverGrantActive ? (
-          <select
+          <Select
             value={serverMode}
             onClick={(event) => event.stopPropagation()}
-            onChange={(event) => onServerModeChange?.(event.target.value as GrantMode)}
-            className="ml-auto rounded-[4px] border px-1.5 py-1 text-[10px]"
-            style={{ borderColor: "var(--border)", color: "var(--ink-2)", background: "var(--white)" }}
-          >
-            <option value="none">Not permitted</option>
-            <option value="on_demand">Permitted on demand</option>
-            <option value="always">Always available</option>
-          </select>
+            onChange={(v) => onServerModeChange?.(v as GrantMode)}
+            options={[
+              { value: "none", label: "Not permitted" },
+              { value: "on_demand", label: "Permitted on demand" },
+              { value: "always", label: "Always available" },
+            ]}
+            className="ml-auto h-7 rounded-md border border-line bg-ground px-2 text-[11px] text-ink-2 outline-none transition focus:border-accent"
+          />
         ) : (
           <button
             onClick={(event) => { event.stopPropagation(); handleToggleAll(); }}
-            className="ml-auto rounded-[4px] px-2 py-0.5 font-mono text-[10px] transition"
-            style={{
-              background: "none",
-              border: "1px solid var(--border)",
-              color: "var(--ink-3)",
-              cursor: "pointer",
-            }}
+            className="ml-auto rounded-md border border-line px-2.5 py-1 font-mono text-[10px] text-ink-3 transition hover:border-ink-3 hover:text-ink-2"
           >
             {allGranted ? "Disable all" : "Enable all"}
           </button>
         )}
         {serverGrantActive && serverMode !== "none" && caps.some((cap) => cap.egress) && (
-          <label className="flex items-center gap-1.5 text-[10px] text-[var(--ink-2)]" onClick={(event) => event.stopPropagation()}>
+          <label
+            className="flex items-center gap-1.5 text-[11px] text-ink-2"
+            onClick={(event) => event.stopPropagation()}
+          >
             <input
               type="checkbox"
               checked={serverRequiresApproval}
               onChange={(event) => onServerApprovalChange?.(event.target.checked)}
-              style={{ cursor: "pointer" }}
+              className="cursor-pointer accent-[var(--accent)]"
             />
             approval
           </label>
         )}
       </div>
       {expanded && (
-        <div className="space-y-1.5 px-4 pb-3">
+        <div className="space-y-1.5 border-t border-line px-4 pb-3 pt-3">
           {caps.map((cap) => {
             const mode = modeFor(cap);
-            const viaServer = serverGrantActive && serverMode !== "none";
+            const viaServer = serverGrantActive && serverMode !== "none" && isInherited(cap);
             const needsApproval = approvals.has(cap.name);
             return (
               <div
                 key={cap.name}
-                className="flex items-center justify-between rounded-[5px] px-3 py-2"
-                style={{ background: "var(--surface)" }}
+                className="flex items-center justify-between gap-3 rounded-md bg-ground px-3 py-2"
               >
                 <div className="flex min-w-0 items-center gap-2.5">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="font-mono text-[12px] font-medium text-[var(--ink)]">{cap.name}</span>
+                      <span className="font-mono text-[12px] font-medium text-ink">{cap.name}</span>
                       {cap.egress && (
-                        <span className="rounded-full px-1.5 py-0.5 text-[9px] font-mono" style={{ background: "rgba(245,158,11,0.1)", color: "var(--warning)" }}>
+                        <span className="rounded-full bg-warning-tint px-1.5 py-0.5 font-mono text-[9px] text-warning">
                           egress
                         </span>
                       )}
                     </div>
                     <p
-                      className="text-[11px] text-[var(--ink-2)]"
-                      style={{ cursor: cap.description.length > 80 ? "pointer" : "default" }}
+                      className={`text-[11px] text-ink-2 ${cap.description.length > 80 ? "cursor-pointer" : ""}`}
                       title={cap.description.length > 80 ? cap.description : undefined}
                       onClick={() => cap.description.length > 80 && setExpandedDesc(expandedDesc === cap.name ? null : cap.name)}
                     >
@@ -919,7 +1010,7 @@ function CapabilityGroup({
                         ? (expandedDesc === cap.name ? cap.description : cap.description.slice(0, 80) + "…")
                         : cap.description}
                       {cap.description.length > 80 && (
-                        <span className="ml-1 font-mono text-[10px] text-[var(--ink-3)]">
+                        <span className="ml-1 font-mono text-[10px] text-ink-3">
                           {expandedDesc === cap.name ? "[-]" : "[+]"}
                         </span>
                       )}
@@ -927,23 +1018,27 @@ function CapabilityGroup({
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
-                  {viaServer ? (
-                    <span className="font-mono text-[10px] text-[var(--ink-3)]">via server</span>
-                  ) : (
-                    <select
-                      value={mode}
-                      onChange={(event) => onModeChange(cap.name, event.target.value as GrantMode)}
-                      className="rounded-[4px] border px-1.5 py-1 text-[10px]"
-                      style={{ borderColor: "var(--border)", color: "var(--ink-2)", background: "var(--white)" }}
-                    >
-                      <option value="none">Not permitted</option>
-                      <option value="on_demand">On demand</option>
-                      <option value="always">Always</option>
-                    </select>
+                  {viaServer && (
+                    <span className="font-mono text-[10px] text-ink-3">via server</span>
                   )}
+                  <Select
+                    value={mode}
+                    onChange={(v) => onModeChange(cap.name, v as GrantMode)}
+                    options={[
+                      { value: "none", label: "Not permitted" },
+                      { value: "on_demand", label: "On demand" },
+                      { value: "always", label: "Always" },
+                    ]}
+                    className="h-7 rounded-md border border-line bg-surface px-2 text-[11px] text-ink-2 outline-none transition focus:border-accent"
+                  />
                   {!viaServer && mode !== "none" && cap.egress && (
-                    <label className="flex items-center gap-1.5 text-[10px] text-[var(--ink-2)]">
-                      <input type="checkbox" checked={needsApproval} onChange={() => toggleApproval(cap.name)} style={{ cursor: "pointer" }} />
+                    <label className="flex items-center gap-1.5 text-[11px] text-ink-2">
+                      <input
+                        type="checkbox"
+                        checked={needsApproval}
+                        onChange={() => toggleApproval(cap.name)}
+                        className="cursor-pointer accent-[var(--accent)]"
+                      />
                       approval
                     </label>
                   )}
@@ -959,49 +1054,191 @@ function CapabilityGroup({
 
 // --- Memory Tab ---
 
-function MemoryTab({ agentId, onClose }: { agentId: string; onClose: () => void; showSaved: (msg: string) => void }) {
+function MemoryTab({ agentId }: { agentId: string; onClose: () => void; showSaved: (msg: string) => void }) {
+  const [managed, setManaged] = useState("");
   const [content, setContent] = useState("");
+  const [meta, setMeta] = useState<{ hash?: string | null; token_count?: number; max_tokens?: number | null; revision_id?: string | null }>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [cleaning, setCleaning] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [conflict, setConflict] = useState<{
+    message: string;
+    currentCurated?: string;
+    currentHash?: string;
+  } | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [savedCurated, setSavedCurated] = useState("");
+
+  const load = useCallback(async (forAgent: string) => {
+    try {
+      const result = await api.getMemory(forAgent);
+      if (forAgent !== agentIdRef.current) return; // stale response for a prior agent
+      setManaged(result.managed_content || "");
+      const curated = result.curated_content ?? result.content ?? "";
+      setContent(curated);
+      setSavedCurated(curated);
+      setMeta({
+        hash: result.hash,
+        token_count: result.token_count,
+        max_tokens: result.max_tokens,
+        revision_id: result.revision_id,
+      });
+      setConflict(null);
+      setLoadFailed(false);
+    } catch (e) {
+      if (forAgent !== agentIdRef.current) return;
+      // Keep the operator's draft — a failed load must not stomp it.
+      setLoadFailed(true);
+      setConflict({ message: e instanceof Error ? e.message : "Failed to load memory" });
+    } finally {
+      if (forAgent === agentIdRef.current) setLoading(false);
+    }
+  }, []);
+
+  // Current agent id ref — guards a late response for the previous agent
+  // from overwriting freshly loaded state.
+  const agentIdRef = useRef(agentId);
+  agentIdRef.current = agentId;
 
   useEffect(() => {
     if (!agentId) return;
-    (async () => {
-      try {
-        const result = await api.getMemory(agentId);
-        setContent(result.content);
-      } catch {} finally {
-        setLoading(false);
-      }
-    })();
-  }, [agentId]);
+    setLoading(true);
+    setLoadFailed(false);
+    load(agentId);
+  }, [agentId, load]);
+
+  const dirty = content !== savedCurated;
 
   const handleSave = async () => {
     setSaving(true);
+    setNotice(null);
+    setConflict(null);
     try {
-      await api.updateMemory(agentId, content);
-      onClose();
+      // Whole-file hash is the CAS base — the server rejects a stale base
+      // rather than stomping a concurrent edit.
+      await api.updateMemory(agentId, content, meta.hash ?? undefined);
+      setNotice("Saved — a new core revision was published.");
+      await load(agentId);
+    } catch (e) {
+      const detail = (e as ApiError)?.detail as
+        | { conflict?: string; current_hash?: string; current_curated_content?: string }
+        | string
+        | undefined;
+      if (detail && typeof detail === "object") {
+        // Keep the server's CURRENT hash — "Replace my draft" must adopt
+        // the authoritative base or the next save loops the same 409.
+        setConflict({
+          message: detail.conflict || "Save conflict",
+          currentCurated: detail.current_curated_content ?? undefined,
+          currentHash: detail.current_hash ?? undefined,
+        });
+      } else {
+        setConflict({ message: e instanceof Error ? e.message : "Save failed" });
+      }
     } finally {
       setSaving(false);
     }
   };
 
-  if (loading) return <p className="text-[13px] text-[var(--ink-2)]">Loading…</p>;
+  const handleCleanup = async () => {
+    setCleaning(true);
+    setNotice(null);
+    setConflict(null);
+    try {
+      await api.cleanupMemory(agentId);
+      setNotice("Cleanup complete — a new revision was published.");
+      await load(agentId);
+    } catch (e) {
+      setConflict({ message: e instanceof Error ? e.message : "Cleanup failed" });
+    } finally {
+      setCleaning(false);
+    }
+  };
+
+  if (loading) return <p className="text-[13px] text-ink-2">Loading…</p>;
 
   return (
     <div className="space-y-3">
-      <p className="text-[12px] text-[var(--ink-3)]">
-        MEMORY.md is the agent's living notebook. Not versioned — changes take effect immediately.
+      <p className="text-[12px] text-ink-3">
+        Core memory is agent-wide and personal — running sessions keep their
+        pinned snapshot; edits apply to future sessions.
       </p>
-      <textarea
-        value={content}
-        onChange={(e) => setContent(e.target.value)}
-        placeholder="# Memory\n\nThe agent's long-term notes go here…"
-        rows={18}
-        className="w-full resize-y rounded-[5px] border px-3 py-2 font-mono text-[12px] leading-[1.6] text-[var(--ink)] outline-none"
-        style={{ borderColor: "var(--border)", background: "var(--surface)" }}
-      />
-      <SaveButton onClick={handleSave} disabled={saving} label="Save" />
+      {managed && (
+        <div>
+          <p className="text-[12px] font-medium text-ink-2 mb-1">Managed identity (read-only)</p>
+          <pre
+            className="w-full max-h-40 overflow-y-auto whitespace-pre-wrap break-all rounded-md border px-3 py-2 font-mono text-[11px] leading-[1.5] text-ink-3"
+            style={{ borderColor: "var(--border)", background: "var(--ground)" }}
+          >
+            {managed}
+          </pre>
+        </div>
+      )}
+      <div>
+        <p className="text-[12px] font-medium text-ink-2 mb-1">Curated memory</p>
+        <textarea
+          value={content}
+          onChange={(e) => setContent(e.target.value)}
+          placeholder="# Memory
+
+Durable preferences and standing facts…"
+          rows={14}
+          className="w-full resize-y rounded-md border px-3 py-2 font-mono text-[12px] leading-[1.6] text-ink outline-none"
+          style={{ borderColor: "var(--border)", background: "var(--ground)" }}
+        />
+      </div>
+      <div className="flex items-center justify-between">
+        <p className="text-[11px] text-ink-3">
+          {meta.token_count != null && meta.max_tokens != null
+            ? `${meta.token_count} / ${meta.max_tokens} tokens`
+            : ""}
+          {meta.hash ? ` · ${meta.hash.slice(0, 12)}` : ""}
+          {meta.revision_id
+            ? ` · rev ${meta.revision_id.slice(0, 12)} — revisions retained; restore via the memory API`
+            : ""}
+        </p>
+        <div className="flex gap-2">
+          <button
+            onClick={handleCleanup}
+            // Cleanup only makes sense against the saved bytes — a dirty
+            // draft hasn't been persisted yet, so it's disabled until saved.
+            disabled={cleaning || saving || dirty || loadFailed}
+            className="rounded-md border px-3 py-1.5 text-[12px] text-ink-2 disabled:opacity-50"
+            style={{ borderColor: "var(--border)" }}
+          >
+            {cleaning ? "Cleaning…" : "Clean Up"}
+          </button>
+          <SaveButton onClick={handleSave} disabled={saving || cleaning || loadFailed} label="Save" />
+        </div>
+      </div>
+      {conflict && (
+        <div className="text-[12px] text-[var(--danger,#b91c1c)]">
+          <p>Conflict: {conflict.message}</p>
+          {conflict.currentCurated !== undefined && (
+            <button
+              onClick={() => {
+                // Adopt the server's curated bytes AND its current hash —
+                // stale revision/token metadata is cleared until the next
+                // successful save reloads it.
+                setContent(conflict.currentCurated || "");
+                setSavedCurated("");
+                setMeta((m) => ({
+                  ...m,
+                  hash: conflict.currentHash ?? m.hash,
+                  token_count: undefined,
+                  revision_id: undefined,
+                }));
+                setConflict(null);
+              }}
+              className="mt-1 underline"
+            >
+              Replace my draft with the current version
+            </button>
+          )}
+        </div>
+      )}
+      {notice && <p className="text-[12px] text-[var(--olive,#4d7c0f)]">{notice}</p>}
     </div>
   );
 }
@@ -1020,7 +1257,7 @@ function SkillsTab({ agentId, showSaved }: { agentId: string; showSaved: (msg: s
         api.listSkills(),
         api.listAgentSkills(agentId),
       ]);
-      setSystemSkills(globalData.skills);
+      setSystemSkills(globalData.skills.filter((s) => s.scope !== "agent-local"));
       setAgentSkills(agentData);
     } catch {} finally {
       setLoading(false);
@@ -1042,49 +1279,55 @@ function SkillsTab({ agentId, showSaved }: { agentId: string; showSaved: (msg: s
     showSaved("Skill deleted");
   };
 
-  const handlePromote = async (name: string) => {
+  const handlePromote = async (skill: Skill) => {
+    const ok = await confirm({
+      title: "Promote to global?",
+      message: `Promote "${skill.name}" to a global skill? It becomes available to all agents and leaves this agent's workspace.`,
+      confirmLabel: "Promote",
+    });
+    if (!ok) return;
     try {
-      await api.promoteSkill(name, agentId);
+      await api.promoteSkill(skill.id!, { change_summary: "promoted from agent settings" });
       load();
-      showSaved(`Promoted "${name}" to global`);
+      showSaved(`Promoted "${skill.name}" to global`);
     } catch (e) {
       showSaved(`Promote failed: ${e instanceof Error ? e.message : "error"}`);
     }
   };
 
-  if (loading) return <p className="text-[13px] text-[var(--ink-2)]">Loading…</p>;
+  if (loading) return <p className="text-[13px] text-ink-2">Loading…</p>;
 
   return (
     <div className="space-y-5">
       <div>
         <div className="flex items-center justify-between mb-2">
-          <p className="text-[12px] font-medium text-[var(--ink-2)]">
+          <p className="text-[12px] font-medium text-ink-2">
             Global Skills ({systemSkills.length})
           </p>
           <a
             href="/skills"
-            className="text-[12px] text-[var(--accent)] hover:underline"
+            className="text-[12px] text-accent hover:underline"
           >
             Manage in Skills page →
           </a>
         </div>
-        <p className="text-[11px] text-[var(--ink-3)] mb-3">
+        <p className="text-[11px] text-ink-3 mb-3">
           Available to all agents. Use /skillname in chat to activate.
         </p>
         {systemSkills.length === 0 ? (
-          <p className="py-4 text-center text-[13px] text-[var(--ink-3)]">No global skills installed.</p>
+          <p className="py-4 text-center text-[13px] text-ink-3">No global skills installed.</p>
         ) : (
           <div className="space-y-1.5">
             {systemSkills.map((skill) => (
               <div
                 key={skill.name}
-                className="flex items-center justify-between rounded-[5px] border px-4 py-2.5"
-                style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+                className="flex items-center justify-between rounded-md border px-4 py-2.5"
+                style={{ borderColor: "var(--border)", background: "var(--ground)" }}
               >
                 <div className="min-w-0 flex-1">
-                  <p className="font-mono text-[13px] font-medium text-[var(--ink)]">{skill.name}</p>
+                  <p className="font-mono text-[13px] font-medium text-ink">{skill.name}</p>
                   {skill.description && (
-                    <p className="text-[12px] text-[var(--ink-2)] truncate">{skill.description}</p>
+                    <p className="text-[12px] text-ink-2 truncate">{skill.description}</p>
                   )}
                 </div>
               </div>
@@ -1094,14 +1337,14 @@ function SkillsTab({ agentId, showSaved }: { agentId: string; showSaved: (msg: s
       </div>
 
       <div style={{ borderTop: "1px solid var(--border)", paddingTop: "16px" }}>
-        <p className="text-[12px] font-medium text-[var(--ink-2)] mb-2">
+        <p className="text-[12px] font-medium text-ink-2 mb-2">
           Agent Skills ({agentSkills.length})
         </p>
-        <p className="text-[11px] text-[var(--ink-3)] mb-3">
+        <p className="text-[11px] text-ink-3 mb-3">
           Created by this agent via skill-creator. Promote to global to share with other agents.
         </p>
         {agentSkills.length === 0 ? (
-          <p className="py-4 text-center text-[13px] text-[var(--ink-3)]">
+          <p className="py-4 text-center text-[13px] text-ink-3">
             No agent-specific skills. Use the skill-creator skill in chat to create one.
           </p>
         ) : (
@@ -1109,27 +1352,29 @@ function SkillsTab({ agentId, showSaved }: { agentId: string; showSaved: (msg: s
             {agentSkills.map((skill) => (
               <div
                 key={skill.name}
-                className="flex items-center justify-between rounded-[5px] border px-4 py-2.5"
-                style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+                className="flex items-center justify-between rounded-md border px-4 py-2.5"
+                style={{ borderColor: "var(--border)", background: "var(--ground)" }}
               >
                 <div className="min-w-0 flex-1">
-                  <p className="font-mono text-[13px] font-medium text-[var(--ink)]">{skill.name}</p>
+                  <p className="font-mono text-[13px] font-medium text-ink">{skill.name}</p>
                   {skill.description && (
-                    <p className="text-[12px] text-[var(--ink-2)] truncate">{skill.description}</p>
+                    <p className="text-[12px] text-ink-2 truncate">{skill.description}</p>
                   )}
                 </div>
                 <div className="flex items-center gap-2 ml-2">
-                  <button
-                    onClick={() => handlePromote(skill.name)}
-                    className="text-[12px] text-[var(--accent)] transition hover:underline"
-                    style={{ border: "none", background: "none", cursor: "pointer" }}
-                    title="Promote to global"
-                  >
-                    Promote
-                  </button>
+                  {skill.id && (
+                    <button
+                      onClick={() => handlePromote(skill)}
+                      className="text-[12px] text-accent transition hover:underline"
+                      style={{ border: "none", background: "none", cursor: "pointer" }}
+                      title="Promote to global"
+                    >
+                      Promote
+                    </button>
+                  )}
                   <button
                     onClick={() => handleDeleteAgentSkill(skill.name)}
-                    className="text-[var(--ink-3)] transition hover:text-[var(--danger)]"
+                    className="text-ink-3 transition hover:text-danger"
                     style={{ border: "none", background: "none", cursor: "pointer" }}
                   >
                     <Trash2 className="h-4 w-4" />
@@ -1140,127 +1385,6 @@ function SkillsTab({ agentId, showSaved }: { agentId: string; showSaved: (msg: s
           </div>
         )}
       </div>
-    </div>
-  );
-}
-
-// --- Workspace Tab ---
-
-function WorkspaceTab({ agentId }: { agentId: string }) {
-  const [path, setPath] = useState("");
-  const [entries, setEntries] = useState<WorkspaceEntry[]>([]);
-  const [fileContent, setFileContent] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  const load = useCallback(async (p: string) => {
-    if (!agentId) return;
-    setLoading(true);
-    setFileContent(null);
-    try {
-      const result = await api.listWorkspace(agentId, p);
-      if (result.type === "dir") {
-        setEntries(result.entries || []);
-      } else {
-        setFileContent(result.content || "");
-        setEntries([]);
-      }
-    } catch {
-      setEntries([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [agentId]);
-
-  useEffect(() => { load(""); }, [load]);
-
-  const navigate = (name: string) => {
-    const newPath = path ? `${path}/${name}` : name;
-    setPath(newPath);
-    load(newPath);
-  };
-
-  const goUp = () => {
-    const parts = path.split("/").filter(Boolean);
-    parts.pop();
-    const up = parts.join("/");
-    setPath(up);
-    load(up);
-  };
-
-  const breadcrumbs = path ? path.split("/").filter(Boolean) : [];
-
-  return (
-    <div className="space-y-3">
-      <div className="flex items-center gap-1 text-[12px] text-[var(--ink-2)]">
-        <button onClick={() => { setPath(""); load(""); }} style={{ border: "none", background: "none", cursor: "pointer", color: "var(--accent)" }}>
-          workspace
-        </button>
-        {breadcrumbs.map((part, i) => (
-          <span key={i} className="flex items-center gap-1">
-            <ChevronRight className="h-3 w-3" />
-            <button
-              onClick={() => {
-                const p = breadcrumbs.slice(0, i + 1).join("/");
-                setPath(p);
-                load(p);
-              }}
-              style={{ border: "none", background: "none", cursor: "pointer", color: i === breadcrumbs.length - 1 ? "var(--ink)" : "var(--accent)" }}
-            >
-              {part}
-            </button>
-          </span>
-        ))}
-      </div>
-
-      {loading ? (
-        <p className="text-[13px] text-[var(--ink-2)]">Loading…</p>
-      ) : fileContent !== null ? (
-        <div>
-          <button onClick={goUp} className="mb-2 flex items-center gap-1 text-[12px] text-[var(--accent)]" style={{ border: "none", background: "none", cursor: "pointer" }}>
-            <FolderOpen className="h-3.5 w-3.5" /> Back
-          </button>
-          <pre
-            className="max-h-[60vh] overflow-auto rounded-[5px] border p-3 font-mono text-[12px] leading-[1.5] text-[var(--ink)]"
-            style={{ borderColor: "var(--border)", background: "var(--surface)" }}
-          >
-            {fileContent}
-          </pre>
-        </div>
-      ) : entries.length === 0 ? (
-        <p className="py-8 text-center text-[13px] text-[var(--ink-3)]">Empty directory.</p>
-      ) : (
-        <div className="space-y-1">
-          {path && (
-            <button
-              onClick={goUp}
-              className="flex w-full items-center gap-2 rounded-[5px] px-3 py-2 text-[13px] text-[var(--ink-2)] transition hover:bg-[var(--surface)]"
-              style={{ border: "none", background: "none", cursor: "pointer" }}
-            >
-              <FolderOpen className="h-4 w-4" /> ..
-            </button>
-          )}
-          {entries.map((entry) => (
-            <button
-              key={entry.name}
-              onClick={() => navigate(entry.name)}
-              className="flex w-full items-center gap-2 rounded-[5px] px-3 py-2 text-[13px] text-[var(--ink)] transition hover:bg-[var(--surface)]"
-              style={{ border: "none", background: "none", cursor: "pointer" }}
-            >
-              {entry.type === "dir" ? (
-                <Folder className="h-4 w-4" style={{ color: "var(--accent)" }} />
-              ) : (
-                <FileText className="h-4 w-4" style={{ color: "var(--ink-3)" }} />
-              )}
-              <span>{entry.name}</span>
-              {entry.type === "file" && (
-                <span className="ml-auto font-mono text-[11px] text-[var(--ink-3)]">
-                  {entry.size > 1024 ? `${(entry.size / 1024).toFixed(1)}KB` : `${entry.size}B`}
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
@@ -1288,12 +1412,12 @@ function ChannelsTab({ agentId }: { agentId: string }) {
     <div className="space-y-2">
       {/* Dashboard chat — always active */}
       <div
-        className="flex items-center justify-between rounded-[5px] border px-4 py-3"
-        style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+        className="flex items-center justify-between rounded-md border px-4 py-3"
+        style={{ borderColor: "var(--border)", background: "var(--ground)" }}
       >
         <div>
-          <p className="text-[13px] font-medium text-[var(--ink)]">Dashboard</p>
-          <p className="text-[12px] text-[var(--ink-2)]">Built-in web chat channel</p>
+          <p className="text-[13px] font-medium text-ink">Dashboard</p>
+          <p className="text-[12px] text-ink-2">Built-in web chat channel</p>
         </div>
         <span className="rounded-full px-2 py-0.5 text-[11px] font-mono" style={{ background: "rgba(22,163,74,0.1)", color: "var(--success)" }}>
           Active
@@ -1302,14 +1426,14 @@ function ChannelsTab({ agentId }: { agentId: string }) {
 
       {/* External channels connected to this agent */}
       {loading ? (
-        <p className="py-2 text-[12px] text-[var(--ink-3)]">Loading...</p>
+        <p className="py-2 text-[12px] text-ink-3">Loading...</p>
       ) : channels.length === 0 ? (
         <div
-          className="rounded-[5px] border px-4 py-3"
-          style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+          className="rounded-md border px-4 py-3"
+          style={{ borderColor: "var(--border)", background: "var(--ground)" }}
         >
-          <p className="text-[13px] text-[var(--ink-2)]">No external channels connected</p>
-          <p className="mt-1 text-[12px] text-[var(--ink-3)]">
+          <p className="text-[13px] text-ink-2">No external channels connected</p>
+          <p className="mt-1 text-[12px] text-ink-3">
             Go to the Channels page to connect Telegram, Discord, and other messaging platforms to this agent.
           </p>
         </div>
@@ -1317,16 +1441,16 @@ function ChannelsTab({ agentId }: { agentId: string }) {
         channels.map((ch) => (
           <div
             key={ch.id}
-            className="flex items-center justify-between rounded-[5px] border px-4 py-3"
-            style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+            className="flex items-center justify-between rounded-md border px-4 py-3"
+            style={{ borderColor: "var(--border)", background: "var(--ground)" }}
           >
             <div className="flex items-center gap-2">
               <span className="text-lg">{platformIcons[ch.platform] || "📡"}</span>
               <div>
-                <p className="text-[13px] font-medium text-[var(--ink)]">
+                <p className="text-[13px] font-medium text-ink">
                   {ch.platform.charAt(0).toUpperCase() + ch.platform.slice(1)}
                 </p>
-                <p className="text-[12px] text-[var(--ink-2)]">
+                <p className="text-[12px] text-ink-2">
                   {ch.mode === "polling" ? "Polling" : "Webhook"} mode
                 </p>
               </div>
@@ -1344,7 +1468,7 @@ function ChannelsTab({ agentId }: { agentId: string }) {
         ))
       )}
 
-      <p className="pt-2 text-[12px] text-[var(--ink-3)]">
+      <p className="pt-2 text-[12px] text-ink-3">
         Manage channels in the <a href="/channels" className="underline">Channels page</a>.
       </p>
     </div>
@@ -1356,7 +1480,7 @@ function ChannelsTab({ agentId }: { agentId: string }) {
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="space-y-3">
-      <h3 className="text-[14px] font-semibold text-[var(--ink)]" style={{ paddingBottom: "4px", borderBottom: "1px solid var(--border)" }}>
+      <h3 className="border-b border-line pb-1.5 text-[11px] font-semibold uppercase tracking-[0.05em] text-ink-3">
         {title}
       </h3>
       {children}
@@ -1367,7 +1491,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <label className="mb-1 block text-[12px] font-medium text-[var(--ink-2)]">{label}</label>
+      <label className="mb-1.5 block text-[12px] font-medium text-ink-2">{label}</label>
       {children}
     </div>
   );
@@ -1384,27 +1508,15 @@ function NumberInput({ value, onChange, step, placeholder }: { value: number | n
         const v = e.target.value;
         onChange(v === "" ? null : parseFloat(v) || 0);
       }}
-      className="w-full rounded-[5px] border px-3 py-2 text-[13px] text-[var(--ink)] outline-none"
-      style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+      className="w-full rounded-md border border-line bg-ground px-3 py-2 text-[13px] text-ink outline-none transition focus:border-accent placeholder:text-ink-faint"
     />
   );
 }
 
 function SaveButton({ onClick, disabled, label }: { onClick: () => void; disabled: boolean; label: string }) {
   return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      className="flex items-center gap-1.5 rounded-[6px] px-4 py-2 text-[13px] font-medium transition"
-      style={{
-        background: "var(--ink)",
-        color: "var(--white)",
-        border: "1px solid var(--ink)",
-        cursor: disabled ? "not-allowed" : "pointer",
-        opacity: disabled ? 0.5 : 1,
-      }}
-    >
+    <Button size="sm" onClick={onClick} disabled={disabled}>
       <Save className="h-3.5 w-3.5" /> {label}
-    </button>
+    </Button>
   );
 }

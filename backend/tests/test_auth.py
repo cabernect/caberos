@@ -202,6 +202,62 @@ class TestAuth:
         )
         assert resp.status_code == 200
 
+    async def test_setup_credentials_renames_and_clears_flag(self, client, db_engine):
+        await _seed_operator(db_engine, "admin", "admin")
+        await client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "admin"},
+        )
+        resp = await client.post(
+            "/api/auth/setup-credentials",
+            json={"username": "hoang", "new_password": "long-enough-secret"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["username"] == "hoang"
+        assert data["must_change_password"] is False
+        # Old default login rejected; new credentials work.
+        resp = await client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "admin"},
+        )
+        assert resp.status_code == 401
+        resp = await client.post(
+            "/api/auth/login",
+            json={"username": "hoang", "password": "long-enough-secret"},
+        )
+        assert resp.status_code == 200
+
+    async def test_setup_credentials_rejects_after_flag_cleared(self, client, db_engine):
+        await _seed_operator(db_engine, "admin", "admin")
+        await client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "admin"},
+        )
+        resp = await client.post(
+            "/api/auth/setup-credentials",
+            json={"username": "hoang", "new_password": "long-enough-secret"},
+        )
+        assert resp.status_code == 200
+        # Second call: flag cleared — must use change-password now.
+        resp = await client.post(
+            "/api/auth/setup-credentials",
+            json={"username": "other", "new_password": "another-secret"},
+        )
+        assert resp.status_code == 409
+
+    async def test_setup_credentials_short_password_rejected(self, client, db_engine):
+        await _seed_operator(db_engine, "admin", "admin")
+        await client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "admin"},
+        )
+        resp = await client.post(
+            "/api/auth/setup-credentials",
+            json={"username": "hoang", "new_password": "short"},
+        )
+        assert resp.status_code == 400
+
 
 async def _seed_operator(db_engine, username: str, password: str):
     """Helper: seed an operator directly into the DB."""

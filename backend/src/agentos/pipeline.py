@@ -20,15 +20,73 @@ from .agent_service import get_active_config
 from .capabilities.builtin import register_builtin_capabilities
 from .harness.guardrails import apply_input_guardrails
 from .harness.loop import Harness, RunResult
-from .memory.auto_extract import auto_extract_memory
 from .models.contact import Contact
 from .models.run import Message, Run
 from .models.session import Session
 from .sandbox.workspace import WorkspaceManager
+from .skills.resolution import resolve_effective_skills, skill_pins
 from .syscall.lock import session_locks
 from .syscall.mediator import SyscallHandler
 
 logger = logging.getLogger(__name__)
+
+
+async def _title_completion(adapter, agent_config, prompt, *, run_id=None, session_id=None):
+    """One provider request for title generation — ledgered as a
+    kind='title' system call; errors recorded then re-raised so the
+    caller's cheap-fallback behavior is unchanged."""
+    import time as _time
+
+    from .services.model_ledger import record_system_call
+
+    model_str = None
+    try:
+        provider_row = await adapter._load_provider(agent_config.model.provider_id)
+        model_str, _ = adapter._route_model(provider_row, agent_config.model.name)
+    except Exception:
+        pass
+    started = _time.perf_counter()
+    try:
+        from .services.context_capture import capture_scope
+
+        with capture_scope(
+            purpose="title",
+            agent_id=agent_config.id,
+            run_id=run_id,
+            session_id=session_id,
+        ):
+            response = await adapter.complete(
+                agent_model=agent_config.model,
+                messages=[{"role": "user", "content": prompt}],
+                tools=None,
+            )
+        await record_system_call(
+            kind="title",
+            provider_id=agent_config.model.provider_id,
+            model_name=agent_config.model.name,
+            model_str=model_str,
+            agent_id=agent_config.id,
+            run_id=run_id,
+            session_id=session_id,
+            response=response,
+            latency_ms=int((_time.perf_counter() - started) * 1000),
+            detail={"operation": "session_title"},
+        )
+        return response
+    except BaseException as exc:
+        await record_system_call(
+            kind="title",
+            provider_id=agent_config.model.provider_id,
+            model_name=agent_config.model.name,
+            model_str=model_str,
+            agent_id=agent_config.id,
+            run_id=run_id,
+            session_id=session_id,
+            error=exc,
+            latency_ms=int((_time.perf_counter() - started) * 1000),
+            detail={"operation": "session_title"},
+        )
+        raise
 
 
 async def _generate_session_title(
@@ -36,6 +94,9 @@ async def _generate_session_title(
     agent_config: Any,
     user_message: str,
     assistant_response: str,
+    *,
+    run_id: str | None = None,
+    session_id: str | None = None,
 ) -> str | None:
     """Generate a short title for the session using the LLM.
 
@@ -52,10 +113,8 @@ async def _generate_session_title(
             f"User: {user_message[:200]}\n"
             f"Assistant: {assistant_response[:200]}"
         )
-        response = await adapter.complete(
-            agent_model=agent_config.model,
-            messages=[{"role": "user", "content": prompt}],
-            tools=None,
+        response = await _title_completion(
+            adapter, agent_config, prompt, run_id=run_id, session_id=session_id
         )
         title = response.content.strip().strip('"').strip("'")[:60]
         return title if title else None
@@ -67,6 +126,9 @@ async def _generate_session_title_from_history(
     db: AsyncSession,
     agent_config: Any,
     messages: list,
+    *,
+    run_id: str | None = None,
+    session_id: str | None = None,
 ) -> str | None:
     """Generate a short title from the full conversation history.
 
@@ -76,13 +138,17 @@ async def _generate_session_title_from_history(
     try:
         from .providers import ProviderRegistry
 
-        # Extract user and assistant messages only
+        # Extract the LATEST user/assistant messages (up to 6) — the title
+        # should reflect what the conversation ended up being about, not
+        # how it opened. `messages` arrives oldest-first; walk it backwards
+        # then re-reverse so the prompt still reads chronologically.
         convo = []
-        for msg in messages:
+        for msg in reversed(messages):
             if msg.role in ("user", "assistant") and msg.content:
                 convo.append(f"{msg.role.capitalize()}: {msg.content[:150]}")
             if len(convo) >= 6:
                 break
+        convo.reverse()
 
         if not convo:
             return None
@@ -92,10 +158,8 @@ async def _generate_session_title_from_history(
             "Summarize this conversation in 3-5 words. "
             "Output ONLY the title, no quotes, no punctuation at the end.\n\n" + "\n".join(convo)
         )
-        response = await adapter.complete(
-            agent_model=agent_config.model,
-            messages=[{"role": "user", "content": prompt}],
-            tools=None,
+        response = await _title_completion(
+            adapter, agent_config, prompt, run_id=run_id, session_id=session_id
         )
         title = response.content.strip().strip('"').strip("'")[:60]
         return title if title else None
@@ -120,6 +184,23 @@ class Attachment:
     filename: str = ""  # original filename (for display + audit)
 
 
+def _dedupe_attachment_target(workspace_path: str, filename: str, index: int) -> str:
+    """First free workspace-relative path under attachments/ — the original
+    filename, with Finder-style " (n)" suffixes on collision. The storer
+    writes sequentially, so the disk check also dedupes same-name files
+    within one message."""
+    base = Path(filename).name or f"attachment_{index}"
+    stem, suffix = Path(base).stem, Path(base).suffix
+    workspace = Path(workspace_path)
+    n = 0
+    while True:
+        name = base if n == 0 else f"{stem} ({n}){suffix}"
+        rel = f"attachments/{name}"
+        if not (workspace / rel).exists():
+            return rel
+        n += 1
+
+
 async def _prepare_attachment_context(
     attachments: list[Attachment], workspace_path: str
 ) -> list[dict[str, Any]]:
@@ -127,7 +208,6 @@ async def _prepare_attachment_context(
     import asyncio
     import base64
 
-    attachment_dir = Path(workspace_path) / "attachments"
     records: list[dict[str, Any]] = []
 
     for index, attachment in enumerate(attachments, start=1):
@@ -144,8 +224,9 @@ async def _prepare_attachment_context(
             records.append(record)
             continue
 
-        safe_name = Path(attachment.filename).name or attachment_id
-        file_path = attachment_dir / f"{attachment_id}_{safe_name}"
+        file_path = Path(workspace_path) / _dedupe_attachment_target(
+            workspace_path, attachment.filename or "", index
+        )
 
         if attachment.type == "file" and (
             attachment.mime_type.startswith("text/") or attachment.mime_type == "application/json"
@@ -169,6 +250,7 @@ async def _prepare_attachment_context(
             record["error"] = f"Could not save attachment: {exc}"
         else:
             record["path"] = str(file_path.relative_to(Path(workspace_path)))
+            record["filename"] = file_path.name
             record["size"] = len(raw)
         records.append(record)
 
@@ -190,6 +272,8 @@ class InboundMessage:
     new_session: bool = False  # if true, force create a new session (ignore auto-resume)
     attachments: list[Attachment] = None  # user attachments stored for tool-mediated access
     skill: str | None = None  # slash command: /skillname → auto-load this skill into context
+    # W8: {schedule_id, revision_id, occurrence_id, auto_approve, max_cost}
+    schedule_context: dict | None = None
 
 
 # Ensure capabilities are registered
@@ -232,7 +316,7 @@ class Pipeline:
         # Step 5: Resolve Session (use explicit session_id if provided, else auto-resume)
         # For external channels, always reuse the persistent session for that
         # channel+chat (don't create new ones on idle timeout).
-        is_channel = message.channel not in ("dashboard_chat", "heartbeat")
+        is_channel = message.channel not in ("dashboard_chat", "heartbeat", "schedule")
         session = await self._resolve_session(
             contact.id,
             message.bot_id,
@@ -242,9 +326,22 @@ class Pipeline:
             external_user_id=message.external_user_id if is_channel else None,
         )
 
+        # Commit contact/session upserts before idle-session closing — its
+        # summary/learning LLM calls take seconds, and a flush left open across them
+        # holds the SQLite write lock for that whole duration (B31).
+        await self.db.commit()
+
+        # Session create/resume just moved a deadline — wake the idle
+        # scheduler so it recomputes instead of sleeping to the old one.
+        from .memory.episodic import poke_session_sweeper
+
+        poke_session_sweeper()
+
         # Lazy session close: only for dashboard sessions (channel sessions are
         # persistent — they stay open so the conversation continues across
-        # messages even after long idle periods).
+        # messages even after long idle periods). Discovery is awaited inline
+        # (cheap SELECTs); each close runs as a background task so the run
+        # never waits on other sessions' maintenance.
         if not is_channel:
             await self._close_idle_sessions(
                 message.bot_id, contact.id, exclude_session_id=session.id
@@ -287,28 +384,11 @@ class Pipeline:
             if hasattr(result_emit, "__await__"):
                 await result_emit
 
-        # Store the user message (with secrets redacted, if any)
-        # Persist attachment metadata (not the base64 data — too large for SQLite)
-        import json as _json
-
+        # Store the user message (with secrets redacted, if any). Attachment
+        # metadata is populated after uploads are stored — the storer resolves
+        # the real workspace paths (deduped), and persisting guesses would
+        # point preview chips at the wrong file on collisions.
         attachment_meta = None
-        if message.attachments:
-            attachment_meta = _json.dumps(
-                [
-                    {
-                        "id": f"attachment_{index}",
-                        "type": attachment.type,
-                        "mime_type": attachment.mime_type,
-                        "filename": attachment.filename,
-                        **(
-                            {"url": attachment.data}
-                            if attachment.type in ("url", "image_url")
-                            else {}
-                        ),
-                    }
-                    for index, attachment in enumerate(message.attachments, start=1)
-                ]
-            )
 
         user_msg = Message(
             id=str(uuid.uuid4()),
@@ -377,12 +457,71 @@ class Pipeline:
                         "Add a provider in Settings → Providers, then assign a model."
                     )
 
-                # Get recent messages from this session (last 10)
-                # Exclude the current run — its user message is appended
-                # separately by build_message_history to avoid duplication.
-                recent_msgs = await self._get_recent_messages(
-                    session.id, limit=10, exclude_run_id=run.id
-                )
+                # Resolve the effective skill set once — the manifest pins
+                # and the prompt menu must describe the same set (W6).
+                resolved_skills: list = []
+                try:
+                    resolved_skills = await resolve_effective_skills(self.db, message.bot_id)
+                except Exception:
+                    logger.exception("Skill resolution failed for run %s", run.id)
+                    await self.db.rollback()
+
+                # Capture the Execution Manifest — the immutable provenance
+                # record of which revisions this run uses (v0.2 foundations).
+                from .manifest import capture_execution_manifest
+
+                try:
+                    await capture_execution_manifest(
+                        self.db,
+                        run_id=run.id,
+                        agent_id=message.bot_id,
+                        agent_config=agent_config,
+                        skill_revision_ids=skill_pins(resolved_skills),
+                        schedule_revision_id=(message.schedule_context or {}).get("revision_id"),
+                        plan_revision_id=(message.schedule_context or {}).get("plan_revision_id"),
+                    )
+                except Exception:
+                    logger.exception("Execution manifest capture failed for run %s", run.id)
+                    await self.db.rollback()
+
+                # Pin the bounded core for this session — pinned sessions
+                # reuse their revision verbatim; unpinned ones get a fresh
+                # validated revision + file publish. A config conflict or
+                # oversized legacy file stops the run before any model call.
+                from .memory.core import CoreConflict, load_or_pin_core
+
+                try:
+                    core_snapshot = await load_or_pin_core(self.db, agent_config, session)
+                    await self.db.commit()
+                except CoreConflict as exc:
+                    run.status = "failed"
+                    run.error = str(exc)
+                    await self.db.commit()
+                    return run
+
+                # Record the pinned identity separately from the run's
+                # current-config revision — the manifest names the version
+                # that generated the managed prefix.
+                try:
+                    from .models.execution_manifest import ExecutionManifest as _EM
+
+                    _mf = await self.db.scalar(select(_EM).where(_EM.run_id == run.id))
+                    if _mf is not None:
+                        _mf.core_revision_id = core_snapshot.revision_id
+                        _mf.core_identity_source_version_id = (
+                            core_snapshot.identity_source_version_id
+                        )
+                        await self.db.flush()
+                except Exception:
+                    logger.debug("manifest core pin update skipped", exc_info=True)
+
+                # Full uncovered conversation for this session — ordered
+                # parent-level records minus covered/thinking/sub-agent rows
+                # and the current run (whose user message is appended by the
+                # harness with its stored id). No LIMIT cut.
+                from .harness.conversation import Conversation
+
+                conversation = await Conversation.load(self.db, session, exclude_run_id=run.id)
 
                 # Set up workspace
                 wm = WorkspaceManager()
@@ -398,12 +537,51 @@ class Pipeline:
                     message.attachments or [], str(workspace_path)
                 )
 
+                # Persist attachment metadata with the resolved workspace
+                # paths so preview chips resolve the stored file.
+                if attachment_context:
+                    import json as _json
+
+                    user_msg.attachments = _json.dumps(
+                        [
+                            {
+                                k: r[k]
+                                for k in (
+                                    "id",
+                                    "type",
+                                    "mime_type",
+                                    "filename",
+                                    "url",
+                                    "path",
+                                    "size",
+                                )
+                                if k in r
+                            }
+                            for r in attachment_context
+                        ]
+                    )
+                    await self.db.flush()
+
                 # Set up syscall handler
                 syscall_handler = SyscallHandler(
                     db=self.db,
                     workspace_path=str(workspace_path),
                     sandbox_mode=agent_config.sandbox_mode,
                 )
+
+                # Scripted test runs are headless — the mediator auto-resolves
+                # approval prompts and elicitations instead of parking forever.
+                syscall_handler._is_test_run = run.is_test
+
+                # W8: schedule context — pre-approved capability scope (inside
+                # the agent ceiling) and an optional per-run cost limit.
+                _sched_ctx = message.schedule_context or {}
+                if _sched_ctx:
+                    syscall_handler._schedule_auto_approve = set(
+                        _sched_ctx.get("auto_approve") or []
+                    )
+                    if _sched_ctx.get("max_cost") is not None:
+                        agent_config.limits.max_cost_per_run = float(_sched_ctx["max_cost"])
 
                 # Wrap event_emitter to persist thinking, intermediate text, and
                 # tool_call events as Message rows, so they show up in conversation
@@ -416,7 +594,17 @@ class Pipeline:
                 _tool_calls_seen: set[str] = set()
                 _msg_seq = 1  # user message is seq=0
 
-                async def _persisting_emitter(event_type: str, payload: dict) -> None:
+                _tool_call_receipts: dict[str, dict] = {}
+                # Narration row id for the current tool batch, per scope —
+                # flushed at the first tool_call event, read when each
+                # call's terminal receipt is built.
+                _narration_ids: dict[str | None, str] = {}
+
+                async def _persisting_emitter(event_type: str, payload: dict) -> dict | None:
+                    """Emit + persist; returns a receipt {assistant_message_id,
+                    tool_message_id} when a tool outcome was persisted, else
+                    None. Receipts are cached per call id — duplicate terminal
+                    emissions return the same ids."""
                     nonlocal _msg_seq
 
                     # Forward to the real emitter (SSE broadcast)
@@ -433,6 +621,9 @@ class Pipeline:
                         _token_buffers[sub_id] = []
                     _tb = _thinking_buffers[sub_id]
                     _tkb = _token_buffers[sub_id]
+
+                    receipt = None
+                    _tool_message_id: str | None = None
 
                     # Persist thinking as a single Message when it's done
                     # (we buffer chunks and flush on first token/tool_call)
@@ -471,58 +662,118 @@ class Pipeline:
                         text_content = "".join(_tkb)
                         _tkb.clear()
                         if text_content.strip():
-                            self.db.add(
-                                Message(
-                                    id=str(uuid.uuid4()),
-                                    run_id=run.id,
-                                    role="assistant",
-                                    content=text_content,
-                                    seq=_msg_seq,
-                                    subagent_id=sub_id,
-                                )
+                            _narration_msg = Message(
+                                id=str(uuid.uuid4()),
+                                run_id=run.id,
+                                role="assistant",
+                                content=text_content,
+                                seq=_msg_seq,
+                                subagent_id=sub_id,
                             )
+                            self.db.add(_narration_msg)
                             _msg_seq += 1
                             await self.db.commit()
+                            _narration_ids[sub_id] = _narration_msg.id
 
                     # Persist tool_call events (only on final status to avoid duplicates)
                     if event_type == "tool_call":
                         tc_id = payload.get("id", "")
                         status = payload.get("status", "")
-                        # Store the final state (complete/denied) as a Message
-                        if status in ("complete", "denied") and tc_id not in _tool_calls_seen:
+                        # Store the final state as a Message — every terminal
+                        # outcome, not just complete/denied.
+                        if tc_id in _tool_call_receipts:
+                            return _tool_call_receipts[tc_id]
+                        if (
+                            status in ("complete", "denied", "failed", "timeout", "interrupted")
+                            and tc_id not in _tool_calls_seen
+                        ):
                             _tool_calls_seen.add(tc_id)
                             import json as _json
 
-                            self.db.add(
-                                Message(
-                                    id=str(uuid.uuid4()),
-                                    run_id=run.id,
-                                    role="tool_call",
-                                    content=_json.dumps(
-                                        {
-                                            "id": tc_id,
-                                            "capability": payload.get("capability", ""),
-                                            "args": payload.get("args", {}),
-                                            "status": status,
-                                            "result": payload.get("result"),
-                                            "approval_id": payload.get("approval_id"),
-                                            "approval_batch_id": payload.get("approval_batch_id"),
-                                            "approval_batch_size": payload.get(
-                                                "approval_batch_size"
-                                            ),
-                                        }
-                                    ),
-                                    seq=_msg_seq,
-                                    subagent_id=sub_id,
-                                )
+                            _tool_msg = Message(
+                                id=str(uuid.uuid4()),
+                                run_id=run.id,
+                                role="tool_call",
+                                content=_json.dumps(
+                                    {
+                                        "id": tc_id,
+                                        "capability": payload.get("capability", ""),
+                                        "args": payload.get("args", {}),
+                                        "status": status,
+                                        "result": payload.get("result"),
+                                        "denied_reason": payload.get("reason"),
+                                        "approval_id": payload.get("approval_id"),
+                                        "approval_batch_id": payload.get("approval_batch_id"),
+                                        "approval_batch_size": payload.get("approval_batch_size"),
+                                    }
+                                ),
+                                seq=_msg_seq,
+                                subagent_id=sub_id,
                             )
+                            self.db.add(_tool_msg)
                             _msg_seq += 1
                             await self.db.commit()
+                            _tool_message_id = _tool_msg.id
+                            receipt = {
+                                "assistant_message_id": _narration_ids.get(sub_id),
+                                "tool_message_id": _tool_message_id,
+                            }
+                            _tool_call_receipts[tc_id] = receipt
 
                     # Clear token buffer on guardrail correction — the corrected
                     # content will be saved as the final assistant message.
+                    if event_type == "turn_complete":
+                        # Batch narration id is per-turn — a later tool batch
+                        # must not claim this turn's narration row.
+                        _narration_ids.pop(sub_id, None)
+
                     if event_type == "guardrail_correction":
                         _tkb.clear()
+
+                    # A parked approval flips the run to awaiting_approval so the
+                    # operator can discover it — persist it here (not in the
+                    # transport layer) so scheduled/channel runs behave the same.
+                    if event_type == "tool_call" and payload.get("status") == "pending_approval":
+                        run.status = "awaiting_approval"
+                        await self.db.commit()
+
+                        async def _notify_approval_required() -> None:
+                            try:
+                                from .db import async_session_factory as _sf
+                                from .notifications import call_brief, create_notification
+
+                                async with _sf() as ndb:
+                                    await create_notification(
+                                        ndb,
+                                        notification_type="approval_required",
+                                        severity="warning",
+                                        title="Approval required",
+                                        message=(f"Waiting to run {call_brief(payload)}."),
+                                        action_path=(
+                                            f"/agents/{message.bot_id}/chat?session={session.id}"
+                                        ),
+                                        entity_id=run.id,
+                                        entity_type="run",
+                                        agent_id=message.bot_id,
+                                    )
+                                    await ndb.commit()
+                            except Exception:
+                                logger.debug(
+                                    "approval_required notification failed",
+                                    exc_info=True,
+                                )
+
+                        import asyncio as _asyncio
+
+                        _asyncio.create_task(_notify_approval_required())
+
+                    return receipt
+
+                # Commit all pre-loop writes (run status, manifest, workspace,
+                # attachments) so the SQLite write lock is released before the
+                # first model call — holding it across the model call starves
+                # every other writer when runs overlap (B31).
+                await self.db.commit()
 
                 # Steps 8-11: Run the harness (with guardrailed user message + attachments)
                 result: RunResult = await self.harness.run(
@@ -531,18 +782,21 @@ class Pipeline:
                     message=guardrailed_text,
                     syscall_handler=syscall_handler,
                     run_id=run.id,
-                    recent_messages=recent_msgs,
+                    conversation=conversation,
+                    current_message_id=user_msg.id,
+                    core_snapshot=core_snapshot,
                     trigger=trigger,
                     event_emitter=_persisting_emitter,
                     attachments=attachment_context,
                     skill=message.skill,
+                    resolved_skills=resolved_skills,
                 )
 
                 # Store the assistant's response
                 assistant_msg = Message(
                     id=str(uuid.uuid4()),
                     run_id=run.id,
-                    role="assistant" if trigger == "user_message" else "heartbeat",
+                    role="assistant",
                     content=result.final_answer,
                     seq=_msg_seq,
                 )
@@ -600,11 +854,19 @@ class Pipeline:
                 # Update session activity
                 session.last_activity_at = datetime.now(UTC)
 
-                # Generate LLM-based session title 3 minutes after the session
-                # started. This avoids locking in a title from a "nothing" first
-                # message (e.g. "hello") — by 3 min there's usually a real conversation.
-                # Run in background — don't block message_complete on this.
-                if result.final_answer and session.title:
+                # Generate LLM-based session title once, 3 minutes after the
+                # session started. This avoids locking in a title from a
+                # "nothing" first message (e.g. "hello") — by 3 min there's
+                # usually a real conversation. title_generated gates it to a
+                # single attempt-set per session — without it every completed
+                # run re-fires a title call. Run in background — don't block
+                # message_complete on this.
+                if (
+                    result.final_answer
+                    and session.title
+                    and not session.title_generated
+                    and not run.is_test
+                ):
                     started = session.started_at
                     if started.tzinfo is None:
                         started = started.replace(tzinfo=UTC)
@@ -614,6 +876,12 @@ class Pipeline:
 
                         from .db import async_session_factory
 
+                        # Snapshot the PKs now — the session/run ORM objects
+                        # are expired by the commit below, and attribute
+                        # access inside the task would need a lazy refresh.
+                        title_session_id = session.id
+                        title_run_id = run.id
+
                         async def _bg_title():
                             try:
                                 # Phase 1: read messages + load provider (short transaction)
@@ -621,7 +889,7 @@ class Pipeline:
                                     stmt = (
                                         select(Message)
                                         .join(Run, Message.run_id == Run.id)
-                                        .where(Run.session_id == session.id)
+                                        .where(Run.session_id == title_session_id)
                                         .order_by(Message.created_at.desc())
                                         .limit(20)
                                     )
@@ -634,21 +902,28 @@ class Pipeline:
                                 # we commit immediately so no write lock is held)
                                 async with async_session_factory() as bg_db:
                                     llm_title = await _generate_session_title_from_history(
-                                        bg_db, agent_config, all_msgs
+                                        bg_db,
+                                        agent_config,
+                                        all_msgs,
+                                        run_id=title_run_id,
+                                        session_id=title_session_id,
                                     )
                                     await bg_db.commit()
 
                                 if llm_title:
-                                    # Phase 3: write title (short transaction)
+                                    # Phase 3: write title + the once-only
+                                    # flag together (short transaction) — a
+                                    # failed generation leaves the flag unset
+                                    # so a later run may retry.
                                     from sqlalchemy import update as sa_update
 
-                                    from ..models.session import Session as SessionModel
+                                    from .models.session import Session as SessionModel
 
                                     async with async_session_factory() as bg_db:
                                         await bg_db.execute(
                                             sa_update(SessionModel)
-                                            .where(SessionModel.id == session.id)
-                                            .values(title=llm_title)
+                                            .where(SessionModel.id == title_session_id)
+                                            .values(title=llm_title, title_generated=True)
                                         )
                                         await bg_db.commit()
                             except Exception:
@@ -656,47 +931,51 @@ class Pipeline:
 
                         _asyncio.create_task(_bg_title())
 
-                # Auto-extract durable facts into MEMORY.md after the run.
-                # Run in background — don't block message_complete on this.
-                if result.final_answer:
-                    import asyncio as _asyncio
-
-                    from .db import async_session_factory
-
-                    async def _bg_memory():
-                        try:
-                            async with async_session_factory() as bg_db:
-                                stmt = (
-                                    select(Message)
-                                    .join(Run, Message.run_id == Run.id)
-                                    .where(Run.session_id == session.id)
-                                    .order_by(Message.created_at.desc())
-                                    .limit(20)
-                                )
-                                rows = (await bg_db.execute(stmt)).scalars().all()
-                                all_msgs = list(reversed(rows))
-                                await auto_extract_memory(
-                                    bg_db, agent_config, agent_config.id, all_msgs, run_id=run.id
-                                )
-                        except Exception:
-                            logger.debug("Background memory extraction failed", exc_info=True)
-
-                    _asyncio.create_task(_bg_memory())
-
                 await self.db.commit()
+                # Run went terminal + last_activity moved — wake the idle
+                # scheduler (deadline refresh + skipped-reflection retry).
+                from .memory.episodic import poke_session_sweeper
+
+                poke_session_sweeper()
 
             except Exception:
-                # Pipeline exception — mark run as failed
+                # Pipeline exception — mark run as failed. Rollback first: a
+                # mid-flush DB error leaves this session unusable, and the run
+                # object may be expired — so the failure mark goes through a
+                # fresh session (otherwise the run stays 'pending' forever).
                 logger.exception("Pipeline run failed")
-                run.status = "failed"
-                run.error = "The agent run failed due to an internal error."
-                run.completed_at = datetime.now(UTC)
-                run.latency_ms = (
-                    int((run.completed_at - run.started_at).total_seconds() * 1000)
-                    if run.started_at
-                    else 0
+                rid = run.id
+                await self.db.rollback()
+                from sqlalchemy import update as _sa_update
+
+                from .db import (
+                    async_session_factory as _sf,
                 )
-                await self.db.commit()
+                from .db import (
+                    retry_locked_transaction as _rlt,
+                )
+
+                async with _sf() as fail_db:
+
+                    async def _mark_failed() -> None:
+                        await fail_db.execute(
+                            _sa_update(Run)
+                            .where(Run.id == rid)
+                            .values(
+                                status="failed",
+                                error="The agent run failed due to an internal error.",
+                                completed_at=datetime.now(UTC),
+                            )
+                        )
+                        await fail_db.commit()
+
+                    # Retry under lock contention — a single-shot commit can
+                    # itself hit a busy SQLite during a storm, orphaning the
+                    # run as 'running' (B31).
+                    await _rlt(_mark_failed, fail_db, f"mark_failed:{rid}")
+                from .memory.episodic import poke_session_sweeper
+
+                poke_session_sweeper()
                 raise
 
         return run
@@ -753,6 +1032,16 @@ class Pipeline:
             )
             session = result.scalar_one_or_none()
             if session is not None:
+                # Explicit resume — a closed session is reopened, same as a
+                # channel resume: the operator chose to continue it.
+                if session.closed:
+                    session.closed = False
+                    session.status = "active"
+                    # A resume is activity — without the bump the stale
+                    # timestamp reads as past-due and the sweeper could
+                    # close the session before its new run registers.
+                    session.last_activity_at = datetime.now(UTC)
+                    await self.db.flush()
                 return session
             # Fall through to auto-resume if session not found
 
@@ -775,6 +1064,7 @@ class Pipeline:
                 if session.status != "active":
                     session.status = "active"
                     session.closed = False
+                    session.last_activity_at = datetime.now(UTC)
                     await self.db.flush()
                 return session
 
@@ -810,53 +1100,54 @@ class Pipeline:
     ) -> None:
         """Lazy trigger (Trigger 1): close idle sessions for this agent+contact.
 
-        Called at run start. Finds other sessions that are idle beyond their
-        timeout and not yet closed, and fires session_close_extract() on them.
+        Called at run start. Discovery is awaited inline; each candidate
+        close runs as its own background task so the incoming run never
+        waits on other sessions' summary, learning, or reflection work.
         """
-        from .memory.episodic import close_session, find_idle_sessions
+        from .agent_service import get_active_config
+        from .db import async_session_factory
+        from .memory.episodic import find_idle_sessions, spawn_close_task
 
         try:
-            idle = await find_idle_sessions(self.db, idle_minutes=30)
-            for s in idle:
-                if s.agent_id != agent_id or s.contact_id != contact_id:
+            # Snapshot tuples only — close attempts run on their OWN DB
+            # sessions so a failing close never touches self.db and never
+            # starves the rest of the idle list.
+            async with async_session_factory() as discovery:
+                probe_config = await get_active_config(discovery, agent_id)
+                timeout = (
+                    probe_config.limits.session_idle_timeout_min if probe_config is not None else 30
+                )
+                idle = [
+                    (s.id, s.agent_id, s.contact_id)
+                    for s in await find_idle_sessions(discovery, idle_minutes=timeout)
+                ]
+            for sid, aid, cid in idle:
+                if aid != agent_id or cid != contact_id:
                     continue
-                if exclude_session_id and s.id == exclude_session_id:
+                if exclude_session_id and sid == exclude_session_id:
                     continue
-                # Need agent config for the LLM calls
-                agent_config = await self._get_agent_config(agent_id)
-                if agent_config:
-                    await close_session(self.db, agent_config, s, contact_id)
-            await self.db.commit()
+                spawn_close_task(self._close_one_idle(sid, aid, cid))
         except Exception:
-            pass  # Non-critical — don't block the run
+            # Non-critical — never block the run on lazy learning.
+            pass
 
-    async def _get_agent_config(self, agent_id: str) -> Any:
-        """Load agent config for memory extraction LLM calls."""
+    async def _close_one_idle(self, sid: str, aid: str, cid: str) -> None:
+        """Close one idle session on its own DB session."""
+        from .agent_service import get_active_config
+        from .db import async_session_factory
+        from .memory.episodic import close_session, session_idle_age_minutes
+        from .models.session import Session
+
         try:
-            from .agent_service import get_active_config
-
-            return await get_active_config(self.db, agent_id)
-        except Exception:
-            return None
-
-    async def _get_recent_messages(
-        self, session_id: str, limit: int = 10, exclude_run_id: str | None = None
-    ) -> list[Message]:
-        """Get recent messages from the session for context.
-
-        exclude_run_id: if set, skip messages from this run (e.g. the current
-        run's user message, which is appended separately by build_message_history).
-        """
-        stmt = (
-            select(Message)
-            .join(Run, Message.run_id == Run.id)
-            .where(Run.session_id == session_id)
-            .order_by(Message.created_at.desc())
-            .limit(limit)
-        )
-        if exclude_run_id:
-            stmt = stmt.where(Message.run_id != exclude_run_id)
-        result = await self.db.execute(stmt)
-        msgs = list(result.scalars().all())
-        msgs.reverse()  # chronological order
-        return msgs
+            async with async_session_factory() as owned:
+                sess = await owned.get(Session, sid)
+                if sess is None:
+                    return
+                agent_config = await get_active_config(owned, aid)
+                if agent_config is None:
+                    return
+                if session_idle_age_minutes(sess) < agent_config.limits.session_idle_timeout_min:
+                    return
+                await close_session(owned, agent_config, sess, cid)
+        except Exception as exc:
+            logger.warning("Idle session close failed for %s: %s", sid, type(exc).__name__)

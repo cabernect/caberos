@@ -8,6 +8,7 @@ never returned in plaintext. Model discovery is dynamic where available
 import json
 import logging
 import uuid
+from datetime import UTC
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -22,7 +23,7 @@ from ..models.agent import Agent
 from ..models.operator import Operator
 from ..models.provider import Provider
 from ..notifications import create_notification
-from ..secret_store import encrypt
+from ..secret_store import decrypt, encrypt
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/providers", tags=["providers"])
@@ -49,6 +50,9 @@ class ProviderCreate(BaseModel):
     base_url: str | None = None
     org_id: str | None = None
     extra_params: dict | None = None
+    # Per-type extra credentials (azure api_version, bedrock aws_*).
+    # Encrypted at rest — secrets never belong in plaintext extra_params.
+    credentials: dict[str, str] | None = None
 
 
 class ProviderUpdate(BaseModel):
@@ -57,6 +61,8 @@ class ProviderUpdate(BaseModel):
     base_url: str | None = None
     org_id: str | None = None
     extra_params: dict | None = None
+    # Per-key merge: non-empty value sets, "" deletes, absent key unchanged.
+    credentials: dict[str, str] | None = None
 
 
 class ProviderOut(BaseModel):
@@ -68,9 +74,17 @@ class ProviderOut(BaseModel):
     org_id: str | None = None
     extra_params: dict = {}
     custom_models: list[str] = []
+    # Credential key NAMES only — values never leave the encrypted blob.
+    credential_fields: list[str] = []
 
     @classmethod
     def from_model(cls, p: Provider) -> "ProviderOut":
+        credential_fields: list[str] = []
+        if p.encrypted_credentials:
+            try:
+                credential_fields = sorted(json.loads(decrypt(p.encrypted_credentials)))
+            except Exception:
+                credential_fields = []
         return cls(
             id=p.id,
             name=p.name,
@@ -80,6 +94,7 @@ class ProviderOut(BaseModel):
             org_id=p.org_id,
             extra_params=json.loads(p.extra_params) if p.extra_params else {},
             custom_models=json.loads(p.custom_models) if p.custom_models else [],
+            credential_fields=credential_fields,
         )
 
 
@@ -92,6 +107,22 @@ class ModelInfo(BaseModel):
     max_context_tokens: int | None = None
     context_window_tokens: int | None = None
     max_output_tokens: int | None = None
+    # W11 additive fields — optional so older rows stay valid.
+    display_name: str | None = None
+    availability: str | None = None  # available | unavailable | unknown
+    lifecycle: str | None = None
+    provenance: dict | None = None
+    pricing: dict | None = None
+    revision: int | None = None
+    snapshot_revision: str | None = None
+    discovery_error: str | None = None
+    stale: bool | None = None
+    last_confirmed_at: str | None = None
+    # Declared catalog identity (user-set mapping for alias providers like
+    # azure deployments) — ids only when explicitly mapped.
+    catalog_provider_id: str | None = None
+    catalog_model_id: str | None = None
+    catalog_mapping_explicit: bool = False
 
 
 @router.get("")
@@ -109,11 +140,13 @@ async def create_provider(
     operator: Operator = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ) -> ProviderOut:
+    credentials = {k: v for k, v in (data.credentials or {}).items() if v}
     provider = Provider(
         id=str(uuid.uuid4()),
         name=data.name,
         type=data.type,
         encrypted_key=encrypt(data.api_key) if data.api_key else None,
+        encrypted_credentials=encrypt(json.dumps(credentials)) if credentials else None,
         base_url=data.base_url,
         org_id=data.org_id,
         extra_params=json.dumps(data.extra_params or {}),
@@ -121,6 +154,9 @@ async def create_provider(
     db.add(provider)
     await db.commit()
     await db.refresh(provider)
+    from ..providers.model_catalog import schedule_provider_refresh
+
+    schedule_provider_refresh(provider.id)
     return ProviderOut.from_model(provider)
 
 
@@ -159,9 +195,27 @@ async def update_provider(
         provider.org_id = data.org_id
     if data.extra_params is not None:
         provider.extra_params = json.dumps(data.extra_params)
+    if data.credentials is not None:
+        # Per-key merge — blank edit fields keep the stored value, an
+        # explicit "" deletes the key, absent keys are untouched.
+        creds: dict[str, str] = {}
+        if provider.encrypted_credentials:
+            try:
+                creds = json.loads(decrypt(provider.encrypted_credentials))
+            except Exception:
+                creds = {}
+        for k, v in data.credentials.items():
+            if v:
+                creds[k] = v
+            else:
+                creds.pop(k, None)
+        provider.encrypted_credentials = encrypt(json.dumps(creds)) if creds else None
 
     await db.commit()
     await db.refresh(provider)
+    from ..providers.model_catalog import schedule_provider_refresh
+
+    schedule_provider_refresh(provider.id)
     return ProviderOut.from_model(provider)
 
 
@@ -199,18 +253,238 @@ async def list_models(
     operator: Operator = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Dynamic model discovery (D40). Returns models if the provider supports it."""
+    """Local resolved offerings (D40) — never fetches, never validates.
+
+    Populated by the scheduled/explicit discovery path; a provider with
+    no discovery yet reports unknown availability rather than a fake
+    empty list.
+    """
+    from ..providers.catalog import get_catalog_snapshot
+    from ..providers.model_catalog import list_offerings, provider_refresh_in_progress
+
     result = await db.execute(select(Provider).where(Provider.id == provider_id))
     provider = result.scalar_one_or_none()
     if provider is None:
         raise HTTPException(status_code=404, detail="Provider not found")
 
-    adapter = LiteLLMAdapter(db)
-    models = await adapter.discover_models(provider_id)
+    offerings = await list_offerings(db, provider_id)
+    by_id = {o.model_id: o for o in offerings}
+    custom = json.loads(provider.custom_models) if provider.custom_models else []
+    # Custom names without an offering yet surface as unknown too.
+
+    # Snapshot freshness gate — a stale active pointer still serves, but
+    # the UI should show it as aged, not live.
+    snapshot = get_catalog_snapshot()
+    snapshot_status = snapshot.status()
+    snapshot_sha = snapshot_status.get("revision")
+    fetched_at = snapshot_status.get("fetched_at")
+    snapshot_stale = None
+    if fetched_at:
+        try:
+            from datetime import datetime
+
+            snapshot_stale = (
+                datetime.now(UTC) - datetime.fromisoformat(fetched_at)
+            ).total_seconds() >= 86400
+        except Exception:
+            snapshot_stale = None
+
+    models: list[ModelInfo] = []
+    for offering in offerings:
+        resolved = json.loads(offering.resolved_json or "{}")
+        prov = resolved.pop("provenance", {}) or {}
+        models.append(
+            ModelInfo(
+                id=offering.model_id,
+                name=offering.model_id,  # exact request id — never a display alias
+                display_name=resolved.get("display_name"),
+                supports_vision=resolved.get("supports_vision", False),
+                supports_thinking=resolved.get("supports_thinking", False),
+                thinking_efforts=resolved.get("thinking_efforts", []),
+                max_context_tokens=resolved.get("max_context_tokens"),
+                context_window_tokens=resolved.get("context_window_tokens"),
+                max_output_tokens=resolved.get("max_output_tokens"),
+                availability=offering.discovery_state,
+                lifecycle=resolved.get("lifecycle"),
+                provenance=prov or None,
+                pricing=resolved.get("pricing"),
+                revision=offering.revision,
+                snapshot_revision=offering.snapshot_revision or None,
+                discovery_error=offering.discovery_error,
+                stale=snapshot_stale,
+                last_confirmed_at=(
+                    offering.discovered_at.isoformat() if offering.discovered_at else None
+                ),
+                catalog_provider_id=(
+                    offering.catalog_provider_id if offering.catalog_mapping_explicit else None
+                ),
+                catalog_model_id=(
+                    offering.catalog_model_id if offering.catalog_mapping_explicit else None
+                ),
+                catalog_mapping_explicit=bool(offering.catalog_mapping_explicit),
+            )
+        )
+    for name in custom:
+        if name not in by_id:
+            models.append(ModelInfo(id=name, name=name, availability="unknown"))
+
+    # Composite revision: snapshot SHA + provider config fingerprint +
+    # summed row revisions — a collision on max(row.rev) can't hide a
+    # snapshot or config change.
+    import hashlib as _hashlib
+
+    rev_material = "|".join(
+        [
+            str(snapshot_sha or "none"),
+            provider.type or "",
+            provider.base_url or "",
+            ",".join(f"{o.model_id}:{o.revision}" for o in offerings),
+        ]
+    )
     return {
-        "discovery": "dynamic" if models else "unavailable",
-        "models": [ModelInfo(**m) for m in models],
+        "discovery": "dynamic",
+        "models": models,
+        "revision": _hashlib.sha256(rev_material.encode()).hexdigest(),
+        "fetched_at": fetched_at,
+        "snapshot_revision": snapshot_sha,
+        "refresh_in_progress": provider_refresh_in_progress(provider_id),
     }
+
+
+@router.get("/{provider_id}/catalog-models")
+async def list_catalog_models(
+    provider_id: str,
+    catalog_provider: str | None = None,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Candidate catalog identities for declaring an offering's mapping.
+
+    Alias providers (azure deployments, bedrock inference profiles) carry
+    operator-chosen names, never model ids — the operator declares which
+    catalog model the name actually serves. Local snapshot read only.
+    """
+    from ..providers.catalog import get_catalog_snapshot
+    from ..providers.catalog_policy import default_catalog_provider, project_model
+
+    result = await db.execute(select(Provider).where(Provider.id == provider_id))
+    provider = result.scalar_one_or_none()
+    if provider is None:
+        raise HTTPException(status_code=404, detail="Provider not found")
+
+    snapshot = get_catalog_snapshot()
+    providers = [
+        {"id": pid, "name": info["name"], "models": info["models"]}
+        for pid, info in sorted(snapshot.providers().items())
+    ]
+    selected = catalog_provider or default_catalog_provider(provider.type)
+    models = []
+    if selected:
+        for mid, raw in snapshot.models(selected).items():
+            projected = project_model(raw)
+            models.append(
+                {
+                    "id": mid,
+                    "name": projected.get("display_name") or mid,
+                    "context_window_tokens": projected.get("context_window_tokens"),
+                    "supports_thinking": projected.get("supports_thinking"),
+                    "supports_vision": projected.get("supports_vision"),
+                }
+            )
+        models.sort(key=lambda m: m["id"])
+    return {
+        "catalog_provider_id": selected,
+        "providers": providers,
+        "models": models,
+    }
+
+
+@router.post("/{provider_id}/models/refresh")
+async def refresh_models(
+    provider_id: str,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Explicit provider discovery — schedules the bounded job."""
+    from ..providers.model_catalog import schedule_provider_refresh
+
+    result = await db.execute(select(Provider).where(Provider.id == provider_id))
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Provider not found")
+    schedule_provider_refresh(provider_id)
+    return {"scheduled": True}
+
+
+class ModelMetadataIn(BaseModel):
+    fields: dict = {}
+    catalog_provider_id: str | None = None
+    catalog_model_id: str | None = None
+    clear_catalog_mapping: bool = False
+
+
+@router.put("/{provider_id}/models/{model_name:path}/metadata")
+async def set_model_metadata(
+    provider_id: str,
+    model_name: str,
+    body: ModelMetadataIn,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Operator-declared overrides + explicit catalog mapping.
+
+    Overrides are validated per field — invalid values 400, they never
+    coerce into model facts. The mapping is the only way a non-official
+    provider claims a catalog offering.
+    """
+    from ..providers.model_catalog import update_override
+
+    result = await db.execute(select(Provider).where(Provider.id == provider_id))
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Provider not found")
+    try:
+        offering = await update_override(
+            db,
+            provider_id,
+            model_name,
+            body.fields,
+            catalog_provider_id=body.catalog_provider_id,
+            catalog_model_id=body.catalog_model_id,
+            clear_catalog_mapping=body.clear_catalog_mapping,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    await db.commit()
+    resolved = json.loads(offering.resolved_json or "{}")
+    return {"resolved": resolved, "revision": offering.revision}
+
+
+async def _pick_probe_model(db: AsyncSession, provider_id: str) -> str | None:
+    """Cheapest tool-capable, non-deprecated catalog model for a key probe.
+
+    The probe's job is proving the key completes a real call — a cheap
+    tool-capable text model exercises the same endpoint shape agent runs
+    use, instead of whatever happens to sort first alphabetically.
+    """
+    from ..providers.model_catalog import list_offerings
+
+    best: tuple[float, float, str] | None = None
+    first_id: str | None = None
+    # list_offerings (not the raw table) — catalog/custom models are virtual
+    # views materialized per provider, so a fresh provider has no stored rows.
+    for offering in await list_offerings(db, provider_id):
+        if first_id is None:
+            first_id = offering.model_id
+        resolved = json.loads(offering.resolved_json or "{}")
+        if resolved.get("lifecycle") == "deprecated" or resolved.get("tool_call") is not True:
+            continue
+        pricing = resolved.get("pricing") or {}
+        input_price = pricing.get("input")
+        if not isinstance(input_price, (int, float)):
+            continue
+        candidate = (float(input_price), float(pricing.get("output") or 0), offering.model_id)
+        if best is None or candidate < best:
+            best = candidate
+    return best[2] if best else first_id
 
 
 @router.post("/{provider_id}/validate")
@@ -221,7 +495,7 @@ async def validate_model(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Validate a model config with a cheap 1-token completion (D40)."""
-    model_name = body.get("model_name")
+    model_name = body.get("model_name") or await _pick_probe_model(db, provider_id)
     if not model_name:
         raise HTTPException(status_code=400, detail="model_name is required")
 
@@ -233,7 +507,7 @@ async def validate_model(
     adapter = LiteLLMAdapter(db)
     try:
         await adapter.validate_model(provider_id, model_name)
-        return {"valid": True}
+        return {"valid": True, "probed_model": model_name}
     except Exception as error:
         log.exception("Provider model validation failed for provider %s", provider.id)
         error_type, guidance = classify_provider_error(str(error))
@@ -247,7 +521,7 @@ async def validate_model(
             entity_id=provider.id,
         )
         await db.commit()
-        return {"valid": False, "error": guidance}
+        return {"valid": False, "error": guidance, "probed_model": model_name}
 
 
 class CustomModelIn(BaseModel):

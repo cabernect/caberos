@@ -9,34 +9,11 @@ from agentos.agent_service import create_agent
 from agentos.config_schema import AgentConfig, CapabilityGrant, ModelConfig
 from agentos.harness.loop import Harness
 from agentos.harness.scripted_model import ScriptedModel, ScriptedResponse
-from agentos.memory.auto_extract import merge_auto_extracted_memory
+from agentos.models.agent import Agent
 from agentos.models.audit import AuditRecord
 from agentos.models.run import Message, Run
 from agentos.pipeline import Attachment, InboundMessage, Pipeline
-
-
-def test_auto_extracted_memory_uses_one_deduplicated_section():
-    existing = (
-        "# Memory\n\n"
-        "## Auto-extracted\n\n"
-        "- User speaks Vietnamese.\n\n"
-        "## Auto-extracted\n\n"
-        "- User uses Notion.\n"
-    )
-
-    merged = merge_auto_extracted_memory(
-        existing,
-        ["- User speaks Vietnamese.", "- User studies agentic loops."],
-    )
-
-    assert merged == (
-        "# Memory\n\n"
-        "## Auto-extracted\n\n"
-        "- User speaks Vietnamese.\n"
-        "- User uses Notion.\n"
-        "- User studies agentic loops.\n"
-    )
-    assert merged.count("## Auto-extracted") == 1
+from agentos.runner import run_agent
 
 
 @pytest.mark.asyncio
@@ -109,6 +86,33 @@ async def test_pipeline_full_run(db, workspace, tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_run_agent_refuses_disabled_agent(db):
+    """A disabled agent must not execute runs — the gate covers every
+    trigger (chat, schedule, heartbeat, channel) since all funnel through
+    run_agent (B39)."""
+    config = AgentConfig(
+        id="disabled-agent",
+        name="Disabled Agent",
+        model=ModelConfig(provider_id="test", name="scripted"),
+    )
+    await create_agent(db, config)
+    agent = await db.scalar(select(Agent).where(Agent.id == "disabled-agent"))
+    agent.enabled = False
+    await db.commit()
+
+    # "is disabled" specifically — "Agent not found: disabled-agent" would
+    # also satisfy match="disabled" while hitting the wrong code path (and
+    # the wrong DB entirely when the session factory isn't patched).
+    with pytest.raises(ValueError, match="is disabled"):
+        await run_agent(
+            agent_id="disabled-agent",
+            text="hi",
+            user_id="u1",
+            is_test=True,
+        )
+
+
+@pytest.mark.asyncio
 async def test_pipeline_stores_attachments_for_existing_file_tools(db, tmp_path, monkeypatch):
     """Attachments are stored in the workspace instead of sent inline."""
     from agentos.config import settings
@@ -148,9 +152,22 @@ async def test_pipeline_stores_attachments_for_existing_file_tools(db, tmp_path,
     run = await pipeline.handle_inbound(inbound, is_test=True)
 
     assert run.status == "completed"
-    stored = ws_dir / "attachments" / "attachment_1_notes.txt"
+    stored = ws_dir / "attachments" / "notes.txt"
     assert stored.read_text() == "private attachment text"
     assert not (tmp_path / "knowledge").exists()
+
+
+def test_attachment_target_dedupes_with_number_suffix(tmp_path):
+    """Original filename wins; collisions get Finder-style (n) suffixes."""
+    from agentos.pipeline import _dedupe_attachment_target
+
+    (tmp_path / "attachments").mkdir()
+    ws = str(tmp_path)
+    assert _dedupe_attachment_target(ws, "report.pdf", 1) == "attachments/report.pdf"
+    (tmp_path / "attachments" / "report.pdf").write_bytes(b"x")
+    assert _dedupe_attachment_target(ws, "report.pdf", 1) == "attachments/report (1).pdf"
+    (tmp_path / "attachments" / "report (1).pdf").write_bytes(b"x")
+    assert _dedupe_attachment_target(ws, "report.pdf", 1) == "attachments/report (2).pdf"
 
 
 @pytest.mark.asyncio
@@ -194,3 +211,186 @@ async def test_pipeline_deduplication(db, tmp_path, monkeypatch):
     result = await db.execute(select(Run).where(Run.message_id == msg_id))
     runs = result.scalars().all()
     assert len(runs) == 1
+
+
+async def _agent_with_active_version(db, agent_id: str, version_number: int = 1):
+    from agentos.models.agent import Agent, AgentVersion
+
+    agent = Agent(id=agent_id, name="Manifest Agent", enabled=True)
+    db.add(agent)
+    await db.flush()
+    version = AgentVersion(
+        agent_id=agent.id,
+        version_number=version_number,
+        config="{}",
+        is_active=True,
+    )
+    db.add(version)
+    await db.flush()
+    agent.active_version_id = version.id
+    await db.flush()
+    return agent
+
+
+async def test_execution_manifest_captures_exact_revisions(db):
+    from agentos.manifest import capture_execution_manifest
+    from agentos.models.execution_manifest import ExecutionManifest
+
+    agent = await _agent_with_active_version(db, "agent-m1", version_number=3)
+    run_id = str(uuid.uuid4())
+    config = AgentConfig(
+        id=agent.id,
+        name="Manifest Agent",
+        model=ModelConfig(provider_id="test-provider", name="test-model"),
+        capabilities=[CapabilityGrant(name="read_file")],
+    )
+
+    manifest = await capture_execution_manifest(
+        db,
+        run_id=run_id,
+        agent_id=agent.id,
+        agent_config=config,
+        skill_revision_ids=["skill-a@2"],
+    )
+    await db.commit()
+
+    row = await db.scalar(select(ExecutionManifest).where(ExecutionManifest.run_id == run_id))
+    assert row is not None
+    assert row.agent_version_id == agent.active_version_id
+    assert row.agent_version_number == 3
+    assert row.model_provider_id == "test-provider"
+    assert row.model_name == "test-model"
+    import json as _json
+
+    assert _json.loads(row.skill_revision_ids) == ["skill-a@2"]
+    # No secrets or private content — only ids/version numbers.
+    assert row.plan_revision_id is None
+    assert row.browser_profile_id is None
+    assert manifest.run_id == run_id
+
+
+async def test_execution_manifest_idempotent_per_run(db):
+    from agentos.manifest import capture_execution_manifest
+    from agentos.models.execution_manifest import ExecutionManifest
+
+    agent = await _agent_with_active_version(db, "agent-m2")
+    run_id = str(uuid.uuid4())
+    config = AgentConfig(
+        id=agent.id,
+        name="Manifest Agent",
+        model=ModelConfig(provider_id="test-provider", name="test-model"),
+        capabilities=[],
+    )
+
+    await capture_execution_manifest(db, run_id=run_id, agent_id=agent.id, agent_config=config)
+    again = await capture_execution_manifest(
+        db, run_id=run_id, agent_id=agent.id, agent_config=config
+    )
+    await db.commit()
+
+    row = await db.scalar(select(ExecutionManifest).where(ExecutionManifest.run_id == run_id))
+    assert row.id == again.id
+
+
+@pytest.mark.asyncio
+async def test_title_generation_fires_once_per_session(db, tmp_path, monkeypatch):
+    """The 3-minute title heuristic must fire once per session — every
+    completed run used to re-trigger it (one title call per run forever)."""
+    import asyncio
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import update
+
+    from agentos.models.model_call import ModelCall
+    from agentos.models.session import Session
+    from agentos.providers import ProviderRegistry
+    from agentos.sandbox.workspace import WorkspaceManager
+
+    ws_dir = tmp_path / "ws"
+    ws_dir.mkdir(exist_ok=True)
+    monkeypatch.setattr(WorkspaceManager, "create_workspace", lambda self, aid: ws_dir)
+
+    config = AgentConfig(
+        id="title-agent",
+        name="Title Agent",
+        model=ModelConfig(provider_id="test", name="scripted"),
+        soul="s",
+    )
+    await create_agent(db, config)
+
+    class _TitleAdapter:
+        """Awaitable for_model stub — only the surface _title_completion uses."""
+
+        def __await__(self):
+            async def _go():
+                return self
+
+            return _go().__await__()
+
+        async def get_model_info(self, model):
+            return {
+                "model_str": "test/scripted",
+                "resolved_model": {"context_window_tokens": 32768},
+            }
+
+        async def complete(self, agent_model, messages, tools):
+            return ScriptedResponse(content="Generated Title", tokens_in=3, tokens_out=2)
+
+    monkeypatch.setattr(ProviderRegistry, "for_model", lambda self, pid: _TitleAdapter())
+
+    pipeline = Pipeline(
+        db=db,
+        harness=Harness(
+            model=ScriptedModel([ScriptedResponse(content=f"reply-{i}") for i in range(6)])
+        ),
+    )
+
+    def _inbound(text: str) -> InboundMessage:
+        return InboundMessage(
+            channel="test",
+            bot_id="title-agent",
+            external_user_id="u1",
+            text=text,
+            message_id=str(uuid.uuid4()),
+        )
+
+    run1 = await pipeline.handle_inbound(_inbound("hi there"))
+    sid = run1.session_id
+
+    # Age the session past the 3-minute gate with an existing derived title.
+    await db.execute(
+        update(Session)
+        .where(Session.id == sid)
+        .values(started_at=datetime.now(UTC) - timedelta(seconds=200), title="hi")
+    )
+    await db.commit()
+
+    run2 = await pipeline.handle_inbound(_inbound("another question"))
+    assert run2.session_id == sid
+
+    # The title task runs in the background — wait until phase 3 lands
+    # (title + flag are written together; the ledger row lands earlier).
+    for _ in range(200):
+        await asyncio.sleep(0.05)
+        flag = (await db.execute(select(Session.title_generated).where(Session.id == sid))).scalar()
+        if flag:
+            break
+
+    title_rows = (
+        (await db.execute(select(ModelCall).where(ModelCall.kind == "title"))).scalars().all()
+    )
+    assert len(title_rows) == 1
+    assert title_rows[0].run_id == run2.id
+    assert title_rows[0].session_id == sid
+
+    sess = await db.get(Session, sid, populate_existing=True)
+    assert sess.title == "Generated Title"
+    assert sess.title_generated is True
+
+    # A later completed run must NOT re-fire the title call.
+    await pipeline.handle_inbound(_inbound("more chat"))
+    await asyncio.sleep(0.3)
+    title_rows = (
+        (await db.execute(select(ModelCall).where(ModelCall.kind == "title"))).scalars().all()
+    )
+    assert len(title_rows) == 1

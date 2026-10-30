@@ -5,48 +5,25 @@
 </p>
 
 <p align="center">
-  <a href="../../releases/latest">Download (macOS ARM64)</a> ·
+  <a href="../../releases/latest">Download (macOS · Windows)</a> ·
   <a href="https://caberos.cabernect.workers.dev">Website</a> ·
   <a href="#features">Features</a> ·
   <a href="#quick-start">Quick Start</a> ·
   <a href="#architecture">Architecture</a> ·
-  <a href="#configuration">Configuration</a> ·
-  <a href="#default-agents">Default Agents</a> ·
-  <a href="#skills">Skills</a> ·
-  <a href="#external-channels">Channels</a> ·
-  <a href="#observability">Observability</a> ·
-  <a href="#desktop-app">Desktop</a> ·
-  <a href="#docker">Docker</a> ·
-  <a href="#roadmap">Roadmap</a> ·
+  <a href="docs/TECHNICAL.md">Technical Reference</a> ·
+  <a href="docs/PRODUCT.md">Product</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
 ---
 
-CaberOS is an open-source, local-first AI Agent Operating System. It hosts personal agents on your machine, gives them a workspace, connects them to your services, and lets them run shell commands in a sandbox. The OS supplies the harness, mediates every capability call, and gives you a dashboard to manage your agents.
+CaberOS is an open-source, local-first AI Agent Operating System. It hosts personal agents on your machine, gives them a workspace, connects them to your services, lets them drive a real browser, and produces versioned documents — while the OS mediates every capability call, keeps an audit trail of every action, and accounts for every token spent.
 
-**Your data never leaves your machine.** Providers (OpenAI, Anthropic, Google, Ollama, OpenRouter) are just transports — CaberOS owns the agent, the memory, the workspace, and the audit trail.
+**Local storage, governed egress.** Agents, memory, workspace, and the audit trail live on your machine. Model providers (OpenAI, Anthropic, Google, Ollama, OpenRouter) receive the inputs you configure them to see under your permission policy — egress capabilities (web fetch, browser, shell, remote embeddings) cross an approval boundary, and remembered scopes let you skip re-prompting where you choose.
 
-## Screenshots
-
-<table>
-  <tr>
-    <td width="50%" align="center"><b>Agent Chat</b></td>
-    <td width="50%" align="center"><b>Agent Management</b></td>
-  </tr>
-  <tr>
-    <td><img src="docs/screenshots/chat.png" alt="Agent chat conversation" /></td>
-    <td><img src="docs/screenshots/agents.png" alt="Agent list" /></td>
-  </tr>
-  <tr>
-    <td width="50%" align="center"><b>Providers &amp; Models</b></td>
-    <td width="50%" align="center"><b>Observability</b></td>
-  </tr>
-  <tr>
-    <td><img src="docs/screenshots/providers.png" alt="Provider settings" /></td>
-    <td><img src="docs/screenshots/observability.png" alt="Observability dashboard" /></td>
-  </tr>
-</table>
+<div align="center">
+  <video src="https://caberos.cabernect.workers.dev/videos/caberos-promises.mp4" poster="https://caberos.cabernect.workers.dev/videos/caberos-promises-poster.jpg" width="720" controls></video>
+</div>
 
 ## Why "OS"?
 
@@ -54,15 +31,36 @@ An operating system's job is identity, permissions, resource accounting, mediate
 
 Adding a new integration (Notion, GitHub, Slack) is a new capability, not a new subsystem. The design doesn't change.
 
+## What's new in v0.2.0 — *Agent Workbench*
+
+*The current development line, integrated on `feat/v0.2.0` and in release preparation — see the [v0.2.0 release plan](docs/plans/v0.2-release-plan.md).*
+
+- **Today home** — Needs-you approvals/elicitations, recent activity, and an ask-your-agent entry point on first load.
+- **Guided first run** — login → optional credential step → onboarding with real runtime checks (browser, sandbox, Node.js, uv, Git) instead of static setup lists.
+- **Redesigned workbench** — reworked frontend with a span-tree/waterfall trace explorer and a context inspector over the unified model-call ledger; provider thinking surfaces only when real reasoning content is reported.
+- **Artifacts & previews** — versioned DOCX/XLSX/PPTX/PDF with in-app previews and immutable revision history.
+- **Managed browser** — Chrome-for-Testing with consent-gated install, headless or visible mode, operator takeover.
+- **Governed skills & reflection** — three-scope skills with versioned drafts; session-close reflection can revise an agent's own local skills from frozen evidence.
+- **Bounded memory** — session-close learning writes transcript summaries and durable facts; MEMORY.md publishes under a token ceiling.
+- **Knowledge Vault** — lexical FTS search by default; optional hybrid embeddings (local setups work once a model is configured; remote embeddings require explicit egress consent).
+- **Durable scheduling & notifications** — real timezones, missed-run recovery, retries, and deep-linked notifications.
+- **Runtime readiness** — model catalog with pricing, consent-gated managed installs for optional runtimes.
+
+### Roadmap
+
+- **v0.2.1 — Honest Vault & Media Tools** — tabular row layer for xlsx/csv (query-then-summarize over complete row sets), Vault document inspection, a global **Settings → Tools** tab binding capabilities to Model Offerings (search, speech-to-text, text-to-speech, image & video generation), and the first media capability end-to-end.
+- **v0.2.2 — Connected Knowledge, Tasks & Richer Preview** — OneDrive/Google Drive connectors, Qdrant & external retrieval, durable tasks with triggers and channel approvals, plus rendered HTML preview and true visual renders for Office artifacts.
+
 ## Features
 
 ### Core
 
 - **Real model chat** — streaming SSE, multi-provider support (OpenAI, Anthropic, Google, Ollama, OpenRouter), thinking/reasoning controls with per-message effort adjustment
-- **Tool use** — file read/write/search, shell (sandboxed), web search/fetch (markdown extraction + pagination), sub-agents, datetime, skills
-- **Approval flow** — every egress capability (shell, web) requires operator approval; decisions can be remembered per-scope (exact, same-verb, pattern, capability)
+- **Tool use** — file read/write/search, shell (sandboxed, background terminals), web search/fetch (markdown extraction + pagination), sub-agents, datetime, skills
+- **Approval flow** — egress capabilities (shell, web, browser) ask under your configured policy; decisions can be remembered per-scope (exact, same-verb, pattern, capability)
 - **Elicitation** — agents ask clarifying questions via `agent_ask_user`; the dashboard shows a prompt bar
 - **Guardrails** — input/output secret redaction, prompt-injection detection, system-prompt leakage prevention
+- **Progressive capability discovery** — `capabilities_search`/`capabilities_load` expose bounded tool metadata on demand; schemas load per-run without widening authority
 
 ### Agent management
 
@@ -71,30 +69,54 @@ Adding a new integration (Notion, GitHub, Slack) is a new capability, not a new 
 - **Rollback** — revert to any previous agent version
 - **Duplicate** — clone an agent with a new ID
 
+### Artifact Studio
+
+- **Tracked deliverables** — `artifact_create` produces DOCX/XLSX/PPTX/PDF from a structured spec, never raw Office XML, saved under `artifacts/`
+- **Immutable revisions** — every edit is a new revision; restore writes old bytes as a *new* revision; external-edit conflicts are detected, never overwritten
+- **Previews** — in-dashboard renderers for markdown, code, JSON, CSV tables, images, PDF pages, docx elements, pptx slides, xlsx workbooks, and media — in chat, workspace, and skill views
+- **Composer** — clipboard image paste, drag/drop, URL attachments, ephemeral preview chips with content-hash dedupe
+
+### Browser automation
+
+- **Managed browser** — Chrome-for-Testing runtime with explicit first-use install consent; headless or visible mode
+- **Isolated by default** — ephemeral sessions; opt-in domain-scoped persistent profiles
+- **Approval-gated** — `browser_open`/`browser_act` cross the syscall gate; domain leash keeps navigation bounded
+- **Visible takeover** — the operator can take control of the browser window mid-run on request
+
+### Skills Studio
+
+- **Three scopes** — built-in, global, and agent-local skills; precedence `agent-local > global > built-in`
+- **Versioned library** — publish, promote, duplicate, restore-as-new, disable, archive, purge (guarded by active-run pins)
+- **Agent-assisted drafts** — "Create Skill" opens a builder session that drafts in `skill-drafts/`; nothing auto-publishes
+- **Safe imports** — ZIP and repo-URL imports pass traversal/symlink/zip-bomb hardening and land as drafts
+- **Run pinning** — each run pins exact skill revisions (`rev:` or `live:` hash), so mid-run publishes can't shift a running agent
+- **RSI / evolution** — session-close reflection passes can revise an agent's own local skills from session evidence, deduped by fingerprint
+
 ### Memory
 
 Three layers (D34):
 
-- **Working memory** — session-scoped conversation snippets, cleared after promotion
-- **MEMORY.md** — agent-scoped living document, always loaded, protected from compaction
+- **Working memory** — session-scoped conversation, compacted under a context budget
+- **MEMORY.md** — agent-scoped living document with identity, bounded by `core_max_tokens`, revisioned with optimistic publication
 - **Knowledge graph** — SQLite triples (entity/predicate/object), queried per-contact
-- **Auto-extraction** — post-run promotion of durable facts from working memory to KG
-- **Semantic recall** — FTS5 (SQLite) or tsvector (Postgres) for past-session retrieval
+- **Session-close learning** — idle sessions close on a deadline-driven sweeper; closing writes a transcript summary + durable-fact extraction, then may run a bounded skill-reflection pass
+- **Semantic recall** — FTS5 (SQLite) or tsvector (Postgres); `search_history` reaches across sessions
 
-### Skills
+### Knowledge Vault (RAG)
 
-- **Opt-in, not auto-injected** — the agent sees a menu of skill names + descriptions and chooses which to load
-- **System skills** — 16 built-in skills (PDF, DOCX, XLSX, PPTX, web artifacts, frontend design, etc.)
-- **Per-agent skills** — promote system skills to individual agents
-- **Skill resources** — agents can read resource files from within a skill directory
+- **Ingest** — documents extract to structured blocks, chunked parent/child per block type
+- **Retrieval** — FTS5 lexical by default (zero egress); optional hybrid embeddings with RRF fusion and bounded parent expansion — retrieval returns source citations and a retrieval trace
+- **Index generations** — blue-green rebuild/repair/activate/delete; exactly one active generation
+- **Privacy-gated embeddings** — remote embedding providers refuse until egress is explicitly enabled; local endpoints (Ollama etc.) require only a configured embedding model
+- **Honest limits** — tabular uploads (.xlsx/.csv) are refused until the row-query layer lands, rather than indexing a misleading text flattening
 
 ### MCP integration
 
 - **MCP client** — stdio and HTTP transports
-- **Server registry** — CRUD for MCP servers, tool discovery, agent bindings
+- **Server registry** — CRUD, tool discovery, agent bindings, per-tool `tool_filter` + deny overrides
 - **Credentials** — encrypted at rest (Fernet), injected via env/headers at runtime
-- **OAuth** — loopback flow with automatic token refresh and reconnect (persisted auth-server + resource metadata)
-- **Runtime resolution** — stdio commands (`npx`, `uvx`, `node`) resolved against the child PATH with fallback dirs and `CABEROS_MCP_RUNTIME_PATH` override
+- **OAuth** — loopback flow with automatic token refresh and reconnect
+- **Runtime resolution** — stdio commands resolved against child PATH with fallback dirs and `CABEROS_MCP_RUNTIME_PATH`
 - **Catalog** — marketplace of installable MCP servers
 
 ### External channels
@@ -106,28 +128,27 @@ Four channels route external messages through the same agent pipeline:
 - **Zalo OA** — webhook, HMAC-SHA256 verification, `cs` message type
 - **Zalo Bot Platform** — polling + webhook, typing indicator, 2000-char split
 
-### Observability
-
-- **Run history** — filterable list with status, trigger, agent, cost, duration
-- **Run detail** — full message history + audit records inline
-- **Durable runs** — runs survive SSE disconnects; status persisted to DB, orphaned runs reconciled to `interrupted` on restart
-- **Notifications** — in-app operator notifications for run completion/failure/interruption, approval requests, elicitation, MCP/OAuth issues
-- **Syscall log** — every capability call with allowed/denied, arguments, result
-- **Spend tracking** — today / 7-day / 30-day breakdown by agent and trigger
-- **Health dashboard** — provider status, MCP connectivity, channel status
-- **Operator audit** — login, password changes, settings changes
-
 ### Scheduler
 
-- **Heartbeat mode** — agents run on a configurable interval (every N minutes/hours)
-- **Alerts** — failed heartbeats surface in the dashboard
-- **Manual fire** — trigger a heartbeat run on demand
+- **Schedules** — one-time / interval / cron with IANA timezones and correct DST handling; persisted `next_fire_at` survives restarts
+- **Missed-run policy** — skip, run once, or catch up (bounded); overlap modes skip/queue/cancel/parallel; bounded retries as new occurrences
+- **Heartbeat facade** — the classic per-agent heartbeat projects onto a managed schedule; old endpoints unchanged
+- **Approval + budget** — revision-scoped auto-approve caps and per-run cost overrides; the permission ceiling never widens
+
+### Observability
+
+- **Traces** — expandable span tree, aligned waterfall, and an observation inspector over the unified `model_calls` ledger (chat, embeddings, probes, extractions, titles)
+- **Runs** — durable run rows survive disconnects; orphaned runs reconcile to `interrupted` on restart; filterable list + timeline projection
+- **Spend** — today / 7d / 30d per agent and trigger, plus a platform-wide ledger scope; unknown pricing is reported as unknown, never silently zero
+- **References** — citations list only URLs the agent actually visited; search results stay as trace evidence
+- **Notifications** — in-app + browser/Tauri notifications with deep links, dedupe, and read-state that follows what you're looking at
+- **Syscall log + health** — every mediated call with allow/deny and arguments; provider, MCP, and channel status
 
 ## Quick start
 
-### Option 1: Desktop app (easiest, macOS Apple Silicon)
+### Option 1: Desktop app (easiest, macOS & Windows)
 
-> **Platform support:** The desktop app currently supports **macOS ARM64 (Apple Silicon)** only — M1/M2/M3/M4 chips. macOS Intel and Windows builds require cross-compilation or CI runners and are not yet set up. Use Docker or local dev on other platforms.
+> **Platform support:** **macOS ARM64** (Tier 1) and **Windows x64** (Tier 2, beta). macOS Intel, Windows on ARM and Linux desktop builds are not available yet — use Docker or local dev there. On Windows, shell commands run in a bundled Microsoft Execution Container (MXC) — **no Docker and no WSL required**. It is experimental and needs a one-click, one-time setup (Observability → Health → *Enable shell sandbox*); until then shell is off with a clear reason and every other capability still works. Full matrix: [docs/platform-support.md](docs/platform-support.md).
 
 **Download the latest release:** [GitHub Releases](../../releases/latest)
 
@@ -135,22 +156,37 @@ Or build from source:
 
 ```bash
 # Build the Tauri app (bundles the PyInstaller gateway + React frontend)
-cd frontend && npm run desktop:build
+(cd frontend && npm run desktop:build)
 
-# Launch
+# Launch (from the repo root)
 open frontend/src-tauri/target/release/bundle/macos/CaberOS.app
+```
+
+```cmd
+:: Windows — needs VS Build Tools (VCTools workload) + a Windows SDK, and the
+:: MSVC Rust toolchain (rustup default stable-x86_64-pc-windows-msvc), not GNU.
+:: Run both in ONE cmd session: vcvars64 sets the environment for the session it
+:: runs in, and Git's own link.exe would otherwise shadow the MSVC linker.
+call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+cd frontend && npm run desktop:build:windows
+:: -> src-tauri\target\release\bundle\nsis\CaberOS_<version>_x64-setup.exe
 ```
 
 The desktop app packages the entire backend as a PyInstaller executable and supervises it. No Python installation required. Gateway logs are at:
 
 ```bash
+# macOS
 tail -f "$HOME/Library/Application Support/com.caberos.desktop/logs/gateway.log"
+# Windows (PowerShell)
+Get-Content -Wait "$env:APPDATA\com.caberos.desktop\logs\gateway.log"
 ```
+
+> **Local rebuilds:** PyInstaller's `--clean` does not prune files already sitting in `frontend/src-tauri/resources/gateway` from an earlier build, so after a version bump delete that folder first — otherwise stale `agentos-<old>.dist-info` metadata gets bundled next to the new one and the gateway can report the old version. CI starts from a fresh checkout, so releases are unaffected.
 
 ### Option 2: Docker (any platform)
 
 ```bash
-git clone <repo-url> && cd foundation-agentos
+git clone https://github.com/cabernect/caberos.git && cd caberos
 ./scripts/docker.sh up
 # → http://localhost:8080
 # Login: admin / admin
@@ -160,10 +196,10 @@ The first launch seeds the default operator and two agents (Caber, AgentBuilder)
 
 ### Option 3: Local dev
 
-**Prerequisites:** Python 3.12+, [uv](https://docs.astral.sh/uv/), Node 22+, npm, and either macOS (uses built-in `sandbox-exec`) or Linux (`bubblewrap`).
+**Prerequisites:** Python 3.12+, [uv](https://docs.astral.sh/uv/), Node 22+, npm. For shell sandboxing: macOS (uses built-in `sandbox-exec`) or Linux (`bubblewrap`). Windows uses Microsoft Execution Containers; from a source checkout, point `CABEROS_MXC_EXE_PATH` at the SDK's `wxc-exec.exe` (the installer bundles it). See [docs/platform-support.md](docs/platform-support.md) for details.
 
 ```bash
-git clone <repo-url> && cd foundation-agentos
+git clone https://github.com/cabernect/caberos.git && cd caberos
 
 # Install backend + frontend dependencies
 ./scripts/install.sh
@@ -177,16 +213,10 @@ Open `http://localhost:5173` — the Vite dev server proxies `/api` to the backe
 **Creating a release** (maintainers):
 
 ```bash
-# 1. Merge your PR to main (feat/*, fix/*, test/*, etc. branches)
-# 2. Tag manually after merge:
-git checkout main && git pull
-git tag v0.1.0
-git push origin v0.1.0
+./scripts/release.sh X.Y.Z   # two-phase: release branch PR → merge → re-run to tag
 ```
 
 Pushing a `v*.*.*` tag triggers the [release workflow](.github/workflows/release.yml) which builds the .dmg, creates a GitHub Release, and deploys the website to Cloudflare automatically. Tags with a `-` suffix (e.g., `v0.1.0-beta`) are marked as prerelease.
-
-The website can also be deployed manually from the Actions tab → "Deploy website" → Run workflow (see [deploy-website.yml](.github/workflows/deploy-website.yml)).
 
 ## Architecture
 
@@ -202,22 +232,21 @@ The website can also be deployed manually from the Actions tab → "Deploy websi
         ▼              ▼                ▼
 ┌─────────────────────────────────────────────────────┐
 │  FastAPI Gateway (REST + SSE)                       │
-│  ┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐ ┌──────────┐  │
-│  │ Chat │ │Agents│ │ MCP  │ │Obsv. │ │ Channels │  │
-│  └──┬───┘ └──────┘ └──────┘ └──────┘ └──────────┘  │
+│  chat · agents · skills · knowledge · schedules ·   │
+│  mcp · channels · notifications · observability …   │
 └─────┼───────────────────────────────────────────────┘
       ▼
 ┌─────────────────────────────────────────────────────┐
-│  Agent Pipeline (13-step, D19)                      │
+│  Agent Pipeline                                     │
 │  ┌──────────────────────────────────────────────┐   │
-│  │  Harness (custom)                           │   │
+│  │  Harness (custom async loop)                │   │
 │  │  ┌─────────────┐  ┌──────────────────────┐   │   │
 │  │  │ Model       │  │ SyscallHandler       │   │   │
 │  │  │ (LiteLLM)   │  │ ┌──────────────────┐ │   │   │
 │  │  │             │  │ │ Approval gate    │ │   │   │
 │  │  │             │  │ │ Capabilities     │ │   │   │
-│  │  │             │  │ │ Sandbox (bwrap)  │ │   │   │
-│  │  │             │  │ │ Audit log        │ │   │   │
+│  │  │             │  │ │ Sandbox          │ │   │   │
+│  │  │             │  │ │ Audit + ledger   │ │   │   │
 │  │  │             │  │ └──────────────────┘ │   │   │
 │  │  └─────────────┘  └──────────────────────┘   │   │
 │  └──────────────────────────────────────────────┘   │
@@ -237,21 +266,21 @@ The website can also be deployed manually from the Actions tab → "Deploy websi
 | Database | SQLAlchemy 2.0 async, SQLite (WAL + FTS5) / Postgres (asyncpg) |
 | Agent harness | Custom (async loop + LiteLLM) |
 | Model transport | LiteLLM |
+| Browser automation | Playwright/CDP over managed Chrome-for-Testing |
 | Frontend | React 19, Vite, TypeScript, Tailwind CSS 4 |
 | Desktop | Tauri 2 (Rust) |
-| Sandbox | macOS `sandbox-exec` / Linux `bubblewrap` |
+| Sandbox | seatbelt (macOS), bwrap (Linux), MXC (Windows); Docker fallback on macOS/Linux |
 | Packaging | PyInstaller (gateway), Tauri bundler (desktop) |
 
 ### Key design decisions
 
 - **D1:** Agents are configuration, not code. AgentConfig is a DB row, versioned.
-- **D2:** Custom async harness. LiteLLM is the model transport.
-- **D33:** FastAPI is the gateway/API layer. The React dashboard, Tauri desktop, and future CLI are all clients of the same REST + SSE contracts.
+- **D2:** Custom async harness. LiteLLM is the model transport — not a pricing/metadata authority.
+- **D33:** FastAPI is the gateway/API layer. The React dashboard, Tauri desktop, and external channels are all clients of the same REST + SSE contracts.
 - **D34:** Three-layer memory: working memory (session), MEMORY.md (file), knowledge graph (SQLite triples).
 - **D35:** Agent identity = soul, persona, task — versioned config fields, NOT workspace files.
-- **D38:** MCP tools in v0.1. CLI/TUI deferred to v0.2.
 
-See `docs/spec-v0.1.md` for the full 40-decision specification.
+See `docs/spec-v0.1.md` for the 40-decision specification and [docs/TECHNICAL.md](docs/TECHNICAL.md) for the deep technical reference (module map, data model, API surface, subsystem internals).
 
 ## Configuration
 
@@ -308,27 +337,18 @@ Skills are opt-in knowledge packs that agents can load on demand. They are **not
 
 > **Attribution:** Built-in skills are adapted from [Anthropic's skills repository](https://github.com/anthropics/skills).
 
-**16 built-in skills:**
+**Built-in skills** (consolidated in v0.2.0):
 
 | Skill | Description |
 |---|---|
-| `algorithmic-art` | Algorithmic art generation |
-| `brand-guidelines` | Brand guideline application |
-| `canvas-design` | Canvas-based design |
-| `claude-api` | Claude API usage patterns |
+| `browser-workflows` | Browser automation recipes |
 | `doc-coauthoring` | Document co-authoring |
-| `docx` | Word document processing |
+| `evolve` | Self-improvement via session-close reflection (RSI) |
 | `frontend-design` | Frontend UI design |
-| `internal-comms` | Internal communications |
-| `mcp-builder` | MCP server building |
-| `pdf` | PDF processing |
-| `pptx` | PowerPoint processing |
+| `office-documents` | DOCX/XLSX/PPTX/PDF processing |
 | `skill-creator` | Create new skills |
-| `slack-gif-creator` | Slack GIF creation |
-| `theme-factory` | Theme generation |
-| `web-artifacts-builder` | Web artifact building |
-| `webapp-testing` | Web app testing |
-| `xlsx` | Excel processing |
+
+Skills can be published to global or agent scopes, assigned per-agent, imported from ZIP/repo, and drafted by agents in builder sessions — all versioned.
 
 ## External channels
 
@@ -347,25 +367,27 @@ Configure channels in the dashboard → Channels page, or via the API at `POST /
 
 CaberOS tracks every run, every capability call, and every dollar spent.
 
-- **Runs page** — filter by agent, status, trigger (chat/heartbeat/channel/test). Click any run to see the full message history and audit records inline.
-- **Syscall log** — every capability call with timestamp, agent, capability name, arguments (redacted), result, allowed/denied. Denied calls highlighted.
-- **Spend** — today / 7-day / 30-day breakdown by agent and trigger. Tracks input/output tokens and cost per run.
-- **Health** — provider connectivity, MCP server status, channel status.
-- **Operator audit** — logins, password changes, YOLO mode toggles.
+- **Traces** — expandable span tree + waterfall + inspector over the `model_calls` ledger; per-model-call request bodies re-projected on read (`/api/model-calls/{id}/context`)
+- **Runs** — durable list with filters (agent, status, trigger, provider, schedule, channel…); detail view projects a timeline from audit roots through tool calls to approvals
+- **Spend** — agent-scoped historic totals plus `scope=platform` ledger accounting; unknown pricing is labeled, never silently zero
+- **Notifications** — run lifecycle, approvals, elicitation, MCP/OAuth issues — deduped, deep-linked, and suppressed when you're already looking at the thing
+- **Syscall log** — every capability call with timestamp, agent, capability, redacted arguments, result, allowed/denied
+- **Health** — provider connectivity, MCP server status, channel status, runtime readiness
 
 ## Desktop app
 
-> **Platform support:** macOS ARM64 (Apple Silicon) only. macOS Intel and Windows are not yet supported — use Docker or local dev on those platforms.
+> **Platform support:** macOS ARM64 (Tier 1) and Windows x64 (Tier 2, beta). See [docs/platform-support.md](docs/platform-support.md).
 >
 > **Download:** [Latest release](../../releases/latest)
 
-The Tauri 2 desktop app packages the entire stack into a native macOS application:
+The Tauri 2 desktop app packages the entire stack into a native application:
 
 - **PyInstaller gateway** — the FastAPI backend is compiled to a standalone executable, no Python needed
 - **Process-group supervision** — the Tauri shell starts the gateway in its own process group and kills it cleanly on exit
 - **Bearer-token auth** — the desktop webview uses `Authorization: Bearer` headers instead of cookies (avoids cross-site cookie issues between `tauri.localhost` and `127.0.0.1`)
 - **Persistent logs** — gateway stdout/stderr written to `~/Library/Application Support/com.caberos.desktop/logs/gateway.log`
 - **Default agents** — `caber` and `agent-builder` seed on first launch from YAML bundled into the executable
+- **Signed auto-update** — `downloading → installing → ready` then an explicit `Restart now`
 
 ```bash
 # Build
@@ -380,7 +402,7 @@ npm run desktop:dev
 
 ## Docker
 
-The Docker setup runs the full stack: backend (Python + uv + bwrap) and frontend (nginx reverse proxy).
+The Docker setup runs the full stack: backend (Python + uv) and frontend (nginx reverse proxy).
 
 ```bash
 # Build and start
@@ -400,7 +422,7 @@ The Docker setup runs the full stack: backend (Python + uv + bwrap) and frontend
 
 | Service | Image | Port | Notes |
 |---|---|---|---|
-| `backend` | `python:3.12-slim` + uv | 8081 (internal) | bwrap needs `SYS_ADMIN` cap |
+| `backend` | `python:3.12-slim` + uv | 8081 (internal) | Agents can use bwrap (if `SYS_ADMIN` cap present) or Docker isolation |
 | `frontend` | `nginx:alpine` | 80 → `:8080` (host) | Reverse-proxies `/api`, `/health` to backend |
 
 Data persists in the `caberos-data` named volume (SQLite DB, secret key, workspaces, agent homes). To use Postgres instead, uncomment the `db` service and `AGENTOS_DATABASE_URL` in `docker-compose.yml`.
@@ -426,46 +448,47 @@ npm run build    # Production build → dist/
 foundation-agentos/
 ├── backend/
 │   ├── src/agentos/          # FastAPI gateway + agent harness
-│   │   ├── api/              # REST routes (chat, agents, mcp, channels, observability)
-│   │   ├── capabilities/     # Tool registry + built-in tools
-│   │   ├── memory/           # Three-layer memory (notebook, triples, recall, auto-extract)
-│   │   ├── skills/           # Skill loader (menu → load → read resource)
+│   │   ├── api/              # REST routes (19 routers — chat, agents, skills,
+│   │   │                     #   knowledge, schedules, mcp, channels, …)
+│   │   ├── capabilities/     # Tool registry + built-in tools (~35 capabilities)
+│   │   ├── memory/           # Core MEMORY.md, episodic close, KG triples, recall
+│   │   ├── skills/           # Resolution, reconcile, usage, importer, validation
+│   │   ├── knowledge/        # Vault ingest/chunking/retrieval/embeddings
+│   │   ├── services/         # Ledger, timelines, spend, lifecycle, captures
+│   │   ├── browser/          # Managed browser runtime + CDP sessions
 │   │   ├── mcp/              # MCP client (stdio/HTTP, credentials, OAuth)
 │   │   ├── channels/         # External channels (Telegram, Discord, Zalo)
-│   │   ├── sandbox/          # Process sandbox (seatbelt/bwrap)
+│   │   ├── sandbox/          # Process sandbox (seatbelt/bwrap/MXC/docker)
 │   │   ├── syscall/          # The single boundary every capability crosses
-│   │   ├── harness/          # Agent loop (custom harness + LiteLLM)
+│   │   ├── harness/          # Agent loop, context assembly, conversation reads
+│   │   ├── reflection.py     # RSI skill-reflection pass (session close)
 │   │   ├── defaults/         # Default agent YAMLs (caber, agent-builder)
 │   │   └── ...
-│   ├── tests/                # 460 tests
+│   ├── tests/                # ~1,300 tests
 │   ├── Dockerfile
 │   └── pyproject.toml
 ├── frontend/
 │   ├── src/
-│   │   ├── pages/            # AgentList, Conversation, Providers, MCP, Channels, Observability...
-│   │   ├── components/       # ModelSelector, ToolCallBlock, SettingsOverlay...
+│   │   ├── pages/            # AgentList, Conversation, Skills, KnowledgeVault,
+│   │   │                     #   Scheduler, Mcps, Channels, Observability,
+│   │   │                     #   Traces, Notifications, ProvidersSettings
+│   │   ├── components/       # ChatInputBar, PreviewPanel, RunTimeline,
+│   │   │                     #   TraceInspector, SettingsOverlay, …
 │   │   ├── lib/api.ts        # The only way the frontend talks to the backend
 │   │   └── ...
 │   ├── src-tauri/            # Tauri 2 desktop shell (Rust)
 │   ├── Dockerfile
 │   ├── nginx.conf
 │   └── package.json
-├── website/                  # Public website (Astro + Starlight)
-│   ├── src/
-│   │   ├── pages/            # Landing, download, vi/ (Vietnamese)
-│   │   ├── content/docs/     # EN + VI documentation
-│   │   ├── styles/           # Brand CSS (light/dark tokens)
-│   │   └── ...
-│   ├── scripts/              # Locale checker
-│   ├── wrangler.toml         # Cloudflare Workers config
-│   └── package.json
-├── skills/                   # 16 system-level skills
-├── scripts/                  # dev, install, docker, build-gateway, build-dmg, desktop-dev
+├── website/                  # Public website (Astro + Starlight, EN + VI)
+├── skills/                   # 6 built-in skills
+├── scripts/                  # dev, install, docker, release, build-gateway/dmg
 ├── sandbox/                  # Sandbox profiles (seatbelt SBPL, bwrap defaults)
 ├── docker-compose.yml
-├── docs/                     # Spec + implementation plans
+├── docs/                     # Specs, plans, TECHNICAL.md, PRODUCT.md
 ├── design-system/            # Design system docs (warm light, olive accent)
-├── AGENTS.md                 # Full architecture reference for AI agents
+├── CONTEXT.md                # Shared vocabulary
+├── AGENTS.md                 # Operating manual for AI agents
 ├── CONTRIBUTING.md
 ├── LICENSE
 └── README.md
@@ -473,24 +496,24 @@ foundation-agentos/
 
 ## Testing
 
-### Backend (460 tests)
+### Backend
 
 ```bash
-cd backend && uv run pytest -v
+cd backend && uv run pytest -q
 
-# Specific module
-uv run pytest tests/test_auth.py -v
+# Lint + format gate (CI parity)
+uv run ruff check src/ tests/ && uv run ruff format --check src/ tests/
 
 # With coverage
 uv run pytest --cov=src/agentos --cov-report=term-missing
 ```
 
-### Frontend (19 tests)
+### Frontend
 
 ```bash
 cd frontend
 
-# Unit tests
+# Unit tests (vitest)
 npm run test
 
 # Type-check + build
@@ -514,51 +537,62 @@ Use the Playwright MCP server for real-browser testing. See `AGENTS.md` for deta
 
 ## Roadmap
 
-### v0.1 (current)
+### v0.1 (released)
 
-- [x] Smoke test vertical slice
-- [x] Dashboard chat with real models
-- [x] File operations + tool call visibility
-- [x] Approval flow + elicitation
-- [x] Agent management UI
-- [x] Global settings & provider management
-- [x] Memory + skills
-- [x] Scheduler/heartbeat
-- [x] MCP client infrastructure + credentials/OAuth
-- [x] External channels (Telegram, Discord, Zalo)
-- [x] Observability + spend
-- [x] Tauri desktop app
-- [x] Docker support
-- [x] Progressive capability discovery (v0.1.7)
-- [x] Stable HITL with same-turn approval batching (v0.1.8)
-- [x] SQLite contention retry and persistence resilience (v0.1.8)
-- [x] MCP OAuth refresh and auto-reconnect (v0.1.8)
-- [x] Dashboard theme support (light/dark/system) (v0.1.8)
-- [x] Vietnamese website and documentation (v0.1.8)
-- [x] Public website with scroll animations (v0.1.8)
-- [x] Durable run lifecycle — `interrupted` status, DB-backed recovery, startup reconciliation (v0.1.9)
-- [x] Operator notifications for run completion, failure, interruption, approvals (v0.1.9)
-- [x] `web_fetch` markdown extraction (trafilatura) + `offset`/`has_more` pagination (v0.1.9)
-- [x] MCP stdio runtime PATH resolution (v0.1.9)
-- [x] MCP OAuth auto-refresh with persisted server metadata (v0.1.9)
+- [x] Real-model chat, SSE streaming, files, sandbox, approvals, and elicitation
+- [x] Agent/provider management, memory, skills, Knowledge Vault, and citations
+- [x] Scheduler/heartbeat, MCP credentials/OAuth, and external channels
+- [x] Observability, spend, Tauri desktop, Docker, and signed auto-update
+- [x] Progressive capability discovery with run-scoped schema loading
+- [x] Stable HITL, concurrent runs, SQLite resilience, and durable run lifecycle
+- [x] Operator notifications, web extraction/pagination, and MCP runtime hardening
 
-### v0.2 (planned)
+### v0.2.0 — Agent Workbench (integrated on `feat/v0.2.0`, release pending)
 
-- [ ] CLI/TUI (`caber` command)
-- [ ] CaberCore extraction (headless runtime, separate from FastAPI)
-- [ ] Browser automation tools (JS-rendered pages, clicking, navigation)
-- [ ] Rich media output — image/audio/PDF/slide preview in chat
-- [ ] Cron/event triggers for scheduler
-- [ ] More MCP catalog entries
-- [ ] More tools integration and variation
-- [ ] Knowledge Vault integration
+- [x] Artifact Studio — DOCX/PPTX/XLSX/PDF from structured specs; immutable revisions, restore, external-edit conflict handling
+- [x] Workspace, composer, and chat previews for documents, slides, sheets, PDFs, media, and code
+- [x] Clipboard image paste, drag/drop, and visual attachment previews
+- [x] Browser automation — managed Chrome-for-Testing, headless/visible, isolated or opt-in persistent profiles, approvals, takeover
+- [x] Skills Studio — three scopes, agent-assisted drafts, validation, imports, publish/promote/archive lifecycle, run pinning
+- [x] RAG v2 — structured chunking, FTS default + optional hybrid, generations, egress consent, retrieval trace
+- [x] Scheduler v2 — once/interval/cron, timezone/DST, missed-run, overlap, retry, heartbeat facade
+- [x] Notifications v2 — in-app/browser/Tauri, deep links, dedupe, focus-aware read state
+- [x] Background terminals — incremental output, ownership, cleanup
+- [x] Observability v2 — unified `model_calls` ledger, projected timelines, platform spend, request captures
+- [x] Runtime readiness — model catalog/pricing (models.dev snapshot), optional tools/runtimes with consent-gated managed installs
+- [x] Context & memory v2 — bounded MEMORY.md publication, session-close learning, conversation summaries
+- [x] RSI — session-close skill reflection runs (`trigger=reflection`), evidence-fingerprint dedupe, deferred retry
+- [~] `/plan` mode — spec settled, **deferred** (see [docs/plans/v0.2/05-plan-mode.md](docs/plans/v0.2/05-plan-mode.md))
+- [x] Frontend rework — redesigned workbench, "Today" home, shared UI primitives, guided tour + onboarding
 
-### v0.5+
+See the detailed [`v0.2.0 release plan`](docs/plans/v0.2-release-plan.md).
 
-- [ ] Postgres migration tooling (Alembic)
+### v0.2.1 — Connected Knowledge (planned)
+
+- [ ] OneDrive and SharePoint file/folder Knowledge Sources
+- [ ] Google Drive and Shared Drive file/folder Knowledge Sources
+- [ ] Read-only OAuth, source browsing, and scheduled incremental snapshots
+- [ ] Google Docs/Sheets/Slides export for local indexing
+- [ ] Qdrant and configurable Retrieval Resources/Profiles
+- [ ] Remote embedding privacy, cost, health, reconnect, and purge controls
+- [ ] Structured sources: row-record layer for tabular data (xlsx/csv now, SQL later)
+
+### v0.2.2 — Tasks and Event Automation (planned)
+
+- [ ] Durable Tasks, assignment, dependencies, due dates, and completion evidence
+- [ ] Task → Plan → Run → Artifact relationships
+- [ ] Webhook, inbox, calendar, file-change, and connector event triggers
+- [ ] Reusable approved automation templates
+- [ ] Inline approval and elicitation through supported external channels
+
+### Later
+
+- [ ] Additional cloud-storage and retrieval adapters; pgvector after PostgreSQL support matures
+- [ ] Persistent multi-agent Missions — coordinated agents, dependencies, budgets, approvals, and artifacts across runs
 - [ ] Multi-operator support
-- [ ] Agent marketplace
-- [ ] Plugin SDK
+- [ ] Agent marketplace and signed plugin SDK
+- [ ] CLI/TUI only when it serves a concrete workflow
+- [ ] Additional desktop platforms after sandbox behavior is verified
 
 ## Troubleshooting
 
@@ -622,7 +656,9 @@ rm -f data/agentos.db-wal data/agentos.db-shm
 
 - **Issues:** [GitHub Issues](../../issues) for bugs and feature requests
 - **Contributing:** See [CONTRIBUTING.md](CONTRIBUTING.md)
-- **Architecture reference:** See [AGENTS.md](AGENTS.md) for the full module layout, key decisions, and patterns
+- **Technical reference:** [docs/TECHNICAL.md](docs/TECHNICAL.md) — architecture, data model, API surface
+- **Product doc:** [docs/PRODUCT.md](docs/PRODUCT.md) — vision, personas, positioning
+- **Agent operating manual:** [AGENTS.md](AGENTS.md)
 
 ## License
 

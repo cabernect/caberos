@@ -1,0 +1,69 @@
+---
+import config from 'virtual:starlight/user-config';
+import Search from '@astrojs/starlight/components/Search.astro';
+import SiteTitle from '@astrojs/starlight/components/SiteTitle.astro';
+import Icon from './Icon.astro';
+
+const isVietnamese = Astro.url.pathname.startsWith('/vi/');
+const prefix = isVietnamese ? '/vi' : '';
+const altPath = isVietnamese
+	? Astro.url.pathname.replace(/^\/vi/, '') || '/'
+	: `/vi${Astro.url.pathname}`;
+
+/**
+ * Render the `Search` component if Pagefind is enabled or the default search component has been overridden.
+ */
+const shouldRenderSearch =
+	config.pagefind || config.components.Search !== '@astrojs/starlight/components/Search.astro';
+---
+
+<div class="docs-header-inner">
+	<div class="title-wrapper sl-flex">
+		<SiteTitle />
+	</div>
+	<nav class="site-nav docs-nav" aria-label="Site">
+		<a class="nav-link" href={`${prefix}/`} aria-label={isVietnamese ? 'Về trang chủ CaberOS' : 'Back to the CaberOS site'}>{isVietnamese ? '← Trang chủ' : '← Home'}</a>
+	</nav>
+	{shouldRenderSearch && <div class="docs-search sl-flex print:hidden"><Search /></div>}
+	<nav class="site-nav right-group sl-hidden md:sl-flex print:hidden" aria-label="Utilities">
+		<a class="nav-lang mono" href={altPath} hreflang={isVietnamese ? 'en' : 'vi'} aria-label={isVietnamese ? 'Switch to English' : 'Đọc tiếng Việt'}>{isVietnamese ? 'EN' : 'VI'}</a>
+		<a class="nav-icon-btn" href="https://github.com/cabernect/caberos" aria-label="GitHub repository"><Icon name="github" size={15} /></a>
+		<button class="nav-icon-btn theme-toggle" data-theme-toggle type="button" aria-label="Switch theme" aria-pressed="false">
+			<span class="theme-toggle-icon" data-theme-icon="sun"><Icon name="sun" size={15} /></span>
+			<span class="theme-toggle-icon" data-theme-icon="moon" hidden><Icon name="moon" size={15} /></span>
+		</button>
+		<a class="nav-cta" href={`${prefix}/download/`}>{isVietnamese ? 'Tải xuống' : 'Download'} <Icon name="download" size={14} /></a>
+	</nav>
+</div>
+<script is:inline>
+	(() => {
+		const sync = () => {
+			document.querySelectorAll('[data-theme-toggle]').forEach((btn) => {
+				if (!(btn instanceof HTMLElement) || btn.dataset.bound === '1') return;
+				btn.dataset.bound = '1';
+				const update = () => {
+					const dark = document.documentElement.dataset.theme === 'dark';
+					const sun = btn.querySelector('[data-theme-icon="sun"]');
+					const moon = btn.querySelector('[data-theme-icon="moon"]');
+					if (sun instanceof HTMLElement) sun.hidden = dark;
+					if (moon instanceof HTMLElement) moon.hidden = !dark;
+					btn.setAttribute('aria-label', dark ? 'Switch to light mode' : 'Switch to dark mode');
+					btn.setAttribute('aria-pressed', String(dark));
+				};
+				btn.addEventListener('click', () => {
+					const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+					document.documentElement.dataset.theme = next;
+					try {
+						localStorage.setItem('starlight-theme', next);
+					} catch {
+						/* private mode */
+					}
+					update();
+				});
+				update();
+			});
+		};
+		sync();
+		document.addEventListener('astro:page-load', sync);
+	})();
+</script>

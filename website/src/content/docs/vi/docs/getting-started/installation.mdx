@@ -1,30 +1,47 @@
 ---
 title: Cài đặt
-description: Cài CaberOS trên macOS, Linux, hoặc Docker.
+description: Cài CaberOS trên macOS, Windows, Linux, hoặc Docker.
 sidebar:
   order: 1
 ---
 
-CaberOS chạy trên macOS, Linux, và Windows (qua WSL2). Chọn tùy chọn phù hợp với nền tảng của bạn.
+CaberOS chạy trên macOS, Windows, và Linux. Chọn tùy chọn phù hợp với nền tảng của bạn.
 
-## Tùy chọn 1: Desktop app (dễ nhất, macOS Apple Silicon)
+## Tùy chọn 1: Desktop app (dễ nhất)
 
-Desktop release hiện hỗ trợ **macOS 13 trở lên trên Apple Silicon**: M1, M2, M3, hoặc M4. App đi kèm FastAPI gateway và không cần Python, Node, hoặc `uv`.
+App đi kèm FastAPI gateway và không cần Python, Node, hoặc `uv`. App phát hành cho **macOS 13 trở lên trên Apple Silicon** (M1–M4) và **Windows 10 trở lên trên x64**.
+
+### macOS
 
 1. Mở [bản phát hành mới nhất](https://github.com/cabernect/caberos/releases/latest).
 2. Tải `CaberOS_<phiên bản>_arm64.dmg`.
 3. Mở DMG và kéo **CaberOS** vào **Applications**.
 4. Khởi động CaberOS từ Applications.
 
-### Thông báo Gatekeeper
+#### Thông báo Gatekeeper
 
-Bản phát hành được ad-hoc signed và không được Apple notarize. Nếu macOS báo ứng dụng không thể mở hoặc bị hỏng, trước tiên xác minh DMG từ bản phát hành chính thức, sau đó chạy:
+Bản phát hành được ad-hoc signed và không được Apple notarize. Nếu macOS báo ứng dụng không thể mở hoặc bị hỏng, trước tiên xác minh DMG từ bản phát hành chính thức, sau đó mở **Terminal** và chạy:
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/CaberOS.app
 ```
 
 Khởi động lại CaberOS sau khi xóa thuộc tính quarantine.
+
+### Windows
+
+1. Mở [bản phát hành mới nhất](https://github.com/cabernect/caberos/releases/latest).
+2. Tải `CaberOS_<phiên bản>_x64-setup.exe`.
+3. Chạy installer — cài cho user hiện tại, không cần quyền admin.
+4. Khởi động CaberOS từ Start menu.
+
+#### Thông báo SmartScreen
+
+Installer chưa được ký bằng chứng chỉ phổ biến. Nếu Windows SmartScreen cảnh báo lần chạy đầu trong khi chữ ký tích lũy reputation, chọn **More info → Run anyway** sau khi xác minh file tải từ bản phát hành chính thức.
+
+#### Shell sandbox trên Windows
+
+Shell command chạy trong Microsoft Execution Containers (MXC) đi kèm installer — không cần Docker hay WSL, nhưng yêu cầu **Windows 11 24H2 (build 26100) trở lên** và setup elevated một lần: mở **Observability → Health** và bấm **Enable shell sandbox**. Trên build cũ hơn mọi thứ khác vẫn hoạt động; chỉ capability `terminal` tắt. MXC được báo là *experimental*, không phải security boundary đã xác minh — xem `docs/platform-support.md` cho ma trận đầy đủ.
 
 ## Tùy chọn 2: Docker (mọi nền tảng)
 
@@ -58,9 +75,10 @@ Mở `http://localhost:5173`. Xem [Phát triển local](/vi/docs/development/loc
 | Nền tảng | Desktop app | Docker | Local dev |
 | --- | --- | --- | --- |
 | macOS Apple Silicon | Có | Có | Có |
+| Windows x64 | Có | Có (WSL2) | Có (WSL2) |
 | macOS Intel | Chưa | Có | Có |
+| Windows ARM | Chưa | Có (WSL2) | Có (WSL2) |
 | Linux | Chưa | Có | Có |
-| Windows (WSL2) | Chưa | Có | Có |
 
 ## Bước tiếp theo
 

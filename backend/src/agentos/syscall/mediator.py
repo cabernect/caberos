@@ -27,7 +27,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..capabilities.catalog import is_capability_granted
+from ..capabilities.catalog import _grant_for, is_capability_granted
 from ..capabilities.registry import registry
 from ..config import settings
 from ..config_schema import AgentConfig
@@ -39,7 +39,45 @@ from ..models.mcp import McpServer
 from ..notifications import create_notification
 from .approval_registry import approval_registry
 from .elicitation_registry import elicitation_registry
-from .protocol import SyscallResult, ToolCall
+from .protocol import ExecutionRestrictions, SyscallResult, ToolCall
+
+
+class _SessionWriteLock:
+    """asyncio.Lock wrapper that also bounds the session's write transaction.
+
+    Tool implementations write through the run's shared session inside
+    ``async with db_lock``. A bare ``flush()`` leaves the write txn — and
+    SQLite's single-writer lock — open until the next unrelated commit,
+    which under ``asyncio.gather`` can span a sibling's entire execution
+    (B31). Committing on clean exit bounds the write lock to the section
+    itself; rolling back on error keeps the shared session usable instead
+    of leaving it in a failed transaction (PendingRollbackError cascades).
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._lock = asyncio.Lock()
+        self._session = session
+
+    async def __aenter__(self) -> "_SessionWriteLock":
+        await self._lock.acquire()
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        from ..db import retry_locked_transaction
+
+        try:
+            if exc_type is None:
+                try:
+                    await retry_locked_transaction(
+                        self._session.commit, self._session, "tool_write"
+                    )
+                except Exception:
+                    await self._session.rollback()
+                    raise
+            else:
+                await self._session.rollback()
+        finally:
+            self._lock.release()
 
 
 class SyscallHandler:
@@ -50,17 +88,51 @@ class SyscallHandler:
     - Running state emission via event_emitter
     """
 
-    def __init__(self, db: AsyncSession, workspace_path: str, sandbox_mode: str = "strict") -> None:
+    def __init__(
+        self,
+        db: AsyncSession,
+        workspace_path: str,
+        sandbox_mode: str = "strict",
+        restrictions: ExecutionRestrictions | None = None,
+    ) -> None:
         self.db = db
         self.workspace_path = workspace_path
         self.sandbox_mode = sandbox_mode
+        self.restrictions = restrictions
         self._event_emitter: Any = None
         self._spawn_context: dict[str, Any] = {}
         self.supports_vision = False
         # Serialize DB operations — asyncio.gather may run multiple tool
         # calls concurrently, but SQLAlchemy async sessions are not safe
-        # for concurrent flush/commit.
-        self._db_lock = asyncio.Lock()
+        # for concurrent flush/commit. The lock also closes the write txn
+        # on section exit so no transaction spans a slow sibling tool call.
+        self._db_lock = _SessionWriteLock(db)
+
+    async def _write_audit(self, audit: AuditRecord) -> None:
+        """Persist an audit row on its own session with lock-retry.
+
+        Audit writes run inside an asyncio.gather of concurrent tool calls —
+        a bare flush on the shared run session would hold the SQLite write
+        txn (and its lock) open until the slowest sibling finishes, starving
+        every other run (B31). A fresh session keeps the write short, and a
+        failure here can't poison the run's session.
+        """
+        from ..db import async_session_factory, retry_locked_transaction
+
+        # Snapshot the capability's declared effects at execution time —
+        # historical rows are never re-labelled from the registry.
+        if audit.effects is None:
+            cap = registry.get(audit.capability_name)
+            if cap is not None and cap.effects:
+                audit.effects = sorted(cap.effects)
+
+        async with async_session_factory() as session:
+
+            async def _persist() -> None:
+                session.add(audit)
+                await session.commit()
+
+            await retry_locked_transaction(_persist, session, f"audit:{audit.id}")
 
     async def mediate(
         self,
@@ -74,6 +146,7 @@ class SyscallHandler:
         parent_config: AgentConfig | None = None,
         capability_catalog: Any = None,
         approval_batch: Any = None,
+        trigger: str = "user_message",
     ) -> SyscallResult:
         start = time.monotonic()
         self._event_emitter = event_emitter
@@ -88,6 +161,11 @@ class SyscallHandler:
             await _arrive(False)
             return await self._deny(
                 run_id, call, agent_config, "capability not found", start, sub_agent_id
+            )
+        if self.restrictions is not None and call.name not in self.restrictions.capability_names:
+            await _arrive(False)
+            return await self._deny(
+                run_id, call, agent_config, "not permitted in this execution", start, sub_agent_id
             )
 
         # 2. Check grant
@@ -139,16 +217,27 @@ class SyscallHandler:
         # For now, the grant check above is sufficient.
 
         # 5. Check approval (Ticket 04)
-        # The grant's require_approval flag takes precedence, then the capability def's.
-        # When capabilities is None (all tools), there's no per-grant override —
-        # fall back to the capability definition's require_approval.
-        grant = (
-            next((g for g in agent_config.capabilities if g.name == call.name), None)
-            if agent_config.capabilities is not None
-            else None
-        )
+        # Resolve the grant the same way the permission check does —
+        # per-tool grant first, then the mcp_server wildcard — so a flag on
+        # the server grant actually governs wildcard-covered calls.
+        # _grant_for also returns the capability def when capabilities is
+        # None (all tools), which carries require_approval itself.
+        grant = _grant_for(agent_config, call.name, server_id)
         needs_approval = grant.require_approval if grant else cap.require_approval
-        if needs_approval and not settings.yolo_mode:
+        if needs_approval and self.restrictions is not None:
+            await _arrive(False)
+            return await self._deny(
+                run_id,
+                call,
+                agent_config,
+                "restricted execution cannot approve actions",
+                start,
+                sub_agent_id,
+            )
+        # Approval bypass — global flag (env/persisted) OR this agent's own
+        # yolo_mode. agent_config is always the parent AgentConfig, so the
+        # flag also covers the agent's sub-agent calls.
+        if needs_approval and not (settings.yolo_mode or getattr(agent_config, "yolo_mode", False)):
             # External channel sessions use a configurable approval policy
             # (v0.1.3: replaces the hardcoded channel bypass).
             if session.channel:
@@ -178,6 +267,7 @@ class SyscallHandler:
                         session_id=session.id,
                         event_emitter=event_emitter,
                         approval_batch=approval_batch,
+                        sub_agent_id=sub_agent_id,
                     )
                     if not approval_result:
                         await _arrive(False)
@@ -205,6 +295,16 @@ class SyscallHandler:
             # skip the approval gate.
             elif approval_registry.is_session_approved(session.id, call.name, call.args):
                 pass  # Auto-approved for this session
+            elif call.name in getattr(self, "_schedule_auto_approve", ()):
+                # W8: a schedule may pre-approve capabilities inside the agent
+                # ceiling — the permission check above already ran; only the
+                # operator prompt is skipped.
+                pass
+            elif getattr(self, "_is_test_run", False):
+                # Scripted test runs are headless — an approval prompt would
+                # park the run forever. Auto-approve (the ceiling check above
+                # still applies) and keep going.
+                pass
             else:
                 approval_result = await self._await_approval(
                     call=call,
@@ -213,6 +313,7 @@ class SyscallHandler:
                     session_id=session.id,
                     event_emitter=event_emitter,
                     approval_batch=approval_batch,
+                    sub_agent_id=sub_agent_id,
                 )
                 if not approval_result:
                     # Denied (or rejected by operator)
@@ -255,7 +356,18 @@ class SyscallHandler:
 
         # For run_subagent, inject the parent context so the sub-agent can
         # run through the same harness with the parent's model, workspace, etc.
-        extra_kwargs: dict[str, Any] = {}
+        # call_id/sub_agent_id correlation is available to every tool;
+        # capabilities that record provenance (artifacts, terminal, sources)
+        # read it from kwargs.
+        extra_kwargs: dict[str, Any] = {
+            "call_id": call.id,
+            "sub_agent_id": sub_agent_id,
+        }
+        if self.restrictions is not None:
+            if call.name in ("read_file", "write_file", "skills_load", "skills_read_resource"):
+                extra_kwargs["skill_edits"] = self.restrictions.skill_edits
+            if call.name == "search_history":
+                extra_kwargs["history_scope"] = self.restrictions.history_scope
         if call.name == "run_subagent":
             extra_kwargs["parent_config"] = agent_config
             extra_kwargs["_spawn_context"] = getattr(self, "_spawn_context", {})
@@ -270,22 +382,63 @@ class SyscallHandler:
             "doc_search",
             "doc_inspect",
             "web_search",
+            "web_fetch",
         ):
             extra_kwargs["db"] = self.db
             extra_kwargs["agent_id"] = agent_config.id
             extra_kwargs["run_id"] = run_id
+            extra_kwargs["session_id"] = getattr(session, "id", None)
+            extra_kwargs["agent_config"] = agent_config
             extra_kwargs["db_lock"] = getattr(self, "_db_lock", None)
             if cap.subject_scoped:
                 extra_kwargs["contact_id"] = subject_contact_id
 
-        # For skill capabilities, inject agent_id (needed to find skill dirs)
-        if call.name in ("skills_list", "skills_load", "skills_read_resource"):
+        # For skill capabilities, inject agent_id + db + run_id — resolution
+        # is DB-backed and governed scopes load via the run's pinned revs.
+        # skills_usage additionally gets the subject scope (its evidence is
+        # the caller's own conversation) and the write lock skills_load
+        # takes when persisting an activation.
+        if call.name in ("skills_list", "skills_load", "skills_read_resource", "skills_usage"):
             extra_kwargs["agent_id"] = agent_config.id
+            extra_kwargs["db"] = self.db
+            extra_kwargs["run_id"] = getattr(self, "_parent_run_id", None) or run_id
+            extra_kwargs["db_lock"] = getattr(self, "_db_lock", None)
+            extra_kwargs["session_id"] = getattr(session, "id", None)
+            extra_kwargs["contact_id"] = subject_contact_id
+
+        # Browser tools: ownership scope (agent/session/run) so a browser
+        # session can only be driven by the run that opened it; db is
+        # injected for named-profile lookup on browser_open.
+        if call.name.startswith("browser_"):
+            extra_kwargs["agent_id"] = agent_config.id
+            extra_kwargs["run_id"] = run_id
+            extra_kwargs["session_id"] = getattr(session, "id", None)
+            extra_kwargs["db"] = self.db
+            extra_kwargs["trigger"] = trigger
+
+        # Terminal tools: registry + ownership scope (agent/session/run) so a
+        # terminal can only be read or closed by the run that started it.
+        if call.name in ("terminal", "read_terminal", "close_terminal"):
+            from ..terminal.registry import terminal_registry
+
+            extra_kwargs["terminal_registry"] = terminal_registry
+            extra_kwargs["db"] = self.db
+            extra_kwargs["db_lock"] = getattr(self, "_db_lock", None)
+            extra_kwargs["agent_id"] = agent_config.id
+            extra_kwargs["run_id"] = run_id
+            extra_kwargs["session_id"] = getattr(session, "id", None)
+
+        # Artifact tools: DB + provenance (run/message linkage on revisions).
+        if call.name.startswith("artifact_"):
+            extra_kwargs["db"] = self.db
+            extra_kwargs["agent_id"] = agent_config.id
+            extra_kwargs["run_id"] = run_id
+            extra_kwargs["call_id"] = call.id
 
         if call.name in ("capabilities_search", "capabilities_load"):
             extra_kwargs["capability_catalog"] = capability_catalog
 
-        if call.name in ("read_file", "doc_search", "doc_inspect"):
+        if call.name in ("read_file", "doc_search", "doc_inspect", "browser_observe"):
             extra_kwargs["supports_vision"] = self.supports_vision
 
         try:
@@ -310,18 +463,18 @@ class SyscallHandler:
                 run_id=run_id,
                 agent_id=agent_config.id,
                 sub_agent_id=sub_agent_id,
+                call_id=call.id,
                 capability_name=call.name,
                 subject_contact_id=subject_contact_id,
                 allowed=True,
+                outcome="ok",
                 denied_reason=None,
                 cost=0.0,
                 latency_ms=elapsed,
                 args=json.dumps(call.args),
                 result=json.dumps(result) if result else None,
             )
-            async with self._db_lock:
-                self.db.add(audit)
-                await self.db.flush()
+            await self._write_audit(audit)
 
             return SyscallResult(
                 output=result,
@@ -331,10 +484,45 @@ class SyscallHandler:
                 audit_id=audit.id,
                 model_content=model_content,
             )
+        except asyncio.CancelledError:
+            # The run was stopped mid-call — audit the interruption, then let
+            # the cancellation propagate so the task actually stops.
+            await self._record_outcome(
+                run_id,
+                call,
+                agent_config,
+                subject_contact_id,
+                outcome="interrupted",
+                start=start,
+                sub_agent_id=sub_agent_id,
+            )
+            raise
         except Exception as e:
             elapsed = int((time.monotonic() - start) * 1000)
-            return await self._deny(
-                run_id, call, agent_config, f"execution error: {e}", start, sub_agent_id
+            status = "timeout" if isinstance(e, (TimeoutError, asyncio.TimeoutError)) else "error"
+            audit = AuditRecord(
+                id=str(uuid.uuid4()),
+                run_id=run_id,
+                agent_id=agent_config.id,
+                sub_agent_id=sub_agent_id,
+                call_id=call.id,
+                capability_name=call.name,
+                subject_contact_id=subject_contact_id,
+                allowed=False,
+                outcome=status,
+                denied_reason=f"execution error: {e}",
+                cost=0.0,
+                latency_ms=elapsed,
+                args=json.dumps(call.args),
+            )
+            await self._write_audit(audit)
+            return SyscallResult(
+                output=None,
+                allowed=False,
+                denied_reason=f"execution error: {e}",
+                cost=0.0,
+                latency_ms=elapsed,
+                status=status,
             )
 
     async def _execute_mcp_tool(
@@ -374,8 +562,8 @@ class SyscallHandler:
             return await self._deny(
                 run_id, call, agent_config, "MCP server is disabled", start, sub_agent_id
             )
-        tool_filter = _json.loads(server.tool_filter) if server.tool_filter else None
-        if tool_filter and tool_name not in tool_filter:
+        tool_filter = _json.loads(server.tool_filter) if server.tool_filter is not None else None
+        if tool_filter is not None and tool_name not in tool_filter:
             return await self._deny(
                 run_id, call, agent_config, "MCP tool is filtered", start, sub_agent_id
             )
@@ -432,18 +620,18 @@ class SyscallHandler:
                 run_id=run_id,
                 agent_id=agent_config.id,
                 sub_agent_id=sub_agent_id,
+                call_id=call.id,
                 capability_name=call.name,
                 subject_contact_id=subject_contact_id,
                 allowed=True,
+                outcome="ok",
                 denied_reason=None,
                 cost=0.0,
                 latency_ms=elapsed,
                 args=json.dumps(call.args),
                 result=json.dumps(result) if result else None,
             )
-            async with self._db_lock:
-                self.db.add(audit)
-                await self.db.flush()
+            await self._write_audit(audit)
 
             return SyscallResult(
                 output=result,
@@ -452,28 +640,45 @@ class SyscallHandler:
                 latency_ms=elapsed,
                 audit_id=audit.id,
             )
+        except asyncio.CancelledError:
+            await self._record_outcome(
+                run_id,
+                call,
+                agent_config,
+                subject_contact_id,
+                outcome="interrupted",
+                start=start,
+                sub_agent_id=sub_agent_id,
+            )
+            raise
         except Exception as e:
             elapsed = int((time.monotonic() - start) * 1000)
-            # Write audit record for the failure
+            # An MCP failure is not a denial — record it as error/timeout.
+            status = "timeout" if isinstance(e, (TimeoutError, asyncio.TimeoutError)) else "error"
             audit = AuditRecord(
                 id=str(uuid.uuid4()),
                 run_id=run_id,
                 agent_id=agent_config.id,
                 sub_agent_id=sub_agent_id,
+                call_id=call.id,
                 capability_name=call.name,
                 subject_contact_id=subject_contact_id,
-                allowed=True,
-                denied_reason=None,
+                allowed=False,
+                outcome=status,
+                denied_reason=f"MCP tool error: {e}",
                 cost=0.0,
                 latency_ms=elapsed,
                 args=json.dumps(call.args),
                 result=json.dumps({"error": str(e)}),
             )
-            async with self._db_lock:
-                self.db.add(audit)
-                await self.db.flush()
-            return await self._deny(
-                run_id, call, agent_config, f"MCP tool error: {e}", start, sub_agent_id
+            await self._write_audit(audit)
+            return SyscallResult(
+                output={"error": f"MCP tool error: {e}"},
+                allowed=False,
+                denied_reason=f"MCP tool error: {e}",
+                cost=0.0,
+                latency_ms=elapsed,
+                status=status,
             )
 
     async def _deny(
@@ -491,23 +696,63 @@ class SyscallHandler:
             run_id=run_id,
             agent_id=agent_config.id,
             sub_agent_id=sub_agent_id,
+            call_id=call.id,
             capability_name=call.name,
             allowed=False,
+            outcome="denied",
             denied_reason=reason,
             cost=0.0,
             latency_ms=elapsed,
             args=json.dumps(call.args),
         )
-        async with self._db_lock:
-            self.db.add(audit)
-            await self.db.flush()
+        await self._write_audit(audit)
         return SyscallResult(
             output=None,
             allowed=False,
             denied_reason=reason,
             cost=0.0,
             latency_ms=elapsed,
+            status="denied",
         )
+
+    async def _record_outcome(
+        self,
+        run_id: str,
+        call: ToolCall,
+        agent_config: AgentConfig,
+        subject_contact_id: str | None,
+        *,
+        outcome: str,
+        start: float,
+        sub_agent_id: str | None = None,
+    ) -> None:
+        """Write an audit row for a call that ended without a result.
+
+        Used for interruptions (run cancelled mid-call). Best-effort — a
+        failing audit write must never swallow the cancellation.
+        """
+        elapsed = int((time.monotonic() - start) * 1000)
+        try:
+            audit = AuditRecord(
+                id=str(uuid.uuid4()),
+                run_id=run_id,
+                agent_id=agent_config.id,
+                sub_agent_id=sub_agent_id,
+                call_id=call.id,
+                capability_name=call.name,
+                subject_contact_id=subject_contact_id,
+                allowed=False,
+                outcome=outcome,
+                denied_reason=None,
+                cost=0.0,
+                latency_ms=elapsed,
+                args=json.dumps(call.args),
+            )
+            await self._write_audit(audit)
+        except Exception:
+            logging.getLogger(__name__).debug(
+                "Could not record %s outcome for %s", outcome, call.name
+            )
 
     async def _resolve_channel_policy(self, session: Any, agent_config: AgentConfig) -> str:
         """Look up the approval policy for the session's channel.
@@ -545,6 +790,7 @@ class SyscallHandler:
         session_id: str,
         event_emitter: Any = None,
         approval_batch: Any = None,
+        sub_agent_id: str | None = None,
     ) -> bool:
         """Create an ApprovalRequest, emit pending_approval, and block until decided.
 
@@ -556,6 +802,8 @@ class SyscallHandler:
         approval = ApprovalRequest(
             id=approval_id,
             run_id=run_id,
+            call_id=call.id,
+            sub_agent_id=sub_agent_id,
             capability_name=call.name,
             args=json.dumps(call.args),
             status="pending",
@@ -735,6 +983,8 @@ class SyscallHandler:
         elicitation = ElicitationRequest(
             id=elicitation_id,
             run_id=run_id,
+            call_id=call.id,
+            sub_agent_id=sub_agent_id,
             question=question,
             options=json.dumps(options) if options else None,
             status="pending",
@@ -758,6 +1008,8 @@ class SyscallHandler:
                     message=question,
                     action_path=f"/agents/{agent_config.id}/chat?session={session.id}",
                     entity_id=run_id,
+                    entity_type="run",
+                    agent_id=agent_config.id,
                 )
                 await el_session.commit()
 
@@ -769,6 +1021,13 @@ class SyscallHandler:
 
         # Register the asyncio.Event so the API can resolve it
         pending = elicitation_registry.register(elicitation_id)
+
+        if getattr(self, "_is_test_run", False):
+            # Headless test run — nobody can answer. Resolve immediately with
+            # the first option (or empty) so the scripted pipeline finishes;
+            # the ElicitationRequest row records responded_by="test".
+            answer = options[0]["label"] if options else ""
+            elicitation_registry.resolve(elicitation_id, answer, "test")
 
         # Emit clarifying_question event so the frontend shows the question + input
         if self._event_emitter:
@@ -866,17 +1125,17 @@ class SyscallHandler:
             run_id=run_id,
             agent_id=agent_config.id,
             sub_agent_id=sub_agent_id,
+            call_id=call.id,
             capability_name=call.name,
             allowed=True,
+            outcome="ok",
             denied_reason=None,
             cost=0.0,
             latency_ms=elapsed,
             args=json.dumps(call.args),
             result=json.dumps({"response": response}),
         )
-        async with self._db_lock:
-            self.db.add(audit)
-            await self.db.flush()
+        await self._write_audit(audit)
 
         return SyscallResult(
             output={"response": response},

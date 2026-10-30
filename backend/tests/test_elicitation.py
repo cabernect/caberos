@@ -23,6 +23,27 @@ def workspace(tmp_path):
 
 
 @pytest.fixture
+async def client(db):
+    """HTTP client wired to the test DB with a stub operator."""
+    from httpx import ASGITransport, AsyncClient
+
+    from agentos.auth import require_operator
+    from agentos.db import get_db
+    from agentos.main import app
+    from agentos.models.operator import Operator
+
+    async def fake_operator():
+        return Operator(id="test-operator", username="test", password_hash="x")
+
+    app.dependency_overrides[require_operator] = fake_operator
+    app.dependency_overrides[get_db] = lambda: db
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as http:
+        yield http
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
 def agent_config():
     return AgentConfig(
         id="elicit-test",
@@ -400,3 +421,91 @@ async def test_approval_persists_before_unblocking_mediator(db, monkeypatch):
         assert refreshed.decided_by == "approval-operator"
     finally:
         approval_registry.cleanup(approval_id)
+
+
+async def _seed_pending_elicitation(db, *, options: list | None) -> str:
+    """Seed the FK chain plus a pending ElicitationRequest row directly.
+
+    Returns the elicitation id. `options` is stored as JSON verbatim —
+    object-form matches what the mediator persists; string-form covers
+    rows written outside the normalization path.
+    """
+    from agentos.models.agent import Agent
+    from agentos.models.contact import Contact
+    from agentos.models.run import Run
+    from agentos.models.session import Session
+
+    elicitation_id = "elicit-api-row"
+
+    db.add(Agent(id="elicit-api-agent", name="Elicit API"))
+    db.add(
+        Contact(
+            id="elicit-api-contact",
+            channel="dashboard_chat",
+            bot_id="elicit-api-agent",
+            external_user_id="elicit-api-user",
+        )
+    )
+    db.add(
+        Session(
+            id="elicit-api-session",
+            agent_id="elicit-api-agent",
+            contact_id="elicit-api-contact",
+        )
+    )
+    db.add(
+        Run(
+            id="elicit-api-run",
+            session_id="elicit-api-session",
+            contact_id="elicit-api-contact",
+            agent_id="elicit-api-agent",
+            status="running",
+            trigger="user_message",
+        )
+    )
+    db.add(
+        ElicitationRequest(
+            id=elicitation_id,
+            run_id="elicit-api-run",
+            question="Pick one",
+            options=json.dumps(options) if options else None,
+            status="pending",
+        )
+    )
+    await db.commit()
+    return elicitation_id
+
+
+@pytest.mark.asyncio
+async def test_list_pending_elicitation_preserves_structured_options(client, db):
+    """B17 regression — the mediator stores options as {label, description}
+    objects; GET /api/elicitation must serialize them, not 500."""
+    elicitation_id = await _seed_pending_elicitation(
+        db,
+        options=[
+            {"label": "Retry", "description": "Try the call again"},
+            {"label": "Skip", "description": "Continue without it"},
+        ],
+    )
+
+    resp = await client.get("/api/elicitation")
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert len(rows) == 1
+    assert rows[0]["id"] == elicitation_id
+    assert rows[0]["options"] == [
+        {"label": "Retry", "description": "Try the call again"},
+        {"label": "Skip", "description": "Continue without it"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_list_pending_elicitation_plain_string_options(client, db):
+    """B17 — rows storing raw string options still serialize as strings."""
+    await _seed_pending_elicitation(db, options=["a.txt", "b.txt"])
+
+    resp = await client.get("/api/elicitation")
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert len(rows) == 1
+    assert rows[0]["options"] == ["a.txt", "b.txt"]

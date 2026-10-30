@@ -22,11 +22,23 @@ from ..syscall.elicitation_registry import elicitation_registry
 router = APIRouter(prefix="/api/elicitation", tags=["elicitation"])
 
 
+class ElicitationOption(BaseModel):
+    """Structured elicitation option.
+
+    `agent_ask_user` accepts plain strings or {label, description} objects;
+    the mediator normalizes every option to this shape before persisting.
+    Plain strings may still appear in rows written outside the mediator.
+    """
+
+    label: str
+    description: str = ""
+
+
 class ElicitationOut(BaseModel):
     id: str
     run_id: str
     question: str
-    options: list[str] | None = None
+    options: list[ElicitationOption | str] | None = None
     status: str
 
 

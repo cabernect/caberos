@@ -26,9 +26,10 @@ Mỗi card báo document count và indexed-chunk count. Chọn scope để uploa
 | Text (`.txt`) | Plain-text paragraph. |
 | PDF (`.pdf`) | Text theo page và PDF outline nếu có. |
 | Word (`.docx`) | Paragraph, heading, table và embedded-image reference. |
-| Excel (`.xlsx`) | Worksheet, sheet name và cell range. |
 
-Giới hạn upload **25 MB/document**. Image-only OCR chưa được hỗ trợ; scanned PDF có thể index ít text hoặc không có useful text nếu thiếu text layer.
+File tabular (`.xlsx`, `.xls`, `.csv`) bị **từ chối** — flatten row sang text làm mất khả năng query, nên chúng chờ row-query ingest layer.
+
+Giới hạn upload **250 MB/document**. Image-only OCR chưa được hỗ trợ; scanned PDF có thể index ít text hoặc không có useful text nếu thiếu text layer.
 
 ## Upload và index
 
@@ -90,4 +91,4 @@ Storage/index đều local. Nếu agent dùng hosted model, excerpt từ `doc_se
 
 ## Troubleshooting
 
-Unsupported format: convert sang Markdown, text, PDF có text layer, DOCX hoặc XLSX. Upload rejected: kiểm tra filename, extension và 25 MB limit. PDF empty: có thể là image scan không có text layer. Agent không thấy document: kiểm tra indexed, `doc_search` grant và retrieval preview. Private document của agent khác không thấy được vì scope isolation.
+Unsupported format: convert sang Markdown, text, PDF có text layer, hoặc DOCX — file tabular (`.xlsx`, `.xls`, `.csv`) bị từ chối chờ row-query layer. Upload rejected: kiểm tra filename, extension và 250 MB limit. PDF empty: có thể là image scan không có text layer. Agent không thấy document: kiểm tra indexed, `doc_search` grant và retrieval preview. Private document của agent khác không thấy được vì scope isolation.

@@ -1,7 +1,11 @@
 import { useState, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
 import { Check, Copy } from "lucide-react";
+import { normalizeMathDelims } from "@/lib/mathDelims";
+import "katex/dist/katex.min.css";
 
 /**
  * Markdown renderer with copy-to-clipboard on code blocks.
@@ -10,12 +14,13 @@ import { Check, Copy } from "lucide-react";
 export function Markdown({ children }: { children: string }) {
   return (
     <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
+      remarkPlugins={[remarkGfm, remarkMath]}
+      rehypePlugins={[rehypeKatex]}
       components={{
         pre: CodeBlock,
       }}
     >
-      {children}
+      {normalizeMathDelims(children)}
     </ReactMarkdown>
   );
 }
@@ -52,18 +57,22 @@ function CodeBlock({ children }: { children?: React.ReactNode }) {
 
   return (
     <div className="group relative">
-      <button
-        onClick={handleCopy}
-        className="absolute right-2 top-2 z-10 flex h-6 w-6 items-center justify-center rounded border border-[var(--border)] bg-[var(--white)] opacity-0 transition-opacity hover:bg-[var(--sidebar)] group-hover:opacity-100"
-        title="Copy code"
-        aria-label="Copy code"
-      >
-        {copied ? (
-          <Check className="h-3.5 w-3.5 text-[var(--success)]" />
-        ) : (
-          <Copy className="h-3.5 w-3.5 text-[var(--ink-2)]" />
-        )}
-      </button>
+      {/* sticky so the button tracks the scrollport top for tall blocks
+          (an absolute top-2 button scrolls out of view inside overflow panes) */}
+      <div className="pointer-events-none sticky top-0 z-10 -mb-8 flex h-8 justify-end pr-2 pt-2">
+        <button
+          onClick={handleCopy}
+          className="pointer-events-auto flex h-6 w-6 items-center justify-center rounded border border-[var(--border)] bg-[var(--white)] opacity-0 transition-opacity hover:bg-[var(--sidebar)] group-hover:opacity-100"
+          title="Copy code"
+          aria-label="Copy code"
+        >
+          {copied ? (
+            <Check className="h-3.5 w-3.5 text-[var(--success)]" />
+          ) : (
+            <Copy className="h-3.5 w-3.5 text-[var(--ink-2)]" />
+          )}
+        </button>
+      </div>
       <pre>{children}</pre>
     </div>
   );

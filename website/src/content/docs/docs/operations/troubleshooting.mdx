@@ -19,17 +19,34 @@ A working gateway returns HTTP `200` and:
 
 ## Inspect the gateway log
 
+**macOS:**
+
 ```bash
 tail -n 100 "$HOME/Library/Application Support/com.caberos.desktop/logs/gateway.log"
+```
+
+**Windows (PowerShell):**
+
+```powershell
+Get-Content "$env:APPDATA\com.caberos.desktop\logs\gateway.log" -Tail 100
 ```
 
 The log is append-only with bounded rotated backups, so older startup attempts may appear above the latest error.
 
 ## Check the process and port
 
+**macOS:**
+
 ```bash
 pgrep -alf 'CaberOS|caberos-gateway'
 lsof -nP -iTCP:51718 -sTCP:LISTEN
+```
+
+**Windows (PowerShell):**
+
+```powershell
+Get-Process | Where-Object { $_.Name -match 'CaberOS|caberos-gateway' }
+netstat -ano | Select-String ':51718'
 ```
 
 If another process owns port `51718`, quit it or stop the conflicting development process before relaunching CaberOS.

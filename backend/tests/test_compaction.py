@@ -31,12 +31,12 @@ def _make_agent_config(compaction: CompactionConfig | None = None) -> AgentConfi
     )
 
 
-def _make_messages(n: int, prefix: str = "msg") -> list[dict]:
+def _make_messages(n: int, prefix: str = "msg", chars: int = 100) -> list[dict]:
     """Generate n simple user/assistant messages."""
     msgs = []
     for i in range(n):
         role = "user" if i % 2 == 0 else "assistant"
-        msgs.append({"role": role, "content": f"{prefix} {i}: {'x' * 100}"})
+        msgs.append({"role": role, "content": f"{prefix} {i}: {'x' * chars}"})
     return msgs
 
 
@@ -96,8 +96,11 @@ class TestPhase2DetermineBoundaries:
         config = CompactionConfig(protect_first_n=3, protect_last_n=20)
         msgs = _make_messages(10)
         head_end, tail_start = determine_boundaries(msgs, config, threshold_tokens=10000)
-        # 10 messages <= 3 (head) + 20 (min tail) → no middle
-        assert tail_start == 10  # tail covers everything after head
+        # 10 messages <= 3 (head) + 20 (min tail) → tail starts at head_end:
+        # no middle, and the tail still covers everything after the head.
+        assert tail_start == head_end == 3
+        assert msgs[head_end:tail_start] == []  # no middle
+        assert len(msgs[tail_start:]) == 10 - 3  # tail covers the rest
 
     def test_tail_does_not_overlap_head(self):
         config = CompactionConfig(protect_first_n=3, protect_last_n=5, tail_budget_fraction=0.01)
@@ -261,7 +264,7 @@ class TestCompactContext:
                 tail_budget_fraction=0.20,
             )
         )
-        msgs = _make_messages(10)
+        msgs = _make_messages(10, chars=2000)
 
         # Mock the summary LLM call and use a small context window
         with (
@@ -289,7 +292,7 @@ class TestCompactContext:
                 tail_budget_fraction=0.20,
             )
         )
-        msgs = _make_messages(10)
+        msgs = _make_messages(10, chars=2000)
         previous = "## Goal\nOld summary"
 
         with (
@@ -349,3 +352,217 @@ class TestCompactContext:
         # The large tool result should have been pruned before summarization
         # (We can't directly check the pruned content, but the compaction should succeed)
         assert result.compacted
+
+    async def test_summary_uses_responses_api_when_flagged(self, monkeypatch):
+        """api.openai.com models route summaries through /v1/responses —
+        reasoning models reject chat completions entirely."""
+        from types import SimpleNamespace
+
+        from agentos.harness.compaction import generate_summary
+
+        captured = {}
+
+        async def fake_aresponses(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                output=[
+                    SimpleNamespace(
+                        type="message",
+                        content=[SimpleNamespace(type="output_text", text="## Goal\nSummary")],
+                    )
+                ]
+            )
+
+        async def acompletion_should_not_run(**_kwargs):
+            raise AssertionError("chat completions must not run when use_responses is set")
+
+        monkeypatch.setattr("litellm.aresponses", fake_aresponses)
+        monkeypatch.setattr("litellm.acompletion", acompletion_should_not_run)
+
+        summary = await generate_summary(
+            [{"role": "user", "content": "old stuff"}],
+            previous_summary=None,
+            model_str="openai/gpt-6-luna",
+            api_key="k",
+            use_responses=True,
+        )
+
+        assert summary == "## Goal\nSummary"
+        assert captured["model"] == "openai/gpt-6-luna"
+        assert "input" in captured and "messages" not in captured
+        assert captured["max_output_tokens"] == 2000
+
+    async def test_generate_summary_failure_propagates_and_sanitizes_log(self, monkeypatch, caplog):
+        """generate_summary raises on provider failure (no stub), and the
+        warning log carries only the exception type — never provider
+        secrets from the error text."""
+        import logging
+
+        import pytest
+
+        async def boom(**_kwargs):
+            raise RuntimeError("auth failed for sk-secret-XYZ")
+
+        monkeypatch.setattr("litellm.acompletion", boom)
+        monkeypatch.setattr("agentos.harness.compaction._record_summary_call", AsyncMock())
+        from agentos.harness.compaction import generate_summary
+
+        with (
+            caplog.at_level(logging.WARNING, logger="agentos.harness.compaction"),
+            pytest.raises(RuntimeError),
+        ):
+            await generate_summary(
+                [{"role": "user", "content": "old"}],
+                previous_summary=None,
+                model_str="openai/gpt-4o",
+                api_key="k",
+            )
+
+        logged = caplog.text
+        assert "Compaction summary LLM call failed" in logged
+        assert "sk-secret-XYZ" not in logged
+
+    async def test_compact_context_cancellation_propagates(self):
+        """Task cancellation during summarization is not swallowed by the
+        failure path — it propagates to the caller."""
+        import asyncio as aio
+
+        import pytest
+
+        config = _make_agent_config(
+            CompactionConfig(
+                auto_compaction=True,
+                protect_first_n=2,
+                protect_last_n=2,
+                tail_budget_fraction=0.20,
+            )
+        )
+        msgs = _make_messages(10, chars=2000)
+
+        with (
+            patch("agentos.harness.compaction.generate_summary", new_callable=AsyncMock) as mock,
+            patch("agentos.harness.compaction.get_model_max_tokens", return_value=500),
+            pytest.raises(aio.CancelledError),
+        ):
+            mock.side_effect = aio.CancelledError()
+            await compact_context(msgs, config, "test-model", force=True)
+
+    async def test_forced_short_history_summarizes_nothing(self):
+        """Force compaction on a fully-protected short history: all
+        messages survive verbatim and the summary model is never invoked."""
+        config = _make_agent_config(CompactionConfig(protect_first_n=5, protect_last_n=10))
+        msgs = _make_messages(10)
+
+        with (
+            patch("agentos.harness.compaction.generate_summary", new_callable=AsyncMock) as mock,
+            patch("agentos.harness.compaction.get_model_max_tokens", return_value=500),
+        ):
+            result = await compact_context(msgs, config, "test-model", force=True)
+
+        mock.assert_not_called()
+        assert not result.compacted
+        assert result.messages == msgs  # all 10 survive
+
+    async def test_summary_failure_returns_originals_with_error(self):
+        """Provider failure must not fabricate a summary — the original
+        history comes back unmodified with a generic error flag."""
+        config = _make_agent_config(
+            CompactionConfig(
+                auto_compaction=True,
+                protect_first_n=2,
+                protect_last_n=2,
+                tail_budget_fraction=0.20,
+            )
+        )
+        # Long tool result inside the summarizable middle must survive
+        # unchanged on failure — nothing is pruned when we bail.
+        msgs = _make_messages(10)
+        msgs[5] = {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": "tc9", "function": {"name": "file.read"}}],
+        }
+        msgs[6] = {"role": "tool", "tool_call_id": "tc9", "content": "x" * 5000}
+        previous = "## Goal\nOld summary"
+
+        with (
+            patch("agentos.harness.compaction.generate_summary", new_callable=AsyncMock) as mock,
+            patch("agentos.harness.compaction.get_model_max_tokens", return_value=500),
+        ):
+            mock.side_effect = RuntimeError("provider exploded — api_key=sk-secret")
+            result = await compact_context(
+                msgs, config, "test-model", previous_summary=previous, force=True
+            )
+
+        assert not result.compacted
+        # Prior summary renders exactly once, then the untouched originals.
+        assert result.messages[0]["content"] == f"[Previous conversation summary]\n{previous}"
+        assert result.messages[1:] == msgs
+        assert (
+            sum("[Previous conversation summary]" in m.get("content", "") for m in result.messages)
+            == 1
+        )
+        assert result.messages[7]["content"] == "x" * 5000  # middle tool result survives
+        assert result.summary == previous  # prior metadata preserved
+        assert result.error == "Conversation summary could not be generated"
+        assert "unavailable" not in (result.summary or "")
+        assert "sk-secret" not in (result.error or "")
+        # Counts describe the unmodified history — no "head/middle" framing
+        # survived the failed compaction.
+        assert result.head_count == 0
+        assert result.middle_count == 0
+        assert result.tail_count == len(msgs)
+
+    async def test_summary_empty_response_is_failure(self):
+        """An empty/whitespace summary is a failure too — original history
+        returns untouched instead of a blank summary section."""
+        config = _make_agent_config(
+            CompactionConfig(
+                auto_compaction=True,
+                protect_first_n=2,
+                protect_last_n=2,
+                tail_budget_fraction=0.20,
+            )
+        )
+        msgs = _make_messages(10, chars=2000)
+
+        with (
+            patch("agentos.harness.compaction.generate_summary", new_callable=AsyncMock) as mock,
+            patch("agentos.harness.compaction.get_model_max_tokens", return_value=500),
+        ):
+            mock.return_value = "   \n  "
+            result = await compact_context(msgs, config, "test-model", force=True)
+
+        assert not result.compacted
+        assert result.messages == msgs
+        assert result.error == "Conversation summary could not be generated"
+
+
+def test_count_tokens_fallback_counts_full_structure(monkeypatch):
+    """When the LiteLLM tokenizer fails, the byte upper-bound fallback
+    counts the serialized structure — not just content//4."""
+    import litellm
+
+    from agentos.harness.compaction import count_tokens
+
+    monkeypatch.setattr(
+        litellm, "token_counter", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no tok"))
+    )
+    assert count_tokens([{"role": "user", "content": "x"}]) == 31
+    assert count_tokens([{"role": "user", "content": "你好"}]) == 36
+    # Large tool-call arguments increase the count — structure counts.
+    small = [{"role": "user", "content": "x"}]
+    big = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "c",
+                    "type": "function",
+                    "function": {"name": "t", "arguments": '{"code": "' + "y" * 500 + '"}'},
+                }
+            ],
+        }
+    ]
+    assert count_tokens(big) > count_tokens(small) + 400

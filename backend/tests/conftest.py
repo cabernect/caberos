@@ -19,6 +19,7 @@ async def db_engine():
         channel_config,
         contact,
         document,
+        knowledge_index,
         mcp,
         memory,
         operator,
@@ -26,6 +27,7 @@ async def db_engine():
         provider,
         run,
         session,
+        skill,
         source,
         sub_agent,
     )
@@ -88,7 +90,14 @@ async def db_engine():
             )
         )
     yield engine
-    await engine.dispose()
+    try:
+        await engine.dispose()
+    except Exception:
+        # aiosqlite's worker thread can exit before StaticPool finalizes the
+        # shared connection on slow/CI hosts, leaving dispose() to fail on a
+        # missing 'connection' key — teardown is best-effort for a disposable
+        # in-memory engine.
+        pass
 
 
 @pytest_asyncio.fixture
@@ -107,12 +116,71 @@ async def db(db_engine, monkeypatch):
         yield session
 
 
+@pytest.fixture(autouse=True)
+def isolated_fs_roots(tmp_path, monkeypatch):
+    """Route all writable runtime roots into tmp_path — tests must never
+    touch the real agent home, workspace, knowledge, or data dirs."""
+    from agentos.config import settings
+
+    monkeypatch.setattr(settings, "agent_home_root", tmp_path / "agents")
+    monkeypatch.setattr(settings, "workspace_root", tmp_path / "workspaces")
+    monkeypatch.setattr(settings, "knowledge_root", tmp_path / "knowledge")
+    monkeypatch.setattr(settings, "skills_store_root", tmp_path / "skills-store")
+    monkeypatch.setattr(settings, "skills_drafts_root", tmp_path / "skills-drafts")
+    monkeypatch.setattr(settings, "db_path", tmp_path / "data" / "agentos.db")
+    monkeypatch.setattr(settings, "secret_key_path", tmp_path / "data" / "secret.key")
+    return tmp_path
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def isolated_db_runtime(db_engine, monkeypatch):
+    """Bind agentos.db's module-level engine/factory to the disposable
+    per-test engine — ledger, capture, init_db, and background sessions can
+    never reach the real database during tests. The explicit `db` fixture
+    still yields a session on the same engine; tests that override their
+    own factory/engine are unaffected."""
+    import agentos.db as db_module
+
+    factory = async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
+    monkeypatch.setattr(db_module, "engine", db_engine)
+    monkeypatch.setattr(db_module, "async_session_factory", factory)
+    yield
+
+
 @pytest.fixture
 def workspace(tmp_path):
     """Create a temporary workspace directory."""
     ws = tmp_path / "workspace"
     ws.mkdir()
     return str(ws)
+
+
+@pytest.fixture
+def skills_env(tmp_path, monkeypatch):
+    """Patch all four skill roots into tmp_path."""
+    import agentos.config as cfg
+
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    store = tmp_path / "skills-store"
+    drafts = tmp_path / "skills-drafts"
+    ws = tmp_path / "workspaces"
+    ws.mkdir()
+    monkeypatch.setattr(cfg.settings, "skills_dir", skills_dir)
+    monkeypatch.setattr(cfg.settings, "skills_store_root", store)
+    monkeypatch.setattr(cfg.settings, "skills_drafts_root", drafts)
+    monkeypatch.setattr(cfg.settings, "workspace_root", ws)
+    return tmp_path
+
+
+@pytest_asyncio.fixture
+async def skills_agent(db):
+    from agentos.models.agent import Agent
+
+    a = Agent(id="agent-1", name="Caber", enabled=True)
+    db.add(a)
+    await db.flush()
+    return a
 
 
 @pytest.fixture(autouse=True)

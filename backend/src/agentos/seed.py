@@ -47,7 +47,10 @@ async def seed_default_agents() -> None:
 
     async with async_session_factory() as db:
         for yaml_path in yaml_files:
-            data = yaml.safe_load(yaml_path.read_text())
+            # encoding is explicit: without it Windows reads these as
+            # cp1252 and the em-dashes in soul/persona reach the model
+            # as mojibake.
+            data = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
             agent_id = data.get("id", "")
             if not agent_id:
                 continue

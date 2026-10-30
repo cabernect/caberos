@@ -43,6 +43,364 @@ async def test_mock_client_connect_disconnect():
 
 
 @pytest.mark.asyncio
+async def test_undeclared_http_oauth_prompts_consent_not_crash(db, monkeypatch):
+    """An HTTP MCP server with no declared OAuth config that answers 401 +
+    WWW-Authenticate must surface 'OAuth required' guidance — not a generic
+    connect failure or an expired-token error — and persist a default
+    oauth_config so the dashboard can offer Connect-with-OAuth."""
+    import httpx2
+
+    from agentos.api.mcp import list_servers
+    from agentos.config import settings
+    from agentos.mcp import registry as mcp_registry
+    from agentos.models.mcp import McpServer
+
+    requests: list[httpx2.Request] = []
+
+    def _handler(request: httpx2.Request) -> httpx2.Response:
+        requests.append(request)
+        # Only the declared MCP endpoint may be contacted; anything else
+        # (well-known metadata, token endpoint) is an unexpected fetch.
+        if str(request.url).rstrip("/") == "https://mcp.test/mcp":
+            return httpx2.Response(
+                401,
+                headers={
+                    "WWW-Authenticate": 'Bearer resource_metadata="https://mcp.test/.well-known/oauth-protected-resource"'
+                },
+                request=request,
+            )
+        raise AssertionError(f"unexpected request URL: {request.url}")
+
+    transport = httpx2.MockTransport(_handler)
+    real_async_client = httpx2.AsyncClient
+
+    def _client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return real_async_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx2, "AsyncClient", _client)
+    monkeypatch.setattr(settings, "mcp_connection_timeout", 2.0)
+
+    # Route the registry's own-session paths (config persistence +
+    # notification) to the test session — its bound import does not see
+    # the db fixture's agentos.db patch.
+    class TestSessionFactory:
+        def __call__(self):
+            class TestSession:
+                async def __aenter__(self):
+                    return db
+
+                async def __aexit__(self, *args):
+                    pass
+
+            return TestSession()
+
+    monkeypatch.setattr(mcp_registry, "async_session_factory", TestSessionFactory())
+    # EncryptedTokenStorage has its own bound import for the token lookup
+    # on the already-configured reconnect path.
+    import agentos.mcp.oauth
+
+    monkeypatch.setattr(agentos.mcp.oauth, "async_session_factory", TestSessionFactory())
+
+    server = McpServer(
+        name="oauth-mcp",
+        transport="http",
+        url="https://mcp.test/mcp",
+        oauth_config=None,
+    )
+    db.add(server)
+    await db.commit()
+
+    ok = await mcp_registry.connect_server(server)
+    assert ok is False
+
+    # One initialize attempt only — no metadata/token fetches, no redirect.
+    assert len(requests) == 1
+    assert requests[0].method == "POST"
+
+    # A default OAuth config is persisted so the UI can offer consent flow.
+    await db.refresh(server)
+    cfg = json.loads(server.oauth_config) if server.oauth_config else None
+    assert cfg is not None, "undeclared OAuth server must persist a default oauth_config"
+    assert cfg.get("scope") == ""
+    assert cfg.get("redirect_uri") == (
+        f"http://localhost:{settings.control_plane_port}/api/mcp/oauth/callback"
+    )
+
+    # The server now reports oauth auth_type for the operator.
+    listed = await list_servers(operator=SimpleNamespace(id="op-1"), db=db)
+    entry = next(s for s in listed if s["id"] == server.id)
+    assert entry["auth_type"] == "oauth"
+
+    # Operator-facing error must say OAuth is required — not an expired token
+    # or a bare transport failure.
+    err = mcp_registry.get_connect_error(server.id) or ""
+    assert "oauth" in err.lower()
+    assert "required" in err.lower() or "authenticate" in err.lower()
+
+    # Operator-facing notification asks for consent — never claims an
+    # expired token.
+    notif = (
+        await db.execute(
+            select(Notification).where(
+                Notification.entity_id == server.id,
+                Notification.notification_type == "oauth_reauth_required",
+            )
+        )
+    ).scalar_one_or_none()
+    assert notif is not None
+    assert notif.title == f"Authorize {server.name}"
+    assert "Connect with OAuth" in (notif.message or "")
+    assert "refresh token" not in (notif.message or "").lower()
+    assert "expired" not in (notif.message or "").lower()
+    assert notif.severity == "warning"
+    assert notif.action_path == "/mcps"
+
+    # A later connect attempt keeps the saved consent config — same scope +
+    # redirect, still consent-required, and still no metadata/token fetch.
+    requests.clear()
+    ok2 = await mcp_registry.connect_server(server)
+    assert ok2 is False
+    assert len(requests) == 0  # consent path returns before any HTTP attempt
+    await db.refresh(server)
+    cfg2 = json.loads(server.oauth_config)
+    assert cfg2["scope"] == ""
+    assert cfg2["redirect_uri"] == cfg["redirect_uri"]
+    err2 = mcp_registry.get_connect_error(server.id) or ""
+    assert "oauth authorization required" in err2.lower()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "challenge,status",
+    [
+        ('Basic realm="x"', 401),  # not a Bearer challenge
+        ("", 401),  # plain 401, no challenge
+        ('Bearer resource_metadata="notaurl"', 401),  # invalid metadata URL
+        ('Bearer resource_metadata="https://user:pw@evil.test/x"', 401),
+        ("", 403),
+        ("", 500),
+    ],
+)
+async def test_negative_challenges_do_not_flag_oauth(db, monkeypatch, challenge, status):
+    """Non-Bearer/malformed/wrong-status responses never persist a config
+    and never trigger extra fetches."""
+    import httpx2
+
+    from agentos.config import settings
+    from agentos.mcp import registry as mcp_registry
+    from agentos.models.mcp import McpServer
+
+    requests: list[httpx2.Request] = []
+
+    def _handler(request: httpx2.Request) -> httpx2.Response:
+        requests.append(request)
+        if str(request.url).rstrip("/") == "https://mcp.test/mcp":
+            headers = {"WWW-Authenticate": challenge} if challenge else {}
+            return httpx2.Response(status, headers=headers, request=request)
+        raise AssertionError(f"unexpected request URL: {request.url}")
+
+    transport = httpx2.MockTransport(_handler)
+    real_async_client = httpx2.AsyncClient
+    monkeypatch.setattr(
+        httpx2,
+        "AsyncClient",
+        lambda *a, **k: real_async_client(*a, transport=transport, **k),
+    )
+    monkeypatch.setattr(settings, "mcp_connection_timeout", 2.0)
+
+    server = McpServer(
+        name=f"neg-{status}",
+        transport="http",
+        url="https://mcp.test/mcp",
+        oauth_config=None,
+    )
+    db.add(server)
+    await db.commit()
+
+    ok = await mcp_registry.connect_server(server)
+    assert ok is False
+    assert len(requests) == 1  # exactly one initialize attempt, no follow-ups
+    await db.refresh(server)
+    assert server.oauth_config is None
+
+
+async def _installed_oauth_hook(db, monkeypatch, auth=None):
+    """Return the REAL response hook the client installs plus the client."""
+    import httpx2
+
+    from agentos.mcp.client import McpClient
+
+    captured: dict = {}
+    real_async_client = httpx2.AsyncClient
+
+    def _client(*a, **k):
+        captured.update(k)
+        # Fail fast at transport level — we only need the installed hooks.
+        return real_async_client(
+            *a, transport=httpx2.MockTransport(lambda r: httpx2.Response(500, request=r)), **k
+        )
+
+    monkeypatch.setattr(httpx2, "AsyncClient", _client)
+    client = McpClient(transport="http", url="https://mcp.test/mcp", timeout=1.0, auth=auth)
+    try:
+        await client.connect()
+    except Exception:
+        pass
+    hooks = (captured.get("event_hooks") or {}).get("response") or []
+    return client, hooks[0] if hooks else None
+
+
+@pytest.mark.asyncio
+async def test_oauth_hook_exact_url_and_challenge_edges(db, monkeypatch):
+    """The installed hook only flags an exact-URL 401 Bearer challenge."""
+    import httpx2
+
+    client, hook = await _installed_oauth_hook(db, monkeypatch)
+    assert hook is not None  # hook is installed when auth is undeclared
+
+    def resp(challenge, method="POST", url="https://mcp.test/mcp", status=401):
+        req = httpx2.Request(method, url)
+        return httpx2.Response(
+            status,
+            headers={"WWW-Authenticate": challenge} if challenge else {},
+            request=req,
+        )
+
+    base = 'Bearer resource_metadata="https://mcp.test/.well-known/oauth-protected-resource"'
+
+    await hook(resp(base))
+    assert client.oauth_required is True
+    client.oauth_required = False
+
+    for bad in (
+        'Bearer resource_metadata="https://mcp.test/x',  # unterminated quote
+        "Bearer resource_metadata=" + "a" * 5000,  # overlong
+        'Basic realm="x"',
+        'Bearer realm="x"',  # no resource_metadata
+        'Bearer resource_metadata="notaurl"',
+        'Bearer resource_metadata="https://user:pw@evil.test/x"',
+    ):
+        await hook(resp(bad))
+        assert client.oauth_required is False, bad
+
+    await hook(resp(base, method="GET"))
+    assert client.oauth_required is False
+    await hook(resp(base, url="http://mcp.test/mcp"))  # different scheme
+    assert client.oauth_required is False
+    await hook(resp(base, url="https://mcp.test:8443/mcp"))  # different port
+    assert client.oauth_required is False
+    await hook(resp(base, url="https://mcp.test/mcp?x=1"))  # different query
+    assert client.oauth_required is False
+    await hook(resp(base, url="https://mcp.test/other"))  # different path
+    assert client.oauth_required is False
+    await hook(resp(base, status=403))
+    assert client.oauth_required is False
+
+
+@pytest.mark.asyncio
+async def test_no_hook_when_auth_preconfigured(db, monkeypatch):
+    """A preconfigured OAuth client must not get the challenge observer —
+    the provider's own 401 handling stays authoritative."""
+    client, hook = await _installed_oauth_hook(db, monkeypatch, auth=object())
+    assert hook is None
+
+
+@pytest.mark.asyncio
+async def test_malformed_args_json_returns_false_not_unbound(db, monkeypatch):
+    """connect_server must NEVER raise — invalid stored JSON lands in the
+    generic failure path with the original error, not UnboundLocalError."""
+    from agentos.mcp import registry as mcp_registry
+    from agentos.models.mcp import McpServer
+
+    server = McpServer(
+        name="bad-json",
+        transport="http",
+        url="https://mcp.test/mcp",
+        args="{not json",
+    )
+    db.add(server)
+    await db.commit()
+    ok = await mcp_registry.connect_server(server)
+    assert ok is False
+    err = mcp_registry.get_connect_error(server.id) or ""
+    assert err and "UnboundLocalError" not in err
+
+
+@pytest.mark.asyncio
+async def test_connect_failure_notification_stays_on_test_engine(db, monkeypatch):
+    """registry.py binds `async_session_factory` at module import — the
+    factory must resolve the CURRENT engine so a failure notification
+    lands on the test engine and never leaks into the dev database."""
+    server = McpServer(
+        name="leak-check",
+        transport="http",
+        url="https://mcp.test/mcp",
+        args="{not json",
+    )
+    db.add(server)
+    await db.commit()
+
+    ok = await mcp_registry.connect_server(server)
+    assert ok is False
+
+    rows = (await db.scalars(select(Notification).where(Notification.entity_id == server.id))).all()
+    assert len(rows) == 1
+    assert rows[0].notification_type == "mcp_connection_failed"
+
+
+@pytest.mark.asyncio
+async def test_record_oauth_requirement_never_clobbers(db, db_engine):
+    """A row that gained a real config between connect and record must keep
+    it — the conditional update only fills an empty slot."""
+    import json as _json
+
+    from sqlalchemy import update as _update
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from agentos.mcp import registry as mcp_registry
+    from agentos.mcp.registry import _record_oauth_requirement
+    from agentos.models.mcp import McpServer
+
+    server = McpServer(
+        name="race",
+        transport="http",
+        url="https://mcp.test/mcp",
+        oauth_config=None,
+    )
+    db.add(server)
+    await db.commit()
+    # Detached snapshot — simulates the object handed to connect_server
+    # before another writer saved a real config.
+    detached = McpServer(
+        id=server.id,
+        name="race",
+        transport="http",
+        url="https://mcp.test/mcp",
+        oauth_config=None,
+    )
+    custom = {"scope": "read write", "redirect_uri": "http://example/cb"}
+    factory = async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
+    # An independent session writes the real config first.
+    async with factory() as other:
+        await other.execute(
+            _update(McpServer)
+            .where(McpServer.id == server.id)
+            .values(oauth_config=_json.dumps(custom))
+        )
+        await other.commit()
+
+    import unittest.mock
+
+    with unittest.mock.patch.object(mcp_registry, "async_session_factory", factory):
+        await _record_oauth_requirement(detached)
+
+    await db.refresh(server)
+    assert _json.loads(server.oauth_config) == custom  # real config survived
+    assert _json.loads(detached.oauth_config) == custom  # reflected, not default
+
+
+@pytest.mark.asyncio
 async def test_mock_client_list_tools():
     """MockMcpClient discovers tools."""
     client = MockMcpClient(

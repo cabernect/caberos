@@ -13,6 +13,7 @@ class RunSource(Base, IdMixin):
     __table_args__ = (
         UniqueConstraint("run_id", "chunk_id", name="uq_run_source_chunk"),
         Index("ix_run_sources_run", "run_id"),
+        Index("ix_run_sources_run_call_sub", "run_id", "call_id", "sub_agent_id"),
     )
 
     run_id: Mapped[str] = mapped_column(
@@ -33,3 +34,7 @@ class RunSource(Base, IdMixin):
     source_location: Mapped[str | None] = mapped_column(String(255), nullable=True)
     excerpt: Mapped[str] = mapped_column(Text, nullable=False)
     rank: Mapped[float | None] = mapped_column(nullable=True)
+    # Correlation (W10): the doc_search call that first cited this chunk.
+    # Repeated citations of the same chunk belong to each call via audit.
+    call_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    sub_agent_id: Mapped[str | None] = mapped_column(String(36), nullable=True)

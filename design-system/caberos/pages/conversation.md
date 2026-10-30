@@ -6,73 +6,57 @@
 ## Layout
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│  Sidebar  │  Chat Sidebar  │  Conversation                   │
-│  (nav)    │  (sessions)    │                                 │
-│           │                │  ┌────────────────────────────┐ │
-│  Agents   │  + New session │  │  Agent name  [model] [⚙]  │ │
-│  Providers│  ───────────── │  ├────────────────────────────┤ │
-│  MCP      │  Session 1  ←  │  │                            │ │
-│  Channels │  Session 2     │  │  Messages (scrollable)     │ │
-│  Observ…  │  Session 3     │  │                            │ │
-│  Skills   │  Session 4     │  │  • User message            │ │
-│  Scheduler│                │  │  • Assistant message       │ │
-│           │                │  │    (markdown)              │ │
-│           │                │  │  • Tool call block         │ │
-│           │                │  │  • Thinking block          │ │
-│           │                │  │  • Approval prompt         │ │
-│           │                │  │                            │ │
-│           │                │  ├────────────────────────────┤ │
-│           │                │  │  Input bar                 │ │
-│           │                │  │  [📎] [text...] [model][→]│ │
-│           │                │  └────────────────────────────┘ │
-└───────────┴────────────────┴──────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│ Sidebar  │  ChatSidebar   │  Conversation                 │
+│ 240/48px │  ~240px        │                               │
+│          │  [+ New chat]  │  ┌──────────────────────────┐ │
+│          │  ────────────  │  │ header: agent / model    │ │
+│          │  Today         │  ├──────────────────────────┤ │
+│          │   session …    │  │                          │ │
+│          │  Yesterday     │  │  messages (scroll)       │ │
+│          │   session …    │  │   user bubble (right)    │ │
+│          │  Previous 7d   │  │   assistant markdown     │ │
+│          │  Older         │  │   tool / thinking /      │ │
+│          │                │  │   approval / elicit /    │ │
+│          │                │  │   sub-agent blocks       │ │
+│          │                │  ├──────────────────────────┤ │
+│          │                │  │ ChatInputBar             │ │
+│          │                │  └──────────────────────────┘ │
+└──────────┴────────────────┴───────────────────────────────┘
 ```
 
-### Three-panel layout
+Three panels: nav sidebar → `ChatSidebar` (session list for this agent,
+collapsible) → conversation column.
 
-1. **Nav sidebar** (left, 240px / 56px collapsed) — same as all pages
-2. **Chat sidebar** (240px) — session list for this agent, toggleable via panel button
-3. **Conversation** (fills remaining) — header + messages + input
+## ChatSidebar
 
-### Header
+- **New chat** button at top — `bg-ink text-surface` light /
+  `dark:bg-accent dark:text-[var(--accent-foreground)]` dark (olive CTA).
+- Sessions grouped by **local** day buckets: Today / Yesterday /
+  Previous 7 days / Older (`groupSessionsByDate`).
+- Row: title + relative last-activity + message count; active session gets
+  `accent-tint`. Per-session menu → rename / delete / compact.
+- `learning` flag on a session → "internal work" indicator while a
+  close/learning pass runs.
 
-- Agent name (18px, font-semibold, `--ink`)
-- Model selector (dropdown, shows current model)
-- Thinking toggle (brain icon, effort slider)
-- Settings gear → opens `SettingsOverlay`
+## Conversation column
 
-### Message area
+- **Header:** agent name + `ModelPicker` + thinking toggle + settings gear
+  (`SettingsOverlay`).
+- **Messages:** see MASTER → *Conversation stream anatomy*. User bubble is
+  `bg-ink text-surface` / `dark:bg-[var(--accent-tint)] dark:text-ink`.
+- **Stream items during a run:** thinking block, tool call block, streaming
+  text + cursor, `ApprovalCard`, elicitation card, nested sub-agent stream —
+  all inline, no modals.
+- **Auto-scroll** to bottom; "scroll to bottom" pill when scrolled up.
 
-- Scrollable, auto-scrolls to bottom on new messages
-- "Scroll to bottom" button appears when scrolled up
-- Messages render based on role (see MASTER.md → Message bubbles)
+## ChatInputBar
 
-### Stream items (during a run)
+Auto-growing textarea + attachments (paperclip; images/files/URLs),
+`ModelPicker`, thinking toggle, send/stop, context-token meter
+(context / cached / max). Attachment chips sit above the input.
 
-During an active run, the following stream items appear inline in the message area:
+## Notes
 
-1. **Thinking block** — warm cream background, amber left border, italic text, collapsible with duration badge
-2. **Tool call block** — warm beige background, capability name + status, collapsible args/result
-3. **Text** — streaming text with blinking cursor (`--accent`, 2px bar)
-4. **Approval prompt** — inline card with approve/reject buttons + remember checkbox
-5. **Elicitation prompt** — inline card with question + text input or option buttons
-6. **Sub-agent stream** — nested thinking + tools + text, visually indented
-
-### Input bar
-
-- Multi-line text input (auto-growing)
-- Attachment button (paperclip icon) — supports images, files, URLs
-- Model selector (compact dropdown)
-- Thinking toggle (brain icon)
-- Send button (arrow icon, `--ink` background)
-- Disabled while a run is active; replaced by "Stop" button
-- Context items (attachments) show as chips above the input
-
-### Chat sidebar (sessions)
-
-- "New session" button at top
-- Session list: title, last activity timestamp, message count
-- Active session highlighted with `--accent-bg` background
-- Click → switches session
-- Session menu → rename, delete, compact
+- Messages poll + SSE during runs; the run-inspector opens `TraceInspector`.
+- Day-bucket boundaries and timestamps render in operator-local time.

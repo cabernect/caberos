@@ -16,6 +16,16 @@ class ToolCall:
     args: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class ExecutionRestrictions:
+    """Trusted per-run narrowing, never additional agent authority."""
+
+    capability_names: frozenset[str]
+    skill_edits: Any = None
+    history_scope: dict[str, Any] | None = None
+    max_concurrent_tool_calls: int = 4
+
+
 @dataclass
 class SyscallResult:
     """Result of a mediated syscall."""
@@ -26,6 +36,11 @@ class SyscallResult:
     cost: float = 0.0
     latency_ms: int = 0
     audit_id: str | None = None
+    # Outcome classification (v0.2): "ok", "denied", "error", "timeout",
+    # "interrupted". `allowed` is False whenever status != "ok" — the call
+    # produced no result; `status` says why. A failed call is not the same
+    # as a denied one.
+    status: str = "ok"
     # Optional provider-native content to add to the next model request.
     # Normal tool output remains safe for the UI and audit log.
     model_content: Any = None

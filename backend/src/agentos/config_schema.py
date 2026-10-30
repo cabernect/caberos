@@ -38,10 +38,11 @@ class CapabilityGrant(BaseModel):
 
 
 class Limits(BaseModel):
-    max_turns_per_run: int = 15
+    max_turns_per_run: int = 200
     max_cost_per_run: float = 500.0
-    session_idle_timeout_min: int = 30
+    session_idle_timeout_min: int = 5
     max_context_tokens: int | None = None  # None = use model's actual context window
+    core_max_tokens: int = Field(default=32768, ge=1)
 
 
 class Fallback(BaseModel):
@@ -97,6 +98,10 @@ class AgentConfig(BaseModel):
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
     compaction: CompactionConfig = Field(default_factory=CompactionConfig)
     sandbox_mode: Literal["strict", "open"] = "strict"  # strict=workspace only, open=any path
+    # Per-agent approval bypass — skips approval gates for THIS agent's runs
+    # (including its sub-agent calls). The global AGENTOS_YOLO_MODE / settings
+    # flag remains the ops-level override for every agent.
+    yolo_mode: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return self.model_dump()

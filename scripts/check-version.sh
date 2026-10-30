@@ -8,12 +8,27 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
+# Windows ships "python", not "python3", and also plants App Execution Alias
+# stubs that exist on PATH but fail when run. So probe by executing, not by
+# looking the name up. This script runs on the Windows release runner too.
+PY=""
+for candidate in python3 python py; do
+  if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c "pass" >/dev/null 2>&1; then
+    PY="$candidate"
+    break
+  fi
+done
+if [ -z "$PY" ]; then
+  echo "No working python interpreter found on PATH." >&2
+  exit 1
+fi
+
 # Extract versions from each manifest
 BACKEND_VERSION=$(grep '^version = ' backend/pyproject.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
-PACKAGE_VERSION=$(python3 -c "import json; print(json.load(open('frontend/package.json'))['version'])")
+PACKAGE_VERSION=$($PY -c "import json; print(json.load(open('frontend/package.json'))['version'])")
 CARGO_VERSION=$(grep '^version = ' frontend/src-tauri/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
-TAURI_VERSION=$(python3 -c "import json; print(json.load(open('frontend/src-tauri/tauri.conf.json'))['version'])")
-WEBSITE_VERSION=$(python3 -c "import json; print(json.load(open('website/package.json'))['version'])")
+TAURI_VERSION=$($PY -c "import json; print(json.load(open('frontend/src-tauri/tauri.conf.json'))['version'])")
+WEBSITE_VERSION=$($PY -c "import json; print(json.load(open('website/package.json'))['version'])")
 
 echo "  backend/pyproject.toml:       $BACKEND_VERSION"
 echo "  frontend/package.json:        $PACKAGE_VERSION"

@@ -55,14 +55,11 @@ async def web_search(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         results = await asyncio.to_thread(_sync_search)
     except ImportError:
         # Fallback: raw HTML scraping (may hit captcha pages)
-        result = await _web_search_html(query, max_results)
-        await _persist_web_sources(result, kwargs)
-        return result
+        return await _web_search_html(query, max_results)
     except Exception as e:
         # Fallback: try HTML scraping if the package fails
         fallback = await _web_search_html(query, max_results)
         if fallback.get("count", 0) > 0:
-            await _persist_web_sources(fallback, kwargs)
             return fallback
         return {"error": f"Search failed: {e}"}
 
@@ -76,40 +73,11 @@ async def web_search(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
             }
         )
 
-    result = {
+    return {
         "query": query,
         "results": formatted,
         "count": len(formatted),
     }
-    await _persist_web_sources(result, kwargs)
-    return result
-
-
-async def _persist_web_sources(result: dict[str, Any], kwargs: dict[str, Any]) -> None:
-    """Persist web search results so the assistant response can cite them."""
-    db = kwargs.get("db")
-    run_id = kwargs.get("run_id")
-    if not db or not run_id:
-        return
-
-    for index, item in enumerate(result.get("results", []), start=1):
-        url = item.get("url", "")
-        if not url:
-            continue
-        exists = await db.scalar(
-            select(WebSource.id).where(WebSource.run_id == run_id, WebSource.url == url)
-        )
-        if exists is None:
-            db.add(
-                WebSource(
-                    run_id=run_id,
-                    url=url,
-                    title=item.get("title", ""),
-                    excerpt=item.get("snippet", ""),
-                    rank=index,
-                )
-            )
-    await db.flush()
 
 
 async def _persist_fetched_source(url: str, title: str, text: str, kwargs: dict[str, Any]) -> None:
@@ -119,23 +87,33 @@ async def _persist_fetched_source(url: str, title: str, text: str, kwargs: dict[
     if not db or not run_id:
         return
 
-    exists = await db.scalar(
-        select(WebSource.id).where(WebSource.run_id == run_id, WebSource.url == url)
-    )
-    if exists is None:
-        rank = (
-            await db.scalar(select(func.count(WebSource.id)).where(WebSource.run_id == run_id)) or 0
-        ) + 1
-        db.add(
-            WebSource(
-                run_id=run_id,
-                url=url,
-                title=title,
-                excerpt=text[:500],
-                rank=rank,
-            )
+    async def _write() -> None:
+        exists = await db.scalar(
+            select(WebSource.id).where(WebSource.run_id == run_id, WebSource.url == url)
         )
-        await db.flush()
+        if exists is None:
+            rank = (
+                await db.scalar(select(func.count(WebSource.id)).where(WebSource.run_id == run_id))
+                or 0
+            ) + 1
+            db.add(
+                WebSource(
+                    run_id=run_id,
+                    url=url,
+                    title=title,
+                    excerpt=text[:500],
+                    rank=rank,
+                )
+            )
+            await db.flush()
+
+    db_lock = kwargs.get("db_lock")
+    if db_lock is not None:
+        async with db_lock:
+            await _write()
+    else:
+        await _write()
+        await db.commit()
 
 
 async def _web_search_html(query: str, max_results: int) -> dict[str, Any]:

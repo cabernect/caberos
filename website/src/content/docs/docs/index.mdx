@@ -1,7 +1,7 @@
 ---
 title: CaberOS documentation
 description: Install, configure, secure, and operate local-first personal AI agents.
-template: splash
+template: doc
 ---
 
 CaberOS is an open-source, local-first operating system for personal AI agents. It supplies the harness around the model: identity, context, tools, memory, permissions, workspaces, integrations, automation, and an audit trail.
@@ -17,6 +17,12 @@ The model proposes actions. CaberOS decides what can execute and records the res
 5. Inspect its first run in [Observability and traces](/docs/guides/observability/).
 
 ## Product features
+
+### Today — the operator home
+
+The Today page is the working home screen. A **Needs you** strip collects pending approvals, agent questions, failed runs, and unread notifications with links that land on the exact chat, trace, or setting that resolves them. A rollup shows what your agents did since you last looked, a rail lists what can leave the machine, and a composer sends a task to any agent.
+
+[Complete first launch →](/docs/getting-started/first-launch/)
 
 ### Conversations and model controls
 
@@ -50,15 +56,27 @@ Combine current session context, an agent-wide `MEMORY.md`, contact-scoped recal
 
 ### Knowledge Vault
 
-Upload Markdown, text, PDF, DOCX, and XLSX files into Shared Knowledge or an agent-private scope. CaberOS extracts local, citation-aware chunks and sends only retrieved excerpts or inspected visual content to the selected model.
+Upload Markdown, text, PDF, and DOCX files into Shared Knowledge or an agent-private scope. Retrieval is local FTS5 lexical search by default, with hybrid embeddings as an opt-in that requires explicit egress consent; agents receive only the retrieved excerpts or inspected visual content. Tabular files such as `.xlsx` and `.csv` are refused at ingest pending a row-query layer.
 
 [Use the Knowledge Vault →](/docs/guides/knowledge-vault/)
 
 ### Skills
 
-Install reusable `SKILL.md` workflows and optional resources. Agents initially see only skill names and descriptions, then load a body or resource when needed. Skills guide behavior but do not grant tools.
+Install reusable `SKILL.md` workflows and optional resources from a governed library — built-in, global, and agent-local skills resolve by precedence, and each run pins the revision it used. Agents initially see only skill names and descriptions, then load a body or resource when needed. After a session closes, a bounded reflection run can propose staged agent-local skill edits. Skills guide behavior but do not grant tools.
 
 [Install and use skills →](/docs/guides/skills/)
+
+### Artifact Studio
+
+Turn run output into tracked deliverables. Agents create docx, xlsx, pptx, and pdf artifacts with stable identity, immutable revisions, restore-as-new-revision, and run/message provenance. External edits to a tracked file surface as conflicts instead of silently diverging, and workspace or skill files render as bounded previews.
+
+[Work in conversations →](/docs/guides/conversations/)
+
+### Browser automation
+
+Let agents drive a managed Chrome-for-Testing browser when a task needs a real page: explicit first-use install consent, headless or visible sessions, domain-scoped persistent profiles, approval-gated actions, and an operator takeover path when a human should take the wheel.
+
+[Review approvals and sandboxing →](/docs/security/approvals-and-sandbox/)
 
 ### MCP integrations
 
@@ -72,15 +90,21 @@ Route Telegram, Discord, Zalo OA, and Zalo Bot text messages through the same ag
 
 [Configure external channels →](/docs/guides/channels/)
 
-### Heartbeat automation
+### Schedules and heartbeats
 
-Run a self-contained agent prompt on a fixed interval with a heartbeat-specific cost ceiling and consecutive-failure alerts. Heartbeats use the same permissions, memory, model harness, audit, and spend tracking as interactive runs.
+Run a self-contained agent prompt once, on a fixed interval, or on a cron expression in a chosen timezone. Schedules are durable rows: the next fire time persists, a startup sweep recovers missed occurrences per the schedule's policy, and overlap and bounded-retry policies shape what each fire does. Agent heartbeats still work — each projects onto a managed schedule edited through the heartbeat configuration.
 
 [Configure the scheduler →](/docs/guides/scheduler/)
 
+### Notifications
+
+Approvals, failures, schedule alerts, and provider events arrive SSE-first as toasts and collect in the notification inbox. Notifications dedupe by type, entity, and unread state, and each deep link lands on the surface that can resolve it.
+
+[See where runs surface →](/docs/guides/observability/)
+
 ### Observability and spend
 
-Review aggregate runs, tokens, errors, latency, and cost. Drill into an agent trace to inspect status, trigger, messages, context breakdown, compaction, loaded capability schemas, and allowed or denied syscalls.
+Review aggregate runs, tokens, errors, latency, and cost. Drill into an agent trace to inspect the span tree and waterfall, per-span observations, persisted thinking, context breakdown, loaded capability schemas, and allowed or denied syscalls. Every model call lands in one ledger.
 
 [Inspect observability and traces →](/docs/guides/observability/)
 
@@ -92,7 +116,7 @@ Review aggregate runs, tokens, errors, latency, and cost. Drill into an agent tr
 | Workspaces | Attachment storage and file/shell working directory | Open sandbox mode deliberately allows broader filesystem paths. |
 | MCP | Configuration, credentials, grants, connection, audit | Third-party MCP code and services have their own trust boundary. |
 | Channels | Contact/session mapping and agent pipeline | Messaging platforms store and transmit platform messages. |
-| Scheduler | In-process fixed-interval heartbeats | It runs only while the local gateway and machine are active. |
+| Scheduler | Durable in-process schedules with once, interval, and cron triggers | Fires only while the local gateway and machine are active; missed occurrences recover per each schedule's policy. |
 | Spend | Per-run token and calculated/provider cost records | Provider billing remains the financial source of truth. |
 | Backups | Local export and backup operations | Backups may contain sensitive history and encrypted secrets. |
 
@@ -108,7 +132,7 @@ Data can leave the machine when you configure a hosted model, call a remote MCP 
 
 The desktop release is distributed for **macOS ARM64 (Apple Silicon)**. Docker deployment and local development are available on macOS, Linux, and Windows (via WSL2). macOS Intel and Windows desktop builds require cross-compilation and are not yet set up.
 
-CaberOS does not currently provide a product CLI/TUI, durable distributed job queue, implemented cron scheduling, or event-trigger scheduler.
+CaberOS does not currently provide a product CLI/TUI, a distributed job queue, or event-triggered schedules.
 
 ## For contributors
 

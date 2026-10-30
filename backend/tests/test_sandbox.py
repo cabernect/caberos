@@ -1,5 +1,7 @@
 """Test the sandbox — shell execution and path validation."""
 
+import sys
+
 import pytest
 
 from agentos.sandbox import WorkspaceManager, get_backend
@@ -24,7 +26,9 @@ async def test_sandbox_workspace_writable(workspace):
     if not backend.is_available():
         pytest.skip("Sandbox backend not available")
 
-    result = await backend.run_command(workspace, "echo test > file.txt && cat file.txt")
+    # The Windows backend runs commands through cmd.exe, which has no `cat`.
+    read_back = "type file.txt" if sys.platform == "win32" else "cat file.txt"
+    result = await backend.run_command(workspace, f"echo test > file.txt && {read_back}")
     assert result.exit_code == 0
     assert "test" in result.stdout
 
@@ -36,7 +40,8 @@ async def test_sandbox_clean_env(workspace):
     if not backend.is_available():
         pytest.skip("Sandbox backend not available")
 
-    result = await backend.run_command(workspace, "echo $HOME")
+    show_home = "echo %HOME%" if sys.platform == "win32" else "echo $HOME"
+    result = await backend.run_command(workspace, show_home)
     assert result.exit_code == 0
     # HOME should be set to the workspace path, not the host's home
     assert "/workspace" in result.stdout or workspace in result.stdout
