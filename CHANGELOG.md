@@ -9,9 +9,7 @@ Each GitHub release attaches the same desktop artifacts: a macOS Apple Silicon
 and `latest.json` — the manifest the in-app updater polls to discover new
 versions.
 
-## [Unreleased] — 0.2.0 "Agent Workbench"
-
-Integrated on `feat/v0.2.0`; release pending.
+## [0.2.0] — 2026-10-30 "Agent Workbench"
 
 ### Added
 
