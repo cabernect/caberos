@@ -133,25 +133,35 @@ def _claim_port_or_die(host: str, port: int) -> None:
     """Bind-probe the port before uvicorn — a foreign holder otherwise turns
     into a silent 'Connecting…' hang on the frontend (B42).
 
+    Retries for a short window first: on update relaunch the previous
+    instance's gateway can still be mid-teardown when this process starts,
+    and dying instantly turns a transient overlap into a hard failure.
+
     Never kills the holder: a second app copy's live gateway is a legitimate
     process — report and let the operator decide.
     """
     import socket
+    import time
 
-    probe = socket.socket()
-    try:
-        probe.bind((host, port))
-    except OSError as exc:
-        holder = _port_holder(port)
-        print(
-            f"FATAL gateway cannot bind {host}:{port} — port is held by "
-            f"{holder or f'another process ({exc})'}. "
-            "Stop that process or run CaberOS on a different port.",
-            file=sys.stderr,
-        )
-        sys.exit(3)  # distinct code — the Rust monitor reports it verbatim
-    finally:
-        probe.close()
+    deadline = time.monotonic() + 8.0
+    while True:
+        probe = socket.socket()
+        try:
+            probe.bind((host, port))
+            return
+        except OSError as exc:
+            if time.monotonic() >= deadline:
+                holder = _port_holder(port)
+                print(
+                    f"FATAL gateway cannot bind {host}:{port} — port is held by "
+                    f"{holder or f'another process ({exc})'}. "
+                    "Stop that process or run CaberOS on a different port.",
+                    file=sys.stderr,
+                )
+                sys.exit(3)  # distinct code — the Rust monitor reports it verbatim
+            time.sleep(0.2)
+        finally:
+            probe.close()
 
 
 def main() -> None:

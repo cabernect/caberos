@@ -25,6 +25,18 @@ fn quit_app(app: AppHandle) {
     app.exit(0);
 }
 
+/// Update-install restart. `process.relaunch()` spawns the new instance
+/// before the old one finishes its Exit handler, so the surviving gateway
+/// can still hold GATEWAY_PORT when the new gateway probes it (B48-class
+/// race: FATAL "cannot bind 127.0.0.1:51718"). Stopping the child first —
+/// `stop()` SIGKILLs the process group and waits for the reap — means the
+/// port is free before the new process exists.
+#[tauri::command]
+fn restart_app(app: AppHandle) {
+    app.state::<GatewayProcess>().stop();
+    app.restart();
+}
+
 #[tauri::command]
 async fn enable_shell_sandbox(app: AppHandle) -> Result<(), String> {
     shell_sandbox::enable(&app).await
@@ -171,6 +183,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             quit_app,
+            restart_app,
             enable_shell_sandbox,
             gateway_url,
             gateway_error,
@@ -182,6 +195,16 @@ pub fn run() {
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // The quit-confirm bridge only exists in the healthy shell —
+                // on the gateway-failed screen nothing listens for this event,
+                // so preventing the close here would strand the window. When
+                // the gateway never started or died on its own there are no
+                // active runs to protect anyway, so let the close go through.
+                let gateway = window.app_handle().state::<GatewayProcess>();
+                let healthy = gateway.port().is_some() && gateway.last_error().is_none();
+                if !healthy {
+                    return;
+                }
                 api.prevent_close();
                 let _ = window.emit("caberos://quit-requested", ());
             }
