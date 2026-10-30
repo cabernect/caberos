@@ -23,7 +23,6 @@ CaberOS is an open-source, local-first AI Agent Operating System. It hosts perso
 
 <div align="center">
   <video src="https://caberos.cabernect.workers.dev/videos/caberos-promises.mp4" poster="https://caberos.cabernect.workers.dev/videos/caberos-promises-poster.jpg" width="720" controls></video>
-  <p><em>One real run, 48 seconds — one agent, one approval, one deliverable.</em></p>
 </div>
 
 ## Why "OS"?
@@ -46,6 +45,11 @@ Adding a new integration (Notion, GitHub, Slack) is a new capability, not a new 
 - **Knowledge Vault** — lexical FTS search by default; optional hybrid embeddings (local setups work once a model is configured; remote embeddings require explicit egress consent).
 - **Durable scheduling & notifications** — real timezones, missed-run recovery, retries, and deep-linked notifications.
 - **Runtime readiness** — model catalog with pricing, consent-gated managed installs for optional runtimes.
+
+### Roadmap
+
+- **v0.2.1 — Honest Vault & Media Tools** — tabular row layer for xlsx/csv (query-then-summarize over complete row sets), Vault document inspection, a global **Settings → Tools** tab binding capabilities to Model Offerings (search, speech-to-text, text-to-speech, image & video generation), and the first media capability end-to-end.
+- **v0.2.2 — Connected Knowledge, Tasks & Richer Preview** — OneDrive/Google Drive connectors, Qdrant & external retrieval, durable tasks with triggers and channel approvals, plus rendered HTML preview and true visual renders for Office artifacts.
 
 ## Features
 

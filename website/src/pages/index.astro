@@ -213,24 +213,18 @@ const faqs = isVietnamese
     </div>
   </section>
 
-  <section class="section watch-section" aria-labelledby="watch-title">
+  <section class="section watch-section" aria-label={isVietnamese ? "Video CaberOS" : "CaberOS film"}>
     <div class="container">
-      <div class="section-intro" data-reveal>
-        <p class="eyebrow"><span class="eyebrow-line"></span>{isVietnamese ? "Xem thực tế" : "See it live"}</p>
-        <h2 id="watch-title">{isVietnamese ? "Một run thật, 48 giây." : "One real run, 48 seconds."}</h2>
-        <p>{isVietnamese ? "Một agent, một lần phê duyệt, một kết quả — quay từ app thật, không dựng mockup." : "One agent, one approval, one deliverable — recorded from the real app, not a mockup."}</p>
-      </div>
       <div class="watch-card" data-reveal>
         <video
           src="/videos/caberos-promises.mp4"
           poster="/videos/caberos-promises-poster.jpg"
           preload="none"
+          muted
           controls
           playsinline
+          loop
         ></video>
-        <button class="watch-play" type="button" aria-label={isVietnamese ? "Phát video CaberOS" : "Play the CaberOS film"}>
-          <svg viewBox="0 0 24 24" width="30" height="30" aria-hidden="true"><path d="M8 5.5v13l11-6.5z" fill="currentColor"/></svg>
-        </button>
       </div>
     </div>
   </section>
@@ -443,13 +437,24 @@ const faqs = isVietnamese
     revealEls.forEach((el) => io.observe(el));
   }
 
-  // Watch card — poster + play overlay; video loads on first play (preload="none").
-  const watchCard = document.querySelector<HTMLElement>(".watch-card");
-  const watchVideo = watchCard?.querySelector("video");
-  watchCard?.querySelector<HTMLButtonElement>(".watch-play")?.addEventListener("click", () => {
-    watchVideo?.play();
-    watchCard.setAttribute("data-playing", "");
-  });
+  // Watch card — muted autoplay while ≥40% visible, pause when it leaves
+  // view (sound stays under user control via the player controls).
+  const watchVideo = document.querySelector<HTMLVideoElement>(".watch-card video");
+  if (watchVideo) {
+    const vio = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            watchVideo.play().catch(() => {});
+          } else {
+            watchVideo.pause();
+          }
+        }
+      },
+      { threshold: 0.4 },
+    );
+    vio.observe(watchVideo);
+  }
 </script>
 
 <style>
@@ -968,9 +973,6 @@ const faqs = isVietnamese
   }
 
   .watch-card {
-    position: relative;
-    max-width: 960px;
-    margin: 0 auto;
     border: 1px solid var(--line);
     border-radius: 18px;
     overflow: hidden;
@@ -983,46 +985,6 @@ const faqs = isVietnamese
     width: 100%;
     aspect-ratio: 16 / 9;
     background: var(--ink);
-  }
-
-  .watch-play {
-    position: absolute;
-    inset: 0;
-    display: grid;
-    place-items: center;
-    border: 0;
-    background: rgba(15, 14, 10, 0.28);
-    color: #fffbf0;
-    cursor: pointer;
-    transition: opacity 0.25s ease, background 0.25s ease;
-  }
-
-  .watch-play::before {
-    content: "";
-    width: 76px;
-    height: 76px;
-    border-radius: 50%;
-    background: var(--olive);
-    position: absolute;
-    transition: transform 0.2s ease, background 0.2s ease;
-  }
-
-  .watch-play svg {
-    position: relative;
-  }
-
-  .watch-play:hover {
-    background: rgba(15, 14, 10, 0.42);
-  }
-
-  .watch-play:hover::before {
-    background: var(--olive-dark);
-    transform: scale(1.07);
-  }
-
-  .watch-card[data-playing] .watch-play {
-    opacity: 0;
-    pointer-events: none;
   }
 
   .section-heading-row {
