@@ -125,8 +125,12 @@ export async function downloadAndInstallUpdate(): Promise<void> {
 
 export async function restartApp(): Promise<void> {
   if (!isDesktopMode()) throw new Error("Restart is only available in desktop mode");
-  const process = await import("@tauri-apps/plugin-process");
-  await process.relaunch();
+  const { invoke } = await import("@tauri-apps/api/core");
+  // Rust-side command: stops the gateway (SIGKILL group + reap) before
+  // restarting, so the new instance's gateway doesn't race the old one's
+  // port. A bare plugin-process relaunch spawns the new app first and the
+  // old gateway outlives the new one's port probe.
+  await invoke("restart_app");
 }
 
 export function resetUpdater(): void {

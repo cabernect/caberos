@@ -297,6 +297,7 @@ jobs:
         with:
           name: CaberOS ${{ github.ref_name }}
           body_path: release-body.md
+          generate_release_notes: true
           files: |
             artifacts/**/*.dmg
             artifacts/**/*-setup.exe
