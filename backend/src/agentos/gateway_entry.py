@@ -153,6 +153,10 @@ def _claim_port_or_die(host: str, port: int) -> None:
     while True:
         probe = socket.socket()
         try:
+            # Match asyncio's POSIX server sockets: TIME_WAIT after a normal
+            # close must not look like a live listener and block a restart.
+            if os.name == "posix" and sys.platform != "cygwin":
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             probe.bind((host, port))
             return
         except OSError as exc:
