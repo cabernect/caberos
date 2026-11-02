@@ -136,7 +136,12 @@ def validate_skill_dir(
             except SyntaxError as e:
                 errors.append(f"{rel}: python syntax error ({e.msg} line {e.lineno})")
         elif script.suffix == ".sh":
-            result = subprocess.run(["bash", "-n", str(script)], capture_output=True, timeout=10)
+            result = subprocess.run(
+                ["bash", "-n", str(script)],
+                capture_output=True,
+                timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
             if result.returncode != 0:
                 detail = result.stderr.decode(errors="replace").strip().splitlines()
                 errors.append(f"{rel}: bash syntax error ({detail[0] if detail else 'invalid'})")

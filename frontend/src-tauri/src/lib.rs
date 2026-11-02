@@ -22,6 +22,10 @@ fn gateway_url(gateway: tauri::State<'_, GatewayProcess>) -> String {
 
 #[tauri::command]
 fn quit_app(app: AppHandle) {
+    // Stop the child before exiting rather than relying on `RunEvent::Exit`
+    // delivery — any path that skips it (fallback `process::exit`, signals)
+    // would orphan a setsid'd gateway holding the port (see gateway.rs).
+    app.state::<GatewayProcess>().stop();
     app.exit(0);
 }
 

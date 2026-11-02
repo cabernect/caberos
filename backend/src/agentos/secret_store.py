@@ -33,6 +33,7 @@ def _restrict_to_current_user(key_path: Path) -> None:
             ["icacls", str(key_path), "/inheritance:r", "/grant:r", f"{user}:F"],
             capture_output=True,
             timeout=15,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         if result.returncode != 0:
             logger.warning(

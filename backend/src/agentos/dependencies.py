@@ -14,6 +14,7 @@ import logging
 import os
 import platform
 import re
+import subprocess
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -115,6 +116,7 @@ async def _default_runner(argv: list[str], env: dict[str, str]) -> tuple[int, by
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=env,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     total = [0]
     wait_task = asyncio.create_task(proc.wait())

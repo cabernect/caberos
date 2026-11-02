@@ -81,8 +81,13 @@ def _port_holder(port: int) -> str | None:
 
     try:
         if sys.platform == "win32":
+            no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             out = subprocess.run(
-                ["netstat", "-ano", "-p", "TCP"], capture_output=True, text=True, timeout=5
+                ["netstat", "-ano", "-p", "TCP"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                creationflags=no_window,
             ).stdout
             pid = next(
                 (
@@ -99,6 +104,7 @@ def _port_holder(port: int) -> str | None:
                 capture_output=True,
                 text=True,
                 timeout=5,
+                creationflags=no_window,
             ).stdout.strip()
             name = task.split('","')[0].strip('"') if task else "unknown"
             return f"{name} (pid {pid})"

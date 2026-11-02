@@ -44,6 +44,9 @@ from .base import SandboxBackend, ShellResult, kill_process_group
 
 _PROBE_TIMEOUT = 10
 
+# The packaged gateway runs with no console (CREATE_NO_WINDOW from the shell),
+# so each console-subsystem wxc-exec.exe child would allocate a visible window.
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 _POLICY_PREFIX = "caberos-mxc-"
 _POLICY_MAX_AGE_SECONDS = 3600
@@ -215,7 +218,11 @@ class MxcBackend(SandboxBackend):
 
         try:
             probe = subprocess.run(
-                [exe, "--probe"], capture_output=True, timeout=_PROBE_TIMEOUT, text=True
+                [exe, "--probe"],
+                capture_output=True,
+                timeout=_PROBE_TIMEOUT,
+                text=True,
+                creationflags=_NO_WINDOW,
             )
             tier = json.loads(probe.stdout or "{}").get("tier") if probe.returncode == 0 else None
         except Exception:
@@ -251,7 +258,10 @@ class MxcBackend(SandboxBackend):
             )
             try:
                 result = subprocess.run(
-                    [exe, str(config_path)], capture_output=True, timeout=_PROBE_TIMEOUT
+                    [exe, str(config_path)],
+                    capture_output=True,
+                    timeout=_PROBE_TIMEOUT,
+                    creationflags=_NO_WINDOW,
                 )
                 return result.returncode == 0
             except Exception:
@@ -334,6 +344,7 @@ class MxcBackend(SandboxBackend):
                 *argv,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                creationflags=_NO_WINDOW,
             )
             try:
                 stdout_bytes, stderr_bytes = await asyncio.wait_for(

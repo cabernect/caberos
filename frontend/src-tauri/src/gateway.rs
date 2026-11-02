@@ -1,7 +1,7 @@
 use std::{
     env, fs,
     io::{Read, Seek, SeekFrom, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -12,6 +12,8 @@ use std::{
 
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 
 use tauri::{AppHandle, Manager};
 
@@ -244,6 +246,7 @@ impl GatewayProcess {
         }
 
         let port = GATEWAY_PORT;
+        reclaim_orphaned_gateway(port, &executable);
 
         let data_dir = app
             .path()
@@ -304,6 +307,11 @@ impl GatewayProcess {
 
         #[cfg(unix)]
         command.process_group(0);
+
+        // The gateway is a console-subsystem binary; without CREATE_NO_WINDOW
+        // Windows allocates it a visible terminal next to the app window.
+        #[cfg(windows)]
+        command.creation_flags(0x08000000 /* CREATE_NO_WINDOW */);
 
         let mut child = command.spawn().map_err(|error| {
             format!(
@@ -449,6 +457,53 @@ impl GatewayProcess {
         }
     }
 }
+
+/// A previous app instance can die without running `RunEvent::Exit` — SIGTERM
+/// (Activity Monitor "Quit", logout/shutdown), SIGKILL, or a panic — and the
+/// setsid'd gateway survives it, holding the port forever. Every later launch
+/// then FATALs on bind with no self-recovery. The port is dedicated to this
+/// app, so a listener whose executable is this bundle's own gateway binary can
+/// only be our orphan: kill it (and its process group) and continue. A holder
+/// that is not ours is left alone — the spawn goes ahead and FATALs honestly.
+/// Windows needs no equivalent: the kill-on-close job reaps the tree even on
+/// force-kill, so an orphan cannot exist there.
+#[cfg(unix)]
+fn reclaim_orphaned_gateway(port: u16, executable: &Path) {
+    let Ok(ours) = fs::canonicalize(executable) else {
+        return;
+    };
+    let Ok(output) = Command::new("lsof")
+        .args(["-nP", &format!("-iTCP:{port}"), "-sTCP:LISTEN", "-t"])
+        .output()
+    else {
+        return;
+    };
+    for token in String::from_utf8_lossy(&output.stdout).split_whitespace() {
+        let Ok(pid) = token.parse::<libc::pid_t>() else {
+            continue;
+        };
+        let Ok(ps) = Command::new("ps")
+            .args(["-o", "comm=", "-p", &pid.to_string()])
+            .output()
+        else {
+            continue;
+        };
+        let comm = String::from_utf8_lossy(&ps.stdout).trim().to_string();
+        let is_ours = fs::canonicalize(Path::new(&comm))
+            .map(|resolved| resolved == ours)
+            .unwrap_or(false);
+        if !is_ours {
+            continue;
+        }
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+            libc::kill(pid, libc::SIGKILL);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn reclaim_orphaned_gateway(_port: u16, _executable: &Path) {}
 
 fn gateway_executable(app: &AppHandle) -> Result<Option<PathBuf>, String> {
     if let Some(path) = env::var_os("CABEROS_GATEWAY_EXECUTABLE") {
