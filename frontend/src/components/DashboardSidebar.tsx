@@ -177,6 +177,12 @@ export function DashboardSidebar({
           borderRight: "1px solid var(--caberos-sidebar-border)",
         }}
       >
+        {"__TAURI_INTERNALS__" in window && (
+          <div
+            data-tauri-drag-region
+            style={{ height: 24, width: "100%", flexShrink: 0, marginTop: -12 }}
+          />
+        )}
         <button
           onClick={handleToggleCollapse}
           className="flex h-7 w-7 items-center justify-center rounded text-[var(--ink-2)] transition hover:bg-[var(--border)] hover:text-[var(--ink)]"
