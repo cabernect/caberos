@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DashboardSidebar } from "./DashboardSidebar";
 
 vi.mock("@/lib/useMediaQuery", () => ({
@@ -13,8 +13,33 @@ vi.mock("@/lib/sidebarState", () => ({
 vi.mock("@/components/NotificationCenter", () => ({
   NotificationCenter: () => null,
 }));
+vi.mock("@/lib/platform", () => ({
+  IS_MAC: true,
+}));
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe("DashboardSidebar on mobile", () => {
+  it("keeps macOS window controls above both the rail and expanded brand", () => {
+    vi.stubGlobal("__TAURI_INTERNALS__", {});
+    render(
+      <MemoryRouter>
+        <DashboardSidebar
+          active="today"
+          onLogout={vi.fn()}
+          onToggleCollapse={vi.fn()}
+          collapsed
+        />
+      </MemoryRouter>,
+    );
+    const railSpacer = screen.getByTestId("mac-titlebar-spacer");
+    expect(railSpacer.parentElement?.firstElementChild).toBe(railSpacer);
+    fireEvent.click(screen.getByTitle("Expand sidebar"));
+    const expanded = screen.getByTitle("Collapse sidebar").closest("aside");
+    expect(expanded?.firstElementChild).toHaveAttribute("data-testid", "mac-titlebar-spacer");
+    expect(screen.getByText("CaberOS")).toBeInTheDocument();
+  });
+
   it("opens the overlay even when the stored desktop preference is collapsed", () => {
     const navigate = vi.fn();
     const onToggle = vi.fn();

@@ -41,7 +41,10 @@ export function BootShell({
   children?: ReactNode;
 }) {
   return (
-    <div className="relative flex min-h-screen flex-col items-center justify-center bg-ground px-6">
+    <div
+      className="relative flex min-h-screen flex-col items-center justify-center bg-ground px-6"
+      data-tauri-drag-region="deep"
+    >
       <OrbitMark failed={failed} spinning={spinning} />
       {children}
       <VersionFooter />

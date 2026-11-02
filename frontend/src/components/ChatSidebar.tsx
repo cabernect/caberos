@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { formatClock } from "@/lib/time";
 import { modShortcut } from "@/lib/platform";
 import { useLearningSessions } from "@/lib/sessionActivity";
+import { MacTitlebarSpacer } from "@/components/MacTitlebarSpacer";
 import type { SessionInfo } from "@/lib/types";
 
 interface ChatSidebarProps {
@@ -55,6 +56,7 @@ export function ChatSidebar({
 
   return (
     <aside className="chat-sidebar flex w-[260px] min-w-[260px] flex-col overflow-hidden border-r border-line bg-ground">
+      <MacTitlebarSpacer />
       {/* Breadcrumb: ← Agents / {name} + collapse toggle (top-right) */}
       <div className="flex items-center justify-between px-3.5 pb-1 pt-3.5">
         <button
