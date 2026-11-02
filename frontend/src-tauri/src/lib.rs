@@ -22,6 +22,8 @@ fn gateway_url(gateway: tauri::State<'_, GatewayProcess>) -> String {
 
 #[tauri::command]
 fn quit_app(app: AppHandle) {
+    // Reap our gateway before requesting exit; the Exit handler is a fallback.
+    app.state::<GatewayProcess>().stop();
     app.exit(0);
 }
 
@@ -229,4 +231,25 @@ pub fn run() {
         }
         _ => {}
     });
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn main_window_allows_overlay_titlebar_dragging() {
+        let capability: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json"))
+                .expect("desktop capability must be valid JSON");
+        assert!(capability["windows"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("main")));
+        assert!(
+            capability["permissions"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("core:window:allow-start-dragging")),
+            "overlay titlebar drag regions require explicit start-dragging permission"
+        );
+    }
 }

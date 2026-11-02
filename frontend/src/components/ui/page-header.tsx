@@ -30,7 +30,10 @@ export function PageHeader({
   className?: string;
 }) {
   return (
-    <header className={cn("sticky top-0 z-10 bg-ground px-8 pb-5 pt-7", className)}>
+    <header
+      className={cn("sticky top-0 z-10 bg-ground px-8 pb-5 pt-7", className)}
+      data-tauri-drag-region="deep"
+    >
       {((breadcrumbs && breadcrumbs.length > 0) || trailing) && (
         <div className="mb-2 flex items-center justify-between gap-4">
           {breadcrumbs && breadcrumbs.length > 0 ? (

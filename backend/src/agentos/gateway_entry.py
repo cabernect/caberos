@@ -81,8 +81,13 @@ def _port_holder(port: int) -> str | None:
 
     try:
         if sys.platform == "win32":
+            no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             out = subprocess.run(
-                ["netstat", "-ano", "-p", "TCP"], capture_output=True, text=True, timeout=5
+                ["netstat", "-ano", "-p", "TCP"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                creationflags=no_window,
             ).stdout
             pid = next(
                 (
@@ -99,6 +104,7 @@ def _port_holder(port: int) -> str | None:
                 capture_output=True,
                 text=True,
                 timeout=5,
+                creationflags=no_window,
             ).stdout.strip()
             name = task.split('","')[0].strip('"') if task else "unknown"
             return f"{name} (pid {pid})"
@@ -147,6 +153,10 @@ def _claim_port_or_die(host: str, port: int) -> None:
     while True:
         probe = socket.socket()
         try:
+            # Match asyncio's POSIX server sockets: TIME_WAIT after a normal
+            # close must not look like a live listener and block a restart.
+            if os.name == "posix" and sys.platform != "cygwin":
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             probe.bind((host, port))
             return
         except OSError as exc:

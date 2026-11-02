@@ -16,6 +16,7 @@ import {
   House,
 } from "lucide-react";
 import { LogoMark } from "@/components/LogoMark";
+import { MacTitlebarSpacer } from "@/components/MacTitlebarSpacer";
 import { NotificationCenter } from "@/components/NotificationCenter";
 import { api, type HomeData } from "@/lib/api";
 import { getStoredSidebarCollapsed, setStoredSidebarCollapsed } from "@/lib/sidebarState";
@@ -177,6 +178,7 @@ export function DashboardSidebar({
           borderRight: "1px solid var(--caberos-sidebar-border)",
         }}
       >
+        <MacTitlebarSpacer className="-mt-3" />
         <button
           onClick={handleToggleCollapse}
           className="flex h-7 w-7 items-center justify-center rounded text-[var(--ink-2)] transition hover:bg-[var(--border)] hover:text-[var(--ink)]"
@@ -264,10 +266,12 @@ export function DashboardSidebar({
           : {}),
       }}
     >
+      <MacTitlebarSpacer />
       {/* Brand + collapse toggle */}
       <div
         className="flex items-center gap-2.5 px-4 py-4"
         style={{ borderBottom: "1px solid var(--sidebar-divider)" }}
+        data-tauri-drag-region="deep"
       >
         <LogoMark className="h-7 w-7 shrink-0" color="var(--brand)" />
         <span className="flex-1 text-[15px] font-semibold text-[var(--ink)]">

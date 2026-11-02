@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
 import sys
 import time
 import uuid
@@ -106,6 +107,9 @@ class TerminalRegistry:
             env = backend.spawn_env(workspace_path)
 
         # Host-side cwd matters for seatbelt; bwrap overrides with --chdir.
+        # The packaged gateway has no console (CREATE_NO_WINDOW in the shell),
+        # so console-subsystem children (cmd.exe, wxc-exec.exe) would each
+        # allocate a visible window without the flag.
         proc = await asyncio.create_subprocess_exec(
             *argv,
             stdout=asyncio.subprocess.PIPE,
@@ -113,6 +117,7 @@ class TerminalRegistry:
             cwd=workspace_path,
             env=env,
             start_new_session=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         try:
             # Windows has no process groups; the pid stands in and

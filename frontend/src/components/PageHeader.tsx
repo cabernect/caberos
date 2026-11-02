@@ -20,6 +20,7 @@ export function PageHeader({ icon: Icon, title, titleOnClick, description, bread
     <header
       className="px-8 py-5"
       style={{ background: "var(--sidebar)", borderBottom: "1px solid var(--border)" }}
+      data-tauri-drag-region="deep"
     >
       <div className="flex items-center gap-2">
         <Icon className="h-5 w-5 shrink-0" style={{ color: "var(--accent)" }} />

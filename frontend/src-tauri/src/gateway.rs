@@ -12,6 +12,8 @@ use std::{
 
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 
 use tauri::{AppHandle, Manager};
 
@@ -305,6 +307,11 @@ impl GatewayProcess {
         #[cfg(unix)]
         command.process_group(0);
 
+        // The gateway is a console-subsystem binary; without CREATE_NO_WINDOW
+        // Windows allocates it a visible terminal next to the app window.
+        #[cfg(windows)]
+        command.creation_flags(0x08000000 /* CREATE_NO_WINDOW */);
+
         let mut child = command.spawn().map_err(|error| {
             format!(
                 "could not start CaberOS gateway at {}: {error}",
@@ -495,6 +502,39 @@ mod tests {
     #[test]
     fn uses_the_stable_oauth_callback_port() {
         assert_eq!(GATEWAY_PORT, 51718);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stop_reaps_owned_child_and_is_safe_to_repeat() {
+        use std::os::unix::process::CommandExt;
+        use std::process::Command;
+
+        let gateway = super::GatewayProcess::new();
+        let child = Command::new("/bin/sleep")
+            .arg("30")
+            .process_group(0)
+            .spawn()
+            .expect("test child should start");
+        let pid = child.id() as libc::pid_t;
+        *gateway.child.lock().unwrap() = Some(child);
+        *gateway.port.lock().unwrap() = Some(GATEWAY_PORT);
+
+        gateway.stop();
+        gateway.stop();
+
+        assert!(gateway.child.lock().unwrap().is_none());
+        assert_eq!(gateway.port(), None);
+        assert_eq!(gateway.last_error(), None);
+        // stop() must reap the child, not merely send a signal.
+        assert_eq!(
+            unsafe { libc::waitpid(pid, std::ptr::null_mut(), libc::WNOHANG) },
+            -1
+        );
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ECHILD)
+        );
     }
 
     #[test]

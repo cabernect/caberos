@@ -13,6 +13,7 @@
     "windows": [
       {
         "title": "CaberOS",
+        "titleBarStyle": "Overlay",
         "hiddenTitle": true,
         "width": 1280,
         "height": 800,

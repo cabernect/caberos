@@ -7,6 +7,7 @@ spools output to bounded files.
 """
 
 import asyncio
+import subprocess
 import sys
 import time
 from typing import Any
@@ -96,6 +97,9 @@ async def _run_sync(
             stderr=asyncio.subprocess.PIPE,
             cwd=workspace_path,
             start_new_session=True,
+            # Packaged shell children run with no console; without the flag
+            # cmd.exe would allocate a visible window on every call.
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)

@@ -12,6 +12,7 @@ import { Markdown } from "@/components/Markdown";
 import { ThinkingBlock } from "@/components/ThinkingBlock";
 import { ProcessSteps } from "@/components/ProcessSteps";
 import { ChatSidebar } from "@/components/ChatSidebar";
+import { MacTitlebarSpacer } from "@/components/MacTitlebarSpacer";
 import { StatusWord } from "@/components/ui/status-word";
 import { ChatInputBar, type Attachment, type ChatInputBarHandle, type ContextItem } from "@/components/ChatInputBar";
 import { SettingsOverlay } from "@/components/SettingsOverlay";
@@ -1494,6 +1495,7 @@ export function Conversation() {
       {/* Collapsed icon rail — expand, new chat, search + session list. */}
       {sidebarCollapsed && (
         <div className="flex w-12 shrink-0 flex-col items-center gap-1.5 border-r border-line bg-ground py-3">
+          <MacTitlebarSpacer className="-mt-3" />
           <button
             onClick={() => setSidebarCollapsed(false)}
             className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-[9px] border border-line bg-surface text-ink-muted transition-colors hover:text-ink"
@@ -1531,8 +1533,12 @@ export function Conversation() {
 
       {/* Main */}
       <div className="relative flex min-w-0 flex-1 flex-col">
+        {sidebarCollapsed && <MacTitlebarSpacer />}
         {/* Header — agent tile + session title + run state */}
-        <div className="flex items-center gap-3 border-b border-line bg-ground px-5 py-2.5">
+        <div
+          className="flex items-center gap-3 border-b border-line bg-ground px-5 py-2.5"
+          data-tauri-drag-region="deep"
+        >
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-accent-tint text-[15px] font-semibold text-accent">
             {(agent?.name ?? agentId ?? "?").charAt(0).toUpperCase()}
           </span>
