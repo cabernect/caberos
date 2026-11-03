@@ -268,7 +268,7 @@ function KnowledgeOverview() {
                   ref={fileInput}
                   type="file"
                   multiple
-                  accept=".md,.markdown,.txt,.pdf,.docx"
+                  accept=".md,.markdown,.txt,.pdf,.docx,.csv,.xlsx"
                   className="hidden"
                   onChange={(e) => {
                     if (e.target.files) void uploadShared(e.target.files);
@@ -506,7 +506,7 @@ function KnowledgeScopeDetail({ scope }: { scope: string }) {
             )}
           </div>
           <p className="mt-1 text-xs text-[var(--ink-faint)]">
-            MD, TXT, PDF, DOCX · up to 250 MB per file
+            MD, TXT, PDF, DOCX, CSV, XLSX · up to 250 MB per file
           </p>
           <button
             type="button"
@@ -541,7 +541,7 @@ function KnowledgeScopeDetail({ scope }: { scope: string }) {
             ref={fileInput}
             type="file"
             multiple
-            accept=".md,.markdown,.txt,.pdf,.docx"
+            accept=".md,.markdown,.txt,.pdf,.docx,.csv,.xlsx"
             className="hidden"
             onChange={(event) => {
               if (event.target.files) void uploadFiles(event.target.files);

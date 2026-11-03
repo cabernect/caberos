@@ -294,3 +294,52 @@ async def doc_inspect(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         }
 
     return {"error": "Visual inspection is supported for PDF and DOCX documents"}
+
+
+async def doc_query_rows(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+    """Exact filtered/aggregated row query over a tabular Vault document.
+
+    Complete-set questions (counts, sums, "all rows where…") belong here —
+    doc_search only samples excerpts. Predicates use a fixed allowlist; the
+    full filtered set is scanned so counts/aggregates are exact, not page-limited.
+    """
+    from ...knowledge.tabular import query_rows
+
+    db = kwargs["db"]
+    agent_id = kwargs["agent_id"]
+    document = await db.scalar(
+        select(Document).where(
+            Document.id == args["document_id"],
+            or_(Document.agent_id.is_(None), Document.agent_id == agent_id),
+        )
+    )
+    if document is None:
+        return {"error": "Document not found"}
+    limit = args.get("limit", 50)
+    if not isinstance(limit, int) or not 1 <= limit <= 200:
+        return {"error": "limit must be an integer between 1 and 200"}
+    after = args.get("after_row", 0)
+    if not isinstance(after, int) or after < 0:
+        return {"error": "after_row must be a non-negative integer (prior page's next_cursor)"}
+    result = await query_rows(
+        db,
+        document,
+        sheet_name=args.get("sheet"),
+        filters=args.get("filters"),
+        order=args.get("order", "asc"),
+        after_row=after,
+        limit=limit,
+        aggregates=args.get("aggregates"),
+    )
+    if "error" in result:
+        return result
+    return {
+        "document_id": result["document_id"],
+        "sheet": result["sheet"],
+        "matched_count": result["matched_count"],
+        "aggregates": result["aggregates"],
+        "rows": result["items"],
+        "next_cursor": result["next_cursor"],
+        "truncated": result["truncated"],
+        "columns": result["columns"],
+    }

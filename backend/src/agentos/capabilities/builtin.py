@@ -23,7 +23,7 @@ from .tools.browser import (
 from .tools.catalog import capabilities_load, capabilities_search
 from .tools.datetime_tool import datetime_now
 from .tools.file import read_file, search_files, write_file
-from .tools.knowledge import doc_inspect, doc_list, doc_search
+from .tools.knowledge import doc_inspect, doc_list, doc_query_rows, doc_search
 from .tools.memory import (
     memory_query_facts,
     memory_recall,
@@ -357,6 +357,74 @@ def register_builtin_capabilities() -> None:
             require_approval=False,
             subject_scoped=False,
             execute=doc_inspect,
+        )
+    )
+
+    registry.register(
+        CapabilityDef(
+            name="doc_query_rows",
+            effects=frozenset({"read"}),
+            kind="tool",
+            description=(
+                "Query rows of a CSV/XLSX document in the Knowledge Vault exactly: "
+                "allowlisted filters (eq, ne, lt, lte, gt, gte, contains), aggregates "
+                "(count, sum, min, max) over the complete matching set, and paged rows "
+                "with source coordinates. Use this for 'all rows where…', counts, or "
+                "totals — doc_search only samples excerpts and cannot answer "
+                "complete-set questions."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "document_id": {
+                        "type": "string",
+                        "description": "Document ID from doc_search/doc_list",
+                    },
+                    "sheet": {
+                        "type": "string",
+                        "description": "Sheet name (required when the document has several)",
+                    },
+                    "filters": {
+                        "type": "array",
+                        "description": "AND-combined predicates on columns (id or unique label)",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "column": {"type": "string"},
+                                "op": {
+                                    "type": "string",
+                                    "enum": ["eq", "ne", "lt", "lte", "gt", "gte", "contains"],
+                                },
+                                "value": {},
+                            },
+                            "required": ["column", "op", "value"],
+                        },
+                    },
+                    "aggregates": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "op": {"type": "string", "enum": ["count", "sum", "min", "max"]},
+                                "column": {"type": "string"},
+                            },
+                            "required": ["op"],
+                        },
+                    },
+                    "order": {"type": "string", "enum": ["asc", "desc"], "default": "asc"},
+                    "limit": {"type": "integer", "default": 50, "maximum": 200},
+                    "after_row": {
+                        "type": "integer",
+                        "description": "Continue after this source row (prior next_cursor)",
+                        "default": 0,
+                    },
+                },
+                "required": ["document_id"],
+            },
+            egress=False,
+            require_approval=False,
+            subject_scoped=False,
+            execute=doc_query_rows,
         )
     )
 

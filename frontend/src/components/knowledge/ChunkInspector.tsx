@@ -5,6 +5,8 @@ import type {
   KnowledgeChunk,
   KnowledgeChunksPage,
   KnowledgeDocument,
+  KnowledgeRow,
+  KnowledgeSheet,
 } from "@/lib/types";
 
 const PAGE_SIZE = 50;
@@ -38,6 +40,185 @@ const INITIAL: BranchState = {
   stale: false,
   error: null,
 };
+
+function RowsView({
+  scope,
+  document,
+}: {
+  scope: string;
+  document: KnowledgeDocument;
+}) {
+  const [sheets, setSheets] = useState<KnowledgeSheet[] | null>(null);
+  const [active, setActive] = useState<string | null>(null);
+  const [rows, setRows] = useState<KnowledgeRow[]>([]);
+  const [columns, setColumns] = useState<{ id: string; label: string; kind: string }[]>([]);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [stale, setStale] = useState(false);
+  const alive = useRef(true);
+  const activeSheet = useRef<string | null>(null);
+
+  useEffect(() => {
+    alive.current = true;
+    api
+      .listDocumentSheets(scope, document.id)
+      .then((page) => {
+        if (!alive.current) return;
+        setSheets(page.sheets);
+        if (page.sheets.length === 1) setActive(page.sheets[0].name);
+      })
+      .catch(() => alive.current && setSheets([]));
+    return () => {
+      alive.current = false;
+    };
+  }, [scope, document.id]);
+
+  const load = useCallback(
+    (sheet: string, next?: string) => {
+      setLoading(true);
+      setError(null);
+      api
+        .listDocumentRows(scope, document.id, {
+          sheet,
+          cursor: next,
+          limit: 50,
+        })
+        .then((page) => {
+          if (!alive.current || activeSheet.current !== sheet) return;
+          setRows((prev) => (next ? [...prev, ...page.items] : page.items));
+          setColumns(page.columns);
+          setCursor(page.next_cursor);
+          setStale(false);
+        })
+        .catch((err) => {
+          if (!alive.current || activeSheet.current !== sheet) return;
+          if (err?.status === 409) setStale(true);
+          else setError(err?.message ?? "Could not load rows");
+        })
+        .finally(() => alive.current && setLoading(false));
+    },
+    [scope, document.id],
+  );
+
+  useEffect(() => {
+    activeSheet.current = active;
+    if (active) {
+      setRows([]);
+      setCursor(null);
+      load(active);
+    }
+  }, [active, load]);
+
+  if (sheets === null)
+    return <p className="px-5 py-6 text-sm text-[var(--ink-faint)]">Loading sheets…</p>;
+  if (sheets.length === 0)
+    return (
+      <p className="px-5 py-6 text-sm text-[var(--ink-faint)]">
+        No parsed sheets — this document has no persisted row layer.
+      </p>
+    );
+
+  const sheet = sheets.find((s) => s.name === active);
+  return (
+    <div>
+      <div className="flex flex-wrap items-center gap-2 px-5 py-3">
+        {sheets.map((s) => (
+          <button
+            key={s.id}
+            type="button"
+            onClick={() => setActive(s.name)}
+            className="cursor-pointer rounded-md border px-3 py-1 text-xs"
+            style={{
+              borderColor: s.name === active ? "var(--accent)" : "var(--line)",
+              color: s.name === active ? "var(--accent)" : "var(--ink-muted)",
+            }}
+          >
+            {s.name} · {s.row_count} rows
+          </button>
+        ))}
+      </div>
+      {sheet?.warnings.map((w) => (
+        <p key={w} className="px-5 pb-1 text-[11px] text-[var(--ink-faint)]">
+          {w}
+        </p>
+      ))}
+      {stale && (
+        <div className="px-5 py-3">
+          <p className="text-sm text-[var(--danger)]">
+            This document was re-indexed — the view is stale.
+          </p>
+          <button
+            type="button"
+            onClick={() => active && load(active)}
+            className="mt-1 cursor-pointer text-xs text-[var(--accent)] hover:underline"
+          >
+            Reload inspection
+          </button>
+        </div>
+      )}
+      {error && <p className="px-5 py-3 text-sm text-[var(--danger)]">{error}</p>}
+      {!active ? (
+        <p className="px-5 py-5 text-sm text-[var(--ink-faint)]">
+          Choose a sheet to inspect its rows.
+        </p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead>
+              <tr className="border-b" style={{ borderColor: "var(--line)" }}>
+                <th className="px-3 py-2 font-medium text-[var(--ink-faint)]">row</th>
+                {columns.map((c) => (
+                  <th key={c.id} className="px-3 py-2 font-medium text-[var(--ink-faint)]">
+                    {c.label}
+                    <span className="ml-1 font-normal">({c.kind})</span>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[var(--line)]">
+              {rows.map((row) => (
+                <tr key={row.row_number}>
+                  <td
+                    className="whitespace-nowrap px-3 py-1.5 text-[var(--ink-faint)]"
+                    title={row.coord}
+                  >
+                    {row.row_number}
+                  </td>
+                  {columns.map((c) => (
+                    <td
+                      key={c.id}
+                      className="max-w-56 truncate px-3 py-1.5 text-[var(--ink)]"
+                    >
+                      {row.cells[c.id] == null ? "" : String(row.cells[c.id])}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {loading && (
+            <p className="px-5 py-3 text-xs text-[var(--ink-faint)]">Loading…</p>
+          )}
+          {!loading && active && rows.length === 0 && (
+            <p className="px-5 py-4 text-xs text-[var(--ink-faint)]">
+              This sheet has no data rows.
+            </p>
+          )}
+          {cursor && !loading && (
+            <button
+              type="button"
+              onClick={() => load(active, cursor)}
+              className="block w-full cursor-pointer px-5 py-2.5 text-left text-xs text-[var(--accent)] hover:underline"
+            >
+              Load more rows
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function ChunkInspector({
   scope,
@@ -250,6 +431,11 @@ export function ChunkInspector({
         </button>
       </div>
       <div className="max-h-[28rem] overflow-y-auto">
+        {/csv|spreadsheet/.test(document.mime_type) &&
+        document.status === "indexed" ? (
+          <RowsView scope={scope} document={document} />
+        ) : (
+          <>
         {document.status === "pending" && (
           <p className="px-5 py-6 text-sm text-[var(--ink-faint)]">
             Still indexing — chunks appear here once persisted.
@@ -294,6 +480,8 @@ export function ChunkInspector({
             </p>
           )}
         {!state.stale && renderRows("", 0)}
+          </>
+        )}
       </div>
     </section>
   );

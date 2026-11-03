@@ -51,7 +51,9 @@ import type {
   KnowledgeGeneration,
   KnowledgeIndexOverview,
   KnowledgeResult,
+  KnowledgeRowsPage,
   KnowledgeScope,
+  KnowledgeSheet,
   WorkspaceEntry,
   InstallJob,
   InstallPlan,
@@ -781,6 +783,24 @@ export const api = {
     const suffix = params.size ? `?${params}` : "";
     return request<KnowledgeChunksPage>(
       `/api/knowledge/scopes/${scope}/documents/${documentId}/chunks${suffix}`,
+    );
+  },
+  listDocumentSheets: (scope: string, documentId: string) =>
+    request<{ corpus_version: string; sheets: KnowledgeSheet[] }>(
+      `/api/knowledge/scopes/${scope}/documents/${documentId}/sheets`,
+    ),
+  listDocumentRows: (
+    scope: string,
+    documentId: string,
+    opts: { sheet?: string; cursor?: string; limit?: number } = {},
+  ) => {
+    const params = new URLSearchParams();
+    if (opts.sheet) params.set("sheet", opts.sheet);
+    if (opts.cursor) params.set("cursor", opts.cursor);
+    if (opts.limit) params.set("limit", String(opts.limit));
+    const suffix = params.size ? `?${params}` : "";
+    return request<KnowledgeRowsPage>(
+      `/api/knowledge/scopes/${scope}/documents/${documentId}/rows${suffix}`,
     );
   },
 

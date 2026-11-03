@@ -31,7 +31,7 @@ from ..knowledge.indexing import (
 from ..knowledge.ingest import delete_document, ingest_document, list_documents
 from ..knowledge.retrieval import retrieve
 from ..models.agent import Agent
-from ..models.document import Document, DocumentChunk
+from ..models.document import Document, DocumentChunk, DocumentRow, DocumentSheet
 from ..models.knowledge_index import EmbeddingResource, IndexGeneration
 from ..models.model_call import ModelCall
 from ..models.operator import Operator, OperatorAuditLog
@@ -42,23 +42,18 @@ router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
 # Large-PDF friendly while still bounding disk usage; uploads stream to disk
 # so the cap doesn't sit in memory.
 _MAX_UPLOAD_BYTES = 250 * 1024 * 1024
-_SUPPORTED_SUFFIXES = {".md", ".markdown", ".txt", ".pdf", ".docx"}
-# Tabular files are refused, not chunked: flattening rows to text destroys
-# queryability (no COUNT/filter/column semantics) and doc_search's top-K
-# sample masquerades as coverage. A row-record ingest layer is deferred
-# post-v0.2 (see v0.2-release-plan.md → "Structured sources get a row layer").
-_TABULAR_SUFFIXES = {".xlsx", ".xls", ".csv"}
+_SUPPORTED_SUFFIXES = {".md", ".markdown", ".txt", ".pdf", ".docx", ".csv", ".xlsx"}
+# .xls (legacy binary) stays refused — openpyxl can't read it and an
+# approximated conversion would misreport the corpus. CSV/XLSX are supported
+# through the row layer in knowledge/tabular.py (W4).
+_TABULAR_SUFFIXES = {".xls"}
 
 
 def _check_supported(file_name: str) -> None:
     suffix = Path(file_name).suffix.lower()
     if suffix in _TABULAR_SUFFIXES:
         raise HTTPException(
-            status_code=400,
-            detail=(
-                "Tabular files are not indexed yet — rows need a queryable "
-                "layer, not text chunks (deferred)"
-            ),
+            status_code=400, detail="Legacy .xls is not supported — save as .xlsx or .csv first"
         )
     if suffix not in _SUPPORTED_SUFFIXES:
         raise HTTPException(status_code=400, detail="Unsupported document format")
@@ -395,6 +390,122 @@ async def get_document_chunks(
         "chunk_count": await _document_chunk_count(db, document_id),
         "preview_chars": _CHUNK_PREVIEW_CHARS,
         "items": items,
+        "next_cursor": next_cursor,
+    }
+
+
+async def _scoped_document(db: AsyncSession, scope: str, document_id: str) -> Document:
+    agent_id = await _resolve_scope(scope, db)
+    document = await db.scalar(
+        select(Document).where(Document.id == document_id, Document.agent_id == agent_id)
+    )
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return document
+
+
+@router.get("/scopes/{scope}/documents/{document_id}/sheets")
+async def get_document_sheets(
+    scope: str,
+    document_id: str,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """List parsed sheets (headers, kinds, warnings) for a tabular document."""
+    document = await _scoped_document(db, scope, document_id)
+    sheets = list(
+        (
+            await db.execute(
+                select(DocumentSheet)
+                .where(DocumentSheet.document_id == document.id)
+                .order_by(DocumentSheet.sheet_index)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return {
+        "document_id": document.id,
+        "corpus_version": _corpus_version(document),
+        "sheets": [
+            {
+                "id": s.id,
+                "name": s.name,
+                "sheet_index": s.sheet_index,
+                "row_count": s.row_count,
+                "columns": json.loads(s.columns_json or "[]"),
+                "warnings": json.loads(s.warnings_json or "[]"),
+            }
+            for s in sheets
+        ],
+    }
+
+
+@router.get("/scopes/{scope}/documents/{document_id}/rows")
+async def get_document_rows(
+    scope: str,
+    document_id: str,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+    sheet: str | None = None,
+    cursor: str | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+) -> dict:
+    """Bounded, corpus-versioned row inspection — same cursor contract as
+    the chunks endpoint (stale cursor → 409)."""
+    document = await _scoped_document(db, scope, document_id)
+    version = _corpus_version(document)
+    after_row = 0
+    if cursor:
+        try:
+            cursor_version, raw = cursor.rsplit(":", 1)
+            after_row = int(raw)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Malformed cursor") from None
+        if cursor_version != version:
+            raise HTTPException(
+                status_code=409,
+                detail="Document was re-indexed — reload the inspection",
+            )
+
+    sheet_q = select(DocumentSheet).where(DocumentSheet.document_id == document.id)
+    if sheet:
+        sheet_q = sheet_q.where(DocumentSheet.name == sheet)
+    sheets = list((await db.execute(sheet_q.order_by(DocumentSheet.sheet_index))).scalars())
+    if not sheets:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Sheet not found: '{sheet}'" if sheet else "No sheets persisted",
+        )
+    if len(sheets) > 1:
+        raise HTTPException(status_code=400, detail="Multiple sheets — pass 'sheet'")
+
+    target = sheets[0]
+    rows = list(
+        (
+            await db.execute(
+                select(DocumentRow)
+                .where(DocumentRow.sheet_id == target.id, DocumentRow.row_number > after_row)
+                .order_by(DocumentRow.row_number)
+                .limit(limit + 1)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    next_cursor = None
+    if len(rows) > limit:
+        rows = rows[:limit]
+        next_cursor = f"{version}:{rows[-1].row_number}"
+    return {
+        "document_id": document.id,
+        "corpus_version": version,
+        "sheet": target.name,
+        "columns": json.loads(target.columns_json or "[]"),
+        "items": [
+            {"row_number": r.row_number, "coord": r.coord, "cells": json.loads(r.cells_json)}
+            for r in rows
+        ],
         "next_cursor": next_cursor,
     }
 

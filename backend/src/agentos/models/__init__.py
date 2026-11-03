@@ -11,7 +11,7 @@ from .channel_config import ChannelConfig
 from .contact import Contact
 from .conversation_summary import ConversationSummary
 from .core import CoreRevision
-from .document import Document, DocumentChunk
+from .document import Document, DocumentChunk, DocumentRow, DocumentSheet
 from .elicitation import ElicitationRequest
 from .execution_manifest import ExecutionManifest
 from .knowledge_index import (
@@ -65,6 +65,8 @@ __all__ = [
     "CoreRevision",
     "Document",
     "DocumentChunk",
+    "DocumentRow",
+    "DocumentSheet",
     "EmbeddingResource",
     "RetrievalProfile",
     "IndexGeneration",

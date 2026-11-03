@@ -35,6 +35,59 @@ class Document(Base, IdMixin, TimestampMixin):
     chunks: Mapped[list["DocumentChunk"]] = relationship(
         back_populates="document", cascade="all, delete-orphan"
     )
+    sheets: Mapped[list["DocumentSheet"]] = relationship(
+        back_populates="document", cascade="all, delete-orphan"
+    )
+
+
+class DocumentSheet(Base, IdMixin):
+    """One parsed sheet/table inside a tabular document.
+
+    ``columns_json`` stores ``[{"id": "col_1", "label": "...", "kind": "..."}]`` —
+    stable ids for querying, original labels for display (duplicates/blanks are
+    never merged). ``warnings_json`` lists parser findings (never silent drops).
+    """
+
+    __tablename__ = "document_sheets"
+    __table_args__ = (
+        UniqueConstraint("document_id", "sheet_index", name="uq_document_sheet_index"),
+        Index("ix_document_sheets_document", "document_id"),
+    )
+
+    document_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    sheet_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    columns_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    row_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    warnings_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+
+    document: Mapped[Document] = relationship(back_populates="sheets")
+    rows: Mapped[list["DocumentRow"]] = relationship(
+        back_populates="sheet", cascade="all, delete-orphan"
+    )
+
+
+class DocumentRow(Base, IdMixin):
+    """One source row of a parsed sheet — typed cells plus exact coordinates."""
+
+    __tablename__ = "document_rows"
+    __table_args__ = (
+        UniqueConstraint("sheet_id", "row_number", name="uq_document_row_number"),
+        Index("ix_document_rows_sheet", "sheet_id"),
+    )
+
+    sheet_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("document_sheets.id", ondelete="CASCADE"), nullable=False
+    )
+    # Original source row number — header row is 1, first data row is 2.
+    row_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    cells_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    # e.g. "Sales!A42:F42" — or "csv!A42:F42" for the synthetic CSV sheet.
+    coord: Mapped[str] = mapped_column(String(96), nullable=False)
+
+    sheet: Mapped[DocumentSheet] = relationship(back_populates="rows")
 
 
 class DocumentChunk(Base, IdMixin):

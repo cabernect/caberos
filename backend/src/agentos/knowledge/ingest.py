@@ -15,6 +15,7 @@ from ..fts import fts5_match_query
 from ..models.document import Document, DocumentChunk
 from .chunker import ChunkingConfig, ChunkNode, chunk_blocks
 from .extractors import extract_document
+from .tabular import TABULAR_SUFFIXES, parse_tabular, persist_tabular
 
 
 async def _chunking_config(db: AsyncSession) -> ChunkingConfig:
@@ -194,6 +195,12 @@ async def ingest_document(
     config = await _chunking_config(db)
     nodes = chunk_blocks(extracted.blocks, config)
     retrievable = await _write_chunk_nodes(db, nodes, document, agent_id)
+
+    # Tabular sources also persist queryable rows — same transaction, so a
+    # failed parse leaves the document (and its earlier rows) unpublished.
+    if source_file.suffix.lower() in TABULAR_SUFFIXES:
+        parsed = await asyncio.to_thread(parse_tabular, source_file)
+        await persist_tabular(db, document, parsed)
 
     # Commit the corpus write before embedding: a large document's embed
     # phase runs hundreds of batches, and holding this transaction through

@@ -411,6 +411,36 @@ export interface KnowledgeChunksPage {
   next_cursor: string | null;
 }
 
+export interface KnowledgeSheetColumn {
+  id: string;
+  label: string;
+  kind: string;
+}
+
+export interface KnowledgeSheet {
+  id: string;
+  name: string;
+  sheet_index: number;
+  row_count: number;
+  columns: KnowledgeSheetColumn[];
+  warnings: string[];
+}
+
+export interface KnowledgeRow {
+  row_number: number;
+  coord: string;
+  cells: Record<string, unknown>;
+}
+
+export interface KnowledgeRowsPage {
+  document_id: string;
+  corpus_version: string;
+  sheet: string;
+  columns: KnowledgeSheetColumn[];
+  items: KnowledgeRow[];
+  next_cursor: string | null;
+}
+
 export interface KnowledgeResult {
   chunk_id: string;
   document_id: string;
