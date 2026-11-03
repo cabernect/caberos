@@ -3611,6 +3611,8 @@ function ModelsTab({
           {providers.map((provider) => {
             const all = discovered[provider.id] || [];
             const models = all.filter((m) => m.availability === "available");
+            const chatModels = models.filter((m) => m.model_kind !== "media");
+            const mediaModels = models.filter((m) => m.model_kind === "media");
             const errCount = all.filter((m) => m.discovery_error).length;
             const error =
               models.length === 0 && errCount > 0
@@ -3665,13 +3667,13 @@ function ModelsTab({
                     Discover
                   </button>
                 </div>
-                {models.length > 0 && (
+                {chatModels.length > 0 && (
                   <div
                     className="mt-3 border-t pt-3"
                     style={{ borderColor: "var(--border-soft)" }}
                   >
                     <div className="flex flex-wrap gap-1.5">
-                      {models
+                      {chatModels
                         .slice(
                           (chipPage[provider.id] || 0) * 24,
                           ((chipPage[provider.id] || 0) + 1) * 24,
@@ -3690,7 +3692,7 @@ function ModelsTab({
                           </span>
                         ))}
                     </div>
-                    {models.length > 24 && (
+                    {chatModels.length > 24 && (
                       <div className="mt-2 flex items-center justify-end gap-2">
                         <button
                           onClick={() =>
@@ -3711,21 +3713,21 @@ function ModelsTab({
                         </button>
                         <span className="text-[11px] text-[var(--ink-3)]">
                           {(chipPage[provider.id] || 0) + 1}/
-                          {Math.ceil(models.length / 24)}
+                          {Math.ceil(chatModels.length / 24)}
                         </span>
                         <button
                           onClick={() =>
                             setChipPage((prev) => ({
                               ...prev,
                               [provider.id]: Math.min(
-                                Math.ceil(models.length / 24) - 1,
+                                Math.ceil(chatModels.length / 24) - 1,
                                 (prev[provider.id] || 0) + 1,
                               ),
                             }))
                           }
                           disabled={
                             (chipPage[provider.id] || 0) >=
-                            Math.ceil(models.length / 24) - 1
+                            Math.ceil(chatModels.length / 24) - 1
                           }
                           aria-label="Next page"
                           className="flex h-6 w-6 items-center justify-center rounded border text-[var(--ink-2)] transition hover:bg-[var(--hover)] disabled:opacity-40"
@@ -3735,6 +3737,31 @@ function ModelsTab({
                         </button>
                       </div>
                     )}
+                  </div>
+                )}
+                {mediaModels.length > 0 && (
+                  <div
+                    className="mt-2.5 border-t pt-2.5"
+                    style={{ borderColor: "var(--border-soft)" }}
+                  >
+                    <p className="mb-1.5 text-[11px] font-medium text-[var(--ink-3)]">
+                      Media models — not pickable for chat
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {mediaModels.map((m) => (
+                        <span
+                          key={m.id}
+                          className="rounded-full border border-dashed px-2.5 py-1 font-mono text-[11px]"
+                          style={{
+                            borderColor: "var(--accent)",
+                            color: "var(--ink-3)",
+                          }}
+                          title={m.display_name || m.name}
+                        >
+                          {m.name}
+                        </span>
+                      ))}
+                    </div>
                   </div>
                 )}
                 {(() => {
@@ -4409,13 +4436,33 @@ export function ToolsTab({ providers }: { providers: Provider[] }) {
     async (providerId: string, modalities: string[] | null) => {
       if (!providerId || !modalities?.length || catalogModels[providerId]) return;
       try {
-        const r = await api.listCatalogModels(providerId);
-        const ids = r.models
+        const [catalogResp, discoveredResp] = await Promise.all([
+          api.listCatalogModels(providerId),
+          // Provider-reported availability (D40) — live-discovered offerings
+          // count even when the catalog snapshot doesn't know the model yet.
+          api.listModels(providerId).catch(() => ({ models: [] })),
+        ]);
+        const catalogIds = catalogResp.models
           .filter((m) =>
             modalities.every((mod) => (m.output_modalities ?? []).includes(mod)),
           )
           .map((m) => m.id);
-        setCatalogModels((prev) => ({ ...prev, [providerId]: ids }));
+        const discoveredIds = discoveredResp.models
+          .filter(
+            (m) =>
+              m.availability === "available" &&
+              m.model_kind === "media" &&
+              modalities.every((mod) =>
+                m.output_modalities
+                  ? (m.output_modalities ?? []).includes(mod)
+                  : m.id.toLowerCase().includes(mod),
+              ),
+          )
+          .map((m) => m.id);
+        setCatalogModels((prev) => ({
+          ...prev,
+          [providerId]: [...new Set([...catalogIds, ...discoveredIds])].sort(),
+        }));
       } catch {
         /* suggestions are assistive — catalog misses stay quiet */
       }

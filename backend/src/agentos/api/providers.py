@@ -123,6 +123,10 @@ class ModelInfo(BaseModel):
     catalog_provider_id: str | None = None
     catalog_model_id: str | None = None
     catalog_mapping_explicit: bool = False
+    # Consumer gate — "chat" or "media". Discovery reports every model the
+    # provider lists; pickers filter on this instead of id patterns.
+    model_kind: str | None = None
+    output_modalities: list[str] | None = None
 
 
 @router.get("")
@@ -260,7 +264,11 @@ async def list_models(
     empty list.
     """
     from ..providers.catalog import get_catalog_snapshot
-    from ..providers.model_catalog import list_offerings, provider_refresh_in_progress
+    from ..providers.model_catalog import (
+        list_offerings,
+        model_kind,
+        provider_refresh_in_progress,
+    )
 
     result = await db.execute(select(Provider).where(Provider.id == provider_id))
     provider = result.scalar_one_or_none()
@@ -293,6 +301,12 @@ async def list_models(
     for offering in offerings:
         resolved = json.loads(offering.resolved_json or "{}")
         prov = resolved.pop("provenance", {}) or {}
+        modalities = resolved.get("modalities")
+        outputs = (
+            list(modalities.get("output") or [])
+            if isinstance(modalities, dict) and modalities.get("output")
+            else None
+        )
         models.append(
             ModelInfo(
                 id=offering.model_id,
@@ -322,11 +336,20 @@ async def list_models(
                     offering.catalog_model_id if offering.catalog_mapping_explicit else None
                 ),
                 catalog_mapping_explicit=bool(offering.catalog_mapping_explicit),
+                model_kind=model_kind(offering.model_id, outputs),
+                output_modalities=outputs,
             )
         )
     for name in custom:
         if name not in by_id:
-            models.append(ModelInfo(id=name, name=name, availability="unknown"))
+            models.append(
+                ModelInfo(
+                    id=name,
+                    name=name,
+                    availability="unknown",
+                    model_kind=model_kind(name, None),
+                )
+            )
 
     # Composite revision: snapshot SHA + provider config fingerprint +
     # summed row revisions — a collision on max(row.rev) can't hide a

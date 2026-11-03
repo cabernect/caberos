@@ -90,6 +90,20 @@ def _is_chat_model(model_id: str) -> bool:
     return not any(pattern in name for pattern in _NON_CHAT_PATTERNS)
 
 
+_MEDIA_OUTPUT_MODALITIES = frozenset({"image", "audio", "video"})
+
+
+def model_kind(model_id: str, output_modalities: list | None) -> str:
+    """ "chat" | "media" — how consumers may treat the model, never a gate
+    on discovery. Reported output modalities win; the id pattern is the
+    fallback when the endpoint stays silent."""
+    if output_modalities and _MEDIA_OUTPUT_MODALITIES & set(output_modalities):
+        return "media"
+    if not output_modalities and not _is_chat_model(model_id):
+        return "media"
+    return "chat"
+
+
 # --- Live discovery: observed fields only, failure raises -------------
 
 
@@ -139,10 +153,12 @@ async def _discover_openai_compat(
         resp.raise_for_status()
         data = resp.json()
     items, complete = _openai_shape(data)
+    # Everything the endpoint reports — chat and non-chat models alike.
+    # model_kind is classified at projection (list_models), not filtered here.
     models = [
         {"id": model["id"], "name": model["id"]}
         for model in items[:_DISCOVERY_MODEL_CAP]
-        if isinstance(model, dict) and _is_chat_model(str(model.get("id", "")))
+        if isinstance(model, dict)
     ]
     if not complete or len(items) >= _DISCOVERY_MODEL_CAP:
         return {"state": "partial", "models": models}
@@ -162,7 +178,7 @@ async def _discover_openai(provider: dict[str, Any]) -> list[dict[str, Any]] | d
     models = [
         {"id": model["id"], "name": model["id"]}
         for model in items[:_DISCOVERY_MODEL_CAP]
-        if isinstance(model, dict) and _is_chat_model(str(model.get("id", "")))
+        if isinstance(model, dict)
     ]
     if not complete or len(items) >= _DISCOVERY_MODEL_CAP:
         return {"state": "partial", "models": models}
@@ -192,7 +208,7 @@ async def _discover_gemini(provider: dict[str, Any]) -> dict:
                 break
             for model in data["models"]:
                 model_id = str(model.get("name", "")).replace("models/", "")
-                if not model_id or not _is_chat_model(model_id):
+                if not model_id:
                     continue
                 models.append(
                     {
@@ -227,7 +243,7 @@ async def _discover_ollama(provider: dict[str, Any]) -> list[dict[str, Any]] | d
     models = [
         {"id": model["name"], "name": model["name"]}
         for model in (items or [])[:_DISCOVERY_MODEL_CAP]
-        if isinstance(model, dict) and _is_chat_model(str(model.get("name", "")))
+        if isinstance(model, dict)
     ]
     if not isinstance(items, list) or len(items) >= _DISCOVERY_MODEL_CAP:
         return {"state": "partial", "models": models}
@@ -249,12 +265,10 @@ async def _discover_openrouter(provider: dict[str, Any]) -> list[dict[str, Any]]
         if not isinstance(model, dict):
             continue
         model_id = str(model.get("id", ""))
-        if not model_id or not _is_chat_model(model_id):
+        if not model_id:
             continue
         architecture = model.get("architecture") or {}
         output_modalities = architecture.get("output_modalities") or []
-        if "image" in output_modalities and not model_id.startswith("openrouter/"):
-            continue
         input_modalities = architecture.get("input_modalities")
         supports_vision: bool | None
         if input_modalities:
@@ -268,6 +282,13 @@ async def _discover_openrouter(provider: dict[str, Any]) -> list[dict[str, Any]]
             {
                 "id": model_id,
                 "name": model_id,
+                # Endpoint-reported architecture modalities → observed
+                # `modalities` (catalog shape); consumers classify by output.
+                "modalities": (
+                    {"input": input_modalities, "output": output_modalities}
+                    if input_modalities or output_modalities
+                    else None
+                ),
                 "supports_vision": supports_vision,
                 "supports_thinking": supports_thinking,
                 "thinking_efforts": efforts,
@@ -661,7 +682,7 @@ async def list_offerings(db: AsyncSession, provider_id: str) -> list[ModelCatalo
     identity = catalog_identity(provider["type"], "", provider.get("base_url"))
     if identity:
         for model_id in snapshot.models(identity[0]):
-            if model_id not in views and _is_chat_model(model_id):
+            if model_id not in views:
                 views[model_id] = _virtual_offering(
                     provider_id, model_id, provider, snapshot, fingerprint
                 )

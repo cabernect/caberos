@@ -59,6 +59,9 @@ export interface ModelInfo {
   catalog_provider_id?: string | null;
   catalog_model_id?: string | null;
   catalog_mapping_explicit?: boolean;
+  /** "chat" | "media" — consumer gate; discovery reports all model types. */
+  model_kind?: "chat" | "media" | string | null;
+  output_modalities?: string[] | null;
 }
 
 /** GET /api/providers/{id}/models response — additive fields optional so
