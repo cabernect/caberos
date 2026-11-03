@@ -38,7 +38,7 @@ interface PanelPos {
 export function Select({
   value,
   onChange,
-  options,
+  options = [],
   placeholder = "— Select —",
   disabled,
   className = "",

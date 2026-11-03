@@ -54,6 +54,7 @@ import type {
   KnowledgeRowsPage,
   KnowledgeScope,
   KnowledgeSheet,
+  ToolBindingInfo,
   WorkspaceEntry,
   InstallJob,
   InstallPlan,
@@ -1705,6 +1706,25 @@ export const api = {
 
   // Global settings
   getYoloMode: () => request<{ yolo_mode: boolean }>("/api/settings/yolo"),
+
+  // --- Global tool bindings (W5) ---
+  listToolBindings: () =>
+    request<{ tools: ToolBindingInfo[] }>("/api/settings/tools"),
+  updateToolBinding: (
+    key: string,
+    body: {
+      provider_id?: string | null;
+      model?: string | null;
+      options?: Record<string, unknown>;
+      expected_revision?: number | null;
+    },
+  ) =>
+    request<ToolBindingInfo>(`/api/settings/tools/${key}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  resetToolBinding: (key: string) =>
+    request<ToolBindingInfo>(`/api/settings/tools/${key}`, { method: "DELETE" }),
 
   // --- Browser (W4) ---
   getBrowserSettings: () =>

@@ -1171,3 +1171,37 @@ export interface InstallJob {
   dependencies: InstallJobDep[];
   log?: { at: string; text: string }[];
 }
+
+// --- Global tool bindings (W5) ---
+
+export interface ToolBindingOptionField {
+  name: string;
+  kind: "string" | "number" | "boolean" | "select" | "engine_order";
+  label: string;
+  default: unknown;
+  choices: string[];
+  required: boolean;
+}
+
+export interface ToolBindingInfo {
+  key: string;
+  title: string;
+  description: string;
+  kind: "engine" | "model";
+  implemented: boolean;
+  planned_note: string | null;
+  capability_names: string[];
+  state: "unconfigured" | "ready" | "invalid" | "unimplemented";
+  ready: boolean;
+  reason: string;
+  options: Record<string, unknown>;
+  options_schema: ToolBindingOptionField[];
+  binding: {
+    provider_id: string | null;
+    provider_name: string | null;
+    provider_type: string | null;
+    model: string;
+    revision: number;
+    updated_at: string | null;
+  } | null;
+}

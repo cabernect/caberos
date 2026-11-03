@@ -22,13 +22,14 @@ import {
   ClipboardCopy,
   ChevronDown,
   ChevronRight,
+  Wrench,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useConfirm } from "@/lib/confirmHook";
 import { openUrl } from "@/lib/openUrl";
 import { useDesktopFileDrop } from "@/lib/desktopFileDrop";
 import { CHROME_PATH_EXAMPLE } from "@/lib/platform";
-import type { Agent, Provider, ModelInfo, Operator } from "@/lib/types";
+import type { Agent, Provider, ModelInfo, Operator, ToolBindingInfo } from "@/lib/types";
 import {
   downloadAndInstallUpdate,
   isDesktopMode,
@@ -299,10 +300,10 @@ const PRESET_PROVIDERS: ProviderPreset[] = [
 ];
 
 type SettingsTab =
-  "general" | "providers" | "models" | "browser" | "migration" | "about";
+  "general" | "providers" | "models" | "tools" | "browser" | "migration" | "about";
 
 const SETTINGS_TABS: SettingsTab[] = [
-  "general", "providers", "models", "browser", "migration", "about",
+  "general", "providers", "models", "tools", "browser", "migration", "about",
 ];
 
 export function ProvidersSettings() {
@@ -367,6 +368,7 @@ export function ProvidersSettings() {
     { key: "general", label: "General", icon: Settings },
     { key: "providers", label: "Providers", icon: Server },
     { key: "models", label: "Models", icon: Cpu },
+    { key: "tools", label: "Tools", icon: Wrench },
     { key: "browser", label: "Browser", icon: Globe },
     { key: "migration", label: "Migration", icon: HardDrive },
     { key: "about", label: "About", icon: Info },
@@ -434,6 +436,8 @@ export function ProvidersSettings() {
               onChanged={load}
             />
           )}
+
+          {activeTab === "tools" && <ToolsTab providers={providers} />}
 
           {activeTab === "browser" && <BrowserTab />}
 
@@ -593,20 +597,15 @@ function GeneralTab({
             Automatic
           </span>
         </div>
-        <div className="mt-3 flex flex-wrap items-center gap-1.5">
-          {["DuckDuckGo", "Bing", "Startpage", "Brave"].map((engine, i) => (
-            <span key={engine} className="flex items-center gap-1.5">
-              {i > 0 && (
-                <span className="text-[11px] text-[var(--ink-3)]">→</span>
-              )}
-              <span className="rounded-md border border-[var(--line)] px-2 py-0.5 text-[11px] font-medium text-[var(--ink-2)]">
-                {engine}
-              </span>
-            </span>
-          ))}
-        </div>
         <p className="mt-2.5 text-[12px] text-[var(--ink-3)]">
-          The first engine that answers wins — no API key required.
+          Engine order, SafeSearch, and region are configured under{" "}
+          <a
+            href="/settings?tab=tools"
+            className="font-medium text-[var(--accent)] hover:underline"
+          >
+            Settings → Tools
+          </a>
+          . No API key required.
         </p>
       </SettingsSection>
 
@@ -4303,6 +4302,373 @@ function Field({
         {label}
       </label>
       {children}
+    </div>
+  );
+}
+
+// --- Tools tab (W5) -------------------------------------------------------
+
+function ToolStatusChip({ tool }: { tool: ToolBindingInfo }) {
+  const label = !tool.implemented
+    ? "Not yet available"
+    : tool.state === "ready"
+      ? tool.binding ? "Configured" : "Using defaults"
+      : tool.state === "unconfigured"
+        ? "Not configured"
+        : "Needs attention";
+  const tone = !tool.implemented
+    ? "var(--ink-3)"
+    : tool.state === "ready"
+      ? "var(--accent)"
+      : tool.state === "unconfigured"
+        ? "var(--ink-3)"
+        : "var(--danger)";
+  return (
+    <span
+      className="rounded-full px-2 py-0.5 text-[11px] font-medium"
+      style={{ background: "var(--sunken)", color: tone }}
+    >
+      {label}
+    </span>
+  );
+}
+
+function EngineOrderField({
+  value,
+  choices,
+  onChange,
+}: {
+  value: string[];
+  choices: string[];
+  onChange: (v: string[]) => void;
+}) {
+  const remaining = choices.filter((c) => !value.includes(c));
+  const move = (i: number, d: number) => {
+    const next = [...value];
+    const [item] = next.splice(i, 1);
+    next.splice(i + d, 0, item);
+    onChange(next);
+  };
+  return (
+    <div className="space-y-1.5">
+      {value.map((engine, i) => (
+        <div
+          key={engine}
+          className="flex items-center gap-2 rounded-md border border-line bg-ground px-2.5 py-1.5"
+        >
+          <span className="flex-1 font-mono text-[12px] text-ink">{engine}</span>
+          <button
+            type="button"
+            disabled={i === 0}
+            onClick={() => move(i, -1)}
+            className="cursor-pointer text-ink-3 hover:text-ink disabled:opacity-30"
+            title="Try earlier"
+          >
+            ↑
+          </button>
+          <button
+            type="button"
+            disabled={i === value.length - 1}
+            onClick={() => move(i, 1)}
+            className="cursor-pointer text-ink-3 hover:text-ink disabled:opacity-30"
+            title="Try later"
+          >
+            ↓
+          </button>
+          <button
+            type="button"
+            onClick={() => onChange(value.filter((e) => e !== engine))}
+            className="cursor-pointer text-ink-3 hover:text-[var(--danger)]"
+            title="Disable engine"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      ))}
+      {remaining.length > 0 && (
+        <Select
+          value=""
+          onChange={(v) => {
+            if (v) onChange([...value, v]);
+          }}
+          options={[
+            { value: "", label: "Add engine…" },
+            ...remaining.map((e) => ({ value: e, label: e })),
+          ]}
+          className="w-full rounded-md border border-line bg-ground px-2.5 py-1.5 text-[12px] text-ink outline-none"
+        />
+      )}
+    </div>
+  );
+}
+
+function ToolsTab({ providers }: { providers: Provider[] }) {
+  const { confirm, toast } = useConfirm();
+  const [tools, setTools] = useState<ToolBindingInfo[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  // per-key draft state: options for engine tools, provider/model for model tools
+  const [drafts, setDrafts] = useState<
+    Record<string, { options: Record<string, unknown>; providerId: string; model: string }>
+  >({});
+  const [saving, setSaving] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await api.listToolBindings();
+      setTools(r.tools);
+      setDrafts((prev) => {
+        const next = { ...prev };
+        for (const t of r.tools) {
+          if (!next[t.key]) {
+            next[t.key] = {
+              options: { ...t.options },
+              providerId: t.binding?.provider_id ?? "",
+              model: t.binding?.model ?? "",
+            };
+          } else {
+            // Refresh options from server only when not mid-edit? Options are
+            // cheap — prefer the server's truth so stale drafts can't write.
+            next[t.key] = {
+              options: { ...t.options },
+              providerId: t.binding?.provider_id ?? next[t.key].providerId,
+              model: t.binding?.model ?? next[t.key].model,
+            };
+          }
+        }
+        return next;
+      });
+      setError("");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const save = async (tool: ToolBindingInfo) => {
+    const draft = drafts[tool.key];
+    if (!draft) return;
+    setSaving(tool.key);
+    try {
+      const body =
+        tool.kind === "engine"
+          ? {
+              options: draft.options,
+              expected_revision: tool.binding?.revision ?? null,
+            }
+          : {
+              provider_id: draft.providerId || null,
+              model: draft.model,
+              options: draft.options,
+              expected_revision: tool.binding?.revision ?? null,
+            };
+      await api.updateToolBinding(tool.key, body);
+      await load();
+      toast(`${tool.title} saved`);
+    } catch (e: any) {
+      if (e?.status === 409) {
+        toast("Settings changed elsewhere — reloaded the latest values");
+        await load();
+      } else {
+        toast(String(e?.message ?? e));
+      }
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const reset = async (tool: ToolBindingInfo) => {
+    const ok = await confirm({
+      title: `Reset ${tool.title}?`,
+      message: "This returns the tool to its built-in defaults.",
+      confirmLabel: "Reset",
+    });
+    if (!ok) return;
+    try {
+      await api.resetToolBinding(tool.key);
+      await load();
+      toast(`${tool.title} reset to defaults`);
+    } catch (e) {
+      toast(String(e));
+    }
+  };
+
+  if (loading) {
+    return <p className="text-sm text-[var(--ink-3)]">Loading tools…</p>;
+  }
+
+  return (
+    <div className="max-w-2xl space-y-4">
+      {error && (
+        <p className="rounded-md border border-[var(--danger)]/30 bg-[var(--danger)]/10 px-3 py-2 text-sm text-[var(--danger)]">
+          {error}
+        </p>
+      )}
+      <p className="text-[13px] text-[var(--ink-2)]">
+        Tool bindings choose how a supported tool executes — engine options or
+        a provider/model. They don't grant capabilities; each agent's
+        permissions still decide who may use them.
+      </p>
+      {tools.map((tool) => {
+        const draft = drafts[tool.key] ?? {
+          options: {},
+          providerId: "",
+          model: "",
+        };
+        const setOption = (name: string, v: unknown) =>
+          setDrafts((d) => ({
+            ...d,
+            [tool.key]: {
+              ...d[tool.key],
+              options: { ...d[tool.key].options, [name]: v },
+            },
+          }));
+        return (
+          <section
+            key={tool.key}
+            className="rounded-xl p-5"
+            style={{
+              border: "1px solid var(--border-soft)",
+              background: "var(--surface)",
+              opacity: tool.implemented ? 1 : 0.75,
+            }}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-sm font-semibold text-[var(--ink)]">
+                {tool.title}
+              </h2>
+              <ToolStatusChip tool={tool} />
+            </div>
+            <p className="mt-1 text-[12px] text-[var(--ink-3)]">
+              {tool.description}
+            </p>
+            {!tool.implemented ? (
+              <p className="mt-3 rounded-md border border-dashed border-line px-3 py-2 text-[12px] text-[var(--ink-3)]">
+                {tool.planned_note ?? "Planned for a future release."}
+              </p>
+            ) : (
+              <div className="mt-4 space-y-3">
+                {tool.reason && tool.state !== "ready" && (
+                  <p className="text-[12px] text-[var(--danger)]">
+                    {tool.reason}
+                  </p>
+                )}
+                {tool.kind === "model" && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <Field label="Provider">
+                      <Select
+                        value={draft.providerId}
+                        onChange={(v) =>
+                          setDrafts((d) => ({
+                            ...d,
+                            [tool.key]: {
+                              ...d[tool.key],
+                              providerId: v,
+                            },
+                          }))
+                        }
+                        options={[
+                          { value: "", label: "Choose provider…" },
+                          ...providers.map((p) => ({
+                            value: p.id,
+                            label: `${p.name} (${p.type})`,
+                          })),
+                        ]}
+                        className="w-full rounded-md border border-line bg-ground px-3 py-1.5 text-[13px] text-ink outline-none"
+                      />
+                    </Field>
+                    <Field label="Model">
+                      <input
+                        value={draft.model}
+                        onChange={(e) =>
+                          setDrafts((d) => ({
+                            ...d,
+                            [tool.key]: {
+                              ...d[tool.key],
+                              model: e.target.value,
+                            },
+                          }))
+                        }
+                        placeholder="e.g. gpt-image-1"
+                        className="w-full rounded-md border border-line bg-ground px-3 py-1.5 font-mono text-[12px] text-ink outline-none"
+                      />
+                    </Field>
+                  </div>
+                )}
+                {tool.options_schema.map((field) => (
+                  <Field key={field.name} label={field.label}>
+                    {field.kind === "engine_order" ? (
+                      <EngineOrderField
+                        value={
+                          (draft.options[field.name] as string[] | undefined) ??
+                          []
+                        }
+                        choices={field.choices}
+                        onChange={(v) => setOption(field.name, v)}
+                      />
+                    ) : field.kind === "select" ? (
+                      <Select
+                        value={String(draft.options[field.name] ?? field.default ?? "")}
+                        onChange={(v) => setOption(field.name, v)}
+                        options={field.choices.map((c) => ({ value: c, label: c }))}
+                        className="w-full rounded-md border border-line bg-ground px-3 py-1.5 text-[13px] text-ink outline-none"
+                      />
+                    ) : field.kind === "boolean" ? (
+                      <input
+                        type="checkbox"
+                        checked={Boolean(draft.options[field.name] ?? field.default)}
+                        onChange={(e) => setOption(field.name, e.target.checked)}
+                      />
+                    ) : field.kind === "number" ? (
+                      <input
+                        type="number"
+                        value={String(draft.options[field.name] ?? field.default ?? "")}
+                        onChange={(e) => setOption(field.name, Number(e.target.value))}
+                        className="w-full rounded-md border border-line bg-ground px-3 py-1.5 text-[13px] text-ink outline-none"
+                      />
+                    ) : (
+                      <input
+                        value={String(draft.options[field.name] ?? field.default ?? "")}
+                        onChange={(e) => setOption(field.name, e.target.value)}
+                        className="w-full rounded-md border border-line bg-ground px-3 py-1.5 font-mono text-[12px] text-ink outline-none"
+                      />
+                    )}
+                  </Field>
+                ))}
+                <div className="flex items-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => void save(tool)}
+                    disabled={saving === tool.key}
+                    className="cursor-pointer rounded-md bg-accent px-3 py-1.5 text-[12px] font-medium text-white transition hover:opacity-90 disabled:opacity-50"
+                  >
+                    {saving === tool.key ? "Saving…" : tool.binding ? "Save" : "Save configuration"}
+                  </button>
+                  {tool.binding && (
+                    <button
+                      type="button"
+                      onClick={() => void reset(tool)}
+                      className="cursor-pointer rounded-md border border-line px-3 py-1.5 text-[12px] text-ink-2 transition hover:bg-sunken"
+                    >
+                      Reset to defaults
+                    </button>
+                  )}
+                  {tool.state === "ready" && !tool.binding && (
+                    <span className="text-[11px] text-[var(--ink-3)]">
+                      Running on built-in defaults — saving creates a binding.
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+          </section>
+        );
+      })}
     </div>
   );
 }
