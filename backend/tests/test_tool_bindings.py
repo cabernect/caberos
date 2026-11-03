@@ -237,3 +237,178 @@ async def test_catalog_hides_unready_binding_tools(db):
 
     # web_search remains available (engine defaults)
     assert "web_search" in names
+
+
+# --- mediation ---
+
+
+def _agent_with(caps: list[str]):
+    from agentos.config_schema import AgentConfig, CapabilityGrant, ModelConfig
+
+    return AgentConfig(
+        id="a",
+        name="A",
+        model=ModelConfig(provider_id="p", name="m"),
+        capabilities=[CapabilityGrant(name=c, require_approval=False) for c in caps],
+    )
+
+
+def _session():
+    from types import SimpleNamespace
+
+    return SimpleNamespace(contact_id="c1", id="s1", channel=None)
+
+
+async def test_mediator_denies_invalid_engine_binding(db, workspace):
+    """A stored binding whose options fail validation must fail through
+    mediation — never silently fall back to defaults at execution time."""
+    from agentos.capabilities.builtin import register_builtin_capabilities
+    from agentos.capabilities.registry import registry
+    from agentos.syscall.mediator import SyscallHandler
+    from agentos.syscall.protocol import ToolCall
+
+    registry._caps.clear()
+    register_builtin_capabilities()
+    try:
+        db.add(
+            ToolBinding(
+                id=str(uuid.uuid4()),
+                key="search.web",
+                options=json.dumps({"engines": ["not-an-engine"]}),
+            )
+        )
+        await db.flush()
+
+        handler = SyscallHandler(db=db, workspace_path=workspace)
+        result = await handler.mediate(
+            call=ToolCall(id="1", name="web_search", args={"query": "x"}),
+            session=_session(),
+            agent_config=_agent_with(["web_search"]),
+            run_id="r1",
+        )
+        assert result.allowed is False
+        assert "not ready" in result.denied_reason
+    finally:
+        registry._caps.clear()
+
+
+async def test_binding_does_not_grant_capability_authority(db, workspace):
+    """A valid binding changes HOW a tool runs — it never changes WHO may
+    run it. An agent without the grant is still denied at step 2."""
+    from agentos.capabilities.builtin import register_builtin_capabilities
+    from agentos.capabilities.registry import registry
+    from agentos.syscall.mediator import SyscallHandler
+    from agentos.syscall.protocol import ToolCall
+
+    registry._caps.clear()
+    register_builtin_capabilities()
+    try:
+        db.add(
+            ToolBinding(
+                id=str(uuid.uuid4()),
+                key="search.web",
+                options=json.dumps({"engines": ["brave"]}),
+            )
+        )
+        await db.flush()
+
+        handler = SyscallHandler(db=db, workspace_path=workspace)
+        result = await handler.mediate(
+            call=ToolCall(id="1", name="web_search", args={"query": "x"}),
+            session=_session(),
+            agent_config=_agent_with([]),  # no grant at all
+            run_id="r1",
+        )
+        assert result.allowed is False
+        assert result.denied_reason == "not granted"
+    finally:
+        registry._caps.clear()
+
+
+async def test_mediator_injects_frozen_binding_options(db, workspace, monkeypatch):
+    """The admission-time resolution rides into the tool as frozen options —
+    the tool never re-reads the settings table mid-execution."""
+    from agentos.capabilities.builtin import register_builtin_capabilities
+    from agentos.capabilities.registry import registry
+    from agentos.syscall.mediator import SyscallHandler
+    from agentos.syscall.protocol import ToolCall
+
+    registry._caps.clear()
+    register_builtin_capabilities()
+    captured: dict = {}
+
+    async def fake_search(**kwargs):
+        captured.update(kwargs)
+        return {"results": []}
+
+    monkeypatch.setattr(registry.get("web_search"), "execute", fake_search)
+    try:
+        db.add(
+            ToolBinding(
+                id=str(uuid.uuid4()),
+                key="search.web",
+                options=json.dumps({"engines": ["brave"], "region": "de-de"}),
+            )
+        )
+        await db.flush()
+
+        handler = SyscallHandler(db=db, workspace_path=workspace)
+        result = await handler.mediate(
+            call=ToolCall(id="1", name="web_search", args={"query": "x"}),
+            session=_session(),
+            agent_config=_agent_with(["web_search"]),
+            run_id="r1",
+        )
+        assert result.allowed is True
+        assert captured["tool_options"]["engines"] == ["brave"]
+        assert captured["tool_options"]["region"] == "de-de"
+        assert captured["tool_binding"].binding.key == "search.web"
+    finally:
+        registry._caps.clear()
+
+
+# --- honest settings surface ---
+
+
+async def test_settings_endpoints_make_no_provider_calls(client, monkeypatch):
+    """Opening or saving tool settings must never reach a provider — any
+    attempt is a bug, not a network flake."""
+    import litellm
+
+    def _boom(*a, **k):
+        raise AssertionError("provider call during settings operation")
+
+    monkeypatch.setattr(litellm, "acompletion", _boom)
+    monkeypatch.setattr(litellm, "aembedding", _boom)
+
+    r = await client.get("/api/settings/tools")
+    assert r.status_code == 200
+    r = await client.put(
+        "/api/settings/tools/search.web",
+        json={"options": {"safesearch": "off"}},
+    )
+    assert r.status_code == 200
+    r = await client.delete("/api/settings/tools/search.web")
+    assert r.status_code == 200
+
+
+async def test_settings_response_never_includes_secrets(client, db):
+    """Provider references are id/name/type only — encrypted key material
+    never leaves through the bindings surface."""
+    secret_marker = "sk-test-SECRET-000111"
+    provider = await _provider(db, name="SecretProv")
+    provider.encrypted_key = f"enc:{secret_marker}"
+    db.add(
+        ToolBinding(
+            id=str(uuid.uuid4()),
+            key="search.web",
+            provider_id=provider.id,
+            options=json.dumps({"engines": ["brave"]}),
+        )
+    )
+    await db.flush()
+
+    r = await client.get("/api/settings/tools")
+    assert r.status_code == 200
+    assert secret_marker not in r.text
+    assert "encrypted" not in r.text

@@ -4402,7 +4402,7 @@ function EngineOrderField({
   );
 }
 
-function ToolsTab({ providers }: { providers: Provider[] }) {
+export function ToolsTab({ providers }: { providers: Provider[] }) {
   const { confirm, toast } = useConfirm();
   const [tools, setTools] = useState<ToolBindingInfo[]>([]);
   const [loading, setLoading] = useState(true);
