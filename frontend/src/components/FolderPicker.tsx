@@ -33,7 +33,7 @@ export function FolderPicker({
     setError(null);
     setFilter("");
     api
-      .listDirectories(path)
+      .listDirectories(path, true)
       .then((p) => alive.current && setPage(p))
       .catch((e) => alive.current && setError(e?.message ?? "Cannot read folder"))
       .finally(() => alive.current && setLoading(false));
@@ -163,4 +163,24 @@ export function FolderPicker({
 /** Pick a folder natively on Tauri, else via the server-side picker. */
 export function isDesktopShell(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+/** Native folder selection: Tauri dialog in the desktop shell, else the
+ *  backend's OS dialog (osascript/zenity/FolderBrowserDialog).
+ *  Returns the path, null when cancelled, or "unsupported" → open the
+ *  server-side picker instead. */
+export async function pickFolderNative(
+  title = "Choose workspace folder",
+): Promise<string | null | "unsupported"> {
+  if (isDesktopShell()) {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const picked = await open({ directory: true, title });
+    return typeof picked === "string" ? picked : null;
+  }
+  try {
+    const result = await api.pickDirectory();
+    return result.path;
+  } catch {
+    return "unsupported";
+  }
 }

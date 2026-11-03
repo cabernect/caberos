@@ -15,7 +15,7 @@ import type {
   Skill,
   SkillInfo,
 } from "@/lib/types";
-import { FolderPicker, isDesktopShell } from "@/components/FolderPicker";
+import { FolderPicker, pickFolderNative } from "@/components/FolderPicker";
 import { ModelSelect } from "@/components/ModelSelect";
 import { ThinkingToggle } from "@/components/ThinkingToggle";
 import { Button } from "@/components/ui/button";
@@ -406,13 +406,9 @@ function GeneralTab({
               <button
                 type="button"
                 onClick={async () => {
-                  if (isDesktopShell()) {
-                    const { open } = await import("@tauri-apps/plugin-dialog");
-                    const picked = await open({ directory: true, title: "Choose workspace folder" });
-                    if (typeof picked === "string") setWorkspaceInput(picked);
-                  } else {
-                    setShowFolderPicker(true);
-                  }
+                  const picked = await pickFolderNative();
+                  if (picked === "unsupported") setShowFolderPicker(true);
+                  else if (picked) setWorkspaceInput(picked);
                 }}
                 className="shrink-0 cursor-pointer rounded-md border border-line bg-ground px-3 py-2 text-[12px] text-ink transition hover:bg-sunken"
               >

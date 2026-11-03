@@ -592,9 +592,10 @@ async def list_workspace(
         }
 
     entries = []
-    for entry in sorted(target.iterdir(), key=lambda e: (not e.is_dir(), e.name)):
-        if entry.name.startswith("."):
-            continue
+    # Dotfiles are real workspace content (agents can read them via tools) —
+    # list them, sorted after visible entries within each group.
+    key = lambda e: (not e.is_dir(), e.name.startswith("."), e.name.lower())  # noqa: E731
+    for entry in sorted(target.iterdir(), key=key):
         entries.append(
             {
                 "name": entry.name,

@@ -817,6 +817,10 @@ export const api = {
       truncated: boolean;
     }>(`/api/fs/directories${params.size ? `?${params}` : ""}`);
   },
+  pickDirectory: () =>
+    request<{ path: string | null }>("/api/fs/pick-directory", {
+      method: "POST",
+    }),
 
   // Knowledge index (RAG v2 — semantic index lifecycle)
   getKnowledgeIndex: () =>
