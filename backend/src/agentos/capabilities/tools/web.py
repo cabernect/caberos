@@ -29,7 +29,10 @@ except ImportError:
 
 
 async def web_search(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
-    """Search the web using DuckDuckGo (free, no API key).
+    """Search the web (DDGS — free, no API key).
+
+    Engine order/region/safesearch come from the resolved search.web tool
+    binding (Settings → Tools); unconfigured uses the default cascade.
 
     Args:
         query: Search query
@@ -38,16 +41,41 @@ async def web_search(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     query = args["query"]
     max_results = args.get("max_results", 5)
 
+    # Frozen binding options injected by the mediator (validated server-side);
+    # absent binding = built-in defaults (valid ddgs 9.x backend keys only).
+    options = kwargs.get("tool_options") or {}
+    engines = options.get("engines") or [
+        "duckduckgo",
+        "brave",
+        "startpage",
+        "yahoo",
+        "mojeek",
+        "wikipedia",
+    ]
+    region = options.get("region") or "wt-wt"
+    safesearch = options.get("safesearch") or "moderate"
+
     try:
         from ddgs import DDGS
 
         def _sync_search() -> list[dict[str, str]]:
             with DDGS() as ddgs:
-                # Try engines in order — DuckDuckGo first (most reliable
-                # through corporate proxies), then Bing, Startpage, Brave.
-                for engine in ("duckduckgo", "bing", "startpage", "brave"):
+                # ddgs 9.x selects engines via backend=<name> (the old
+                # engine= kwarg is silently swallowed — it landed in
+                # **kwargs and made every attempt TypeError).
+                for engine in engines:
                     try:
-                        return list(ddgs.text(query, max_results=max_results, engine=engine))
+                        hits = list(
+                            ddgs.text(
+                                query,
+                                max_results=max_results,
+                                backend=engine,
+                                region=region,
+                                safesearch=safesearch,
+                            )
+                        )
+                        if hits:
+                            return hits
                     except Exception:
                         continue
                 return []

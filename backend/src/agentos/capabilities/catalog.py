@@ -10,6 +10,12 @@ from sqlalchemy import select
 
 from ..config_schema import AgentConfig
 from ..models.mcp import McpServer, McpTool
+from .bindings import (
+    BINDING_SPECS,
+    binding_key_for_capability,
+    resolve_binding,
+    spec_for,
+)
 from .effects import DEFAULT_MUTATING
 from .registry import CapabilityDef, registry
 
@@ -81,6 +87,29 @@ class CapabilityRunCatalog:
     max_loaded: int = 50
     loaded: set[str] = field(default_factory=set)
     _metadata_cache: list[dict[str, Any]] | None = field(default=None, init=False, repr=False)
+    # capability name → ready, for binding-gated tools (W5). Empty until
+    # _metadata() resolves; unknown defaults to engine-ready/model-hidden.
+    _binding_ready: dict[str, bool] = field(default_factory=dict, init=False, repr=False)
+
+    async def _resolve_binding_gates(self) -> dict[str, bool]:
+        """Which binding-gated capabilities are loadable right now.
+        Engine tools stay usable unconfigured (invalid stored options hide
+        them); model-backed tools require a ready binding. No db → model
+        gates fail closed, engine gates stay open (defaults work)."""
+        ready: dict[str, bool] = {}
+        for spec in BINDING_SPECS:
+            for name in spec.capability_names:
+                if not spec.implemented:
+                    ready[name] = False
+                elif self.db is None:
+                    ready[name] = spec.kind == "engine"
+                else:
+                    resolution = await resolve_binding(self.db, spec.key)
+                    if spec.kind == "engine":
+                        ready[name] = resolution.state != "invalid"
+                    else:
+                        ready[name] = resolution.ready
+        return ready
 
     def _is_permitted(self, name: str, server_id: str | None = None) -> bool:
         if not is_capability_granted(self.agent_config, name, server_id=server_id):
@@ -95,11 +124,17 @@ class CapabilityRunCatalog:
         if self._metadata_cache is not None:
             return self._metadata_cache
 
+        self._binding_ready = await self._resolve_binding_gates()
+
         metadata_by_name: dict[str, dict[str, Any]] = {}
         for capability in registry.list_all():
             if capability.name in DISCOVERY_CAPABILITY_NAMES or capability.kind == "mcp_tool":
                 continue
             if not self._is_permitted(capability.name):
+                continue
+            # Binding gate (W5): an unconfigured model-backed tool is absent
+            # from the catalog entirely — the agent can't load its schema.
+            if self._binding_ready.get(capability.name) is False:
                 continue
             grant = _grant_for(self.agent_config, capability.name)
             metadata_by_name[capability.name] = {
@@ -287,6 +322,13 @@ class CapabilityRunCatalog:
             if capability.name in DISCOVERY_CAPABILITY_NAMES:
                 names.append(capability.name)
             elif capability.name in self.loaded or self._always_loaded(capability.name, server_id):
+                # Unknown gate state fails closed for model-backed specs;
+                # engine tools default to usable (built-in fallback).
+                key = binding_key_for_capability(capability.name)
+                spec = spec_for(key) if key else None
+                default = not (spec and spec.kind == "model")
+                if self._binding_ready.get(capability.name, default) is False:
+                    continue
                 if self._is_permitted(capability.name, server_id) and (
                     capability.kind != "mcp_tool"
                     or available_names is None
@@ -308,7 +350,12 @@ class CapabilityRunCatalog:
             seen.add(name)
             item = metadata.get(name)
             if item is None:
-                rejected.append({"name": name, "reason": "Capability is not permitted"})
+                if self._binding_ready.get(name) is False:
+                    rejected.append(
+                        {"name": name, "reason": "Tool is not configured (Settings → Tools)"}
+                    )
+                else:
+                    rejected.append({"name": name, "reason": "Capability is not permitted"})
                 continue
             if not await self._is_mcp_available(item):
                 rejected.append({"name": name, "reason": "Capability is unavailable"})

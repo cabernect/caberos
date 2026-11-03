@@ -39,6 +39,7 @@ from .skill_usage import SkillActivation
 from .source import RunSource
 from .sub_agent import SubAgent
 from .terminal import TerminalSession
+from .tool_binding import ToolBinding
 from .web_source import WebSource
 
 __all__ = [
@@ -54,6 +55,7 @@ __all__ = [
     "AgentCapability",
     "SubAgent",
     "TerminalSession",
+    "ToolBinding",
     "McpServer",
     "McpServerCredential",
     "ContactMcpBinding",

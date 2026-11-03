@@ -1,11 +1,18 @@
 """Global app settings API — runtime toggles like YOLO mode."""
 
+import json
+import uuid
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import require_operator
 from ..config import env_pinned, settings
-from ..models.operator import Operator
+from ..db import get_db
+from ..models.operator import Operator, OperatorAuditLog
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -193,3 +200,182 @@ async def refresh_model_catalog(
         "scheduled": True,
         **_catalog_status().model_dump(),
     }
+
+
+# --- Global tool bindings (W5) ----------------------------------------------
+# How supported tools execute — engine options or provider/model — kept
+# separate from per-agent capability authority. No provider calls happen
+# here: validation is local-only by contract.
+
+from ..capabilities.bindings import (  # noqa: E402
+    BINDING_SPECS,
+    BindingSpec,
+    resolve_binding,
+    spec_for,
+    validate_options,
+)
+from ..models.provider import Provider  # noqa: E402
+from ..models.tool_binding import ToolBinding  # noqa: E402
+
+
+def _options_schema(spec: BindingSpec) -> list[dict[str, Any]]:
+    return [
+        {
+            "name": f.name,
+            "kind": f.kind,
+            "label": f.label,
+            "default": f.default,
+            "choices": list(f.choices),
+            "required": f.required,
+        }
+        for f in spec.option_fields
+    ]
+
+
+async def _binding_out(db: AsyncSession, spec: BindingSpec) -> dict[str, Any]:
+    resolution = await resolve_binding(db, spec.key)
+    provider = resolution.provider
+    return {
+        "key": spec.key,
+        "title": spec.title,
+        "description": spec.description,
+        "kind": spec.kind,
+        "implemented": spec.implemented,
+        "planned_note": spec.planned_note,
+        "capability_names": list(spec.capability_names),
+        "state": resolution.state,
+        "ready": resolution.ready,
+        "reason": resolution.reason,
+        "options": resolution.options,
+        "options_schema": _options_schema(spec),
+        "binding": (
+            {
+                "provider_id": resolution.binding.provider_id,
+                "provider_name": provider.name if provider else None,
+                "provider_type": provider.type if provider else None,
+                "model": resolution.binding.model,
+                "revision": resolution.binding.revision,
+                "updated_at": resolution.binding.updated_at.isoformat()
+                if resolution.binding.updated_at
+                else None,
+            }
+            if resolution.binding
+            else None
+        ),
+    }
+
+
+@router.get("/tools")
+async def list_tool_bindings(
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Every bindable tool with resolution state — configured, ready or
+    unimplemented reasons kept separate. Never returns secrets."""
+    return {
+        "tools": [await _binding_out(db, spec) for spec in BINDING_SPECS],
+    }
+
+
+class ToolBindingUpdate(BaseModel):
+    provider_id: str | None = None
+    model: str | None = None
+    options: dict[str, Any] | None = None
+    # Optimistic concurrency — required only when a binding already exists.
+    expected_revision: int | None = None
+
+
+@router.put("/tools/{key}")
+async def put_tool_binding(
+    key: str,
+    req: ToolBindingUpdate,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    spec = spec_for(key)
+    if spec is None:
+        raise HTTPException(status_code=404, detail=f"unknown tool binding: {key}")
+    if not spec.implemented:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{spec.title} is not implemented in this release — "
+            "there is nothing to bind yet",
+        )
+
+    provider: Provider | None = None
+    if spec.kind == "engine":
+        if req.provider_id:
+            raise HTTPException(status_code=422, detail="engine bindings do not take a provider")
+        if req.model:
+            raise HTTPException(status_code=422, detail="engine bindings do not take a model")
+    else:  # model-backed
+        if not req.provider_id:
+            raise HTTPException(status_code=422, detail="a provider is required for this tool")
+        provider = await db.get(Provider, req.provider_id)
+        if provider is None:
+            raise HTTPException(status_code=422, detail="provider not found")
+        if req.model is None or not req.model.strip():
+            raise HTTPException(status_code=422, detail="a model name is required")
+
+    try:
+        options = validate_options(spec, req.options or {})
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+    binding = await db.scalar(select(ToolBinding).where(ToolBinding.key == key))
+    if binding is not None:
+        if req.expected_revision is not None and req.expected_revision != binding.revision:
+            raise HTTPException(
+                status_code=409,
+                detail=f"binding changed since you loaded it "
+                f"(revision {binding.revision}) — reload and retry",
+            )
+        binding.provider_id = provider.id if provider else None
+        binding.model = req.model.strip() if req.model else ""
+        binding.options = json.dumps(options)
+        binding.revision += 1
+    else:
+        binding = ToolBinding(
+            id=str(uuid.uuid4()),
+            key=key,
+            provider_id=provider.id if provider else None,
+            model=req.model.strip() if req.model else "",
+            options=json.dumps(options),
+            revision=1,
+        )
+        db.add(binding)
+
+    db.add(
+        OperatorAuditLog(
+            id=str(uuid.uuid4()),
+            operator_id=operator.id,
+            action="tool_binding.update",
+            target=f"{key} rev {binding.revision}",
+        )
+    )
+    await db.commit()
+    return await _binding_out(db, spec)
+
+
+@router.delete("/tools/{key}")
+async def reset_tool_binding(
+    key: str,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    spec = spec_for(key)
+    if spec is None:
+        raise HTTPException(status_code=404, detail=f"unknown tool binding: {key}")
+    binding = await db.scalar(select(ToolBinding).where(ToolBinding.key == key))
+    if binding is not None:
+        await db.delete(binding)
+        db.add(
+            OperatorAuditLog(
+                id=str(uuid.uuid4()),
+                operator_id=operator.id,
+                action="tool_binding.reset",
+                target=key,
+            )
+        )
+        await db.commit()
+    return await _binding_out(db, spec)
