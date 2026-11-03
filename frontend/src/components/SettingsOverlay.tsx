@@ -15,6 +15,7 @@ import type {
   Skill,
   SkillInfo,
 } from "@/lib/types";
+import { FolderPicker, isDesktopShell } from "@/components/FolderPicker";
 import { ModelSelect } from "@/components/ModelSelect";
 import { ThinkingToggle } from "@/components/ThinkingToggle";
 import { Button } from "@/components/ui/button";
@@ -154,6 +155,7 @@ function GeneralTab({
   const [coreMax, setCoreMax] = useState<number | null>(null);
   const [sandboxMode, setSandboxMode] = useState<"strict" | "open">("strict");
   const [workspaceInput, setWorkspaceInput] = useState("");
+  const [showFolderPicker, setShowFolderPicker] = useState(false);
   const [thinkingEnabled, setThinkingEnabled] = useState<boolean | null>(null);
   const [thinkingEffort, setThinkingEffort] = useState<string>("medium");
   const [saving, setSaving] = useState(false);
@@ -401,18 +403,30 @@ function GeneralTab({
                 className="w-full rounded-md border px-3 py-2 font-mono text-[12px] text-ink outline-none"
                 style={{ borderColor: "var(--border)", background: "var(--ground)" }}
               />
-              {typeof window !== "undefined" && "__TAURI_INTERNALS__" in window && (
-                <button
-                  type="button"
-                  onClick={async () => {
+              <button
+                type="button"
+                onClick={async () => {
+                  if (isDesktopShell()) {
                     const { open } = await import("@tauri-apps/plugin-dialog");
                     const picked = await open({ directory: true, title: "Choose workspace folder" });
                     if (typeof picked === "string") setWorkspaceInput(picked);
+                  } else {
+                    setShowFolderPicker(true);
+                  }
+                }}
+                className="shrink-0 cursor-pointer rounded-md border border-line bg-ground px-3 py-2 text-[12px] text-ink transition hover:bg-sunken"
+              >
+                Browse…
+              </button>
+              {showFolderPicker && (
+                <FolderPicker
+                  initialPath={workspaceInput.trim() || undefined}
+                  onPick={(p) => {
+                    setWorkspaceInput(p);
+                    setShowFolderPicker(false);
                   }}
-                  className="shrink-0 cursor-pointer rounded-md border border-line bg-ground px-3 py-2 text-[12px] text-ink transition hover:bg-sunken"
-                >
-                  Browse…
-                </button>
+                  onClose={() => setShowFolderPicker(false)}
+                />
               )}
             </div>
             <p className="text-[11px] leading-[1.5] text-ink-3">

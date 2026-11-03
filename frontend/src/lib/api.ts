@@ -463,6 +463,7 @@ export const api = {
     soul?: string;
     persona?: string;
     task?: string;
+    workspace?: string;
   }) =>
     request<{ id: string; name: string; enabled: boolean }>("/api/agents", {
       method: "POST",
@@ -802,6 +803,19 @@ export const api = {
     return request<KnowledgeRowsPage>(
       `/api/knowledge/scopes/${scope}/documents/${documentId}/rows${suffix}`,
     );
+  },
+
+  // Local filesystem browsing for folder pickers (directory names only)
+  listDirectories: (path?: string, hidden = false) => {
+    const params = new URLSearchParams();
+    if (path) params.set("path", path);
+    if (hidden) params.set("hidden", "true");
+    return request<{
+      path: string;
+      parent: string | null;
+      directories: { name: string; path: string }[];
+      truncated: boolean;
+    }>(`/api/fs/directories${params.size ? `?${params}` : ""}`);
   },
 
   // Knowledge index (RAG v2 — semantic index lifecycle)

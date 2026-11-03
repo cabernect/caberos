@@ -91,6 +91,7 @@ class CreateAgentRequest(BaseModel):
     soul: str = ""
     persona: str = ""
     task: str = ""
+    workspace: str = ""
 
 
 class UpdateAgentRequest(BaseModel):
@@ -289,6 +290,14 @@ async def create_agent_route(
 ) -> dict:
     """Create a new agent with default config."""
     agent_id = str(uuid.uuid4())[:8]
+    workspace = req.workspace.strip()
+    if workspace:
+        from ..sandbox.workspace import WorkspaceManager
+
+        try:
+            workspace = WorkspaceManager().validate_external_root(workspace)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
     config = AgentConfig(
         id=agent_id,
         name=req.name,
@@ -299,6 +308,7 @@ async def create_agent_route(
         soul=req.soul,
         persona=req.persona,
         task=req.task,
+        workspace=workspace,
     )
     agent = await create_agent(db, config)
     return {"id": agent.id, "name": agent.name, "enabled": agent.enabled}

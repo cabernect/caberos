@@ -33,6 +33,7 @@ from .api import (  # noqa: E402
     data,
     dependencies,
     elicitation,
+    fs,
     home,
     knowledge,
     mcp,
@@ -639,6 +640,7 @@ app.include_router(settings.router)
 app.include_router(data.router)
 app.include_router(browser.router)
 app.include_router(dependencies.router)
+app.include_router(fs.router)
 
 
 @app.get("/health")
