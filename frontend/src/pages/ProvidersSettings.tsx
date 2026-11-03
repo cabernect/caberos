@@ -579,39 +579,6 @@ function GeneralTab({
       </SettingsSection>
 
       <SettingsSection
-        id="search"
-        title="Search"
-        subtitle="Which engine answers agent web searches."
-      >
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-[13px] font-medium text-[var(--ink)]">
-              Web search engine
-            </p>
-            <p className="mt-0.5 text-[12px] text-[var(--ink-3)]">
-              Used by the web_search capability
-            </p>
-          </div>
-          <span
-            className="rounded-full px-3 py-1 text-[11px] font-medium"
-            style={{ background: "var(--border)", color: "var(--ink-2)" }}
-          >
-            Automatic
-          </span>
-        </div>
-        <p className="mt-2.5 text-[12px] text-[var(--ink-3)]">
-          Engine order, SafeSearch, and region are configured under{" "}
-          <a
-            href="/settings?tab=tools"
-            className="font-medium text-[var(--accent)] hover:underline"
-          >
-            Settings → Tools
-          </a>
-          . No API key required.
-        </p>
-      </SettingsSection>
-
-      <SettingsSection
         id="guidance"
         title="Guidance"
         subtitle="Replay the welcome tour and per-page intros."
