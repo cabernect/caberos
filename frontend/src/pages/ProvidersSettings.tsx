@@ -4333,6 +4333,17 @@ function ToolStatusChip({ tool }: { tool: ToolBindingInfo }) {
   );
 }
 
+const ENGINE_LABELS: Record<string, string> = {
+  duckduckgo: "DuckDuckGo",
+  brave: "Brave",
+  startpage: "Startpage",
+  yahoo: "Yahoo",
+  mojeek: "Mojeek",
+  wikipedia: "Wikipedia",
+};
+
+const engineLabel = (key: string) => ENGINE_LABELS[key] ?? key;
+
 function EngineOrderField({
   value,
   choices,
@@ -4356,7 +4367,9 @@ function EngineOrderField({
           key={engine}
           className="flex items-center gap-2 rounded-md border border-line bg-ground px-2.5 py-1.5"
         >
-          <span className="flex-1 font-mono text-[12px] text-ink">{engine}</span>
+          <span className="flex-1 text-[12px] font-medium text-ink">
+            {engineLabel(engine)}
+          </span>
           <button
             type="button"
             disabled={i === 0}
@@ -4393,7 +4406,7 @@ function EngineOrderField({
           }}
           options={[
             { value: "", label: "Add engine…" },
-            ...remaining.map((e) => ({ value: e, label: e })),
+            ...remaining.map((e) => ({ value: e, label: engineLabel(e) })),
           ]}
           className="w-full rounded-md border border-line bg-ground px-2.5 py-1.5 text-[12px] text-ink outline-none"
         />
@@ -4554,7 +4567,15 @@ export function ToolsTab({ providers }: { providers: Provider[] }) {
             ) : (
               <div className="mt-4 space-y-3">
                 {tool.reason && tool.state !== "ready" && (
-                  <p className="text-[12px] text-[var(--danger)]">
+                  <p
+                    className="text-[12px]"
+                    style={{
+                      color:
+                        tool.state === "invalid"
+                          ? "var(--danger)"
+                          : "var(--ink-3)",
+                    }}
+                  >
                     {tool.reason}
                   </p>
                 )}
