@@ -1303,7 +1303,13 @@ export function Conversation() {
 
   // --- File preview (W3) — shared right-side panel ---
   const openPreview = useCallback((source: PreviewSource) => {
-    setPreviewSource(source);
+    // Attachments/FileChips carry no session pin — they belong to the
+    // active conversation's pinned workspace. A source that already knows
+    // its session (workspace tree) keeps it.
+    setPreviewSource({
+      sessionId: activeSessionRef.current ?? undefined,
+      ...source,
+    });
     setWorkspaceOpen(true);
   }, []);
 
@@ -1926,6 +1932,7 @@ export function Conversation() {
                       subagentMessages={subagentMessages}
                       onPreview={openPreview}
                       agentId={agentId}
+                      sessionId={activeSessionId}
                       runFileRefs={msg.role === "assistant" ? runRefs : undefined}
                     />
                   );
@@ -2144,6 +2151,9 @@ export function Conversation() {
             agentId={agentId || ""}
             agentName={agent?.name ?? agentId ?? ""}
             sessionId={activeSessionId}
+            workspacePath={
+              sessions.find((s) => s.id === activeSessionId)?.workspace_path
+            }
             selected={previewSource}
             onSelect={setPreviewSource}
             changedPaths={changedPaths}
@@ -2313,6 +2323,7 @@ function MessageRow({
   subagentMessages,
   onPreview,
   agentId,
+  sessionId,
   runFileRefs,
 }: {
   message: ChatMessage;
@@ -2320,6 +2331,7 @@ function MessageRow({
   subagentMessages?: ChatMessage[];
   onPreview?: (source: PreviewSource) => void;
   agentId?: string;
+  sessionId?: string | null;
   /** Output files this run produced — rendered at the end of the run. */
   runFileRefs?: FileRef[];
 }) {
@@ -2342,7 +2354,7 @@ function MessageRow({
         {attachmentFiles.length > 0 && (
           <div className="flex flex-wrap justify-end gap-1.5">
             {attachmentFiles.map((f, i) => (
-              <MessageAttachmentCard key={i} file={f} agentId={agentId} onPreview={onPreview} />
+              <MessageAttachmentCard key={i} file={f} agentId={agentId} sessionId={sessionId} onPreview={onPreview} />
             ))}
           </div>
         )}
@@ -2549,10 +2561,12 @@ function TypingIndicator() {
 function MessageAttachmentCard({
   file,
   agentId,
+  sessionId,
   onPreview,
 }: {
   file: { type: string; mime_type: string; filename: string; url?: string; path?: string; size?: number; preview_url?: string };
   agentId?: string;
+  sessionId?: string | null;
   onPreview?: (source: PreviewSource) => void;
 }) {
   const isUrl = file.type === "url" || file.type === "image_url";
@@ -2561,9 +2575,9 @@ function MessageAttachmentCard({
   // ephemeral data URL covering the window before persistence lands.
   const { url: blobUrl } = useObjectUrl(
     isImage && file.path && agentId
-      ? () => workspaceBackend(agentId).blob({ path: file.path! })
+      ? () => workspaceBackend(agentId, sessionId ?? undefined).blob({ path: file.path! })
       : null,
-    [file.path, agentId]
+    [file.path, agentId, sessionId]
   );
 
   return (

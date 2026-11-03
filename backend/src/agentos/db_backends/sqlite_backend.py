@@ -270,7 +270,7 @@ class SQLiteBackend(DatabaseBackend):
             # root their files live under; NULL = legacy dynamic resolution.
             ("sessions", "workspace_path", "TEXT"),
             ("runs", "workspace_path", "TEXT"),
-            ("artifacts", "workspace_path", "VARCHAR(1024)"),
+            ("artifacts", "workspace_path", "TEXT"),
         ]
         for table, column, col_type in patches:
             if not await self.column_exists(conn, table, column):

@@ -153,9 +153,11 @@ function GeneralTab({
   const [maxContext, setMaxContext] = useState<number | null>(null);
   const [coreMax, setCoreMax] = useState<number | null>(null);
   const [sandboxMode, setSandboxMode] = useState<"strict" | "open">("strict");
+  const [workspaceInput, setWorkspaceInput] = useState("");
   const [thinkingEnabled, setThinkingEnabled] = useState<boolean | null>(null);
   const [thinkingEffort, setThinkingEffort] = useState<string>("medium");
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
 
   useEffect(() => {
     if (agent) {
@@ -173,6 +175,7 @@ function GeneralTab({
         setCoreMax(agent.limits.core_max_tokens ?? 32768);
       }
       setSandboxMode(agent.sandbox_mode || "strict");
+      setWorkspaceInput(agent.workspace || "");
       setThinkingEnabled(agent.thinking_enabled ?? null);
       setThinkingEffort(agent.thinking_effort || "medium");
     }
@@ -206,6 +209,7 @@ function GeneralTab({
   const handleSave = async () => {
     if (!agent) return;
     setSaving(true);
+    setSaveError("");
     try {
       await api.updateAgent(agent.id, {
         name, provider_id: providerId, model_name: modelName,
@@ -213,6 +217,7 @@ function GeneralTab({
         thinking_effort: thinkingEnabled ? thinkingEffort : null,
         soul, persona, task,
         sandbox_mode: sandboxMode,
+        workspace: workspaceInput.trim(),
         limits: {
           max_turns_per_run: maxTurns,
           max_cost_per_run: maxCost,
@@ -223,6 +228,10 @@ function GeneralTab({
       });
       onSaved();
       onClose();
+    } catch (e) {
+      // Workspace validation (422) and active-run conflicts (409) land
+      // here — keep the overlay open so the operator can fix the input.
+      setSaveError(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(false);
     }
@@ -382,6 +391,46 @@ function GeneralTab({
 
       {/* Section: Limits */}
       <Section title="Limits & Sandbox">
+        <Field label="Workspace folder">
+          <div className="space-y-1.5">
+            <div className="flex gap-2">
+              <input
+                value={workspaceInput}
+                onChange={(e) => setWorkspaceInput(e.target.value)}
+                placeholder={agent.workspace_is_managed !== false ? "CaberOS-managed folder (default)" : "Path to an existing folder"}
+                className="w-full rounded-md border px-3 py-2 font-mono text-[12px] text-ink outline-none"
+                style={{ borderColor: "var(--border)", background: "var(--ground)" }}
+              />
+              {typeof window !== "undefined" && "__TAURI_INTERNALS__" in window && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const { open } = await import("@tauri-apps/plugin-dialog");
+                    const picked = await open({ directory: true, title: "Choose workspace folder" });
+                    if (typeof picked === "string") setWorkspaceInput(picked);
+                  }}
+                  className="shrink-0 cursor-pointer rounded-md border border-line bg-ground px-3 py-2 text-[12px] text-ink transition hover:bg-sunken"
+                >
+                  Browse…
+                </button>
+              )}
+            </div>
+            <p className="text-[11px] leading-[1.5] text-ink-3">
+              {workspaceInput.trim()
+                ? "Attach an existing folder — e.g. a project repo. Nothing is copied or moved; new conversations work there. Identity and memory stay outside it."
+                : `Managed workspace: ${agent.workspace_path || "created on first use"}. Paste a folder path to attach an existing project instead.`}
+            </p>
+            {workspaceInput.trim() && (
+              <button
+                type="button"
+                onClick={() => setWorkspaceInput("")}
+                className="cursor-pointer border-none bg-transparent p-0 text-[11px] text-accent underline underline-offset-2 hover:opacity-80"
+              >
+                Reset to managed folder
+              </button>
+            )}
+          </div>
+        </Field>
         <Field label="Sandbox mode">
           <Select
             value={sandboxMode}
@@ -458,6 +507,11 @@ function GeneralTab({
 
       {/* Single save for everything above */}
       <div className="pt-2">
+        {saveError && (
+          <p className="mb-2 rounded-md border border-[var(--danger)]/30 bg-[var(--danger)]/10 px-3 py-2 text-[12px] text-[var(--danger)]">
+            {saveError}
+          </p>
+        )}
         <SaveButton onClick={handleSave} disabled={saving} label="Save" />
       </div>
     </div>

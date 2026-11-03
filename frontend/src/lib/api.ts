@@ -65,6 +65,8 @@ export interface PreviewSource {
   revisionId?: string;
   /** Skill revision number (skill preview endpoints only). */
   revision?: number;
+  /** Session pin — the workspace root this file lives under. */
+  sessionId?: string;
 }
 
 /** Operator's IANA zone — endpoints that bucket by calendar day want local days. */
@@ -77,6 +79,7 @@ function sourceQuery(opts: PreviewSource): string {
   if (opts.artifactId) params.set("artifact_id", opts.artifactId);
   if (opts.revisionId) params.set("revision_id", opts.revisionId);
   if (opts.revision != null) params.set("revision", String(opts.revision));
+  if (opts.sessionId) params.set("session_id", opts.sessionId);
   return params.toString();
 }
 
@@ -475,6 +478,7 @@ export const api = {
       task?: string;
       sandbox_mode?: "strict" | "open";
       yolo_mode?: boolean;
+      workspace?: string;
       capabilities?: CapabilityGrant[] | null;
       limits?: Limits;
       heartbeat?: HeartbeatConfig;
@@ -598,7 +602,7 @@ export const api = {
     request<{ ok: boolean }>(`/api/agents/${id}/skills/${skillName}`, {
       method: "DELETE",
     }),
-  listWorkspace: (id: string, path?: string) =>
+  listWorkspace: (id: string, path?: string, sessionId?: string) =>
     request<{
       type: "dir" | "file";
       path: string;
@@ -606,11 +610,11 @@ export const api = {
       content?: string;
       size?: number;
     }>(
-      `/api/agents/${id}/workspace${path ? `?path=${encodeURIComponent(path)}` : ""}`,
+      `/api/agents/${id}/workspace?${sourceQuery({ path, sessionId })}`,
     ),
-  deleteWorkspaceEntry: (id: string, path: string) =>
+  deleteWorkspaceEntry: (id: string, path: string, sessionId?: string) =>
     request<{ deleted: boolean; path: string }>(
-      `/api/agents/${id}/workspace?path=${encodeURIComponent(path)}`,
+      `/api/agents/${id}/workspace?${sourceQuery({ path, sessionId })}`,
       { method: "DELETE" },
     ),
 
@@ -668,10 +672,13 @@ export const api = {
       identical: boolean;
     }>(`/api/agents/${id}/artifacts/${artifactId}/compare?${qs.toString()}`);
   },
-  adoptWorkspaceFile: (id: string, path: string) =>
+  adoptWorkspaceFile: (id: string, path: string, sessionId?: string) =>
     request<{ artifact_id: string; revision_id: string; path: string }>(
       `/api/agents/${id}/artifacts/adopt`,
-      { method: "POST", body: JSON.stringify({ path }) },
+      {
+        method: "POST",
+        body: JSON.stringify({ path, session_id: sessionId }),
+      },
     ),
   // Composer attachment previews (W3c) — ephemeral, nothing persisted.
   previewAttachment: async (
@@ -923,7 +930,7 @@ export const api = {
   listSessions: (agentId: string) =>
     request<SessionInfo[]>(`/api/chat/${agentId}/sessions`),
   createSession: (agentId: string, title?: string) =>
-    request<{ id: string; title: string; status: string }>(
+    request<{ id: string; title: string; status: string; workspace_path?: string | null }>(
       `/api/chat/${agentId}/sessions`,
       { method: "POST", body: JSON.stringify({ title }) },
     ),
@@ -1742,11 +1749,15 @@ export const api = {
 };
 
 /** PreviewBackend implementations — one per content root. */
-export function workspaceBackend(agentId: string): PreviewBackend {
+export function workspaceBackend(
+  agentId: string,
+  sessionId?: string,
+): PreviewBackend {
+  const pin = (s: PreviewSource): PreviewSource => ({ sessionId, ...s });
   return {
-    preview: (source) => api.previewFile(agentId, source),
-    blob: (source) => api.fetchFileBlob(agentId, source),
-    pdfPage: (page, source) => api.fetchPdfPage(agentId, page, source),
+    preview: (source) => api.previewFile(agentId, pin(source)),
+    blob: (source) => api.fetchFileBlob(agentId, pin(source)),
+    pdfPage: (page, source) => api.fetchPdfPage(agentId, page, pin(source)),
   };
 }
 

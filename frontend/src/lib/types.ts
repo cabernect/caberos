@@ -102,6 +102,9 @@ export interface Agent {
   heartbeat?: HeartbeatConfig;
   compaction?: CompactionConfig;
   workspace?: string;
+  /** Resolved absolute root — managed default or the configured external dir. */
+  workspace_path?: string;
+  workspace_is_managed?: boolean;
   sandbox_mode?: "strict" | "open";
   yolo_mode?: boolean;
 }
@@ -495,6 +498,8 @@ export interface SessionInfo {
   external_user_id?: string | null;
   active_run_id?: string | null;
   active_run_status?: string | null;
+  /** Canonical root pinned at session creation — where this chat's files live. */
+  workspace_path?: string | null;
   learning?: boolean;
 }
 

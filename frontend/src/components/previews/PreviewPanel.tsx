@@ -240,7 +240,7 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, cla
   const trackHistory = async () => {
     if (!currentPath) return;
     try {
-      await api.adoptWorkspaceFile(agentId, currentPath);
+      await api.adoptWorkspaceFile(agentId, currentPath, viewing.sessionId);
       setActionMsg("Now tracking revisions");
       fetchPreview();
     } catch (e) {
@@ -259,7 +259,7 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, cla
     });
     if (!ok) return;
     try {
-      await api.deleteWorkspaceEntry(agentId, rel);
+      await api.deleteWorkspaceEntry(agentId, rel, viewing.sessionId);
       onDeleted(rel);
     } catch (e) {
       setActionMsg(e instanceof Error ? e.message : String(e));
