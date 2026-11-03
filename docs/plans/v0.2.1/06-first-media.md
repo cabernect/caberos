@@ -1,10 +1,20 @@
 # First Media Capability
 
-Status: proposed. Choice not finalized: TTS recommended; image generation is the
-alternative if supported-provider feasibility makes TTS unsuitable. Whichever
-ships first becomes the first live `model`-shape binding under the W5 registry
-(`media.tts` / `media.image`); `media.stt` and `media.video` stay roadmap until
-a real backend exists — see [Tool bindings](05-tool-bindings.md#binding-key-roadmap).
+Status: decided — **image generation** (`media.image`) is the first modality;
+`media.tts`, `media.stt`, `media.video` stay roadmap until a real backend
+exists — see [Tool bindings](05-tool-bindings.md#binding-key-roadmap).
+
+## Decision Gate — Recorded
+
+| Question | Evidence |
+|---|---|
+| Modality | **Image** — the plan's fallback activates. The bundled `models.dev` snapshot carries no TTS models at all (`openai` has zero `tts`/`audio` entries), and LiteLLM `aspeech` returns `HttpxBinaryResponseContent` with **no usage object** — so TTS would have neither pricing authority nor reported usage, violating "unknown ≠ zero" accounting less usefully than image. |
+| Provider | `openai` provider type (already first-class, encrypted key, existing readiness checks). |
+| Models | Bundled catalog carries `gpt-image-1`, `gpt-image-2`, `gpt-image-1-mini`, `gpt-image-1.5`, `chatgpt-image-latest` with `output: ['image']` modality; `gpt-image-2` has token pricing (in 5 / out 30 per Mtok) → real cost provenance via `capture_call_rates`. |
+| Transport | LiteLLM 1.106.6 `aimage_generation` → `ImageResponse`; `data[].b64_json` gives bytes directly (no URL fetch — satisfies "prefer bytes"); `usage.input_tokens/output_tokens` normalizes under the `chat` family. |
+| Output contract | `n=1` fixed (no multi-output billing), `size`/`quality`/`format` allowlists via binding options, `b64_json` response format, magic-byte + MIME validation, 16 MiB cap. |
+| Cancellation | Single `asyncio.wait_for` timeout; no automatic retry after ambiguous billable dispatch — timeout/error records the attempt honestly. |
+| Cancellation of TTS decision | TTS requires a catalog entry + reported-usage path that doesn't exist yet; adding hand-rolled pricing contradicts "bundled models.dev is pricing authority". |
 
 ## Goal
 

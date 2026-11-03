@@ -24,6 +24,7 @@ from .tools.catalog import capabilities_load, capabilities_search
 from .tools.datetime_tool import datetime_now
 from .tools.file import read_file, search_files, write_file
 from .tools.knowledge import doc_inspect, doc_list, doc_query_rows, doc_search
+from .tools.media import media_image
 from .tools.memory import (
     memory_query_facts,
     memory_recall,
@@ -1297,5 +1298,30 @@ def register_builtin_capabilities() -> None:
             require_approval=False,
             subject_scoped=False,
             execute=artifact_restore,
+        )
+    )
+
+    registry.register(
+        CapabilityDef(
+            name="media_image",
+            effects=frozenset({"workspace_write"}),
+            kind="tool",
+            description="Generate one image from a text prompt and save it as a tracked "
+            "workspace artifact. Requires a configured image binding (Settings → Tools) — "
+            "provider, model, size and quality are operator-set, not call arguments.",
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "prompt": {
+                        "type": "string",
+                        "description": "Image prompt (max 4000 chars)",
+                    },
+                },
+                "required": ["prompt"],
+            },
+            egress=True,
+            require_approval=True,
+            subject_scoped=False,
+            execute=media_image,
         )
     )

@@ -98,23 +98,35 @@ async def test_unimplemented_spec_resolves_unready(db):
 async def test_model_binding_states(db):
     # unconfigured
     r = await resolve_binding(db, "media.image")
-    assert r.state == "unimplemented"
+    assert r.state == "unconfigured"
+    assert r.ready is False
 
-    provider = await _provider(db, name="VoiceProv")
+    provider = await _provider(db, name="ImageProv")
 
-    # model-backed spec is unimplemented → stays unready regardless of rows
+    # bound provider + model + valid options → ready
     db.add(
         ToolBinding(
             id=str(uuid.uuid4()),
             key="media.image",
             provider_id=provider.id,
-            model="dall-e-3",
-            options="{}",
+            model="gpt-image-1",
+            options=json.dumps({"size": "1024x1024", "quality": "low"}),
         )
     )
     await db.flush()
     r = await resolve_binding(db, "media.image")
-    assert r.state == "unimplemented"  # spec gate wins
+    assert r.state == "ready"
+    assert r.ready is True
+    assert r.provider.id == provider.id
+    assert r.options["size"] == "1024x1024"
+    assert r.options["format"] == "png"  # default filled
+
+    # broken provider reference stays visible + repairable
+    r.binding.provider_id = "gone"
+    await db.flush()
+    r = await resolve_binding(db, "media.image")
+    assert r.state == "invalid"
+    assert "no longer exists" in r.reason
 
 
 async def test_capability_ready_reflects_binding(db):
@@ -412,3 +424,254 @@ async def test_settings_response_never_includes_secrets(client, db):
     assert r.status_code == 200
     assert secret_marker not in r.text
     assert "encrypted" not in r.text
+
+
+# --- W6 media.image execution ---
+
+
+async def _bound_image(db, workspace, model="gpt-image-1"):
+    """Provider (real Fernet key) + binding → resolved binding + exec kwargs."""
+    from agentos.secret_store import encrypt
+
+    provider = Provider(
+        id=str(uuid.uuid4()),
+        name="ImgProv",
+        type="openai",
+        encrypted_key=encrypt("sk-test-image"),
+        base_url=None,
+        org_id=None,
+        extra_params="{}",
+        custom_models="[]",
+    )
+    db.add(provider)
+    db.add(
+        ToolBinding(
+            id=str(uuid.uuid4()),
+            key="media.image",
+            provider_id=provider.id,
+            model=model,
+            options=json.dumps({"size": "1024x1024"}),
+        )
+    )
+    await db.flush()
+    resolution = await resolve_binding(db, "media.image")
+    assert resolution.ready, resolution.reason
+    kwargs = {
+        "db": db,
+        "agent_id": "a1",
+        "run_id": "r1",
+        "call_id": "call1",
+        "session_id": "s1",
+        "tool_binding": resolution,
+        "tool_options": resolution.options,
+    }
+    return provider, kwargs
+
+
+def _png_bytes() -> bytes:
+    return b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+
+
+def _fake_image_response(b64: str | None):
+    import base64
+    from types import SimpleNamespace
+
+    if b64 is None:
+        b64 = base64.b64encode(_png_bytes()).decode()
+    return SimpleNamespace(
+        data=[SimpleNamespace(b64_json=b64, revised_prompt="a cat, studio light")],
+        usage=SimpleNamespace(input_tokens=12, output_tokens=900, total_tokens=912),
+    )
+
+
+async def test_media_image_dispatch_writes_artifact_and_ledger(db, workspace, monkeypatch):
+    """Success path: provider bytes → magic-validated file under artifacts/ →
+    tracked Artifact + revision → one image-kind ledger row with usage."""
+    import litellm
+
+    from agentos.capabilities.bindings import BindingResolution, spec_for
+    from agentos.capabilities.tools.media import media_image
+    from agentos.models.artifact import Artifact
+    from agentos.models.model_call import ModelCall
+
+    provider, kwargs = await _bound_image(db, workspace)
+    calls: dict = {}
+
+    async def fake_gen(**kw):
+        calls.update(kw)
+        return _fake_image_response(None)
+
+    monkeypatch.setattr(litellm, "aimage_generation", fake_gen)
+
+    out = await media_image({"prompt": "a cat"}, workspace, **kwargs)
+    assert out.get("artifact_id"), out
+    assert out["mime"] == "image/png" and out["bytes"] == len(_png_bytes())
+    assert out["path"].startswith("artifacts/media/")
+
+    # provider kwargs routed from the binding — not the call args
+    assert calls["model"] == "openai/gpt-image-1"
+    assert calls["n"] == 1 and calls["size"] == "1024x1024"
+    assert calls["response_format"] == "b64_json"
+    assert calls["api_key"] == "sk-test-image"
+    assert "quality" not in calls  # "auto" is omitted, not sent
+
+    # bytes actually landed in the workspace, tracked
+    from pathlib import Path
+
+    assert (Path(workspace) / out["path"]).read_bytes() == _png_bytes()
+    artifact = await db.get(Artifact, out["artifact_id"])
+    assert artifact and artifact.workspace_path == workspace
+
+    # ledger: one image-kind row with reported usage + provider correlation
+    rows = (await db.execute(select(ModelCall))).scalars().all()
+    img = [r for r in rows if r.kind == "image"]
+    assert len(img) == 1
+    assert img[0].provider_id == provider.id and img[0].model_str == "openai/gpt-image-1"
+    assert img[0].tokens_in == 12 and img[0].tokens_out == 900
+    assert img[0].status == "ok" and img[0].run_id == "r1"
+
+    # resolution shape guard — provider row is what the tool saw
+    assert isinstance(kwargs["tool_binding"], BindingResolution)
+    assert kwargs["tool_binding"].spec is spec_for("media.image")
+
+
+async def test_media_image_provider_error_records_attempt(db, workspace, monkeypatch):
+    """A failed dispatch still records the real attempt — status error, no
+    fabricated artifact, honest error surface."""
+    import litellm
+
+    from agentos.capabilities.tools.media import media_image
+    from agentos.models.model_call import ModelCall
+
+    _, kwargs = await _bound_image(db, workspace)
+
+    async def boom(**kw):
+        raise RuntimeError("provider exploded")
+
+    monkeypatch.setattr(litellm, "aimage_generation", boom)
+    out = await media_image({"prompt": "x"}, workspace, **kwargs)
+    assert out["error"].startswith("image generation failed")
+
+    rows = (await db.execute(select(ModelCall))).scalars().all()
+    img = [r for r in rows if r.kind == "image"]
+    assert len(img) == 1 and img[0].status == "error"
+
+
+async def test_media_image_rejects_non_image_bytes(db, workspace, monkeypatch):
+    """Garbage b64 must not land in artifacts/ — magic-byte validation is the
+    last honesty gate before tracking."""
+    import base64
+
+    import litellm
+
+    from agentos.capabilities.tools.media import media_image
+    from agentos.models.artifact import Artifact
+
+    _, kwargs = await _bound_image(db, workspace)
+
+    async def fake_gen(**kw):
+        return _fake_image_response(base64.b64encode(b"definitely not an image").decode())
+
+    monkeypatch.setattr(litellm, "aimage_generation", fake_gen)
+    out = await media_image({"prompt": "x"}, workspace, **kwargs)
+    assert "not a recognized image format" in out["error"]
+    assert (await db.execute(select(Artifact))).scalars().all() == []
+
+
+async def test_media_image_timeout_reports_billing_risk(db, workspace, monkeypatch):
+    import litellm
+
+    from agentos.capabilities.tools.media import media_image
+
+    _, kwargs = await _bound_image(db, workspace)
+
+    async def hang(**kw):
+        raise TimeoutError
+
+    monkeypatch.setattr(litellm, "aimage_generation", hang)
+    out = await media_image({"prompt": "x"}, workspace, **kwargs)
+    assert "timed out" in out["error"]
+    assert "billed" in out["error"]  # honest about ambiguous billable dispatch
+
+
+async def test_media_image_unconfigured_returns_error(db, workspace):
+    """No binding → honest refusal, no provider call attempted."""
+    import litellm
+
+    from agentos.capabilities.tools.media import media_image
+
+    called = []
+    monkey = litellm.aimage_generation
+
+    async def track(**kw):
+        called.append(kw)
+        return _fake_image_response(None)
+
+    litellm.aimage_generation = track
+    try:
+        out = await media_image({"prompt": "x"}, workspace, db=db)
+        assert "not configured" in out["error"]
+        assert called == []
+    finally:
+        litellm.aimage_generation = monkey
+
+
+async def test_mediator_denies_unconfigured_media_image(db, workspace):
+    """An unconfigured model-bound tool must be denied at admission — the
+    schema is also hidden, but stale invocations can't slip through either."""
+    from agentos.capabilities.builtin import register_builtin_capabilities
+    from agentos.capabilities.registry import registry
+    from agentos.syscall.mediator import SyscallHandler
+    from agentos.syscall.protocol import ToolCall
+
+    registry._caps.clear()
+    register_builtin_capabilities()
+    try:
+        handler = SyscallHandler(db=db, workspace_path=workspace)
+        result = await handler.mediate(
+            call=ToolCall(id="1", name="media_image", args={"prompt": "x"}),
+            session=_session(),
+            agent_config=_agent_with(["media_image"]),
+            run_id="r1",
+        )
+        assert result.allowed is False
+        assert "not ready" in result.denied_reason
+    finally:
+        registry._caps.clear()
+
+
+async def test_mediator_injects_frozen_media_binding(db, workspace, monkeypatch):
+    """A ready model binding rides into execution frozen — the tool sees the
+    admission-time provider/options, plus db + provenance ids."""
+    from agentos.capabilities.builtin import register_builtin_capabilities
+    from agentos.capabilities.registry import registry
+    from agentos.syscall.mediator import SyscallHandler
+    from agentos.syscall.protocol import ToolCall
+
+    registry._caps.clear()
+    register_builtin_capabilities()
+    captured: dict = {}
+
+    async def fake_exec(**kwargs):
+        captured.update(kwargs)
+        return {"ok": True}
+
+    monkeypatch.setattr(registry.get("media_image"), "execute", fake_exec)
+    try:
+        await _bound_image(db, workspace)
+        handler = SyscallHandler(db=db, workspace_path=workspace)
+        result = await handler.mediate(
+            call=ToolCall(id="1", name="media_image", args={"prompt": "a cat"}),
+            session=_session(),
+            agent_config=_agent_with(["media_image"]),
+            run_id="r1",
+        )
+        assert result.allowed is True, result.denied_reason
+        assert captured["tool_binding"].binding.key == "media.image"
+        assert captured["tool_options"]["size"] == "1024x1024"
+        assert captured["db"] is db
+        assert captured["agent_id"] == "a"
+        assert captured["session_id"] == "s1"
+        assert captured["call_id"] == "1"
+    finally:
+        registry._caps.clear()

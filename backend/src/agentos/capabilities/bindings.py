@@ -117,9 +117,31 @@ BINDING_SPECS: tuple[BindingSpec, ...] = (
         title="Image generation",
         description="Generate images from a prompt and save them as artifacts.",
         kind="model",
-        implemented=False,
+        implemented=True,
         capability_names=("media_image",),
-        planned_note="Planned — selector unlocks when the capability ships.",
+        option_fields=(
+            OptionField(
+                name="size",
+                kind="select",
+                label="Size",
+                choices=("auto", "1024x1024", "1536x1024", "1024x1536"),
+                default="auto",
+            ),
+            OptionField(
+                name="quality",
+                kind="select",
+                label="Quality",
+                choices=("auto", "low", "medium", "high"),
+                default="auto",
+            ),
+            OptionField(
+                name="format",
+                kind="select",
+                label="Format",
+                choices=("png", "jpeg", "webp"),
+                default="png",
+            ),
+        ),
     ),
 )
 
