@@ -1,7 +1,10 @@
 # First Media Capability
 
 Status: proposed. Choice not finalized: TTS recommended; image generation is the
-alternative if supported-provider feasibility makes TTS unsuitable.
+alternative if supported-provider feasibility makes TTS unsuitable. Whichever
+ships first becomes the first live `model`-shape binding under the W5 registry
+(`media.tts` / `media.image`); `media.stt` and `media.video` stay roadmap until
+a real backend exists — see [Tool bindings](05-tool-bindings.md#binding-key-roadmap).
 
 ## Goal
 

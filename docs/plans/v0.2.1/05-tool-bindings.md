@@ -1,11 +1,16 @@
 # Global Tool Bindings
 
-Status: proposed. Dependencies: persistence/readiness decisions.
+Status: first slice implemented (`search.web` engine options, planned media
+entries, mediator freezing, `/api/settings/tools` API). This document now also
+records the extended backend-registry roadmap below.
 
 ## Goal
 
 Separate platform tool configuration from per-agent authority. Global bindings
 choose how a supported tool executes; agent grants decide who may execute it.
+The Tools tab is the capability backend registry: each supported tool can have
+its implementation swapped — engine options, a keyed service, a model offering,
+or an execution backend — without touching per-agent grants.
 
 ## Existing File Targets
 
@@ -30,6 +35,33 @@ assuming the roadmap's intended General control is already implemented.
 Choose persisted settings versus a dedicated small table before writing code.
 Respect existing environment-pinned setting behavior; do not create two competing
 authorities. Validate configuration without sending a provider request on save.
+
+## Binding Key Roadmap
+
+The registry grows by adding specs — the table, resolver, mediator freeze, API,
+and card UI already generalize. Four binding shapes exist or are planned:
+
+- **engine** — implementation plus validated options, no provider/model
+  (implemented: `search.web` ddgs cascade).
+- **provider** — keyed service: a Provider row supplies credentials; no model
+  needed (roadmap: keyed search).
+- **model** — provider + model + options (planned: media).
+- **backend** — execution environment selection plus per-backend options
+  (roadmap: terminal sandbox).
+
+| Binding key | Shape | Status / notes |
+|---|---|---|
+| `search.web` | engine → provider | Implemented: free `ddgs` cascade with engine order, SafeSearch, region. Roadmap: keyed services (exa, tavily, brave-api, firecrawl) bound to Provider rows of new search provider types — credentials stay in encrypted provider storage. |
+| `exec.terminal` | backend | Roadmap: `auto` keeps today's seatbelt/bwrap → docker → mxc probe order; or pin docker / ssh / daytona / modal. The `SandboxBackend` abstraction is already pluggable — ssh/daytona/modal are new implementations; remote backends take credentials via provider references, never inline secrets. |
+| `media.tts` | model | Planned for this release (W6); spec exists, marked unimplemented until the handler ships. Provider + model + voice/format options. |
+| `media.image` | model | Planned (W6 alternative); provider + model + size/quality options. |
+| `media.stt` | model | Roadmap; spec entry when an STT handler is committed. Provider + model + language options. |
+| `media.video` | model | Future; register only alongside a real backend. |
+
+Every new key keeps the same contract: a card shows live selectors only when a
+real backend exists — planned entries render an honest note, never a fake
+selector. Keyed services always reference a Provider row; secrets never enter
+`tool_bindings` rows or API responses.
 
 ## Resolution Contract
 
