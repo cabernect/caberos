@@ -386,6 +386,31 @@ export interface KnowledgeDocument {
   structure?: KnowledgeStructure;
 }
 
+export interface KnowledgeChunk {
+  id: string;
+  kind: "parent" | "child" | "chunk";
+  parent_id: string | null;
+  seq: number;
+  heading_path: string[];
+  page_number: number | null;
+  source_location: string | null;
+  block_type: string | null;
+  token_count: number | null;
+  has_children: boolean;
+  preview: string;
+  preview_truncated: boolean;
+}
+
+export interface KnowledgeChunksPage {
+  document_id: string;
+  corpus_version: string;
+  status: KnowledgeDocument["status"];
+  chunk_count: number;
+  preview_chars: number;
+  items: KnowledgeChunk[];
+  next_cursor: string | null;
+}
+
 export interface KnowledgeResult {
   chunk_id: string;
   document_id: string;

@@ -9,7 +9,7 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -286,6 +286,116 @@ async def get_scope_documents(
     )
     return {
         "documents": [_document_response(document, len(document.chunks)) for document in documents]
+    }
+
+
+_CHUNK_PREVIEW_CHARS = 400
+
+
+def _corpus_version(document: Document) -> str:
+    """Marker that changes whenever the document's chunk corpus mutates —
+    re-ingest/reindex bumps ``indexed_at``; chunk rows carry no timestamps."""
+    stamp = document.indexed_at.isoformat() if document.indexed_at else "pending"
+    return f"{document.content_hash}:{stamp}"
+
+
+@router.get("/scopes/{scope}/documents/{document_id}/chunks")
+async def get_document_chunks(
+    scope: str,
+    document_id: str,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+    parent_id: str | None = None,
+    cursor: str | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+) -> dict:
+    """Bounded, cursor-paged inspection of a document's persisted chunks.
+
+    ``parent_id`` loads one branch lazily; absent = top level (parents and
+    flat chunks). The cursor pins a corpus version — a re-ingested document
+    rejects stale pages with 409 instead of mixing corpora.
+    """
+    agent_id = await _resolve_scope(scope, db)
+    document = await db.scalar(
+        select(Document).where(Document.id == document_id, Document.agent_id == agent_id)
+    )
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    version = _corpus_version(document)
+    cursor_seq: int | None = None
+    if cursor:
+        try:
+            cursor_version, raw_seq = cursor.rsplit(":", 1)
+            cursor_seq = int(raw_seq)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Malformed cursor") from None
+        if cursor_version != version:
+            raise HTTPException(
+                status_code=409,
+                detail="Document was re-indexed — reload the inspection",
+            )
+
+    query = select(DocumentChunk).where(DocumentChunk.document_id == document_id)
+    if parent_id:
+        parent = await db.get(DocumentChunk, parent_id)
+        if parent is None or parent.document_id != document_id:
+            raise HTTPException(status_code=404, detail="Chunk parent not found")
+        query = query.where(DocumentChunk.parent_id == parent_id)
+    else:
+        query = query.where(DocumentChunk.parent_id.is_(None))
+    if cursor_seq is not None:
+        query = query.where(DocumentChunk.seq > cursor_seq)
+
+    rows = list(
+        (await db.execute(query.order_by(DocumentChunk.seq).limit(limit + 1))).scalars().all()
+    )
+    next_cursor = None
+    if len(rows) > limit:
+        rows = rows[:limit]
+        next_cursor = f"{version}:{rows[-1].seq}"
+
+    # Children exist? One grouped count — no N+1 when rendering chevrons.
+    has_children: set[str] = set()
+    if rows:
+        counts = await db.execute(
+            select(DocumentChunk.parent_id, func.count(DocumentChunk.id))
+            .where(
+                DocumentChunk.document_id == document_id,
+                DocumentChunk.parent_id.in_([r.id for r in rows]),
+            )
+            .group_by(DocumentChunk.parent_id)
+        )
+        has_children = {pid for pid, _ in counts.all() if pid}
+
+    items = []
+    for row in rows:
+        text = row.text or ""
+        items.append(
+            {
+                "id": row.id,
+                "kind": row.kind,
+                "parent_id": row.parent_id,
+                "seq": row.seq,
+                "heading_path": json.loads(row.heading_path or "[]"),
+                "page_number": row.page_number,
+                "source_location": row.source_location,
+                "block_type": row.block_type,
+                "token_count": row.token_count,
+                "has_children": row.id in has_children,
+                "preview": text[:_CHUNK_PREVIEW_CHARS],
+                "preview_truncated": len(text) > _CHUNK_PREVIEW_CHARS,
+            }
+        )
+
+    return {
+        "document_id": document.id,
+        "corpus_version": version,
+        "status": document.status,
+        "chunk_count": await _document_chunk_count(db, document_id),
+        "preview_chars": _CHUNK_PREVIEW_CHARS,
+        "items": items,
+        "next_cursor": next_cursor,
     }
 
 

@@ -9,6 +9,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { DashboardSidebar, NAV_ROUTES, type NavKey } from "@/components/DashboardSidebar";
 import { PageIntro } from "@/components/guidance/PageIntro";
 import { INTRO_BY_KEY } from "@/components/guidance/tourStops";
+import { ChunkInspector } from "@/components/knowledge/ChunkInspector";
 import { PageHeader } from "@/components/ui/page-header";
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusWord } from "@/components/ui/status-word";
@@ -386,6 +387,7 @@ function KnowledgeScopeDetail({ scope }: { scope: string }) {
   const [working, setWorking] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [reindexing, setReindexing] = useState<string | null>(null);
+  const [inspecting, setInspecting] = useState<KnowledgeDocument | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const [error, setError] = useState("");
   const isShared = scope === "shared";
@@ -629,6 +631,18 @@ function KnowledgeScopeDetail({ scope }: { scope: string }) {
                         <div className="flex justify-end gap-3">
                           <button
                             type="button"
+                            onClick={() =>
+                              setInspecting((current) =>
+                                current?.id === document.id ? null : document,
+                              )
+                            }
+                            aria-expanded={inspecting?.id === document.id}
+                            className="cursor-pointer text-xs text-[var(--ink-muted)] hover:text-[var(--accent)]"
+                          >
+                            Inspect
+                          </button>
+                          <button
+                            type="button"
                             onClick={() => void reindex(document)}
                             disabled={working || reindexing === document.id}
                             className="cursor-pointer text-xs text-[var(--ink-muted)] hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
@@ -654,6 +668,13 @@ function KnowledgeScopeDetail({ scope }: { scope: string }) {
             </table>
           )}
         </section>
+        {inspecting && (
+          <ChunkInspector
+            scope={scope}
+            document={inspecting}
+            onClose={() => setInspecting(null)}
+          />
+        )}
         <section
           className="rounded-xl"
           style={{

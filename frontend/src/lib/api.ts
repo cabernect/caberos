@@ -45,6 +45,7 @@ import type {
   SkillInfo,
   EffectiveSkill,
   SpendSummary,
+  KnowledgeChunksPage,
   KnowledgeDocument,
   KnowledgeEmbeddingResource,
   KnowledgeGeneration,
@@ -768,6 +769,20 @@ export const api = {
     request<void>(`/api/knowledge/scopes/${scope}/documents/${documentId}`, {
       method: "DELETE",
     }),
+  listDocumentChunks: (
+    scope: string,
+    documentId: string,
+    opts: { parentId?: string; cursor?: string; limit?: number } = {},
+  ) => {
+    const params = new URLSearchParams();
+    if (opts.parentId) params.set("parent_id", opts.parentId);
+    if (opts.cursor) params.set("cursor", opts.cursor);
+    if (opts.limit) params.set("limit", String(opts.limit));
+    const suffix = params.size ? `?${params}` : "";
+    return request<KnowledgeChunksPage>(
+      `/api/knowledge/scopes/${scope}/documents/${documentId}/chunks${suffix}`,
+    );
+  },
 
   // Knowledge index (RAG v2 — semantic index lifecycle)
   getKnowledgeIndex: () =>
