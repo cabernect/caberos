@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { ArrowDown, PanelLeft, PanelRight, Plus, Search, Globe, FileText, CalendarClock, Sparkles, AlertCircle, BookOpen, ChevronDown, Paperclip, Loader2, MessageSquare } from "lucide-react";
+import { ArrowDown, PanelLeft, PanelRight, Plus, Search, Globe, FileText, CalendarClock, Sparkles, AlertCircle, BookOpen, ChevronDown, Paperclip, Loader2, MessageSquare, CheckCircle, X } from "lucide-react";
 import { api, workspaceBackend, type PreviewSource } from "@/lib/api";
 import type { Agent, Citation, Message, Provider, SessionInfo } from "@/lib/types";
 import { WorkspacePanel } from "@/components/WorkspacePanel";
@@ -133,6 +133,80 @@ function createStreamingResponse(): StreamingResponse {
   };
 }
 
+// Per-session /compact outcome — a request always applies its result to the
+// session that started it, never whichever session happens to be on screen.
+interface CompactStatus {
+  state: "pending" | "succeeded" | "unchanged" | "failed";
+  originalTokens?: number;
+  compactedTokens?: number;
+  maxContextTokens?: number;
+  message?: string;
+}
+
+// Pinned above the composer so progress/outcome stays visible regardless of
+// where the message list is scrolled. aria-live announces state changes.
+function CompactStatusBar({
+  status,
+  onRetry,
+  onDismiss,
+}: {
+  status: CompactStatus;
+  onRetry: () => void;
+  onDismiss: () => void;
+}) {
+  const isError = status.state === "failed";
+  return (
+    <div
+      role={isError ? "alert" : "status"}
+      aria-live="polite"
+      className="mb-2 flex items-center gap-2 rounded-lg px-3 py-2 text-[13px]"
+      style={{
+        background: "var(--surface)",
+        border: `1px solid ${isError ? "var(--warning)" : "var(--border)"}`,
+        color: "var(--ink-2)",
+      }}
+    >
+      {status.state === "pending" && (
+        <Loader2 className="h-4 w-4 shrink-0 animate-spin" style={{ color: "var(--accent)" }} />
+      )}
+      {status.state === "succeeded" && (
+        <CheckCircle className="h-4 w-4 shrink-0" style={{ color: "var(--accent)" }} />
+      )}
+      {(status.state === "failed" || status.state === "unchanged") && (
+        <AlertCircle className="h-4 w-4 shrink-0" style={{ color: isError ? "var(--warning)" : "var(--ink-3)" }} />
+      )}
+      <span className="min-w-0 flex-1">
+        {status.state === "pending" && "Compacting conversation…"}
+        {status.state === "succeeded" &&
+          `Context compacted — ${status.originalTokens?.toLocaleString() ?? "?"} → ${status.compactedTokens?.toLocaleString() ?? "?"} estimated tokens`}
+        {status.state === "unchanged" &&
+          "Nothing to compact — the conversation already fits in context."}
+        {status.state === "failed" &&
+          `Compaction failed — ${status.message ?? "unknown error"}`}
+      </span>
+      {status.state === "failed" && (
+        <button
+          onClick={onRetry}
+          className="shrink-0 rounded px-2 py-0.5 text-[12px] font-medium"
+          style={{ background: "var(--accent)", color: "var(--white)" }}
+        >
+          Retry
+        </button>
+      )}
+      {status.state !== "pending" && (
+        <button
+          onClick={onDismiss}
+          aria-label="Dismiss compaction status"
+          className="shrink-0 rounded p-0.5"
+          style={{ color: "var(--ink-3)" }}
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function Conversation() {
   const { id: agentId } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -154,7 +228,10 @@ export function Conversation() {
   const [cachedTokens, setCachedTokens] = useState<number | undefined>(undefined);
   const [maxContextTokens, setMaxContextTokens] = useState<number | undefined>(undefined);
   const [compacted, setCompacted] = useState(false);
-  const [compacting, setCompacting] = useState(false);
+  // /compact outcomes are keyed by session — results land on the session
+  // that started the request even after the user switches conversations.
+  const [compactStatus, setCompactStatus] = useState<Record<string, CompactStatus>>({});
+  const compacting = compactStatus[activeSessionId ?? ""]?.state === "pending";
   const [hasMoreHistory, setHasMoreHistory] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [yoloMode, setYoloMode] = useState(false);
@@ -181,6 +258,8 @@ export function Conversation() {
   // viewport pinned to the same spot while they land.
   const oldestFetchedIdRef = useRef<string | null>(null);
   const loadingOlderRef = useRef(false);
+  // Synchronous duplicate-submit guard — setState can't stop a double Enter.
+  const compactInFlightRef = useRef<Set<string>>(new Set());
   const anchorRef = useRef<{ height: number; top: number } | null>(null);
 
   // Support multiple concurrent runs — one per session.
@@ -1160,6 +1239,11 @@ export function Conversation() {
         setRunningSessionIds(new Set(runEntriesRef.current.keys()));
       }
       await api.deleteSession(agentId, id);
+      setCompactStatus((m) => {
+        const next = { ...m };
+        delete next[id];
+        return next;
+      });
       if (activeSessionId === id) {
         setActiveSessionId(null);
         setMessages([]);
@@ -1453,18 +1537,66 @@ export function Conversation() {
     onError: () => setInputWarnings(["The dropped file could not be read."]),
   });
 
+  // Re-apply a recorded result when returning to a session that finished
+  // compacting while another conversation was on screen.
+  useEffect(() => {
+    if (!activeSessionId) return;
+    const s = compactStatus[activeSessionId];
+    if (s?.state === "succeeded" && s.compactedTokens != null) {
+      setContextTokens(s.compactedTokens);
+      if (s.maxContextTokens != null) setMaxContextTokens(s.maxContextTokens);
+      setCompacted(true);
+    }
+    // compactStatus entries are only applied on entry to the session — a
+    // live completion writes through handleCompact's active check instead.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSessionId]);
+
   const handleCompact = async () => {
-    if (!agentId || !activeSessionId) return;
-    setCompacting(true);
+    const sessionId = activeSessionRef.current ?? activeSessionId;
+    if (!agentId || !sessionId || compactInFlightRef.current.has(sessionId)) return;
+    compactInFlightRef.current.add(sessionId);
+    setCompactStatus((m) => ({ ...m, [sessionId]: { state: "pending" } }));
     try {
-      const result = await api.compactSession(agentId, activeSessionId);
-      setContextTokens(result.compacted_tokens);
-      setMaxContextTokens(result.max_context_tokens);
-      setCompacted(result.compacted);
+      const result = await api.compactSession(agentId, sessionId);
+      // The endpoint reports summarization failures inside a successful
+      // HTTP response — a nonempty `error` is a failure, not success.
+      if (result.error) {
+        setCompactStatus((m) => ({
+          ...m,
+          [sessionId]: { state: "failed", message: result.error ?? "unknown error" },
+        }));
+        return;
+      }
+      setCompactStatus((m) => ({
+        ...m,
+        [sessionId]: result.compacted
+          ? {
+              state: "succeeded",
+              originalTokens: result.original_tokens,
+              compactedTokens: result.compacted_tokens,
+              maxContextTokens: result.max_context_tokens,
+            }
+          : { state: "unchanged" },
+      }));
+      // The meter belongs to the on-screen session — apply directly only
+      // while that session is still active (the status map re-applies it
+      // if the user switches back afterward).
+      if (activeSessionRef.current === sessionId) {
+        setContextTokens(result.compacted_tokens);
+        setMaxContextTokens(result.max_context_tokens);
+        setCompacted(result.compacted);
+      }
     } catch (e) {
-      console.error("Compact failed:", e);
+      setCompactStatus((m) => ({
+        ...m,
+        [sessionId]: {
+          state: "failed",
+          message: e instanceof Error ? e.message : "Compaction request failed",
+        },
+      }));
     } finally {
-      setCompacting(false);
+      compactInFlightRef.current.delete(sessionId);
     }
   };
 
@@ -1834,14 +1966,6 @@ export function Conversation() {
               <StreamingMessage streaming={streaming} onPreview={openPreview} />
             )}
 
-            {/* Compacting indicator */}
-            {compacting && (
-              <div className="flex items-center justify-center gap-2 py-4">
-                <Loader2 className="h-4 w-4 animate-spin" style={{ color: "var(--accent)" }} />
-                <span className="text-[13px] text-[var(--ink-2)]">Compacting conversation…</span>
-              </div>
-            )}
-
             <div ref={messagesEndRef} />
           </div>
         </div>
@@ -1931,6 +2055,21 @@ export function Conversation() {
             sessions render a read-only notice in the same slot. */}
         <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 bg-[linear-gradient(to_bottom,transparent_0px,var(--ground)_48px)]">
           <div className="pointer-events-auto relative mt-12 px-4 pb-3">
+        {/* /compact outcome — composer-adjacent so it stays visible no
+            matter where the message list is scrolled. */}
+        {activeSessionId && compactStatus[activeSessionId] && (
+          <CompactStatusBar
+            status={compactStatus[activeSessionId]}
+            onRetry={handleCompact}
+            onDismiss={() =>
+              setCompactStatus((m) => {
+                const next = { ...m };
+                delete next[activeSessionId];
+                return next;
+              })
+            }
+          />
+        )}
         {(() => {
           const activeSession = sessions.find((s) => s.id === activeSessionId);
           if (activeSession?.channel) {

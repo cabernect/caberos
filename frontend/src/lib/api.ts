@@ -952,6 +952,7 @@ export const api = {
       middle_count: number;
       tail_count: number;
       summary: string | null;
+      error: string | null;
     }>(`/api/chat/${agentId}/compact`, {
       method: "POST",
       body: JSON.stringify({ session_id: sessionId }),

@@ -535,9 +535,12 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
         return;
       }
       if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
         const command = allFiltered[skillIndex];
-        if (command) {
+        // Exact-match guard: when the typed text already IS the full
+        // command name ("/compact"), Enter falls through and submits —
+        // completion only applies to a selected *different* suggestion.
+        if (command && command.name !== skillQueryStr) {
+          e.preventDefault();
           const afterSlash = text.slice(slashMatch![0].length);
           setText(`/${command.name} ${afterSlash}`.trim() + " ");
           return;
