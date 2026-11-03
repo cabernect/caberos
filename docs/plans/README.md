@@ -4,6 +4,12 @@ This folder contains the original CaberOS v0.1 implementation plans, derived fro
 
 ## Active release plan
 
+The v0.2.1 follow-up scope is a draft for review in
+[`v0.2.1-release-plan.md`](v0.2.1-release-plan.md): existing Vault & Media
+commitments plus Agent Workspace Selection and compaction UX.
+Detailed implementation workstreams and acceptance scenarios live under
+[`v0.2.1/`](v0.2.1/README.md).
+
 The next major release is **v0.2.0 — Agent Workbench**. Its product promise, release boundary, invariants, workstream status, integrated acceptance stories, migration strategy, and release gate are documented in [`v0.2-release-plan.md`](v0.2-release-plan.md). Detailed pillar plans live under [`v0.2/`](v0.2/).
 
 ## Build order
