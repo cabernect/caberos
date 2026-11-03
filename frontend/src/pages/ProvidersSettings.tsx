@@ -23,6 +23,8 @@ import {
   ChevronDown,
   ChevronRight,
   Wrench,
+  ArrowUp,
+  ArrowDown,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useConfirm } from "@/lib/confirmHook";
@@ -4361,56 +4363,63 @@ function EngineOrderField({
     onChange(next);
   };
   return (
-    <div className="space-y-1.5">
-      {value.map((engine, i) => (
-        <div
-          key={engine}
-          className="flex items-center gap-2 rounded-md border border-line bg-ground px-2.5 py-1.5"
-        >
-          <span className="flex-1 text-[12px] font-medium text-ink">
-            {engineLabel(engine)}
-          </span>
-          <button
-            type="button"
-            disabled={i === 0}
-            onClick={() => move(i, -1)}
-            className="cursor-pointer text-ink-3 hover:text-ink disabled:opacity-30"
-            title="Try earlier"
+    <div>
+      <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
+        {value.map((engine, i) => (
+          <div
+            key={engine}
+            className="group flex items-center gap-2 rounded-md border border-line bg-ground px-2 py-1"
           >
-            ↑
-          </button>
-          <button
-            type="button"
-            disabled={i === value.length - 1}
-            onClick={() => move(i, 1)}
-            className="cursor-pointer text-ink-3 hover:text-ink disabled:opacity-30"
-            title="Try later"
-          >
-            ↓
-          </button>
-          <button
-            type="button"
-            onClick={() => onChange(value.filter((e) => e !== engine))}
-            className="cursor-pointer text-ink-3 hover:text-[var(--danger)]"
-            title="Disable engine"
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      ))}
-      {remaining.length > 0 && (
-        <Select
-          value=""
-          onChange={(v) => {
-            if (v) onChange([...value, v]);
-          }}
-          options={[
-            { value: "", label: "Add engine…" },
-            ...remaining.map((e) => ({ value: e, label: engineLabel(e) })),
-          ]}
-          className="w-full rounded-md border border-line bg-ground px-2.5 py-1.5 text-[12px] text-ink outline-none"
-        />
-      )}
+            <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-[var(--accent-bg)] text-[10px] font-semibold text-[var(--accent)]">
+              {i + 1}
+            </span>
+            <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-ink">
+              {engineLabel(engine)}
+            </span>
+            <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+              <button
+                type="button"
+                disabled={i === 0}
+                onClick={() => move(i, -1)}
+                className="cursor-pointer text-ink-3 hover:text-ink disabled:opacity-30"
+                title="Try earlier"
+              >
+                <ArrowUp className="h-3 w-3" />
+              </button>
+              <button
+                type="button"
+                disabled={i === value.length - 1}
+                onClick={() => move(i, 1)}
+                className="cursor-pointer text-ink-3 hover:text-ink disabled:opacity-30"
+                title="Try later"
+              >
+                <ArrowDown className="h-3 w-3" />
+              </button>
+              <button
+                type="button"
+                onClick={() => onChange(value.filter((e) => e !== engine))}
+                className="cursor-pointer text-ink-3 hover:text-[var(--danger)]"
+                title="Disable engine"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          </div>
+        ))}
+        {remaining.length > 0 && (
+          <Select
+            value=""
+            onChange={(v) => {
+              if (v) onChange([...value, v]);
+            }}
+            options={[
+              { value: "", label: "+ engine" },
+              ...remaining.map((e) => ({ value: e, label: engineLabel(e) })),
+            ]}
+            className="h-full w-full rounded-md border border-dashed border-line px-2 py-1 text-[12px] text-ink-3 outline-none"
+          />
+        )}
+      </div>
     </div>
   );
 }
@@ -4516,7 +4525,7 @@ export function ToolsTab({ providers }: { providers: Provider[] }) {
   }
 
   return (
-    <div className="max-w-2xl space-y-4">
+    <div className="max-w-3xl space-y-4">
       {error && (
         <p className="rounded-md border border-[var(--danger)]/30 bg-[var(--danger)]/10 px-3 py-2 text-sm text-[var(--danger)]">
           {error}
@@ -4527,7 +4536,9 @@ export function ToolsTab({ providers }: { providers: Provider[] }) {
         a provider/model. They don't grant capabilities; each agent's
         permissions still decide who may use them.
       </p>
-      {tools.map((tool) => {
+      {tools
+        .filter((t) => t.implemented)
+        .map((tool) => {
         const draft = drafts[tool.key] ?? {
           options: {},
           providerId: "",
@@ -4548,7 +4559,6 @@ export function ToolsTab({ providers }: { providers: Provider[] }) {
             style={{
               border: "1px solid var(--border-soft)",
               background: "var(--surface)",
-              opacity: tool.implemented ? 1 : 0.75,
             }}
           >
             <div className="flex items-center justify-between gap-3">
@@ -4560,12 +4570,7 @@ export function ToolsTab({ providers }: { providers: Provider[] }) {
             <p className="mt-1 text-[12px] text-[var(--ink-3)]">
               {tool.description}
             </p>
-            {!tool.implemented ? (
-              <p className="mt-3 rounded-md border border-dashed border-line px-3 py-2 text-[12px] text-[var(--ink-3)]">
-                {tool.planned_note ?? "Planned for a future release."}
-              </p>
-            ) : (
-              <div className="mt-4 space-y-3">
+            <div className="mt-4 space-y-3">
                 {tool.reason && tool.state !== "ready" && (
                   <p
                     className="text-[12px]"
@@ -4621,9 +4626,14 @@ export function ToolsTab({ providers }: { providers: Provider[] }) {
                     </Field>
                   </div>
                 )}
-                {tool.options_schema.map((field) => (
-                  <Field key={field.name} label={field.label}>
-                    {field.kind === "engine_order" ? (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  {tool.options_schema.map((field) => (
+                    <div
+                      key={field.name}
+                      className={field.kind === "engine_order" ? "sm:col-span-2" : ""}
+                    >
+                      <Field label={field.label}>
+                        {field.kind === "engine_order" ? (
                       <EngineOrderField
                         value={
                           (draft.options[field.name] as string[] | undefined) ??
@@ -4659,8 +4669,10 @@ export function ToolsTab({ providers }: { providers: Provider[] }) {
                         className="w-full rounded-md border border-line bg-ground px-3 py-1.5 font-mono text-[12px] text-ink outline-none"
                       />
                     )}
-                  </Field>
-                ))}
+                      </Field>
+                    </div>
+                  ))}
+                </div>
                 <div className="flex items-center gap-2 pt-1">
                   <button
                     type="button"
@@ -4686,10 +4698,35 @@ export function ToolsTab({ providers }: { providers: Provider[] }) {
                   )}
                 </div>
               </div>
-            )}
           </section>
         );
       })}
+      {tools.some((t) => !t.implemented) && (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {tools
+            .filter((t) => !t.implemented)
+            .map((tool) => (
+              <section
+                key={tool.key}
+                className="rounded-xl border border-dashed border-line p-4"
+                style={{ background: "var(--surface)" }}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <h2 className="text-sm font-semibold text-[var(--ink-2)]">
+                    {tool.title}
+                  </h2>
+                  <ToolStatusChip tool={tool} />
+                </div>
+                <p className="mt-1 text-[12px] text-[var(--ink-3)]">
+                  {tool.description}
+                </p>
+                <p className="mt-2 text-[12px] text-[var(--ink-3)]">
+                  {tool.planned_note ?? "Planned for a future release."}
+                </p>
+              </section>
+            ))}
+        </div>
+      )}
     </div>
   );
 }
