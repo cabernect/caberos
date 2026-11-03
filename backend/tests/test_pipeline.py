@@ -25,10 +25,10 @@ async def test_pipeline_full_run(db, workspace, tmp_path, monkeypatch):
     ws_dir = tmp_path / "ws"
     ws_dir.mkdir(exist_ok=True)
 
-    def mock_create_workspace(self, agent_id):
+    def mock_get_workspace_path(self, agent_id):
         return ws_dir
 
-    monkeypatch.setattr(WorkspaceManager, "create_workspace", mock_create_workspace)
+    monkeypatch.setattr(WorkspaceManager, "get_workspace_path", mock_get_workspace_path)
 
     # Create a test agent
     config = AgentConfig(
@@ -121,7 +121,7 @@ async def test_pipeline_stores_attachments_for_existing_file_tools(db, tmp_path,
     ws_dir = tmp_path / "ws"
     ws_dir.mkdir(exist_ok=True)
     monkeypatch.setattr(settings, "knowledge_root", tmp_path / "knowledge")
-    monkeypatch.setattr(WorkspaceManager, "create_workspace", lambda self, aid: ws_dir)
+    monkeypatch.setattr(WorkspaceManager, "get_workspace_path", lambda self, aid: ws_dir)
 
     config = AgentConfig(
         id="pipe-attachments",
@@ -177,7 +177,7 @@ async def test_pipeline_deduplication(db, tmp_path, monkeypatch):
 
     ws_dir = tmp_path / "ws"
     ws_dir.mkdir(exist_ok=True)
-    monkeypatch.setattr(WorkspaceManager, "create_workspace", lambda self, aid: ws_dir)
+    monkeypatch.setattr(WorkspaceManager, "get_workspace_path", lambda self, aid: ws_dir)
 
     config = AgentConfig(
         id="pipe-test-2",
@@ -308,7 +308,7 @@ async def test_title_generation_fires_once_per_session(db, tmp_path, monkeypatch
 
     ws_dir = tmp_path / "ws"
     ws_dir.mkdir(exist_ok=True)
-    monkeypatch.setattr(WorkspaceManager, "create_workspace", lambda self, aid: ws_dir)
+    monkeypatch.setattr(WorkspaceManager, "get_workspace_path", lambda self, aid: ws_dir)
 
     config = AgentConfig(
         id="title-agent",

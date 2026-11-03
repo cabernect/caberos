@@ -266,6 +266,11 @@ class SQLiteBackend(DatabaseBackend):
             ("audit_records", "created_at", "DATETIME"),
             # Execution-time effects snapshot (capability registry).
             ("audit_records", "effects", "JSON"),
+            # v0.2.1 workspace pinning — sessions/artifacts/runs record the
+            # root their files live under; NULL = legacy dynamic resolution.
+            ("sessions", "workspace_path", "TEXT"),
+            ("runs", "workspace_path", "TEXT"),
+            ("artifacts", "workspace_path", "VARCHAR(1024)"),
         ]
         for table, column, col_type in patches:
             if not await self.column_exists(conn, table, column):

@@ -61,12 +61,33 @@ def _skills_dir(agent_id: str) -> Path:
 
 
 def _workspace_path(agent_id: str) -> Path:
-    """Get the agent's workspace path."""
+    """Get the agent's managed workspace path (skills/agent-owned storage)."""
     from ..sandbox.workspace import WorkspaceManager
 
     wm = WorkspaceManager()
     agent_id = _safe_component(agent_id, "agent id")
     return Path(wm.create_workspace(agent_id))
+
+
+async def _workspace_root(db: AsyncSession, agent_id: str, session_id: str | None = None) -> Path:
+    """Resolve the root for workspace browsing/previews.
+
+    A session's pinned root wins; absent or unpinned, the agent's current
+    default. Managed roots are created on demand; external roots are
+    attach-only and never created here. A foreign session 404s — no
+    silent fallback to another directory.
+    """
+    from ..sandbox.workspace import WorkspaceManager
+
+    wm = WorkspaceManager()
+    agent_id = _safe_component(agent_id, "agent id")
+    try:
+        root = await wm.resolve_api_root(db, agent_id, session_id)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail="Session not found") from e
+    if wm.is_managed_root(agent_id, root):
+        root.mkdir(parents=True, exist_ok=True)
+    return root
 
 
 # --- MEMORY.md ---
@@ -547,11 +568,12 @@ async def list_workspace(
     operator: Operator = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
     path: str = "",
+    session_id: str | None = None,
 ) -> dict:
     """List files in the agent's workspace."""
     from ..sandbox.workspace import WorkspaceManager
 
-    ws = _workspace_path(agent_id)
+    ws = await _workspace_root(db, agent_id, session_id)
     try:
         target = Path(WorkspaceManager().validate_path(str(ws), path or "."))
     except ValueError as error:
@@ -593,6 +615,7 @@ async def delete_workspace_entry(
     operator: Operator = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
     path: str = "",
+    session_id: str | None = None,
 ) -> dict:
     """Delete a file or directory in the agent's workspace.
 
@@ -612,7 +635,7 @@ async def delete_workspace_entry(
     if not rel:
         raise HTTPException(status_code=400, detail="path is required")
 
-    ws = _workspace_path(agent_id)
+    ws = await _workspace_root(db, agent_id, session_id)
     # Containment applies to the parent directory (fully resolved — '..'
     # and symlinked dirs still can't escape), never to the leaf: a symlink
     # leaf is a workspace entry and must be unlinked without being followed.
@@ -774,11 +797,12 @@ async def preview_workspace_file(
     path: str = "",
     artifact_id: str | None = None,
     revision_id: str | None = None,
+    session_id: str | None = None,
 ) -> dict:
     """Bounded preview payload for a workspace file or artifact revision."""
     from .. import previews
 
-    ws = _workspace_path(agent_id)
+    ws = await _workspace_root(db, agent_id, session_id)
     data, name, artifact, _ = await _resolve_source(
         db, ws, agent_id, path, artifact_id, revision_id
     )
@@ -803,6 +827,7 @@ async def raw_workspace_file(
     path: str = "",
     artifact_id: str | None = None,
     revision_id: str | None = None,
+    session_id: str | None = None,
 ):
     """Raw bytes with the correct Content-Type — images/media/downloads
     stream through object URLs on the client (Bearer auth blocks <img src>)."""
@@ -810,7 +835,7 @@ async def raw_workspace_file(
 
     from .. import previews
 
-    ws = _workspace_path(agent_id)
+    ws = await _workspace_root(db, agent_id, session_id)
     data, name, _, file_path = await _resolve_source(
         db, ws, agent_id, path, artifact_id, revision_id
     )
@@ -829,13 +854,14 @@ async def pdf_page(
     path: str = "",
     artifact_id: str | None = None,
     revision_id: str | None = None,
+    session_id: str | None = None,
 ):
     """One PDF page rendered to PNG — the paginated viewer's image source."""
     from fastapi.responses import Response
 
     from .. import previews
 
-    ws = _workspace_path(agent_id)
+    ws = await _workspace_root(db, agent_id, session_id)
     data, name, _, _ = await _resolve_source(db, ws, agent_id, path, artifact_id, revision_id)
     if not name.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Not a PDF")
@@ -892,11 +918,17 @@ async def restore_artifact_revision(
     from ..artifacts import service as artifact_service
     from ..artifacts.service import ArtifactError
 
-    ws = _workspace_path(agent_id)
     try:
         artifact = await artifact_service._get(db, artifact_id)
         if artifact.workspace_id != agent_id:
             raise ArtifactError("Artifact not found")
+        # Restore writes back to the root the artifact was recorded under —
+        # the agent's default may have moved since then.
+        ws = (
+            Path(artifact.workspace_path)
+            if artifact.workspace_path
+            else await _workspace_root(db, agent_id)
+        )
         rev = await artifact_service.restore(
             db,
             artifact_id,
@@ -919,13 +951,14 @@ async def adopt_workspace_file(
     req: AdoptRequest,
     operator: Operator = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
+    session_id: str | None = None,
 ) -> dict:
     """Track history for an ordinary workspace file — its current bytes
     become revision 1."""
     from ..artifacts import service as artifact_service
     from ..artifacts.service import ArtifactError
 
-    ws = _workspace_path(agent_id)
+    ws = await _workspace_root(db, agent_id, session_id)
     try:
         artifact, rev = await artifact_service.adopt(
             db,

@@ -22,6 +22,10 @@ class Artifact(Base, IdMixin, RevisionedEntityMixin, TimestampMixin):
     __tablename__ = "artifacts"
 
     workspace_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    # Root the file was created under — lets restore/adopt resolve the
+    # original location after the agent's default workspace changes.
+    # NULL on legacy rows: they resolve through the agent's current default.
+    workspace_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     current_path: Mapped[str] = mapped_column(String(1024), nullable=False)
     format: Mapped[str] = mapped_column(String(16), nullable=False)
     tracking_status: Mapped[str] = mapped_column(String(32), default="tracked", nullable=False)

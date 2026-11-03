@@ -78,6 +78,7 @@ async def create(
 
     artifact = Artifact(
         workspace_id=workspace_id,
+        workspace_path=str(workspace_path),
         current_path=rel_path,
         format=_format_of(rel_path),
         tracking_status="tracked",
@@ -292,6 +293,7 @@ async def adopt(
 
     artifact = Artifact(
         workspace_id=workspace_id,
+        workspace_path=str(workspace_path),
         current_path=rel_path,
         format=_format_of(rel_path),
         tracking_status="tracked",

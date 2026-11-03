@@ -504,6 +504,7 @@ async def list_sessions(
                 "external_user_id": sess.external_user_id,
                 "active_run_id": active_run.id if active_run else None,
                 "active_run_status": active_run.status if active_run else None,
+                "workspace_path": sess.workspace_path,
                 "learning": sess.id in closing,
             }
         )
@@ -579,12 +580,21 @@ async def create_session(
         db.add(contact)
         await db.flush()
 
+    # Pin the agent's current default workspace — a later default change
+    # must not re-anchor conversations that started elsewhere.
+    from ..agent_service import get_active_config
+    from ..sandbox.workspace import WorkspaceManager
+
+    cfg = await get_active_config(db, agent_id)
     session = Session(
         id=str(uuid.uuid4()),
         contact_id=contact.id,
         agent_id=agent_id,
         status="active",
         title=body.title,
+        workspace_path=str(
+            WorkspaceManager().resolve_agent_root(agent_id, cfg.workspace if cfg else "")
+        ),
     )
     db.add(session)
     await db.commit()
@@ -592,6 +602,7 @@ async def create_session(
         "id": session.id,
         "title": session.title or "New conversation",
         "status": session.status,
+        "workspace_path": session.workspace_path,
     }
 
 

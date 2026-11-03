@@ -48,6 +48,12 @@ class Session(Base, IdMixin):
     # Pinned core snapshot for this session — later runs/restarts load
     # exactly this revision regardless of later notebook updates.
     core_revision_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # Pinned workspace root (canonical absolute path) — recorded when the
+    # session is created or first runs after the workspace-selection change.
+    # A later agent-default change never reinterprets where this session's
+    # files live. NULL on legacy rows: they keep the pre-pin dynamic
+    # resolution (configured workspace, else the managed root).
+    workspace_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Channel that created this session (null = dashboard).
     # Used to keep channel sessions persistent — one session per channel+chat.
     channel: Mapped[str | None] = mapped_column(String(50), nullable=True)

@@ -523,13 +523,31 @@ class Pipeline:
 
                 conversation = await Conversation.load(self.db, session, exclude_run_id=run.id)
 
-                # Set up workspace
+                # Set up workspace — the session's pinned root wins. A
+                # missing pin (legacy row) resolves the agent default once
+                # and is then pinned, so a later default change can't
+                # reinterpret where this session's files live.
                 wm = WorkspaceManager()
-                workspace_path = wm.create_workspace(message.bot_id)
-                if agent_config.workspace:
-                    workspace_path = agent_config.workspace
-                else:
-                    agent_config.workspace = str(workspace_path)
+                workspace_path = wm.resolve_session_root(
+                    session, message.bot_id, agent_config.workspace
+                )
+                if not session.workspace_path:
+                    session.workspace_path = str(workspace_path)
+                if wm.is_managed_root(message.bot_id, workspace_path):
+                    wm.create_workspace(message.bot_id)
+                elif not workspace_path.is_dir():
+                    # External roots are attach-only — a missing directory
+                    # fails the run honestly instead of being recreated.
+                    run.status = "failed"
+                    run.error = (
+                        f"Workspace directory is unavailable: {workspace_path}. "
+                        "Re-select an existing folder in agent settings."
+                    )
+                    await self.db.commit()
+                    return run
+                if not agent_config.workspace:
+                    agent_config.workspace = str(wm.get_workspace_path(message.bot_id))
+                run.workspace_path = str(workspace_path)
 
                 # Store uploads in the workspace. Only metadata and relative
                 # paths are passed to the model; tools read content on demand.
@@ -1083,6 +1101,11 @@ class Pipeline:
             if session is not None:
                 return session
 
+        # Pin the workspace at creation — a later change to the agent's
+        # default must never re-anchor this session's files.
+        from .agent_service import get_active_config
+
+        cfg = await get_active_config(self.db, agent_id)
         session = Session(
             id=str(uuid.uuid4()),
             contact_id=contact_id,
@@ -1090,6 +1113,9 @@ class Pipeline:
             status="active",
             channel=channel,
             external_user_id=external_user_id,
+            workspace_path=str(
+                WorkspaceManager().resolve_agent_root(agent_id, cfg.workspace if cfg else "")
+            ),
         )
         self.db.add(session)
         await self.db.flush()

@@ -85,6 +85,7 @@ async def _stream_upload(file: UploadFile, target: Path) -> int:
 
 class IngestRequest(BaseModel):
     path: str = Field(min_length=1, max_length=4096)
+    session_id: str | None = None
 
 
 class SearchRequest(BaseModel):
@@ -408,8 +409,12 @@ async def ingest_workspace_file(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Copy and index an existing agent workspace file into the shared Vault."""
-    workspace = Path(WorkspaceManager().get_workspace_path(agent_id)).resolve()
-    source = Path(WorkspaceManager().validate_path(str(workspace), request.path))
+    wm = WorkspaceManager()
+    try:
+        workspace = (await wm.resolve_api_root(db, agent_id, request.session_id)).resolve()
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Session not found") from None
+    source = Path(wm.validate_path(str(workspace), request.path))
     if not source.is_file():
         raise HTTPException(status_code=400, detail="Document does not exist")
     _check_supported(source.name)
