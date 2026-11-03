@@ -67,6 +67,10 @@ class BindingSpec:
     capability_names: tuple[str, ...]  # capabilities gated by this binding
     option_fields: tuple[OptionField, ...] = ()
     planned_note: str | None = None  # honest copy for not-yet-implemented entries
+    # Model-kind tools: required output modality for catalog model
+    # suggestions (e.g. ("image",) for image generation). Suggestions are
+    # assistive — the field stays free-text per D40 override policy.
+    model_modalities: tuple[str, ...] | None = None
 
 
 BINDING_SPECS: tuple[BindingSpec, ...] = (
@@ -119,6 +123,7 @@ BINDING_SPECS: tuple[BindingSpec, ...] = (
         kind="model",
         implemented=True,
         capability_names=("media_image",),
+        model_modalities=("image",),
         option_fields=(
             OptionField(
                 name="size",

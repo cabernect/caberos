@@ -1213,6 +1213,7 @@ export const api = {
         context_window_tokens: number | null;
         supports_thinking?: boolean | null;
         supports_vision?: boolean | null;
+        output_modalities?: string[] | null;
       }[];
     }>(
       `/api/providers/${id}/catalog-models${catalogProvider ? `?catalog_provider=${encodeURIComponent(catalogProvider)}` : ""}`,

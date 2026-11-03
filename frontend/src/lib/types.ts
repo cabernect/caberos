@@ -1196,6 +1196,7 @@ export interface ToolBindingInfo {
   reason: string;
   options: Record<string, unknown>;
   options_schema: ToolBindingOptionField[];
+  model_modalities: string[] | null;
   binding: {
     provider_id: string | null;
     provider_name: string | null;

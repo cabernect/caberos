@@ -382,6 +382,7 @@ async def list_catalog_models(
     if selected:
         for mid, raw in snapshot.models(selected).items():
             projected = project_model(raw)
+            modalities = projected.get("modalities")
             models.append(
                 {
                     "id": mid,
@@ -389,6 +390,9 @@ async def list_catalog_models(
                     "context_window_tokens": projected.get("context_window_tokens"),
                     "supports_thinking": projected.get("supports_thinking"),
                     "supports_vision": projected.get("supports_vision"),
+                    "output_modalities": (
+                        modalities.get("output") if isinstance(modalities, dict) else None
+                    ),
                 }
             )
         models.sort(key=lambda m: m["id"])

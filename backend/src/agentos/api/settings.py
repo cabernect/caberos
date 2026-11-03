@@ -248,6 +248,7 @@ async def _binding_out(db: AsyncSession, spec: BindingSpec) -> dict[str, Any]:
         "reason": resolution.reason,
         "options": resolution.options,
         "options_schema": _options_schema(spec),
+        "model_modalities": (list(spec.model_modalities) if spec.model_modalities else None),
         "binding": (
             {
                 "provider_id": resolution.binding.provider_id,

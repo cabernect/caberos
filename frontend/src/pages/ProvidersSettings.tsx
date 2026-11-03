@@ -4401,6 +4401,27 @@ export function ToolsTab({ providers }: { providers: Provider[] }) {
     Record<string, { options: Record<string, unknown>; providerId: string; model: string }>
   >({});
   const [saving, setSaving] = useState<string | null>(null);
+  // providerId → modality-filtered catalog model ids (assistive suggestions
+  // for the free-text model field; failures stay silent — not a hard gate)
+  const [catalogModels, setCatalogModels] = useState<Record<string, string[]>>({});
+
+  const loadModelSuggestions = useCallback(
+    async (providerId: string, modalities: string[] | null) => {
+      if (!providerId || !modalities?.length || catalogModels[providerId]) return;
+      try {
+        const r = await api.listCatalogModels(providerId);
+        const ids = r.models
+          .filter((m) =>
+            modalities.every((mod) => (m.output_modalities ?? []).includes(mod)),
+          )
+          .map((m) => m.id);
+        setCatalogModels((prev) => ({ ...prev, [providerId]: ids }));
+      } catch {
+        /* suggestions are assistive — catalog misses stay quiet */
+      }
+    },
+    [catalogModels],
+  );
 
   const load = useCallback(async () => {
     try {
@@ -4428,12 +4449,18 @@ export function ToolsTab({ providers }: { providers: Provider[] }) {
         return next;
       });
       setError("");
+      // Warm model suggestions for already-bound providers.
+      for (const t of r.tools) {
+        if (t.kind === "model" && t.binding?.provider_id) {
+          void loadModelSuggestions(t.binding.provider_id, t.model_modalities);
+        }
+      }
     } catch (e) {
       setError(String(e));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [loadModelSuggestions]);
 
   useEffect(() => {
     void load();
@@ -4556,15 +4583,16 @@ export function ToolsTab({ providers }: { providers: Provider[] }) {
                     <Field label="Provider">
                       <Select
                         value={draft.providerId}
-                        onChange={(v) =>
+                        onChange={(v) => {
                           setDrafts((d) => ({
                             ...d,
                             [tool.key]: {
                               ...d[tool.key],
                               providerId: v,
                             },
-                          }))
-                        }
+                          }));
+                          void loadModelSuggestions(v, tool.model_modalities);
+                        }}
                         options={[
                           { value: "", label: "Choose provider…" },
                           ...providers.map((p) => ({
@@ -4577,6 +4605,7 @@ export function ToolsTab({ providers }: { providers: Provider[] }) {
                     </Field>
                     <Field label="Model">
                       <input
+                        list={`catalog-models-${tool.key}`}
                         value={draft.model}
                         onChange={(e) =>
                           setDrafts((d) => ({
@@ -4590,6 +4619,11 @@ export function ToolsTab({ providers }: { providers: Provider[] }) {
                         placeholder="e.g. gpt-image-1"
                         className="w-full rounded-md border border-line bg-ground px-3 py-1.5 font-mono text-[12px] text-ink outline-none"
                       />
+                      <datalist id={`catalog-models-${tool.key}`}>
+                        {(catalogModels[draft.providerId] ?? []).map((id) => (
+                          <option key={id} value={id} />
+                        ))}
+                      </datalist>
                     </Field>
                   </div>
                 )}
