@@ -17,6 +17,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
+
 from ...artifacts import service as artifact_service
 from ...artifacts.service import ArtifactError
 from ...secret_store import decrypt
@@ -43,6 +45,58 @@ def _classify_image_bytes(data: bytes) -> tuple[str, str] | None:
                 continue
             return ext, mime
     return None
+
+
+async def _openrouter_image(
+    provider: Any,
+    model: str,
+    prompt: str,
+    options: dict,
+    api_key: str | None,
+) -> Any:
+    """OpenRouter's dedicated POST /images API.
+
+    Litellm's openrouter image transform dispatches to /chat/completions,
+    which Images-API-only models (gpt-image-2.5-*, grok-imagine, …) refuse
+    with 404. Same response contract as ImageResponse: data[].b64_json +
+    usage with native prompt/completion/cost fields for the ledger.
+    """
+    base = (provider.base_url or "https://openrouter.ai/api/v1").rstrip("/")
+    body: dict[str, Any] = {"model": model, "prompt": prompt, "n": 1}
+    for opt in ("size", "quality"):
+        val = options.get(opt)
+        if val and val != "auto":
+            body[opt] = val
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            f"{base}/images",
+            headers={"Authorization": f"Bearer {api_key or ''}"},
+            json=body,
+            timeout=_TIMEOUT_S,
+        )
+    if resp.status_code >= 400:
+        try:
+            detail = (resp.json().get("error") or {}).get("message") or resp.text[:200]
+        except Exception:  # noqa: BLE001 — a non-JSON error body still reports status
+            detail = resp.text[:200]
+        raise RuntimeError(f"openrouter images {resp.status_code}: {detail}")
+    d = resp.json()
+    usage = d.get("usage") or {}
+    return SimpleNamespace(
+        data=[
+            SimpleNamespace(
+                b64_json=i.get("b64_json"),
+                revised_prompt=i.get("revised_prompt"),
+            )
+            for i in d.get("data", [])
+            if isinstance(i, dict)
+        ],
+        usage={
+            **usage,
+            "input_tokens": usage.get("prompt_tokens"),
+            "output_tokens": usage.get("completion_tokens"),
+        },
+    )
 
 
 async def media_image(args: dict[str, Any], workspace_path: str, **kwargs: Any) -> dict:
@@ -107,11 +161,17 @@ async def media_image(args: dict[str, Any], workspace_path: str, **kwargs: Any) 
     response = None
     error: BaseException | None = None
     try:
-        import litellm
+        if provider.type == "openrouter":
+            response = await asyncio.wait_for(
+                _openrouter_image(provider, model, prompt, options, api_key),
+                timeout=_TIMEOUT_S,
+            )
+        else:
+            import litellm
 
-        response = await asyncio.wait_for(
-            litellm.aimage_generation(**call_kwargs), timeout=_TIMEOUT_S
-        )
+            response = await asyncio.wait_for(
+                litellm.aimage_generation(**call_kwargs), timeout=_TIMEOUT_S
+            )
     except BaseException as e:  # record the real attempt, then report honestly
         error = e
     latency_ms = int((time.monotonic() - start) * 1000)

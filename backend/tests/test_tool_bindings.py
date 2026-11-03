@@ -1,9 +1,11 @@
 """W5 — global tool bindings: persistence, resolver, settings API,
 catalog gating, and mediation of bound tools."""
 
+import base64
 import json
 import uuid
 
+import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
@@ -429,14 +431,14 @@ async def test_settings_response_never_includes_secrets(client, db):
 # --- W6 media.image execution ---
 
 
-async def _bound_image(db, workspace, model="gpt-image-1"):
+async def _bound_image(db, workspace, model="gpt-image-1", provider_type="openai"):
     """Provider (real Fernet key) + binding → resolved binding + exec kwargs."""
     from agentos.secret_store import encrypt
 
     provider = Provider(
         id=str(uuid.uuid4()),
         name="ImgProv",
-        type="openai",
+        type=provider_type,
         encrypted_key=encrypt("sk-test-image"),
         base_url=None,
         org_id=None,
@@ -592,6 +594,94 @@ async def test_media_image_timeout_reports_billing_risk(db, workspace, monkeypat
     out = await media_image({"prompt": "x"}, workspace, **kwargs)
     assert "timed out" in out["error"]
     assert "billed" in out["error"]  # honest about ambiguous billable dispatch
+
+
+def _or_response(status, payload):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        status_code=status,
+        json=lambda: payload,
+        text=json.dumps(payload),
+    )
+
+
+async def test_media_image_openrouter_dispatches_images_endpoint(db, workspace, monkeypatch):
+    """OpenRouter image models on the dedicated /images API (e.g.
+    gpt-image-2.5-*) — litellm routes openrouter image gen to
+    /chat/completions which these models refuse, so we POST /images
+    directly. Same b64 extraction, artifact tracking, and ledger row;
+    usage.cost lands as provider-reported cost."""
+    import litellm
+
+    from agentos.capabilities.tools.media import media_image
+    from agentos.models.model_call import ModelCall
+
+    provider, kwargs = await _bound_image(
+        db, workspace, model="openai/gpt-image-2.5-sunburst", provider_type="openrouter"
+    )
+    posts: dict = {}
+
+    async def fake_post(self, url, **kw):
+        posts.update({"url": url, **kw})
+        return _or_response(
+            200,
+            {
+                "data": [
+                    {
+                        "b64_json": base64.b64encode(_png_bytes()).decode(),
+                        "media_type": "image/png",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 15,
+                    "completion_tokens": 196,
+                    "total_tokens": 211,
+                    "cost": 0.005955,
+                },
+            },
+        )
+
+    async def boom(**kw):
+        raise AssertionError("litellm must not dispatch openrouter image models")
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+    monkeypatch.setattr(litellm, "aimage_generation", boom)
+
+    out = await media_image({"prompt": "a red circle"}, workspace, **kwargs)
+    assert out.get("artifact_id"), out
+    assert posts["url"].endswith("/images")
+    assert posts["json"]["model"] == "openai/gpt-image-2.5-sunburst"
+    assert posts["json"]["n"] == 1 and posts["json"]["size"] == "1024x1024"
+
+    rows = (await db.execute(select(ModelCall))).scalars().all()
+    img = [r for r in rows if r.kind == "image"]
+    assert len(img) == 1
+    assert img[0].provider_id == provider.id
+    assert img[0].model_str == "openrouter/openai/gpt-image-2.5-sunburst"
+    assert img[0].tokens_in == 15 and img[0].tokens_out == 196
+    assert img[0].cost == pytest.approx(0.005955)
+    assert img[0].status == "ok"
+
+
+async def test_media_image_openrouter_error_records_attempt(db, workspace, monkeypatch):
+    """A non-2xx from /images still records the real attempt and surfaces
+    the provider's own error message — no fabricated artifact."""
+    from agentos.capabilities.tools.media import media_image
+    from agentos.models.model_call import ModelCall
+
+    _, kwargs = await _bound_image(db, workspace, provider_type="openrouter")
+
+    async def fake_post(self, url, **kw):
+        return _or_response(404, {"error": {"message": "model not served"}})
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+    out = await media_image({"prompt": "x"}, workspace, **kwargs)
+    assert "image generation failed" in out["error"]
+
+    rows = (await db.execute(select(ModelCall))).scalars().all()
+    img = [r for r in rows if r.kind == "image"]
+    assert len(img) == 1 and img[0].status == "error"
 
 
 async def test_media_image_unconfigured_returns_error(db, workspace):
