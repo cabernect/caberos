@@ -183,6 +183,9 @@ async def media_image(args: dict[str, Any], workspace_path: str, **kwargs: Any) 
     fmt = options.get("format")
     if fmt:
         call_kwargs["output_format"] = fmt
+    # Provider-specific params (azure api_version, bedrock creds) merge in —
+    # same convention as the chat adapter's extras.
+    call_kwargs.update(extra_params)
 
     start = time.monotonic()
     response = None
@@ -216,6 +219,7 @@ async def media_image(args: dict[str, Any], workspace_path: str, **kwargs: Any) 
                     edit_kwargs["api_base"] = provider.base_url
                 if options.get("size") and options["size"] != "auto":
                     edit_kwargs["size"] = options["size"]
+                edit_kwargs.update(extra_params)
                 response = await asyncio.wait_for(
                     litellm.aimage_edit(**edit_kwargs), timeout=_TIMEOUT_S
                 )
