@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   ArrowRight,
@@ -48,6 +48,12 @@ export function WorkspacePanel({
 }: WorkspacePanelProps) {
   const [tab, setTab] = useState<PanelTab>("workspace");
   const [filter, setFilter] = useState("");
+  // Stable backend object — a fresh one every render would invalidate
+  // PreviewPanel's memoized identity and refetch image/pdf blobs in a loop.
+  const previewBackend = useMemo(
+    () => workspaceBackend(agentId, sessionId ?? undefined),
+    [agentId, sessionId],
+  );
 
   return (
     <div className="flex h-full min-w-0 flex-col border-l border-line bg-surface">
@@ -119,7 +125,7 @@ export function WorkspacePanel({
               <PreviewPanel
                 agentId={agentId}
                 source={selected}
-                backend={workspaceBackend(agentId, sessionId ?? undefined)}
+                backend={previewBackend}
                 onClose={() => onSelect(null)}
                 className="h-full border-0"
               />
