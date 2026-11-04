@@ -1306,15 +1306,20 @@ def register_builtin_capabilities() -> None:
             name="media_image",
             effects=frozenset({"workspace_write"}),
             kind="tool",
-            description="Generate one image from a text prompt and save it as a tracked "
-            "workspace artifact. Requires a configured image binding (Settings → Tools) — "
-            "provider, model, size and quality are operator-set, not call arguments.",
+            description="Generate one image from a text prompt, or edit a workspace image "
+            "given via source_image, and save the result as a tracked workspace artifact. "
+            "Requires a configured image binding (Settings → Tools) — provider, model, "
+            "size and quality are operator-set, not call arguments.",
             parameters_schema={
                 "type": "object",
                 "properties": {
                     "prompt": {
                         "type": "string",
-                        "description": "Image prompt (max 4000 chars)",
+                        "description": "Image prompt or edit instruction (max 4000 chars)",
+                    },
+                    "source_image": {
+                        "type": "string",
+                        "description": "Optional workspace-relative path to an image to edit",
                     },
                 },
                 "required": ["prompt"],

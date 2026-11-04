@@ -9,6 +9,7 @@ service. Every real provider attempt lands in the model_calls ledger through
 
 import asyncio
 import base64
+import io
 import json
 import logging
 import time
@@ -21,6 +22,7 @@ import httpx
 
 from ...artifacts import service as artifact_service
 from ...artifacts.service import ArtifactError
+from ...sandbox.workspace import WorkspaceManager
 from ...secret_store import decrypt
 from ...services.call_accounting import capture_call_rates, unknown_call_rates
 from ...services.model_ledger import record_system_call
@@ -28,6 +30,7 @@ from ...services.model_ledger import record_system_call
 log = logging.getLogger(__name__)
 
 _MAX_OUTPUT_BYTES = 16 * 1024 * 1024  # 16 MiB — honest cap, not a format promise
+_MAX_SOURCE_BYTES = 8 * 1024 * 1024  # 8 MiB input cap for edit sources
 _TIMEOUT_S = 120.0
 
 _MAGIC = (
@@ -53,6 +56,7 @@ async def _openrouter_image(
     prompt: str,
     options: dict,
     api_key: str | None,
+    image: str | None = None,
 ) -> Any:
     """OpenRouter's dedicated POST /images API.
 
@@ -60,9 +64,12 @@ async def _openrouter_image(
     which Images-API-only models (gpt-image-2.5-*, grok-imagine, …) refuse
     with 404. Same response contract as ImageResponse: data[].b64_json +
     usage with native prompt/completion/cost fields for the ledger.
+    `image` is an optional data URL for reference-image editing.
     """
     base = (provider.base_url or "https://openrouter.ai/api/v1").rstrip("/")
     body: dict[str, Any] = {"model": model, "prompt": prompt, "n": 1}
+    if image:
+        body["image"] = image
     for opt in ("size", "quality"):
         val = options.get(opt)
         if val and val != "auto":
@@ -119,6 +126,26 @@ async def media_image(args: dict[str, Any], workspace_path: str, **kwargs: Any) 
     if len(prompt) > 4000:
         return {"error": "prompt exceeds the 4000-character limit"}
 
+    # Optional edit source — a workspace-contained image. Presence turns
+    # the call into an edit rather than a fresh generation.
+    source: tuple[bytes, str] | None = None
+    source_arg = str(args.get("source_image") or "").strip()
+    if source_arg:
+        try:
+            src_path = WorkspaceManager().validate_path(
+                workspace_path, source_arg, kwargs.get("sandbox_mode", "strict")
+            )
+            src_bytes = Path(src_path).read_bytes()
+        except Exception as e:  # noqa: BLE001 — containment + IO deny alike
+            return {"error": f"cannot read source_image: {e}"}
+        if len(src_bytes) > _MAX_SOURCE_BYTES:
+            limit = _MAX_SOURCE_BYTES // (1024 * 1024)
+            return {"error": f"source_image exceeds the {limit} MiB limit"}
+        src_cls = _classify_image_bytes(src_bytes)
+        if src_cls is None:
+            return {"error": "source_image is not a recognized image format"}
+        source = (src_bytes, src_cls[1])
+
     # Credentials — same decryption path as the chat adapter (D39).
     api_key = decrypt(provider.encrypted_key) if provider.encrypted_key else None
     extra_params = json.loads(provider.extra_params) if provider.extra_params else {}
@@ -162,16 +189,40 @@ async def media_image(args: dict[str, Any], workspace_path: str, **kwargs: Any) 
     error: BaseException | None = None
     try:
         if provider.type == "openrouter":
+            src_url = (
+                f"data:{source[1]};base64,{base64.b64encode(source[0]).decode()}"
+                if source
+                else None
+            )
             response = await asyncio.wait_for(
-                _openrouter_image(provider, model, prompt, options, api_key),
+                _openrouter_image(provider, model, prompt, options, api_key, src_url),
                 timeout=_TIMEOUT_S,
             )
         else:
             import litellm
 
-            response = await asyncio.wait_for(
-                litellm.aimage_generation(**call_kwargs), timeout=_TIMEOUT_S
-            )
+            if source:
+                src_file = io.BytesIO(source[0])
+                src_file.name = f"source.{source[1].split('/')[-1]}"
+                edit_kwargs = {
+                    "image": src_file,
+                    "model": model_str,
+                    "prompt": prompt,
+                    "n": 1,
+                    "response_format": "b64_json",
+                    "api_key": api_key,
+                }
+                if provider.base_url:
+                    edit_kwargs["api_base"] = provider.base_url
+                if options.get("size") and options["size"] != "auto":
+                    edit_kwargs["size"] = options["size"]
+                response = await asyncio.wait_for(
+                    litellm.aimage_edit(**edit_kwargs), timeout=_TIMEOUT_S
+                )
+            else:
+                response = await asyncio.wait_for(
+                    litellm.aimage_generation(**call_kwargs), timeout=_TIMEOUT_S
+                )
     except BaseException as e:  # record the real attempt, then report honestly
         error = e
     latency_ms = int((time.monotonic() - start) * 1000)
@@ -212,7 +263,7 @@ async def media_image(args: dict[str, Any], workspace_path: str, **kwargs: Any) 
             else None
         ),
         error=error,
-        detail={"modality": "image"},
+        detail={"modality": "image", "edit": bool(source)},
     )
 
     if error is not None:
@@ -262,7 +313,7 @@ async def media_image(args: dict[str, Any], workspace_path: str, **kwargs: Any) 
             source_run_id=kwargs.get("run_id"),
             call_id=kwargs.get("call_id"),
             sub_agent_id=kwargs.get("sub_agent_id"),
-            change_summary=f"generated image ({model})",
+            change_summary=f"{'edited' if source else 'generated'} image ({model})",
         )
     except (ArtifactError, OSError) as e:
         target.unlink(missing_ok=True)

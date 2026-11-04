@@ -684,6 +684,89 @@ async def test_media_image_openrouter_error_records_attempt(db, workspace, monke
     assert len(img) == 1 and img[0].status == "error"
 
 
+async def test_media_image_edit_sends_source_as_data_url(db, workspace, monkeypatch):
+    """source_image (workspace-contained) → edit call: the source lands in
+    the request as a data URL on OpenRouter, and aimage_edit on others."""
+    from agentos.capabilities.tools.media import media_image
+
+    _, kwargs = await _bound_image(db, workspace, provider_type="openrouter")
+    from pathlib import Path
+
+    (Path(workspace) / "in.png").write_bytes(_png_bytes())
+    posts: dict = {}
+
+    async def fake_post(self, url, **kw):
+        posts.update(kw)
+        return _or_response(
+            200,
+            {
+                "data": [{"b64_json": base64.b64encode(_png_bytes()).decode()}],
+                "usage": {"prompt_tokens": 30, "completion_tokens": 200, "cost": 0.01},
+            },
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+    out = await media_image(
+        {"prompt": "make it blue", "source_image": "in.png"}, workspace, **kwargs
+    )
+    assert out.get("artifact_id"), out
+    assert posts["json"]["image"].startswith("data:image/png;base64,")
+
+
+async def test_media_image_edit_openai_dispatches_aimage_edit(db, workspace, monkeypatch):
+    """Same source_image on an openai provider routes to litellm aimage_edit
+    with the source bytes — generation stays on aimage_generation."""
+    import litellm
+
+    from agentos.capabilities.tools.media import media_image
+
+    _, kwargs = await _bound_image(db, workspace)
+    from pathlib import Path
+
+    (Path(workspace) / "in.png").write_bytes(_png_bytes())
+    calls: dict = {}
+
+    async def fake_edit(**kw):
+        calls.update(kw)
+        return _fake_image_response(None)
+
+    async def gen_boom(**kw):
+        raise AssertionError("edit path must not call aimage_generation")
+
+    monkeypatch.setattr(litellm, "aimage_edit", fake_edit)
+    monkeypatch.setattr(litellm, "aimage_generation", gen_boom)
+    out = await media_image(
+        {"prompt": "make it blue", "source_image": "in.png"}, workspace, **kwargs
+    )
+    assert out.get("artifact_id"), out
+    assert calls["model"] == "openai/gpt-image-1"
+    assert calls["image"].read() == _png_bytes()
+
+
+async def test_media_image_source_must_stay_in_workspace(db, workspace):
+    """Path escapes deny before any provider contact."""
+    from agentos.capabilities.tools.media import media_image
+
+    _, kwargs = await _bound_image(db, workspace)
+    out = await media_image(
+        {"prompt": "x", "source_image": "../../etc/passwd"}, workspace, **kwargs
+    )
+    assert "error" in out
+
+
+async def test_media_image_source_rejects_non_image(db, workspace):
+    """A text file is not an edit source — magic-byte gate applies to
+    inputs exactly like outputs."""
+    from agentos.capabilities.tools.media import media_image
+
+    _, kwargs = await _bound_image(db, workspace)
+    from pathlib import Path
+
+    (Path(workspace) / "note.txt").write_text("hello")
+    out = await media_image({"prompt": "x", "source_image": "note.txt"}, workspace, **kwargs)
+    assert "not a recognized image format" in out["error"]
+
+
 async def test_media_image_unconfigured_returns_error(db, workspace):
     """No binding → honest refusal, no provider call attempted."""
     import litellm
