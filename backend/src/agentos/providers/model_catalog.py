@@ -300,6 +300,28 @@ async def _discover_openrouter(provider: dict[str, Any]) -> list[dict[str, Any]]
         )
     if not complete or len(items) >= _DISCOVERY_MODEL_CAP:
         return {"state": "partial", "models": models}
+    # Images-API-only models (gpt-image-2.5-*, grok-imagine, flux…) are not
+    # listed by /models — the dedicated /images/models listing is the only
+    # place OpenRouter reports them. Merge as image-output observations.
+    try:
+        async with httpx.AsyncClient(timeout=15.0, verify=_SSL_CERT) as client:
+            resp = await client.get(f"{base}/images/models", headers=headers)
+            resp.raise_for_status()
+            img_items = resp.json().get("data") or []
+        seen = {m["id"] for m in models}
+        for item in img_items:
+            img_id = item.get("id") if isinstance(item, dict) else item
+            if isinstance(img_id, str) and img_id and img_id not in seen:
+                models.append(
+                    {
+                        "id": img_id,
+                        "name": img_id,
+                        "modalities": {"output": ["image"]},
+                    }
+                )
+                seen.add(img_id)
+    except Exception:  # noqa: BLE001 — chat listing stands; images stay unknown
+        return {"state": "partial", "models": models}
     return models
 
 
