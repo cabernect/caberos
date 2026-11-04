@@ -12,6 +12,7 @@ import base64
 import io
 import json
 import logging
+import re
 import time
 import uuid
 from pathlib import Path
@@ -106,6 +107,24 @@ async def _openrouter_image(
     )
 
 
+# Aspect hints recognized in prompts — explicit ratios + orientation words —
+# mapped to the size enum the binding surface exposes. Only applies when the
+# operator left size unpinned ("auto"/absent); a pinned size is policy.
+_ASPECT_SIZES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("1536x1024", ("16:9", "21:9", "4:3", "3:2", "landscape", "wide", "banner")),
+    ("1024x1536", ("9:16", "9:21", "3:4", "2:3", "portrait", "tall", "vertical")),
+    ("1024x1024", ("1:1", "square")),
+)
+
+
+def _derive_size(prompt: str) -> str | None:
+    low = prompt.lower()
+    for size, hints in _ASPECT_SIZES:
+        if any(re.search(rf"\b{re.escape(h)}\b", low) for h in hints):
+            return size
+    return None
+
+
 async def image_generate(args: dict[str, Any], workspace_path: str, **kwargs: Any) -> dict:
     """image_generate(prompt) → one generated image as a tracked artifact."""
     if str(args.get("source_image") or "").strip():
@@ -132,13 +151,20 @@ async def _run_image(
         return {"error": "Image generation is not configured — see Settings → Tools."}
     provider = binding.provider
     model = binding.binding.model.strip()
-    options = binding.options or {}
+    options = dict(binding.options or {})
 
     prompt = str(args.get("prompt") or "").strip()
     if not prompt:
         return {"error": "prompt is required"}
     if len(prompt) > 4000:
         return {"error": "prompt exceeds the 4000-character limit"}
+
+    # Size left unpinned by the operator → a prompt aspect hint ("16:9",
+    # "portrait") picks the closest size; a pinned size is never overridden.
+    if options.get("size") in (None, "", "auto"):
+        hinted = _derive_size(prompt)
+        if hinted:
+            options["size"] = hinted
 
     # Edit source — a workspace-contained image, required for image_edit.
     source: tuple[bytes, str] | None = None

@@ -431,7 +431,7 @@ async def test_settings_response_never_includes_secrets(client, db):
 # --- W6 media.image execution ---
 
 
-async def _bound_image(db, workspace, model="gpt-image-1", provider_type="openai"):
+async def _bound_image(db, workspace, model="gpt-image-1", provider_type="openai", options=None):
     """Provider (real Fernet key) + binding → resolved binding + exec kwargs."""
     from agentos.secret_store import encrypt
 
@@ -452,7 +452,7 @@ async def _bound_image(db, workspace, model="gpt-image-1", provider_type="openai
             key="media.image",
             provider_id=provider.id,
             model=model,
-            options=json.dumps({"size": "1024x1024"}),
+            options=json.dumps(options if options is not None else {"size": "1024x1024"}),
         )
     )
     await db.flush()
@@ -741,6 +741,34 @@ async def test_media_image_edit_openai_dispatches_aimage_edit(db, workspace, mon
     assert out.get("artifact_id"), out
     assert calls["model"] == "openai/gpt-image-1"
     assert calls["image"].read() == _png_bytes()
+
+
+async def test_image_generate_prompt_hint_picks_size_when_auto(db, workspace, monkeypatch):
+    """Unpinned size + a prompt aspect hint → the hinted size reaches the
+    provider call. A pinned binding size is policy and wins over prompts."""
+    import litellm
+
+    from agentos.capabilities.tools.media import image_generate
+
+    _, kwargs = await _bound_image(db, workspace, options={})
+    calls: dict = {}
+
+    async def fake_gen(**kw):
+        calls.update(kw)
+        return _fake_image_response(None)
+
+    monkeypatch.setattr(litellm, "aimage_generation", fake_gen)
+    out = await image_generate({"prompt": "a cat, 16:9 cinematic"}, workspace, **kwargs)
+    assert out.get("artifact_id"), out
+    assert calls["size"] == "1536x1024"
+
+    # Pinned binding beats the prompt — operator policy is not overridable.
+    # (tool_bindings.key is unique — swap the resolved options in place.)
+    kwargs["tool_binding"].options = {"size": "1024x1024"}
+    calls.clear()
+    out = await image_generate({"prompt": "a cat, 16:9 cinematic"}, workspace, **kwargs)
+    assert out.get("artifact_id"), out
+    assert calls["size"] == "1024x1024"
 
 
 async def test_image_generate_rejects_source_arg(db, workspace):
