@@ -2588,6 +2588,28 @@ function MessageAttachmentCard({
     [file.path, agentId, sessionId]
   );
 
+  // Images render inline at view size, not as a 36px thumb — click still
+  // opens the workspace preview. preview_url covers the pre-persist window.
+  const imageSrc = blobUrl ?? file.preview_url;
+  if (isImage && imageSrc) {
+    return (
+      <button
+        onClick={file.path && onPreview ? () => onPreview({ path: file.path! }) : undefined}
+        title={`Preview ${file.filename}`}
+        className="block cursor-pointer rounded-[8px] text-left transition hover:opacity-90"
+      >
+        <img
+          src={imageSrc}
+          alt={file.filename}
+          className="max-h-56 w-auto max-w-full rounded-[8px] border border-[var(--border)] object-contain"
+        />
+        <span className="mt-1 block max-w-[220px] truncate font-mono text-[10px] text-[var(--ink-3)]">
+          {file.filename}
+        </span>
+      </button>
+    );
+  }
+
   return (
     <AttachmentCard
       type={file.type}
