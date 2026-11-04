@@ -1847,6 +1847,8 @@ export function Conversation() {
                     key={`files-${runId}`}
                     refs={refs}
                     onPreview={openPreview}
+                    agentId={agentId}
+                    sessionId={activeSessionId}
                   />
                 );
               };
@@ -1943,6 +1945,8 @@ export function Conversation() {
                         key={`files-${msg.run_id}`}
                         refs={runRefs}
                         onPreview={openPreview}
+                        agentId={agentId}
+                        sessionId={activeSessionId}
                       />
                     );
                   }
@@ -1965,12 +1969,12 @@ export function Conversation() {
             )}
 
             {isStreaming && streaming && (
-              <StreamingMessage streaming={streaming} onPreview={openPreview} />
+              <StreamingMessage streaming={streaming} onPreview={openPreview} agentId={agentId} sessionId={activeSessionId} />
             )}
             {isStreaming && !streaming && <TypingIndicator />}
             {/* Completed streaming block — keeps thinking/tool calls/costs visible after run ends */}
             {!isStreaming && streaming && streaming.completed && (
-              <StreamingMessage streaming={streaming} onPreview={openPreview} />
+              <StreamingMessage streaming={streaming} onPreview={openPreview} agentId={agentId} sessionId={activeSessionId} />
             )}
 
             <div ref={messagesEndRef} />
@@ -2207,9 +2211,13 @@ export function Conversation() {
 function StreamingMessage({
   streaming,
   onPreview,
+  agentId,
+  sessionId,
 }: {
   streaming: StreamingResponse;
   onPreview?: (source: PreviewSource) => void;
+  agentId?: string;
+  sessionId?: string | null;
 }) {
   const hasContent = streaming.text || streaming.items.length > 0;
   const endTime = streaming.thinkingEndTime ?? Date.now();
@@ -2284,7 +2292,7 @@ function StreamingMessage({
 
       {/* Output files the run produced — at the end of the run, not buried
           inside collapsed tool-call steps. */}
-      {fileRefs.length > 0 && <FileChips refs={fileRefs} onPreview={onPreview} />}
+      {fileRefs.length > 0 && <FileChips refs={fileRefs} onPreview={onPreview} agentId={agentId} sessionId={sessionId} />}
 
       {streaming.guardrailWarnings.length > 0 && (
         <div
@@ -2455,7 +2463,7 @@ function MessageRow({
       </div>
       {/* Output files the run produced — end of the run, above sources. */}
       {runFileRefs && runFileRefs.length > 0 && (
-        <FileChips refs={runFileRefs} onPreview={onPreview} />
+        <FileChips refs={runFileRefs} onPreview={onPreview} agentId={agentId} sessionId={sessionId} />
       )}
       {message.citations && message.citations.length > 0 && <CitationList citations={message.citations} />}
       {hasCost && (
