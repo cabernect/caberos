@@ -4636,6 +4636,9 @@ export function ToolsTab({ providers }: { providers: Provider[] }) {
                             [tool.key]: {
                               ...d[tool.key],
                               providerId: v,
+                              // Model ids are provider-namespaced — the old
+                              // provider's id is wrong under a new provider.
+                              model: "",
                             },
                           }));
                           void loadModelSuggestions(v, tool.model_modalities);
