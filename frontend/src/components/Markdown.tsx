@@ -10,19 +10,58 @@ import "katex/dist/katex.min.css";
 /**
  * Markdown renderer with copy-to-clipboard on code blocks.
  * Drop-in replacement for <ReactMarkdown remarkPlugins={[remarkGfm]}>...
+ *
+ * onWorkspaceLink: models often write workspace-relative paths as markdown
+ * links ([file](artifacts/x.png)) — those hrefs are dead in a browser. When
+ * provided, such links render as in-app openers instead of navigating.
  */
-export function Markdown({ children }: { children: string }) {
+export function Markdown({
+  children,
+  onWorkspaceLink,
+}: {
+  children: string;
+  onWorkspaceLink?: (path: string) => void;
+}) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkMath]}
       rehypePlugins={[rehypeKatex]}
       components={{
         pre: CodeBlock,
+        a: (props) => <WorkspaceAwareLink {...props} onWorkspaceLink={onWorkspaceLink} />,
       }}
     >
       {normalizeMathDelims(children)}
     </ReactMarkdown>
   );
+}
+
+function WorkspaceAwareLink({
+  href,
+  children,
+  onWorkspaceLink,
+}: {
+  href?: string;
+  children?: React.ReactNode;
+  onWorkspaceLink?: (path: string) => void;
+}) {
+  const isWorkspacePath =
+    !!href && !/^[a-z][a-z0-9+.-]*:/i.test(href) && !href.startsWith("#") && !href.startsWith("/");
+  if (isWorkspacePath && onWorkspaceLink) {
+    return (
+      <a
+        href={href}
+        title={`Open ${href} in workspace`}
+        onClick={(e) => {
+          e.preventDefault();
+          onWorkspaceLink(href!);
+        }}
+      >
+        {children}
+      </a>
+    );
+  }
+  return <a href={href}>{children}</a>;
 }
 
 function CodeBlock({ children }: { children?: React.ReactNode }) {

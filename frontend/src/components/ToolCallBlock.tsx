@@ -215,8 +215,8 @@ export function FileChips({
   );
 }
 
-/** Produced image rendered inline — the artifact bytes themselves, not a
-    proxy card. Click opens the full preview panel. */
+/** Produced image rendered inline — bare <img>, click opens the preview.
+    No card chrome: the image itself is the affordance. */
 function ImageChip({
   ref_,
   agentId,
@@ -232,33 +232,28 @@ function ImageChip({
     () => workspaceBackend(agentId, sessionId ?? undefined).blob(ref_.source),
     [agentId, sessionId, ref_.source.artifactId, ref_.source.revisionId, ref_.source.path],
   );
-  return (
-    <button
-      onClick={() => onPreview(ref_.source)}
-      title={`${ref_.source.path ?? ref_.name} — open in workspace`}
-      className="block w-full cursor-pointer rounded-[12px] border p-2.5 text-left transition-colors hover:bg-accent-tint/40"
-      style={{
-        borderColor: "color-mix(in oklab, var(--accent) 45%, var(--line))",
-        background: "var(--surface)",
-      }}
-    >
-      {error ? (
-        <span className="block px-1 py-2 text-[12px] text-ink-muted">{ref_.name} — preview unavailable</span>
-      ) : loading || !url ? (
-        <span className="flex h-24 items-center justify-center">
-          <Loader2 className="h-5 w-5 animate-spin text-[var(--ink-3)]" />
-        </span>
-      ) : (
-        <img
-          src={url}
-          alt={ref_.name}
-          className="max-h-56 w-auto max-w-full rounded-[8px] object-contain"
-        />
-      )}
-      <span className="mt-1.5 block truncate px-1 font-mono text-[11px] text-ink-muted">
-        {ref_.source.path ?? ref_.name}
+  if (error) {
+    return (
+      <span className="block rounded-md border border-[var(--border)] px-3 py-2 text-[12px] text-ink-muted">
+        {ref_.name} — preview unavailable
       </span>
-    </button>
+    );
+  }
+  if (loading || !url) {
+    return (
+      <span className="flex h-24 w-40 items-center justify-center rounded-md border border-[var(--border)]">
+        <Loader2 className="h-5 w-5 animate-spin text-[var(--ink-3)]" />
+      </span>
+    );
+  }
+  return (
+    <img
+      src={url}
+      alt={ref_.name}
+      title={`${ref_.source.path ?? ref_.name} — open in workspace`}
+      onClick={() => onPreview(ref_.source)}
+      className="max-h-72 w-auto max-w-full cursor-pointer rounded-[10px] object-contain transition-opacity hover:opacity-90"
+    />
   );
 }
 

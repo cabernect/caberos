@@ -2248,7 +2248,7 @@ function StreamingMessage({
         if (item.type === "text") {
           return (
             <div key={item.id} className="markdown-body text-[14px] leading-[1.65] text-[var(--ink)]">
-              <Markdown>{item.data.content}</Markdown>
+              <Markdown onWorkspaceLink={(p) => onPreview?.({ path: p })}>{item.data.content}</Markdown>
             </div>
           );
         }
@@ -2280,7 +2280,7 @@ function StreamingMessage({
 
       {streaming.text && (
         <div className="markdown-body text-[14px] leading-[1.65] text-[var(--ink)]">
-          <Markdown>{streaming.text}</Markdown>
+          <Markdown onWorkspaceLink={(p) => onPreview?.({ path: p })}>{streaming.text}</Markdown>
           {!streaming.completed && <span className="streaming-cursor" />}
         </div>
       )}
@@ -2439,7 +2439,7 @@ function MessageRow({
           className="markdown-body border-l-[3px] pl-4 text-[14px] leading-[1.65]"
           style={{ borderColor: "#7C3AED" }}
         >
-          <Markdown>{message.content}</Markdown>
+          <Markdown onWorkspaceLink={(p) => onPreview?.({ path: p })}>{message.content}</Markdown>
         </div>
       </div>
     );
@@ -2459,7 +2459,7 @@ function MessageRow({
   return (
     <div className="mb-6">
       <div className="markdown-body text-[14px] leading-[1.65] text-[var(--ink)]">
-        <Markdown>{message.content}</Markdown>
+        <Markdown onWorkspaceLink={(p) => onPreview?.({ path: p })}>{message.content}</Markdown>
       </div>
       {/* Output files the run produced — end of the run, above sources. */}
       {runFileRefs && runFileRefs.length > 0 && (
@@ -2588,25 +2588,20 @@ function MessageAttachmentCard({
     [file.path, agentId, sessionId]
   );
 
-  // Images render inline at view size, not as a 36px thumb — click still
-  // opens the workspace preview. preview_url covers the pre-persist window.
+  // Images render inline at view size — bare <img>, click opens preview.
+  // preview_url covers the pre-persist window.
   const imageSrc = blobUrl ?? file.preview_url;
   if (isImage && imageSrc) {
     return (
-      <button
-        onClick={file.path && onPreview ? () => onPreview({ path: file.path! }) : undefined}
+      <img
+        src={imageSrc}
+        alt={file.filename}
         title={`Preview ${file.filename}`}
-        className="block cursor-pointer rounded-[8px] text-left transition hover:opacity-90"
-      >
-        <img
-          src={imageSrc}
-          alt={file.filename}
-          className="max-h-56 w-auto max-w-full rounded-[8px] border border-[var(--border)] object-contain"
-        />
-        <span className="mt-1 block max-w-[220px] truncate font-mono text-[10px] text-[var(--ink-3)]">
-          {file.filename}
-        </span>
-      </button>
+        onClick={file.path && onPreview ? () => onPreview({ path: file.path! }) : undefined}
+        className={`max-h-72 w-auto max-w-full rounded-[10px] object-contain transition-opacity ${
+          file.path && onPreview ? "cursor-pointer hover:opacity-90" : ""
+        }`}
+      />
     );
   }
 
