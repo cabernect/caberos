@@ -492,7 +492,7 @@ async def test_media_image_dispatch_writes_artifact_and_ledger(db, workspace, mo
     import litellm
 
     from agentos.capabilities.bindings import BindingResolution, spec_for
-    from agentos.capabilities.tools.media import media_image
+    from agentos.capabilities.tools.media import image_generate
     from agentos.models.artifact import Artifact
     from agentos.models.model_call import ModelCall
 
@@ -505,7 +505,7 @@ async def test_media_image_dispatch_writes_artifact_and_ledger(db, workspace, mo
 
     monkeypatch.setattr(litellm, "aimage_generation", fake_gen)
 
-    out = await media_image({"prompt": "a cat"}, workspace, **kwargs)
+    out = await image_generate({"prompt": "a cat"}, workspace, **kwargs)
     assert out.get("artifact_id"), out
     assert out["mime"] == "image/png" and out["bytes"] == len(_png_bytes())
     assert out["path"].startswith("artifacts/media/")
@@ -542,7 +542,7 @@ async def test_media_image_provider_error_records_attempt(db, workspace, monkeyp
     fabricated artifact, honest error surface."""
     import litellm
 
-    from agentos.capabilities.tools.media import media_image
+    from agentos.capabilities.tools.media import image_generate
     from agentos.models.model_call import ModelCall
 
     _, kwargs = await _bound_image(db, workspace)
@@ -551,7 +551,7 @@ async def test_media_image_provider_error_records_attempt(db, workspace, monkeyp
         raise RuntimeError("provider exploded")
 
     monkeypatch.setattr(litellm, "aimage_generation", boom)
-    out = await media_image({"prompt": "x"}, workspace, **kwargs)
+    out = await image_generate({"prompt": "x"}, workspace, **kwargs)
     assert out["error"].startswith("image generation failed")
 
     rows = (await db.execute(select(ModelCall))).scalars().all()
@@ -566,7 +566,7 @@ async def test_media_image_rejects_non_image_bytes(db, workspace, monkeypatch):
 
     import litellm
 
-    from agentos.capabilities.tools.media import media_image
+    from agentos.capabilities.tools.media import image_generate
     from agentos.models.artifact import Artifact
 
     _, kwargs = await _bound_image(db, workspace)
@@ -575,7 +575,7 @@ async def test_media_image_rejects_non_image_bytes(db, workspace, monkeypatch):
         return _fake_image_response(base64.b64encode(b"definitely not an image").decode())
 
     monkeypatch.setattr(litellm, "aimage_generation", fake_gen)
-    out = await media_image({"prompt": "x"}, workspace, **kwargs)
+    out = await image_generate({"prompt": "x"}, workspace, **kwargs)
     assert "not a recognized image format" in out["error"]
     assert (await db.execute(select(Artifact))).scalars().all() == []
 
@@ -583,7 +583,7 @@ async def test_media_image_rejects_non_image_bytes(db, workspace, monkeypatch):
 async def test_media_image_timeout_reports_billing_risk(db, workspace, monkeypatch):
     import litellm
 
-    from agentos.capabilities.tools.media import media_image
+    from agentos.capabilities.tools.media import image_generate
 
     _, kwargs = await _bound_image(db, workspace)
 
@@ -591,7 +591,7 @@ async def test_media_image_timeout_reports_billing_risk(db, workspace, monkeypat
         raise TimeoutError
 
     monkeypatch.setattr(litellm, "aimage_generation", hang)
-    out = await media_image({"prompt": "x"}, workspace, **kwargs)
+    out = await image_generate({"prompt": "x"}, workspace, **kwargs)
     assert "timed out" in out["error"]
     assert "billed" in out["error"]  # honest about ambiguous billable dispatch
 
@@ -614,7 +614,7 @@ async def test_media_image_openrouter_dispatches_images_endpoint(db, workspace, 
     usage.cost lands as provider-reported cost."""
     import litellm
 
-    from agentos.capabilities.tools.media import media_image
+    from agentos.capabilities.tools.media import image_generate
     from agentos.models.model_call import ModelCall
 
     provider, kwargs = await _bound_image(
@@ -648,7 +648,7 @@ async def test_media_image_openrouter_dispatches_images_endpoint(db, workspace, 
     monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
     monkeypatch.setattr(litellm, "aimage_generation", boom)
 
-    out = await media_image({"prompt": "a red circle"}, workspace, **kwargs)
+    out = await image_generate({"prompt": "a red circle"}, workspace, **kwargs)
     assert out.get("artifact_id"), out
     assert posts["url"].endswith("/images")
     assert posts["json"]["model"] == "openai/gpt-image-2.5-sunburst"
@@ -667,7 +667,7 @@ async def test_media_image_openrouter_dispatches_images_endpoint(db, workspace, 
 async def test_media_image_openrouter_error_records_attempt(db, workspace, monkeypatch):
     """A non-2xx from /images still records the real attempt and surfaces
     the provider's own error message — no fabricated artifact."""
-    from agentos.capabilities.tools.media import media_image
+    from agentos.capabilities.tools.media import image_generate
     from agentos.models.model_call import ModelCall
 
     _, kwargs = await _bound_image(db, workspace, provider_type="openrouter")
@@ -676,7 +676,7 @@ async def test_media_image_openrouter_error_records_attempt(db, workspace, monke
         return _or_response(404, {"error": {"message": "model not served"}})
 
     monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
-    out = await media_image({"prompt": "x"}, workspace, **kwargs)
+    out = await image_generate({"prompt": "x"}, workspace, **kwargs)
     assert "image generation failed" in out["error"]
 
     rows = (await db.execute(select(ModelCall))).scalars().all()
@@ -687,7 +687,7 @@ async def test_media_image_openrouter_error_records_attempt(db, workspace, monke
 async def test_media_image_edit_sends_source_as_data_url(db, workspace, monkeypatch):
     """source_image (workspace-contained) → edit call: the source lands in
     the request as a data URL on OpenRouter, and aimage_edit on others."""
-    from agentos.capabilities.tools.media import media_image
+    from agentos.capabilities.tools.media import image_edit
 
     _, kwargs = await _bound_image(db, workspace, provider_type="openrouter")
     from pathlib import Path
@@ -706,7 +706,7 @@ async def test_media_image_edit_sends_source_as_data_url(db, workspace, monkeypa
         )
 
     monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
-    out = await media_image(
+    out = await image_edit(
         {"prompt": "make it blue", "source_image": "in.png"}, workspace, **kwargs
     )
     assert out.get("artifact_id"), out
@@ -718,7 +718,7 @@ async def test_media_image_edit_openai_dispatches_aimage_edit(db, workspace, mon
     with the source bytes — generation stays on aimage_generation."""
     import litellm
 
-    from agentos.capabilities.tools.media import media_image
+    from agentos.capabilities.tools.media import image_edit
 
     _, kwargs = await _bound_image(db, workspace)
     from pathlib import Path
@@ -735,7 +735,7 @@ async def test_media_image_edit_openai_dispatches_aimage_edit(db, workspace, mon
 
     monkeypatch.setattr(litellm, "aimage_edit", fake_edit)
     monkeypatch.setattr(litellm, "aimage_generation", gen_boom)
-    out = await media_image(
+    out = await image_edit(
         {"prompt": "make it blue", "source_image": "in.png"}, workspace, **kwargs
     )
     assert out.get("artifact_id"), out
@@ -743,27 +743,55 @@ async def test_media_image_edit_openai_dispatches_aimage_edit(db, workspace, mon
     assert calls["image"].read() == _png_bytes()
 
 
-async def test_media_image_source_must_stay_in_workspace(db, workspace):
-    """Path escapes deny before any provider contact."""
-    from agentos.capabilities.tools.media import media_image
+async def test_image_generate_rejects_source_arg(db, workspace):
+    """source_image on a generate call is an honest error pointing at
+    image_edit — never silently ignored, never silently switched."""
+    from agentos.capabilities.tools.media import image_generate
 
     _, kwargs = await _bound_image(db, workspace)
-    out = await media_image(
-        {"prompt": "x", "source_image": "../../etc/passwd"}, workspace, **kwargs
-    )
+    out = await image_generate({"prompt": "x", "source_image": "in.png"}, workspace, **kwargs)
+    assert "use image_edit" in out["error"]
+
+
+async def test_image_edit_requires_source_arg(db, workspace):
+    """image_edit without source_image fails before any provider contact."""
+    import litellm
+
+    from agentos.capabilities.tools.media import image_edit
+
+    _, kwargs = await _bound_image(db, workspace)
+
+    async def boom(**kw):
+        raise AssertionError("provider must not be contacted")
+
+    monkey = litellm.aimage_edit
+    litellm.aimage_edit = boom
+    try:
+        out = await image_edit({"prompt": "x"}, workspace, **kwargs)
+        assert "source_image is required" in out["error"]
+    finally:
+        litellm.aimage_edit = monkey
+
+
+async def test_media_image_source_must_stay_in_workspace(db, workspace):
+    """Path escapes deny before any provider contact."""
+    from agentos.capabilities.tools.media import image_edit
+
+    _, kwargs = await _bound_image(db, workspace)
+    out = await image_edit({"prompt": "x", "source_image": "../../etc/passwd"}, workspace, **kwargs)
     assert "error" in out
 
 
 async def test_media_image_source_rejects_non_image(db, workspace):
     """A text file is not an edit source — magic-byte gate applies to
     inputs exactly like outputs."""
-    from agentos.capabilities.tools.media import media_image
+    from agentos.capabilities.tools.media import image_edit
 
     _, kwargs = await _bound_image(db, workspace)
     from pathlib import Path
 
     (Path(workspace) / "note.txt").write_text("hello")
-    out = await media_image({"prompt": "x", "source_image": "note.txt"}, workspace, **kwargs)
+    out = await image_edit({"prompt": "x", "source_image": "note.txt"}, workspace, **kwargs)
     assert "not a recognized image format" in out["error"]
 
 
@@ -771,7 +799,7 @@ async def test_media_image_unconfigured_returns_error(db, workspace):
     """No binding → honest refusal, no provider call attempted."""
     import litellm
 
-    from agentos.capabilities.tools.media import media_image
+    from agentos.capabilities.tools.media import image_generate
 
     called = []
     monkey = litellm.aimage_generation
@@ -782,14 +810,14 @@ async def test_media_image_unconfigured_returns_error(db, workspace):
 
     litellm.aimage_generation = track
     try:
-        out = await media_image({"prompt": "x"}, workspace, db=db)
+        out = await image_generate({"prompt": "x"}, workspace, db=db)
         assert "not configured" in out["error"]
         assert called == []
     finally:
         litellm.aimage_generation = monkey
 
 
-async def test_mediator_denies_unconfigured_media_image(db, workspace):
+async def test_mediator_denies_unconfigured_image_generate(db, workspace):
     """An unconfigured model-bound tool must be denied at admission — the
     schema is also hidden, but stale invocations can't slip through either."""
     from agentos.capabilities.builtin import register_builtin_capabilities
@@ -802,9 +830,9 @@ async def test_mediator_denies_unconfigured_media_image(db, workspace):
     try:
         handler = SyscallHandler(db=db, workspace_path=workspace)
         result = await handler.mediate(
-            call=ToolCall(id="1", name="media_image", args={"prompt": "x"}),
+            call=ToolCall(id="1", name="image_generate", args={"prompt": "x"}),
             session=_session(),
-            agent_config=_agent_with(["media_image"]),
+            agent_config=_agent_with(["image_generate"]),
             run_id="r1",
         )
         assert result.allowed is False
@@ -829,14 +857,14 @@ async def test_mediator_injects_frozen_media_binding(db, workspace, monkeypatch)
         captured.update(kwargs)
         return {"ok": True}
 
-    monkeypatch.setattr(registry.get("media_image"), "execute", fake_exec)
+    monkeypatch.setattr(registry.get("image_generate"), "execute", fake_exec)
     try:
         await _bound_image(db, workspace)
         handler = SyscallHandler(db=db, workspace_path=workspace)
         result = await handler.mediate(
-            call=ToolCall(id="1", name="media_image", args={"prompt": "a cat"}),
+            call=ToolCall(id="1", name="image_generate", args={"prompt": "a cat"}),
             session=_session(),
-            agent_config=_agent_with(["media_image"]),
+            agent_config=_agent_with(["image_generate"]),
             run_id="r1",
         )
         assert result.allowed is True, result.denied_reason

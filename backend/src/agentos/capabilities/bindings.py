@@ -118,11 +118,12 @@ BINDING_SPECS: tuple[BindingSpec, ...] = (
     ),
     BindingSpec(
         key="media.image",
-        title="Image generation",
-        description="Generate images from a prompt and save them as artifacts.",
+        title="Image generation & editing",
+        description="Generate images from a prompt, or edit a workspace image, "
+        "saving results as artifacts.",
         kind="model",
         implemented=True,
-        capability_names=("media_image",),
+        capability_names=("image_generate", "image_edit"),
         model_modalities=("image",),
         option_fields=(
             OptionField(

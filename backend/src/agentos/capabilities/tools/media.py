@@ -1,4 +1,4 @@
-"""Media generation capabilities — W6 first slice: image generation.
+"""Media generation capabilities — W6 first slice: image generate + edit.
 
 Bounded provider dispatch: one request, fixed n=1, allowlisted options from the
 frozen `media.image` binding, bytes (never URLs) validated by magic bytes and a
@@ -106,8 +106,22 @@ async def _openrouter_image(
     )
 
 
-async def media_image(args: dict[str, Any], workspace_path: str, **kwargs: Any) -> dict:
-    """media_image(prompt) → one generated image as a tracked artifact.
+async def image_generate(args: dict[str, Any], workspace_path: str, **kwargs: Any) -> dict:
+    """image_generate(prompt) → one generated image as a tracked artifact."""
+    if str(args.get("source_image") or "").strip():
+        return {"error": "source_image is not accepted here — use image_edit to edit an image"}
+    return await _run_image(args, workspace_path, require_source=False, **kwargs)
+
+
+async def image_edit(args: dict[str, Any], workspace_path: str, **kwargs: Any) -> dict:
+    """image_edit(prompt, source_image) → one edited image as a tracked artifact."""
+    return await _run_image(args, workspace_path, require_source=True, **kwargs)
+
+
+async def _run_image(
+    args: dict[str, Any], workspace_path: str, require_source: bool, **kwargs: Any
+) -> dict:
+    """Shared dispatch for image_generate / image_edit.
 
     Provider/model/options come from the frozen media.image binding injected
     by the mediator — never from call args, so the model can't reroute the
@@ -126,10 +140,11 @@ async def media_image(args: dict[str, Any], workspace_path: str, **kwargs: Any) 
     if len(prompt) > 4000:
         return {"error": "prompt exceeds the 4000-character limit"}
 
-    # Optional edit source — a workspace-contained image. Presence turns
-    # the call into an edit rather than a fresh generation.
+    # Edit source — a workspace-contained image, required for image_edit.
     source: tuple[bytes, str] | None = None
     source_arg = str(args.get("source_image") or "").strip()
+    if require_source and not source_arg:
+        return {"error": "source_image is required — a workspace-relative image path"}
     if source_arg:
         try:
             src_path = WorkspaceManager().validate_path(
