@@ -58,11 +58,9 @@ def test_probe_result_is_cached_per_instance():
     assert run.call_count == calls_after_first_probe
 
 
-def test_image_pulled_when_not_already_present():
-    """If the sandbox image isn't cached locally, is_available() pulls it
-    during the probe rather than deferring that cost to the first command."""
+def test_missing_image_refuses_without_downloading():
+    """A readiness probe must not acquire network/download authority."""
     inspect_missing = MagicMock(returncode=1)
-    pull_ok = MagicMock(returncode=0)
     version_ok = MagicMock(returncode=0)
 
     calls = []
@@ -73,32 +71,6 @@ def test_image_pulled_when_not_already_present():
             return version_ok
         if args[1:3] == ["image", "inspect"]:
             return inspect_missing
-        if args[1] == "pull":
-            return pull_ok
-        raise AssertionError(f"unexpected docker subcommand: {args}")
-
-    with (
-        patch("agentos.sandbox.docker.shutil.which", return_value="/usr/bin/docker"),
-        patch("agentos.sandbox.docker.subprocess.run", side_effect=fake_run),
-    ):
-        backend = DockerBackend()
-        assert backend.is_available() is True
-
-    assert any(c[1] == "pull" for c in calls), "expected a docker pull when the image was missing"
-
-
-def test_unavailable_when_image_pull_fails():
-    version_ok = MagicMock(returncode=0)
-    inspect_missing = MagicMock(returncode=1)
-    pull_failed = MagicMock(returncode=1)
-
-    def fake_run(args, **kwargs):
-        if args[1] == "version":
-            return version_ok
-        if args[1:3] == ["image", "inspect"]:
-            return inspect_missing
-        if args[1] == "pull":
-            return pull_failed
         raise AssertionError(f"unexpected docker subcommand: {args}")
 
     with (
@@ -107,7 +79,61 @@ def test_unavailable_when_image_pull_fails():
     ):
         backend = DockerBackend()
         assert backend.is_available() is False
-        assert "could not be pulled" in (backend.unavailable_reason() or "")
+        reason = backend.unavailable_reason() or ""
+        assert "docker pull alpine:3.20" in reason
+        assert "does not download" in reason
+        assert backend.needs_host_setup() is False
+
+    assert [c[1:3] for c in calls] == [
+        ["version", "--format"],
+        ["image", "inspect"],
+    ]
+
+
+def test_unavailable_when_image_inspection_fails():
+    version_ok = MagicMock(returncode=0)
+    inspect_missing = MagicMock(returncode=1)
+
+    def fake_run(args, **kwargs):
+        if args[1] == "version":
+            return version_ok
+        if args[1:3] == ["image", "inspect"]:
+            return inspect_missing
+        raise AssertionError(f"unexpected docker subcommand: {args}")
+
+    with (
+        patch("agentos.sandbox.docker.shutil.which", return_value="/usr/bin/docker"),
+        patch("agentos.sandbox.docker.subprocess.run", side_effect=fake_run),
+    ):
+        backend = DockerBackend()
+        assert backend.is_available() is False
+        assert "missing or cannot be inspected" in (backend.unavailable_reason() or "")
+
+
+def test_image_inspection_error_does_not_attempt_install():
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        if args[1] == "version":
+            return MagicMock(returncode=0)
+        raise OSError("local image inspection failed")
+
+    with (
+        patch("agentos.sandbox.docker.shutil.which", return_value="/usr/bin/docker"),
+        patch("agentos.sandbox.docker.subprocess.run", side_effect=fake_run),
+    ):
+        backend = DockerBackend()
+        assert backend.is_available() is False
+        assert "does not download" in (backend.unavailable_reason() or "")
+    assert len(calls) == 2
+    assert calls[-1][1:3] == ["image", "inspect"]
+
+
+def test_background_spawn_cannot_implicitly_pull_image():
+    args = DockerBackend().spawn_argv("/workspace", "echo hello")
+    assert args[:3] == ["docker", "run", "--pull=never"]
+    assert "--network" in args and "none" in args
 
 
 @pytest.mark.asyncio
@@ -129,6 +155,7 @@ async def test_run_command_builds_expected_argv(tmp_path):
     assert result.stdout == "hello\n"
     args = captured["args"]
     assert args[0:2] == ("docker", "run")
+    assert "--pull=never" in args
     assert "--rm" in args
     assert "--network" in args and "none" in args
     assert "-v" in args
@@ -154,6 +181,7 @@ async def test_run_command_allows_network_when_requested(tmp_path):
         await backend.run_command(str(tmp_path), "true", allow_network=True)
 
     assert "--network" not in captured["args"]
+    assert "--pull=never" in captured["args"]
 
 
 @pytest.mark.asyncio

@@ -27,11 +27,6 @@ _SANDBOX_IMAGE = "alpine:3.20"
 # waiting for it (the kill itself is not best-effort — only the wait is).
 _KILL_GRACE = 5
 
-# A first pull of _SANDBOX_IMAGE can take a while on a fresh machine. This
-# runs during the probe (see _ensure_image_present), not during a real
-# command, specifically so it never eats into a caller's run_command timeout.
-_IMAGE_PULL_TIMEOUT = 120
-
 
 class DockerBackend(SandboxBackend):
     """Run sandboxed commands inside a throwaway Docker container."""
@@ -64,36 +59,27 @@ class DockerBackend(SandboxBackend):
             self._reason = "Docker is installed but the daemon is not responding. Is it running?"
             return False
 
-        if self._ensure_image_present():
+        if self._image_present():
             self._probe_cache = True
             return True
 
         self._probe_cache = False
-        self._reason = f"Docker sandbox image {_SANDBOX_IMAGE!r} could not be pulled."
+        self._reason = (
+            f"Docker sandbox image {_SANDBOX_IMAGE!r} is missing or cannot be inspected. "
+            f"After reviewing the image and download, run: docker pull {_SANDBOX_IMAGE}. "
+            "CaberOS does not download sandbox images automatically."
+        )
         return False
 
-    def _ensure_image_present(self) -> bool:
-        """Pull the sandbox image now, during the probe, not the first command.
-
-        Without this, the first sandboxed command on a fresh machine pays for
-        the image pull out of its own run_command timeout — a slow pull looks
-        exactly like a generic "Command timed out", with no hint that the
-        sandbox infrastructure, not the command, was the bottleneck.
-        """
+    def _image_present(self) -> bool:
+        """Inspect the local image only; readiness never authorizes a download."""
         try:
             inspect = subprocess.run(
                 ["docker", "image", "inspect", _SANDBOX_IMAGE],
                 capture_output=True,
                 timeout=5,
             )
-            if inspect.returncode == 0:
-                return True
-            pull = subprocess.run(
-                ["docker", "pull", _SANDBOX_IMAGE],
-                capture_output=True,
-                timeout=_IMAGE_PULL_TIMEOUT,
-            )
-            return pull.returncode == 0
+            return inspect.returncode == 0
         except Exception:
             return False
 
@@ -109,6 +95,8 @@ class DockerBackend(SandboxBackend):
         args = [
             "docker",
             "run",
+            # Also close the race where the image disappears after probing.
+            "--pull=never",
             "--rm",
             "--name",
             container_name,
