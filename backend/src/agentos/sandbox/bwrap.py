@@ -119,6 +119,9 @@ class BwrapBackend(SandboxBackend):
                 exit_code=proc.returncode if proc.returncode is not None else -1,
                 duration_ms=elapsed,
             )
+        except asyncio.CancelledError:
+            await kill_process_group(proc)
+            raise
         except TimeoutError:
             await kill_process_group(proc)
             elapsed = int((time.monotonic() - start) * 1000)

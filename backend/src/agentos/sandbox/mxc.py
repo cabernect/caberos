@@ -357,6 +357,9 @@ class MxcBackend(SandboxBackend):
                     exit_code=proc.returncode if proc.returncode is not None else -1,
                     duration_ms=elapsed,
                 )
+            except asyncio.CancelledError:
+                await kill_process_group(proc, grace=5)
+                raise
             except TimeoutError:
                 # Best-effort: unlike DockerBackend there is no separate
                 # "container kill" verb exposed by this CLI - killing the

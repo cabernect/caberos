@@ -241,6 +241,9 @@ class DockerBackend(SandboxBackend):
                 exit_code=proc.returncode if proc.returncode is not None else -1,
                 duration_ms=elapsed,
             )
+        except asyncio.CancelledError:
+            await self._kill_container(container_name, proc)
+            raise
         except TimeoutError:
             await self._kill_container(container_name, proc)
             elapsed = int((time.monotonic() - start) * 1000)
