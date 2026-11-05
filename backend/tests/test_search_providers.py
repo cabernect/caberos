@@ -302,3 +302,153 @@ async def test_invalid_reported_units_remain_unknown(client, db, monkeypatch, cr
     result = await search_provider(await db.get(Provider, provider_id), "query")
     assert result["service_usage"]["credits"] is None
     json.dumps(result, allow_nan=False)
+
+
+# ---------------------------------------------------------------------------
+# Per-adapter request/response contract fixtures (Exa, Brave, Firecrawl)
+# ---------------------------------------------------------------------------
+
+
+async def create_service(client, name, service_type):
+    response = await client.post(
+        "/api/providers",
+        json={"name": name, "type": service_type, "api_key": "test-secret"},
+    )
+    assert response.status_code == 200
+    return response.json()["id"]
+
+
+@pytest.mark.parametrize(
+    "service,method,url,auth_header",
+    [
+        ("exa", "POST", "https://api.exa.ai/search", "x-api-key"),
+        (
+            "brave_search",
+            "GET",
+            "https://api.search.brave.com/res/v1/web/search",
+            "x-subscription-token",
+        ),
+        ("firecrawl", "POST", "https://api.firecrawl.dev/v2/search", "authorization"),
+    ],
+)
+async def test_adapter_request_shape_and_auth(
+    client, db, monkeypatch, service, method, url, auth_header
+):
+    provider_id = await create_service(client, f"My {service}", service)
+    provider = await db.get(Provider, provider_id)
+    requests = []
+
+    def handle(request):
+        requests.append(request)
+        return httpx.Response(200, json={"results": []})
+
+    mock_search_http(monkeypatch, handle)
+    await search_provider(provider, "find it", 3)
+    assert len(requests) == 1
+    request = requests[0]
+    assert request.method == method
+    assert str(request.url).startswith(url)
+    auth = request.headers.get(auth_header)
+    assert auth is not None and "test-secret" in auth
+
+
+@pytest.mark.parametrize(
+    "service,payload,want_results,want",
+    [
+        (
+            "exa",
+            {
+                "results": [
+                    {
+                        "title": "A",
+                        "url": "https://example.org",
+                        "highlights": ["h1", "h2", "h3", "h4"],
+                    }
+                ],
+                "costDollars": {"total": 0.005},
+            },
+            [{"title": "A", "url": "https://example.org", "snippet": "h1 h2 h3"}],
+            {"estimated_cost": 0.005, "cost_status": "estimated"},
+        ),
+        (
+            "brave_search",
+            {
+                "web": {
+                    "results": [{"title": "B", "url": "https://example.org", "description": "desc"}]
+                }
+            },
+            [{"title": "B", "url": "https://example.org", "snippet": "desc"}],
+            {},
+        ),
+        (
+            "firecrawl",
+            {
+                "success": True,
+                "data": {
+                    "web": [{"title": "F", "url": "https://example.org", "description": "fdesc"}]
+                },
+                "creditsUsed": 2,
+            },
+            [{"title": "F", "url": "https://example.org", "snippet": "fdesc"}],
+            {"credits": 2},
+        ),
+    ],
+)
+async def test_adapter_success_normalization(
+    client, db, monkeypatch, service, payload, want_results, want
+):
+    provider_id = await create_service(client, f"My {service}", service)
+    provider = await db.get(Provider, provider_id)
+    mock_search_http(monkeypatch, lambda request: httpx.Response(200, json=payload))
+    result = await search_provider(provider, "query")
+    assert result["results"] == want_results
+    usage = result["service_usage"]
+    assert usage["requests"] == 1 and usage["status"] == "ok"
+    for key, value in want.items():
+        assert usage[key] == value
+
+
+@pytest.mark.parametrize(
+    "service,payload",
+    [
+        ("exa", {"results": []}),
+        ("brave_search", {}),  # Brave omits the web section when empty.
+        ("firecrawl", {"success": True, "data": {"web": []}}),
+    ],
+)
+async def test_adapter_empty_results_are_not_errors(client, db, monkeypatch, service, payload):
+    provider_id = await create_service(client, f"My {service}", service)
+    provider = await db.get(Provider, provider_id)
+    mock_search_http(monkeypatch, lambda request: httpx.Response(200, json=payload))
+    result = await search_provider(provider, "query")
+    assert result.get("error") is None
+    assert result["results"] == []
+    assert result["service_usage"]["status"] == "ok"
+
+
+@pytest.mark.parametrize(
+    "service,payload",
+    [
+        ("exa", {"results": [{"url": "https://x", "highlights": "not-a-list"}]}),
+        ("brave_search", {"web": "broken"}),
+        ("firecrawl", {"success": False}),
+    ],
+)
+async def test_adapter_malformed_payloads_fail_honestly(client, db, monkeypatch, service, payload):
+    provider_id = await create_service(client, f"My {service}", service)
+    provider = await db.get(Provider, provider_id)
+    mock_search_http(monkeypatch, lambda request: httpx.Response(200, json=payload))
+    result = await search_provider(provider, "query")
+    assert "error" in result
+
+
+@pytest.mark.parametrize("service", ["exa", "brave_search", "firecrawl"])
+@pytest.mark.parametrize("status", [401, 429])
+async def test_adapter_auth_and_rate_limit_failures(client, db, monkeypatch, service, status):
+    provider_id = await create_service(client, f"My {service}", service)
+    provider = await db.get(Provider, provider_id)
+    mock_search_http(monkeypatch, lambda request: httpx.Response(status, text="test-secret echoed"))
+    result = await search_provider(provider, "query")
+    assert "error" in result
+    assert "test-secret" not in json.dumps(result)
+    assert result["service_usage"]["requests"] == 1
