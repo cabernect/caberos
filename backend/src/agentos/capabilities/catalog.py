@@ -268,7 +268,9 @@ class CapabilityRunCatalog:
                 continue
             score = 0
             if tokens:
-                searchable = f"{item['name']} {item['description']}".lower()
+                searchable = (
+                    f"{item['name']} {item['server_name'] or ''} {item['description']}"
+                ).lower()
                 name_text = item["name"].lower()
                 matched = sum(1 for token in tokens if token in searchable)
                 if matched == 0:

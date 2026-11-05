@@ -1079,25 +1079,17 @@ def register_builtin_capabilities() -> None:
             effects=frozenset({"read"}),
             kind="tool",
             description=(
-                "Search the capabilities permitted for this run by name or description. "
-                "Returns compact metadata only; use capabilities_load to make selected "
-                "tool schemas available for the next model turn."
+                "Search the capabilities permitted for this run by name, server name, "
+                "or description — covers built-in tools, memory tools, and MCP server "
+                "tools alike. Returns compact metadata only; use capabilities_load to "
+                "make selected tool schemas available for the next model turn."
             ),
             parameters_schema={
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Optional text to match against capability names and descriptions",
-                    },
-                    "server": {
-                        "type": "string",
-                        "description": "Optional MCP server name or ID filter",
-                    },
-                    "kind": {
-                        "type": "string",
-                        "enum": ["tool", "memory", "mcp_tool"],
-                        "description": "Optional capability kind filter",
+                        "description": "Text to match against capability names, server names, and descriptions",
                     },
                     "limit": {
                         "type": "integer",

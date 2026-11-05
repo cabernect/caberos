@@ -4,16 +4,19 @@ from typing import Any
 
 
 async def capabilities_search(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
-    """Search permitted capabilities without returning parameter schemas."""
+    """Search permitted capabilities without returning parameter schemas.
+
+    Deliberately query-only for the model: kind/server narrowing exists on
+    catalog.search for internal callers, but exposing them as args let the
+    model filter itself out of mcp_tool results ("kind": "tool").
+    """
     catalog = kwargs.get("capability_catalog")
     if catalog is None:
         return {"error": "Capability discovery is unavailable", "results": [], "count": 0}
 
     query = args.get("query", "")
-    server = args.get("server")
-    kind = args.get("kind")
     limit = args.get("limit", 20)
-    results = await catalog.search(query, server=server, kind=kind, limit=limit)
+    results = await catalog.search(query, limit=limit)
     return {"query": query, "results": results, "count": len(results)}
 
 

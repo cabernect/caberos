@@ -504,14 +504,27 @@ async def _run_oauth_flow(server_id: str, server_url: str, auth, flow: OAuthFlow
             limits=httpx2.Limits(max_keepalive_connections=0),
             event_hooks={"request": [_ensure_user_agent]},
         ) as client:
-            # Make a request to the actual server URL to trigger the 401
-            # The MCP protocol uses POST with JSON-RPC, but any request
-            # will trigger the auth flow
+            # Make a request to the actual server URL to trigger the 401.
+            # The Accept header is required: MCP servers answer 406 (not the
+            # 401 Bearer challenge) without it, which never starts the flow.
+            resp = None
             try:
                 resp = await client.post(
                     server_url,
-                    json={"jsonrpc": "2.0", "method": "initialize", "id": 1},
-                    headers={"Content-Type": "application/json"},
+                    json={
+                        "jsonrpc": "2.0",
+                        "method": "initialize",
+                        "id": 1,
+                        "params": {
+                            "protocolVersion": "2025-06-18",
+                            "capabilities": {},
+                            "clientInfo": {"name": "caberos", "version": "0.2.0"},
+                        },
+                    },
+                    headers={
+                        "Content-Type": "application/json",
+                        "Accept": "application/json, text/event-stream",
+                    },
                 )
                 log.info("OAuth flow: initial request returned status %s", resp.status_code)
             except httpx2.HTTPStatusError as e:
@@ -522,7 +535,16 @@ async def _run_oauth_flow(server_id: str, server_url: str, auth, flow: OAuthFlow
                 return
 
         if not flow.completed:
-            flow.completed = True
+            # The request finished without the provider driving authorization —
+            # no Bearer challenge seen, or the server isn't OAuth-protected.
+            # Connecting now would just re-fail; report the real answer instead.
+            status = resp.status_code if resp is not None else "unknown"
+            flow.reject(
+                f"OAuth flow did not start — the server answered HTTP {status} "
+                "without an OAuth challenge. Check the URL and that the server "
+                "supports MCP OAuth."
+            )
+            return
 
         await _persist_oauth_metadata(auth)
         await _connect_after_oauth(server_id)

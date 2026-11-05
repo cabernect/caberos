@@ -376,6 +376,12 @@ function AddServerModal({
         }
       }
 
+      // Standard configs use "type" where CaberOS uses "transport".
+      if (!data.transport && typeof data.type === "string") {
+        data.transport = data.type;
+      }
+      delete data.type;
+
       await api.createMcpServer(data as Parameters<typeof api.createMcpServer>[0]);
       onAdded();
     } catch (e) {
@@ -598,15 +604,22 @@ function ServerRow({
   onSelect: () => void;
   onEnabledChange: (enabled: boolean) => void;
 }) {
+  const keyTemplate = [server.env_template, server.headers_template].some(
+    (t) => t && Object.values(t).some((v) => v.includes("{{credential")),
+  );
   const subtitle =
     usedBy && usedBy.length > 0
       ? `Used by ${usedBy.join(", ")}`
       : !server.enabled
         ? "Not enabled"
-        : !server.connected && server.auth_type === "api_key"
+        : !server.connected &&
+            (server.auth_type === "api_key" ||
+              (server.auth_type === "none" && keyTemplate))
           ? "Needs an API key to connect"
           : !server.connected && server.auth_type === "oauth"
-            ? "Sign in to sync tools"
+            ? keyTemplate
+              ? "Sign in or add a key to connect"
+              : "Sign in to sync tools"
             : server.connected
               ? "No agents use this yet"
               : "Not connected";
@@ -670,7 +683,6 @@ function ServerDetail({
 }) {
   const [tools, setTools] = useState<McpToolInfo[] | null>(null);
   const [showAll, setShowAll] = useState(false);
-  const [showCredForm, setShowCredForm] = useState(false);
   const [oauthLoading, setOauthLoading] = useState(false);
   const [testing, setTesting] = useState(false);
   const { toast } = useConfirm();
@@ -690,7 +702,15 @@ function ServerDetail({
     };
   }, [server.id]);
 
-  const needsApiKey = server.auth_type === "api_key" && !server.connected && server.enabled;
+  // A key template makes a key POSSIBLE — it is only REQUIRED when the
+  // server has no OAuth path (dual-auth OAuth servers accept either).
+  const hasKeyTemplate = [server.env_template, server.headers_template].some(
+    (t) => t && Object.values(t).some((v) => v.includes("{{credential")),
+  );
+  const keyIsAlternative = server.auth_type === "oauth" && hasKeyTemplate;
+  const requiresApiKey =
+    server.auth_type !== "oauth" &&
+    (server.auth_type === "api_key" || hasKeyTemplate);
   const needsOAuth = server.auth_type === "oauth" && !server.connected && server.enabled;
   const inFilter = (t: McpToolInfo) =>
     server.tool_filter === null || server.tool_filter.includes(t.tool_name);
@@ -855,56 +875,41 @@ function ServerDetail({
           </div>
         )}
 
-        {/* Auth actions */}
-        {(needsApiKey || needsOAuth) && (
+        {/* OAuth action — key entry lives in the Credentials section */}
+        {needsOAuth && (
           <div className="mt-3">
-            {needsApiKey && !showCredForm && (
+            {oauthLoading ? (
+              <span className="flex items-center gap-1.5 rounded-md border border-line px-3 py-1.5 text-[12px] text-ink-muted">
+                <Key className="h-3.5 w-3.5" /> Waiting for sign-in…
+                <button
+                  onClick={() => (window as any)._oauthCleanup?.()}
+                  className="ml-1 cursor-pointer border-none bg-transparent text-[11px] text-danger underline"
+                >
+                  Cancel
+                </button>
+              </span>
+            ) : (
               <button
-                onClick={() => setShowCredForm(true)}
+                onClick={startOAuth}
                 className="flex cursor-pointer items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[12px] font-medium text-white transition-opacity hover:opacity-90"
               >
-                <Key className="h-3.5 w-3.5" /> Set API key
+                <Key className="h-3.5 w-3.5" /> Connect OAuth
               </button>
             )}
-            {needsOAuth &&
-              (oauthLoading ? (
-                <span className="flex items-center gap-1.5 rounded-md border border-line px-3 py-1.5 text-[12px] text-ink-muted">
-                  <Key className="h-3.5 w-3.5" /> Waiting for sign-in…
-                  <button
-                    onClick={() => (window as any)._oauthCleanup?.()}
-                    className="ml-1 cursor-pointer border-none bg-transparent text-[11px] text-danger underline"
-                  >
-                    Cancel
-                  </button>
-                </span>
-              ) : (
-                <button
-                  onClick={startOAuth}
-                  className="flex cursor-pointer items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[12px] font-medium text-white transition-opacity hover:opacity-90"
-                >
-                  <Key className="h-3.5 w-3.5" /> Connect OAuth
-                </button>
-              ))}
-          </div>
-        )}
-        {showCredForm && needsApiKey && (
-          <div className="mt-3 overflow-hidden rounded-md border border-line">
-            <CredentialForm
-              serverId={server.id}
-              envTemplate={server.env_template}
-              onSaved={() => {
-                setShowCredForm(false);
-                onChanged();
-              }}
-              onCancel={() => setShowCredForm(false)}
-            />
           </div>
         )}
         <div className="mt-3">
           <CredentialManager
             serverId={server.id}
             hasCredentials={server.has_credentials}
-            envTemplate={server.env_template}
+            envTemplate={
+              server.env_template || server.headers_template
+                ? { ...(server.headers_template ?? {}), ...(server.env_template ?? {}) }
+                : null
+            }
+            requiresApiKey={requiresApiKey}
+            keyIsAlternative={keyIsAlternative}
+            enabled={server.enabled}
             onChanged={onChanged}
           />
         </div>
@@ -1013,17 +1018,20 @@ function ToolPermissionRow({
 function CredentialForm({
   serverId,
   envTemplate,
+  connectOnSave,
   onSaved,
   onCancel,
 }: {
   serverId: string;
   envTemplate: Record<string, string> | null;
+  connectOnSave: boolean;
   onSaved: () => void;
   onCancel: () => void;
 }) {
   const [apiKey, setApiKey] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { toast } = useConfirm();
 
   // Determine the env var name from the template (e.g. "API_KEY", "NOTION_TOKEN")
   const envVarName = envTemplate
@@ -1036,10 +1044,15 @@ function CredentialForm({
     setSaving(true);
     setError(null);
     try {
-      await api.storeMcpCredential(serverId, {
+      const saved = await api.storeMcpCredential(serverId, {
         credential_type: "api_key",
         value: apiKey.trim(),
       });
+      setApiKey("");
+      toast(saved.connected
+        ? "API key saved. MCP server connected."
+        : connectOnSave ? "API key saved. Connection failed; retry from this server."
+          : "API key saved. Server is disabled.");
       onSaved();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save credential");
@@ -1068,6 +1081,9 @@ function CredentialForm({
         <div className="flex gap-2">
           <input
             type="password"
+            aria-label="API key"
+            autoComplete="new-password"
+            disabled={saving}
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
             placeholder="Paste your API key…"
@@ -1091,10 +1107,11 @@ function CredentialForm({
               cursor: saving ? "not-allowed" : "pointer",
             }}
           >
-            {saving ? "Saving…" : "Save & Connect"}
+            {saving ? "Saving…" : connectOnSave ? "Save & Connect" : "Save key"}
           </button>
           <button
             type="button"
+            disabled={saving}
             onClick={onCancel}
             className="rounded-[5px] px-3 py-2 text-[12px] transition"
             style={{
@@ -1119,11 +1136,17 @@ function CredentialManager({
   serverId,
   hasCredentials,
   envTemplate,
+  requiresApiKey,
+  keyIsAlternative,
+  enabled,
   onChanged,
 }: {
   serverId: string;
   hasCredentials: boolean;
   envTemplate: Record<string, string> | null;
+  requiresApiKey: boolean;
+  keyIsAlternative: boolean;
+  enabled: boolean;
   onChanged: () => void;
 }) {
   const [creds, setCreds] = useState<{ id: string; credential_type: string; label: string | null; created_at: string }[]>([]);
@@ -1165,7 +1188,8 @@ function CredentialManager({
     }
   };
 
-  if (!envTemplate && !hasCredentials) return null;
+  if (!envTemplate && !hasCredentials && !requiresApiKey && !keyIsAlternative)
+    return null;
 
   return (
     <div className="mt-3 border-t pt-3" style={{ borderColor: "var(--border)" }}>
@@ -1181,21 +1205,47 @@ function CredentialManager({
             </span>
           )}
         </div>
-        {!showForm && (
+        {/* Key entry only exists where a template can inject it —
+            OAuth-only servers list credentials but offer no key path. */}
+        {!showForm &&
+          envTemplate != null &&
+          (hasCredentials || (!requiresApiKey && !keyIsAlternative)) && (
+            <button
+              onClick={() => setShowForm(true)}
+              className="text-[11px] font-medium transition"
+              style={{
+                background: "none",
+                color: "var(--accent)",
+                border: "none",
+                cursor: "pointer",
+              }}
+            >
+              {hasCredentials ? "Update key" : "Add key"}
+            </button>
+          )}
+      </div>
+
+      {/* Key missing — real button in both cases: filled when required,
+          outline when it's the alternative to OAuth. */}
+      {!hasCredentials && !showForm && (requiresApiKey || keyIsAlternative) && (
+        <div className="mt-2">
           <button
             onClick={() => setShowForm(true)}
-            className="text-[11px] font-medium transition"
-            style={{
-              background: "none",
-              color: "var(--accent)",
-              border: "none",
-              cursor: "pointer",
-            }}
+            className={
+              requiresApiKey
+                ? "flex cursor-pointer items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[12px] font-medium text-white transition-opacity hover:opacity-90"
+                : "flex cursor-pointer items-center gap-1.5 rounded-md border border-line px-3 py-1.5 text-[12px] font-medium text-ink-2 transition-colors hover:bg-sunken"
+            }
           >
-            {hasCredentials ? "Update key" : "Add key"}
+            <Key className="h-3.5 w-3.5" /> Set API key
           </button>
-        )}
-      </div>
+          <p className="mt-1.5 text-[11px]" style={{ color: "var(--ink-3)" }}>
+            {requiresApiKey
+              ? "This server needs an API key to connect."
+              : "Or use an API key instead — either method connects the server."}
+          </p>
+        </div>
+      )}
 
       {/* Existing credentials list */}
       {creds.length > 0 && (
@@ -1241,6 +1291,7 @@ function CredentialManager({
           <CredentialForm
             serverId={serverId}
             envTemplate={envTemplate}
+            connectOnSave={enabled}
             onSaved={() => {
               setShowForm(false);
               fetchCreds();
@@ -1251,11 +1302,15 @@ function CredentialManager({
         </div>
       )}
 
-      {!hasCredentials && !showForm && envTemplate && (
-        <p className="mt-1 text-[11px]" style={{ color: "var(--ink-3)" }}>
-          No credential configured. Click "Add key" to set one up.
-        </p>
-      )}
+      {!requiresApiKey &&
+        !keyIsAlternative &&
+        !hasCredentials &&
+        !showForm &&
+        envTemplate && (
+          <p className="mt-1 text-[11px]" style={{ color: "var(--ink-3)" }}>
+            No credential configured. Click "Add key" to set one up.
+          </p>
+        )}
     </div>
   );
 }
@@ -1276,6 +1331,18 @@ const AUTH_LABELS: Record<string, string> = {
   api_key: "API key",
   oauth: "OAuth",
 };
+
+// Catalog entries that accept a credential placeholder AND OAuth are
+// either/or — the badge should say so instead of implying both.
+const catalogKeyTemplate = (e: McpCatalogEntry) =>
+  Object.values({ ...(e.env_template ?? {}), ...(e.headers ?? {}) }).some((v) =>
+    v.includes("{{credential"),
+  );
+
+const catalogAuthLabel = (e: McpCatalogEntry) =>
+  e.auth_type === "oauth" && catalogKeyTemplate(e)
+    ? "OAuth or API key"
+    : (AUTH_LABELS[e.auth_type] ?? e.auth_type);
 
 function CatalogBrowser({
   search,
@@ -1400,7 +1467,7 @@ function CatalogBrowser({
                       entry.auth_type === "none" ? "bg-accent-tint text-accent" : "bg-ground text-ink-muted"
                     }`}
                   >
-                    {AUTH_LABELS[entry.auth_type] ?? entry.auth_type}
+                    {catalogAuthLabel(entry)}
                   </span>
                 </div>
 
@@ -1429,8 +1496,8 @@ function CatalogBrowser({
                     </a>
                   ) : (
                     <button
-                      onClick={() => handleInstall(entry.name)}
-                      disabled={installing === entry.name}
+                      onClick={() => void handleInstall(entry.name)}
+                      disabled={installing !== null}
                       className={`rounded-md px-3 py-1.5 text-[12px] font-medium transition-opacity ${
                         installing === entry.name
                           ? "cursor-not-allowed bg-ground text-ink-muted"
