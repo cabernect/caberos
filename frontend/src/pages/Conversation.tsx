@@ -9,6 +9,7 @@ import { useObjectUrl } from "@/components/previews/useObjectUrl";
 import { AttachmentCard } from "@/components/AttachmentCard";
 import { ToolCallBlock, FileChips, collectFileRefs, type ToolCallData, type SubAgentStreamData, type FileRef } from "@/components/ToolCallBlock";
 import { Markdown } from "@/components/Markdown";
+import { MessageActions } from "@/components/MessageActions";
 import { ThinkingBlock } from "@/components/ThinkingBlock";
 import { ProcessSteps } from "@/components/ProcessSteps";
 import { ChatSidebar } from "@/components/ChatSidebar";
@@ -398,6 +399,11 @@ export function Conversation() {
       oldestFetchedIdRef.current = null;
       return;
     }
+    // Opening a session always lands pinned at the latest message —
+    // autoScrollRef persists across switches, so a mid-scroll position in
+    // the previous session would leave this one unpinned + Jump pill on.
+    autoScrollRef.current = true;
+    setShowJumpToLatest(false);
     api
       .getSessionMessages(agentId, activeSessionId)
       .then((res) => {
@@ -1106,11 +1112,28 @@ export function Conversation() {
 
   useEffect(() => {
     if (autoScrollRef.current) {
-      messagesEndRef.current?.scrollIntoView({
-        behavior: prefersReducedMotion.current ? "instant" : "smooth",
-      });
+      // Instant, not smooth — a smooth auto-scroll races the scroll
+      // handler: mid-flight nearBottom=false flips autoScrollRef off and
+      // the pin (and the scroll) dies before reaching the bottom.
+      messagesEndRef.current?.scrollIntoView({ behavior: "instant" });
     }
   }, [messages, streaming, isStreaming]);
+
+  // Async content (inline images resolving, streamed chunks, preview
+  // cards) grows the scroll height after render — keep the bottom pinned
+  // through those resizes while the user hasn't scrolled away.
+  useEffect(() => {
+    const scroller = scrollContainerRef.current;
+    const content = scroller?.firstElementChild;
+    if (!content) return;
+    const ro = new ResizeObserver(() => {
+      if (autoScrollRef.current) {
+        messagesEndRef.current?.scrollIntoView({ behavior: "instant" });
+      }
+    });
+    ro.observe(content);
+    return () => ro.disconnect();
+  }, [activeSessionId]);
 
   const handleJumpToLatest = () => {
     autoScrollRef.current = true;
@@ -2371,6 +2394,7 @@ function MessageRow({
         >
           {message.content}
         </div>
+        <MessageActions content={message.content} />
       </div>
     );
   }
@@ -2441,6 +2465,9 @@ function MessageRow({
         >
           <Markdown onWorkspaceLink={(p) => onPreview?.({ path: p })}>{message.content}</Markdown>
         </div>
+        <div className="mt-1.5 flex items-center gap-3">
+          <MessageActions content={message.content} />
+        </div>
       </div>
     );
   }
@@ -2466,11 +2493,14 @@ function MessageRow({
         <FileChips refs={runFileRefs} onPreview={onPreview} agentId={agentId} sessionId={sessionId} />
       )}
       {message.citations && message.citations.length > 0 && <CitationList citations={message.citations} />}
-      {hasCost && (
-        <div className="mt-1.5 font-mono text-[11px]" style={{ color: "var(--ink-3)" }}>
-          {message.tokens_out || 0} tokens · ${(message.cost || 0).toFixed(3)}
-        </div>
-      )}
+      <div className="mt-1.5 flex items-center gap-1.5">
+        <MessageActions content={message.content} />
+        {hasCost && (
+          <div className="shrink-0 font-mono text-[11px]" style={{ color: "var(--ink-3)" }}>
+            {message.tokens_out || 0} tokens · ${(message.cost || 0).toFixed(3)}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
