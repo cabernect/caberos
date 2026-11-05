@@ -51,6 +51,15 @@ def _serve(tmp_path: Path) -> tuple[http.server.HTTPServer, str]:
     return httpd, f"http://127.0.0.1:{httpd.server_port}/index.html"
 
 
+@pytest.fixture(autouse=True)
+def _allow_loopback_fixtures(monkeypatch):
+    """Local test pages live on 127.0.0.1 — grant the same private-network
+    exception an operator would, so navigate policy admits the fixtures."""
+    from agentos import netpolicy
+
+    monkeypatch.setattr(netpolicy, "private_allowlist", lambda: ["127.0.0.1", "localhost"])
+
+
 # --- unit: observation machinery -------------------------------------------
 
 
