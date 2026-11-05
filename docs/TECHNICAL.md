@@ -212,9 +212,31 @@ being silently rewritten or dropped. These grants are still host-wide.
 Cached MCP OAuth metadata is rechecked against the configured resource, selected
 issuer, and SDK client-credential binding before refresh. Initialization remains
 incomplete after a failed check, and errors do not echo metadata or credentials.
-This does not yet enforce destination policy on SDK discovery/token transports
-or isolate local MCP processes. OAuth authorization URLs are no longer logged
-by CaberOS's redirect callback.
+The MCP HTTP adapter now applies shared destination policy below the SDK:
+logical URLs remain intact for OAuth/cookies while connections dial checked IPs
+with the original Host and TLS SNI. Discovery, registration, exchange, refresh,
+and redirects use the same transport. Its pool disables keep-alive and ambient
+proxy environment use. The owning MCP session closes the supplied HTTP client;
+the SDK deliberately does not close caller-supplied clients.
+
+Literal local/localhost server configuration authorizes that exact origin.
+Other private hostnames require the existing private-host allowlist. A public
+server name does not implicitly gain private access through DNS rebinding.
+Metadata/link-local/reserved destinations stay blocked even for configured
+local services. This tightens previously unrestricted MCP HTTP behavior;
+isolated transport/SDK regression execution is still pending. Local MCP process
+isolation is not established. CaberOS's OAuth flow logs server IDs rather than
+authorization or initial-request URLs.
+
+`sandbox/process.py` owns sync completion, deadline, cancellation cleanup
+requests, output decoding, and bounded retention. Its `drain_output` is also
+used by background terminal spooling. Both retain at most 4 MiB per stream and
+continue draining beyond the cap or after spool-write failure. Sync results
+report `truncated` when output was lost. Background finalization waits up to
+one second for buffered output before cancelling pumps and flagging truncation.
+OS adapters retain launch/env decisions and backend-specific cleanup; existing
+strict/open settings and syscall authorization are unchanged. This is not a
+CPU/RAM limit or proof of escaped-descendant cleanup.
 
 Address classification explicitly denies reserved/site-local IPv6 and
 unsupported NAT64, Teredo, and 6to4 ranges rather than assuming `is_global`

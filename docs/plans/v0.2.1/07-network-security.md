@@ -13,6 +13,12 @@ for native terminal execution or a required W7 installation. Existing Docker
 hardening is retained as inactive prototype work. Per-agent strict/open policy
 is unchanged; native failure must not downgrade strict execution to open.
 
+Delivery scope clarification: enforce the existing agent/tool grants, approval
+decisions, workspace restrictions, strict/open mode, and network settings.
+Do not introduce a parallel permission system, new grant schema, or scope UI.
+Service-specific grant configuration is a separate proposal, not a prerequisite
+for consolidating or enforcing the current policy.
+
 ## Goal
 
 Protect the operator's machine, files, credentials, and control plane from
@@ -36,9 +42,10 @@ specific operation; it must not disable filesystem, process, or network limits.
 - The existing `netpolicy.py` pins fetch dial targets and checks redirects.
   Browser checks only cover explicit navigation before Chrome resolves again;
   frames, subresources, script navigation, WebSockets, and rebinding remain open.
-- The current exact-host private allowlist spans ports and schemes. It is not
-  the final service-scoped exception model. MCP discovery and refresh paths
-  still need enforcement tests through the actual SDK transport.
+- The current exact-host private allowlist spans ports and schemes. Keep that
+  configured meaning, document its breadth, and do not silently replace it with
+  a new service-scoped grant model. MCP discovery and refresh now use a checked,
+  pinned HTTP transport; isolated SDK-flow verification is still pending.
 - The execution inventory in `test_result/2026-11-05-network-policy.md` identifies
   Seatbelt's unrestricted reads/shared temp and Docker's background cleanup and
   resource-limit gaps. A follow-up patch removes implicit Docker image pulls
@@ -54,8 +61,12 @@ specific operation; it must not disable filesystem, process, or network limits.
   binding checks are implemented, but runtime acceptance remains open.
 - Generic fetch now has an operation-wide deadline, stateless cookies,
   public-content-only headers, and identity-only response handling. Wildcard
-  grants are rejected rather than rewritten. Service-scoped grants and browser
-  connection-level enforcement are still required.
+  grants are rejected rather than rewritten. Browser connection-level
+  enforcement is still required; finer-grained grant settings are deferred.
+- Native sync execution now uses `sandbox/process.py` for deadline, abort,
+  decoding, and bounded output. Sync capture and background spooling share
+  the existing 4 MiB-per-stream cap and drain implementation. This does not
+  establish CPU/RAM containment or complete descendant termination.
 
 ## Threat Model And Limits
 
@@ -141,25 +152,30 @@ authority. An allowlisted public hostname is not proof its resolved IP is public
 
 ### Local-Service Exceptions And Revocation
 
-- Replace host-only grants with explicit consumer scope (fetch/browser/MCP/
-  remote connection), scheme, exact hostname, port, and permitted address scope.
-  Add path/method constraints where enforceable; state when a proxy only
-  enforces an HTTPS origin and cannot inspect paths.
+- Enforce the existing exact-host network allowlist alongside existing agent/
+  tool authorization. Host-wide permission remains host-wide; do not invent
+  per-tool, scheme, port, or address-scope settings in this implementation.
 - Normalize hostnames/IPs consistently; reject wildcard expansion, ambiguous
   entries, URL credentials, and malformed or silently truncated configuration.
-  A hostname grant must not admit every private address it could later resolve to.
+  A public hostname without an exception must not gain private access when its
+  DNS changes. Document that an explicit private-host exception currently
+  admits eligible loopback/RFC1918/ULA addresses for that host.
 - Link-local, metadata, multicast, unspecified, and reserved targets remain
   denied under ordinary private-service exceptions. OAuth loopback callbacks
   are a separate narrowly bound listener, not arbitrary local egress authority.
 - Protect administrative/control-plane destinations separately; a broad LAN
   exception must not expose CaberOS operator APIs.
-- Version policy, record grant/revocation actor and scope without secrets, and
-  recheck at dispatch and redirects. Revocation closes affected long-lived
-  connections and denies later requests; already transmitted bytes are not
-  retractable. Define restart and pending-approval behavior explicitly.
-- Do not silently convert existing broad host grants into service-specific
-  consent. Inventory compatibility impact and require operator review before
-  enabling changed grants; provide clear blocked/unavailable messages.
+- Recheck existing policy at connection and redirects. Removing an allowlist
+  entry denies subsequent checked connections; do not claim that this closes
+  every already-established stream. Immediate active-stream revocation and
+  policy/grant versioning remain separate, unfinished design work.
+- A configured literal local/localhost MCP endpoint authorizes its exact
+  origin, not every private metadata/token destination. Other private names
+  require the existing explicit host allowlist. Report compatibility failures
+  rather than silently broadening authority.
+- Consumer/scheme/port/address-specific grants and their configuration UX are
+  deferred. Any future design must reuse the permission model, not compete
+  with it.
 
 ### Credentials And MCP/OAuth
 
