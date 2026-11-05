@@ -228,6 +228,11 @@ isolated transport/SDK regression execution is still pending. Local MCP process
 isolation is not established. CaberOS's OAuth flow logs server IDs rather than
 authorization or initial-request URLs.
 
+Seatbelt (macOS) uses layered denies: broad runtime read/exec, then
+deny file-read on private trees (/Users, per-user temp/caches, launchd
+sockets) and deny file-write outside the workspace and /dev/null —
+subpath-only grants abort processes in dyld, verified live on macOS.
+
 `sandbox/process.py` owns sync completion, deadline, cancellation cleanup
 requests, output decoding, and bounded retention. Its `drain_output` is also
 used by background terminal spooling. Both retain at most 4 MiB per stream and

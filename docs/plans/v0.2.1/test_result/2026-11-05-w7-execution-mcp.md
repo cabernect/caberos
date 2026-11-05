@@ -20,10 +20,18 @@ destination enforcement via PolicyTransport, `netpolicy.resolve_destination`).
 - Local-server exception narrowed to the literal configured origin;
   public hostnames no longer gain private access through DNS answers.
 
+## Verified since (native)
+
+- macOS Seatbelt native checks run on this host against synthetic dirs:
+  workspace R/W + workspace temp OK; sibling-secret read denied (direct
+  + symlink); sibling-temp write denied. A real defect was found and
+  fixed — subpath-only grants abort in dyld; profile now uses layered
+  private-tree denies (commit `a41a561`).
+
 ## Not verified / open
 
-- Native Seatbelt/bwrap confinement, Docker cleanup, and real-process
-  termination still lack an isolated runtime — synthetic only.
+- bwrap/MXC native checks are platform-specific and were not run here.
+- Docker cleanup and real-process termination remain synthetic only.
 - Browser traffic enforcement still covers explicit navigation only;
   subresources, WebSockets, XHR/fetch, and rebinding inside Chrome are
   open and need a proxy/OS-boundary mechanism.

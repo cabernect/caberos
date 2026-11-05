@@ -1,10 +1,49 @@
-# Host Protection, Network Policy, And MCP Security
+# Local Host Hardening Baseline (W7)
 
-Status: OPEN. An initial fetch-policy slice is implemented and fixture-tested;
-browser containment, execution isolation, and MCP/OAuth enforcement are not
-complete. Earlier passing suites do not establish completion of this workstream.
-This is a hardening plan, not a completed security audit or authorization to
-install software, change host firewalls, grant privileges, or make live probes.
+Status: BASELINE — the workstream was re-scoped down on operator direction.
+What is in scope is listed under "Baseline scope" below; the original
+full-scope sections are kept under "Deferred — full boundary work" so the
+threat review and requirements remain available when a later workstream
+picks them up. This is a hardening plan, not a completed security audit
+or authorization to install software, change host firewalls, grant
+privileges, or make live probes.
+
+## Baseline Scope (what W7 now means)
+
+Already implemented and fixture-tested:
+
+- `web_fetch` destination policy at the dial point: checked DNS answers,
+  pinned IP with original Host/SNI, per-redirect revalidation, bounded
+  body, deadline, no ambient proxy/cookie/credential forwarding, and an
+  operator exact-host private allowlist.
+- Browser explicit-navigation preflight (scheme + destination check);
+  Chrome's own in-page traffic is explicitly NOT covered — see Deferred.
+- Shared sync execution lifecycle (`sandbox/process.py`): deadline,
+  cancellation/timeout cleanup ordering, bounded 4 MiB-per-stream output
+  with drain-to-EOF and a `truncated` flag, safe process-group kills.
+- Native confinement adapters: Seatbelt scoped workspace/runtime grants,
+  bwrap real-profile readiness + allowlisted env, Docker hardened as
+  inactive opt-in prototype. OS-native execution stays the default and
+  failures are reported, never silently retried elsewhere.
+- MCP HTTP traffic through `mcp/transport.PolicyTransport`: every
+  SDK-generated request (discovery, registration, token exchange,
+  refresh, redirects) dials checked destinations; ambient proxies off;
+  literal local/localhost config authorizes its exact origin only;
+  cached OAuth resource/issuer/client bindings revalidated before use.
+- Child environment hygiene: stdio MCP servers inherit only the SDK
+  allowlist plus operator-declared vars; backends pin launch env.
+
+Baseline verification status:
+
+- DONE (macOS, this host): Seatbelt native checks run against synthetic
+  directories — workspace R/W + workspace temp allowed; sibling secret
+  unreadable directly and via symlink; sibling temp unwritable. The run
+  exposed and fixed a real defect: subpath-only file grants abort every
+  process in dyld; the profile now uses layered private-tree denies.
+- NOT RUN HERE: bwrap (Linux-only) and MXC (Windows-only, experimental)
+  native checks — verified only on their own platforms.
+- Everything else in the baseline is synthetic-fixture verified.
+
 
 Operator direction: the default terminal path is OS-native. If it is unavailable
 or a command fails, report that result without switching to Docker or another
@@ -109,7 +148,15 @@ Record exception scope, audit visibility, revocation, and compatibility warnings
 Do not silently break approved local integrations or silently grandfather broad
 authority. An allowlisted public hostname is not proof its resolved IP is public.
 
-## Required Protection Contracts
+## Deferred — full boundary work
+
+Everything below this heading is OUT of baseline scope. It documents the
+complete boundary design (browser-wide traffic enforcement, per-server MCP
+sandbox grants, scoped local-service exceptions, control-plane and remote
+verification) for a later workstream. The baseline above must not be
+described as covering any of it.
+
+## Required Protection Contracts (deferred)
 
 ### Execution And Filesystem Isolation
 
