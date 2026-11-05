@@ -9,6 +9,7 @@ Windows uses MXC instead, see mxc.py and base._candidates_for().
 
 import asyncio
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -93,6 +94,8 @@ class DockerBackend(SandboxBackend):
         self, workspace_path: str, command: str, allow_network: bool, container_name: str
     ) -> list[str]:
         workspace = str(Path(workspace_path).resolve())
+        uid = getattr(os, "getuid", lambda: 65534)() or 65534
+        gid = getattr(os, "getgid", lambda: 65534)() or 65534
         args = [
             "docker",
             "run",
@@ -103,6 +106,21 @@ class DockerBackend(SandboxBackend):
             container_name,
             "--label",
             f"io.caberos.sandbox={container_name}",
+            "--user",
+            f"{uid}:{gid}",
+            "--cap-drop=ALL",
+            "--security-opt=no-new-privileges",
+            "--read-only",
+            "--pids-limit=64",
+            "--memory=256m",
+            "--memory-swap=256m",
+            "--cpus=1",
+            "--ulimit",
+            "nofile=256:256",
+            "--ulimit",
+            "fsize=67108864:67108864",
+            "--tmpfs",
+            "/tmp:rw,nosuid,nodev,noexec,size=32m,mode=1777",
             "-v",
             f"{workspace}:/workspace",
             "-w",
@@ -120,12 +138,7 @@ class DockerBackend(SandboxBackend):
     def spawn_argv(
         self, workspace_path: str, command: str, allow_network: bool = False
     ) -> list[str]:
-        """Argv for a background terminal.
-
-        The terminal registry kills the local `docker run` client on close, which
-        does not stop the container the daemon is running; `--rm` removes it once
-        its command ends. Prefer a native backend for long-running terminals.
-        """
+        """Legacy argv interface; managed backgrounds use plan/activate/cleanup."""
         return self._docker_argv(
             workspace_path, command, allow_network, f"caberos-sandbox-{uuid.uuid4().hex}"
         )

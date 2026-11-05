@@ -299,3 +299,30 @@ async def test_daemon_disconnect_never_claims_resource_stopped():
     with patch.object(backend, "_control", AsyncMock(side_effect=OSError("offline"))):
         confirmed = await backend.cleanup_launch(SandboxLaunch([], None, name), None)
     assert confirmed is False
+
+
+def test_container_limits_apply_even_when_network_is_authorized(tmp_path):
+    backend = DockerBackend()
+    for network in (False, True):
+        args = backend.spawn_argv(str(tmp_path), "true", allow_network=network)
+        assert {
+            "--pull=never",
+            "--cap-drop=ALL",
+            "--security-opt=no-new-privileges",
+            "--read-only",
+            "--pids-limit=64",
+            "--memory=256m",
+            "--memory-swap=256m",
+            "--cpus=1",
+        }.issubset(args)
+        assert args[args.index("--tmpfs") + 1] == "/tmp:rw,nosuid,nodev,noexec,size=32m,mode=1777"
+        assert "nofile=256:256" in args
+        assert "fsize=67108864:67108864" in args
+        assert "--privileged" not in args
+
+
+def test_root_controller_never_selects_root_container_user(tmp_path, monkeypatch):
+    monkeypatch.setattr("agentos.sandbox.docker.os.getuid", lambda: 0, raising=False)
+    monkeypatch.setattr("agentos.sandbox.docker.os.getgid", lambda: 0, raising=False)
+    args = DockerBackend().spawn_argv(str(tmp_path), "true")
+    assert args[args.index("--user") + 1] == "65534:65534"
