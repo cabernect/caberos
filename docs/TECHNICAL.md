@@ -227,8 +227,13 @@ destination; explicit loopback grants remain supported.
 | macOS | `seatbelt` (sandbox-exec) | Tier 1 |
 | Linux | `bwrap` | needs `SYS_ADMIN` in containers |
 | Windows | MXC (bundled `wxc-exec.exe`) | one-time consent setup |
-| Any (fallback) | Docker container | docker.py |
-| Docker deploy | bwrap if cap else Docker-isolation | compose sets `cap_add` |
+| Future explicit opt-in | Docker prototype | Not auto-selected; setup is deferred |
+| Docker deploy | Native Linux `bwrap` if available | No nested Docker fallback |
+
+OS-native execution is the default. Native unavailability or command failure
+is reported directly, without selecting Docker, another backend, or open mode.
+Existing per-agent strict/open settings are unchanged. Installing or starting
+Docker does not enable a terminal fallback.
 
 `workspace.py::resolve_within` = canonical containment check (realpath + prefix). All file ops route through it.
 

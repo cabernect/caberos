@@ -269,7 +269,7 @@ Pushing a `v*.*.*` tag triggers the [release workflow](.github/workflows/release
 | Browser automation | Playwright/CDP over managed Chrome-for-Testing |
 | Frontend | React 19, Vite, TypeScript, Tailwind CSS 4 |
 | Desktop | Tauri 2 (Rust) |
-| Sandbox | seatbelt (macOS), bwrap (Linux), MXC (Windows); Docker fallback on macOS/Linux |
+| Sandbox | OS-native: seatbelt (macOS), bwrap (Linux), MXC (Windows); Docker setup is future opt-in |
 | Packaging | PyInstaller (gateway), Tauri bundler (desktop) |
 
 ### Key design decisions
@@ -422,7 +422,7 @@ The Docker setup runs the full stack: backend (Python + uv) and frontend (nginx 
 
 | Service | Image | Port | Notes |
 |---|---|---|---|
-| `backend` | `python:3.12-slim` + uv | 8081 (internal) | Agents can use bwrap (if `SYS_ADMIN` cap present) or Docker isolation |
+| `backend` | `python:3.12-slim` + uv | 8081 (internal) | Agents use native Linux bwrap when available; no nested Docker fallback |
 | `frontend` | `nginx:alpine` | 80 → `:8080` (host) | Reverse-proxies `/api`, `/health` to backend |
 
 Data persists in the `caberos-data` named volume (SQLite DB, secret key, workspaces, agent homes). To use Postgres instead, uncomment the `db` service and `AGENTOS_DATABASE_URL` in `docker-compose.yml`.
@@ -620,12 +620,10 @@ The desktop app uses bearer-token auth (not cookies). If login fails:
 
 ### Docker: bwrap fails
 
-Bubblewrap needs `SYS_ADMIN` capability. The compose file sets `cap_add: SYS_ADMIN`. If your Docker setup blocks this:
-
-```yaml
-# In docker-compose.yml, replace cap_add with:
-privileged: true
-```
+The compose file requests `cap_add: SYS_ADMIN` for bubblewrap. If the environment
+still blocks its required namespaces, strict terminal execution reports
+unavailable. CaberOS does not switch to another backend or recommend enabling
+`privileged: true` to recover. Other capabilities remain available.
 
 ### Backend: SSL certificate errors
 

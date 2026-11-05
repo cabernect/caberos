@@ -1,10 +1,9 @@
-"""Docker sandbox backend — macOS/Linux fallback.
+"""Docker sandbox prototype — reserved for future explicit opt-in setup.
 
 Runs the sandboxed command inside a throwaway container instead of a native
-OS sandbox. It is the fallback candidate behind Seatbelt on macOS and bwrap on
-Linux. It is deliberately not a Windows candidate: the Windows desktop app must
-not require Docker Desktop (which runs its own WSL2 VM) for shell to work —
-Windows uses MXC instead, see mxc.py and base._candidates_for().
+OS sandbox. It is not a candidate in OS-native backend selection and is never
+used automatically when a native terminal is unavailable or a command fails.
+The implementation is retained for future setup and owned-resource cleanup.
 """
 
 import asyncio

@@ -19,6 +19,29 @@ or rebinding. S01/S03 are partial; S02/S04 and new S05-S10 remain open/blocking
 as recorded in the acceptance matrix. Preserve the test counts as historical
 results, not proof of the expanded contracts.
 
+## Operator Clarification: Native Default, No Docker Fallback
+
+The default terminal path is OS-native. Automatic selection now includes only
+Seatbelt on macOS, bubblewrap on Linux, and MXC on Windows. Native unavailability
+or command failure is reported directly, without probing or selecting Docker.
+Existing per-agent strict/open settings are unchanged.
+
+Docker sandbox setup is future explicit opt-in work. Its implementation and
+historical hardening notes below are retained as prototype evidence, not an
+active fallback or a prerequisite for terminal execution. The earlier Docker
+Desktop/Podman test-runner proposals are superseded; no installation or VM start
+was performed or is requested as part of this correction.
+
+Regression fixtures check native selection/refusal and health, ensure Docker
+is not constructed even when it would be available, preserve native command
+errors, and cover recovery after native setup. Native probes are mocked in
+these registry tests. Runtime execution remains NOT RUN; static checks only.
+
+Verification from `backend/`: `./.venv/bin/ruff check --no-cache src/ tests/`
+and `./.venv/bin/ruff format --check --no-cache src/ tests/` both exit 0;
+317 files pass formatting. AST parsing of the three changed Python files
+also exits 0 without importing target code. No runtime tests were executed.
+
 ## Follow-Up: Execution Inventory And Download Authority
 
 The non-W7 feature work is now committed separately:

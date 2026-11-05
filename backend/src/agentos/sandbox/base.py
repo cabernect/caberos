@@ -1,9 +1,8 @@
 """Sandbox backend abstraction (D28 — process-level sandboxing).
 
-get_backend() never raises. Each platform has an ordered list of candidate
-backends; the first one whose is_available() returns true wins. Where no
-candidate is available, the terminal capability is refused with a reason
-naming every candidate that was tried — never a crash mid-run.
+get_backend() never raises. Each platform uses its OS-native backend. If that
+backend is unavailable, the terminal capability is refused with a reason;
+Docker is reserved for future explicit opt-in setup, never automatic fallback.
 """
 
 import asyncio
@@ -114,9 +113,8 @@ async def kill_process_group(proc: asyncio.subprocess.Process, grace: float = 3.
 class SandboxBackend(ABC):
     """Abstract sandbox backend.
 
-    Implementations: Seatbelt (macOS), bwrap (Linux), Docker (macOS/Linux
-    fallback), MXC (Windows, experimental), and Unavailable (no candidate on
-    this machine works).
+    Default implementations: Seatbelt (macOS), bwrap (Linux), MXC (Windows,
+    experimental), and Unavailable. The Docker prototype is not auto-selected.
     """
 
     # Short identifier surfaced through the health endpoint.
@@ -233,7 +231,7 @@ class UnavailableBackend(SandboxBackend):
 
 
 def _candidates_for(platform: str) -> list[Callable[[], SandboxBackend]]:
-    """Ordered constructors to try for this platform, native backend first."""
+    """Only the OS-native backend; Docker setup is future, explicit opt-in."""
     if platform == "win32":
         # Windows has no trusted native sandbox, and the desktop app must not
         # ask a user to install Docker Desktop or WSL for shell to work. MXC
@@ -242,8 +240,6 @@ def _candidates_for(platform: str) -> list[Callable[[], SandboxBackend]]:
         from .mxc import MxcBackend
 
         return [MxcBackend]
-
-    from .docker import DockerBackend
 
     candidates: list[Callable[[], SandboxBackend]] = []
     if platform == "darwin":
@@ -254,7 +250,6 @@ def _candidates_for(platform: str) -> list[Callable[[], SandboxBackend]]:
         from .bwrap import BwrapBackend
 
         candidates.append(BwrapBackend)
-    candidates.append(DockerBackend)
     return candidates
 
 
@@ -266,12 +261,11 @@ _backend_cache: dict[str, SandboxBackend] = {}
 
 
 def get_backend(refresh: bool = False) -> SandboxBackend:
-    """Return the best available backend for the current platform.
+    """Return the OS-native backend for the current platform.
 
-    Never raises. Tries each platform candidate in priority order (native
-    sandbox first, Docker as a cross-platform fallback) and returns the first
-    one whose is_available() is true. Where none work, returns an
-    UnavailableBackend whose reason names every candidate that was tried.
+    Never raises. If the native backend is unavailable, returns an
+    UnavailableBackend naming the reason. Docker is never probed or selected
+    automatically, even if its daemon and sandbox image are already available.
 
     Cached: every strict-mode shell call goes through this function, and
     constructing a fresh backend each time re-runs its availability probe
@@ -300,11 +294,8 @@ def get_backend(refresh: bool = False) -> SandboxBackend:
             reason = "No sandbox available. " + " / ".join(tried_reasons)
         else:
             reason = f"No sandbox implementation for platform {platform!r}."
-        # Deliberately not cached: the most common fix (e.g. starting Docker
-        # Desktop) happens after the gateway is already running, and the
-        # operator has no way to force a recheck short of restarting the
-        # whole app. Re-probing on every call while broken is cheap next to
-        # staying stuck refusing shell commands for the rest of the process.
+        # Native setup may finish while the gateway is running. Recheck
+        # failures instead of requiring a restart to notice recovery.
         return UnavailableBackend(reason=reason, setup_required=setup_required)
 
     _backend_cache[platform] = backend

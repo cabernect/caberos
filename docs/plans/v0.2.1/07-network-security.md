@@ -6,6 +6,13 @@ complete. Earlier passing suites do not establish completion of this workstream.
 This is a hardening plan, not a completed security audit or authorization to
 install software, change host firewalls, grant privileges, or make live probes.
 
+Operator direction: the default terminal path is OS-native. If it is unavailable
+or a command fails, report that result without switching to Docker or another
+backend. Docker sandbox setup is future, explicit opt-in work, not a prerequisite
+for native terminal execution or a required W7 installation. Existing Docker
+hardening is retained as inactive prototype work. Per-agent strict/open policy
+is unchanged; native failure must not downgrade strict execution to open.
+
 ## Goal
 
 Protect the operator's machine, files, credentials, and control plane from

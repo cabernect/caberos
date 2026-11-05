@@ -68,7 +68,7 @@ Personal agents are a new attack surface — they hold credentials, act autonomo
 
 **What CaberOS does by construction:**
 - **Egress capabilities cross an approval boundary.** Web fetch, browser navigation, shell commands, and remote embeddings ask before acting — per the capability's declared effects. "Never ask again" is a remembered scope the operator owns — not a default.
-- **Sandboxed execution** — OS-level isolation (seatbelt/bwrap/MXC, Docker fallback), workspace-scoped file access with canonical path containment.
+- **Sandboxed execution** — OS-native isolation (seatbelt/bwrap/MXC), workspace-scoped file access with canonical path containment. Native failures are reported without automatic backend switching; Docker setup is future opt-in work.
 - **Encrypted credential custody** — provider keys and connector tokens are encrypted at rest, injected at execution time, never into prompts; guardrails redact secrets on output, and audit/log payloads are redacted and bounded (not a tamper-proof guarantee).
 - **Blast radius is bounded** — capability ceilings are config, and nothing below the model (memory writes, elicitation, reflection) can widen them.
 - **Receipts for everything** — the audit log and call ledger record what crossed the boundary, so actions leave inspectable records.
