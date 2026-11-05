@@ -137,6 +137,21 @@ Chrome-for-Testing runtime — managed install gated on explicit consent. CDP se
 
 `WebSource` rows = URLs the agent **visited** (web_fetch / browser_open landed / browser_act transitions). `web_search` results are trace-only — inspectable in the tool-call record, never citable references. Base prompt instructs: open a page before citing it.
 
+### Outbound network policy (v0.2.1 worktree)
+
+`netpolicy.py` is the destination classifier for agent-driven HTTP: global
+unicast allowed; loopback/RFC1918/ULA only via the operator's exact-host
+allowlist (`web_private_allowlist`, Settings → "Private-network access" or
+`AGENTOS_WEB_PRIVATE_ALLOWLIST`); link-local/CGNAT/multicast/reserved/cloud
+metadata never admitted. `policy_fetch` resolves once, requires every DNS
+answer to be permitted, dials the validated IP with original Host/SNI, and
+re-validates at each redirect hop (≤5, 5 MB body cap, `trust_env=False`).
+`web_fetch` enforces it fully; browser `navigate` applies the same URL+host
+check before `Page.navigate` (subresources/rebinding residual documented in
+the W7 review record). MCP endpoints are operator-configured authority and
+are intentionally not private-banned. Self-hosted Firecrawl keeps its own
+`allow_private_network` consent and shares the classifier.
+
 ### Search service configuration (v0.2.1 worktree)
 
 Settings -> Tools -> Web Search configures DDGS (free default), Tavily, Exa,

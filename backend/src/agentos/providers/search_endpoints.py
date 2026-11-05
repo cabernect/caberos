@@ -8,24 +8,9 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
+from ..netpolicy import addr_allowed as _address_allowed
+
 SELF_HOSTED = "firecrawl_self_hosted"
-_PRIVATE_NETWORKS = tuple(
-    ipaddress.ip_network(network)
-    for network in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7")
-)
-
-
-def _address_allowed(value: str, allow_private: bool) -> bool:
-    ip = ipaddress.ip_address(value)
-    ip = getattr(ip, "ipv4_mapped", None) or ip
-    if str(ip) == "fd00:ec2::254":
-        return False
-    if ip.is_global and not ip.is_multicast:
-        return True
-    return allow_private and (
-        ip.is_loopback
-        or any(ip.version == network.version and ip in network for network in _PRIVATE_NETWORKS)
-    )
 
 
 def validate_self_hosted(

@@ -956,13 +956,19 @@ function BrowserTab() {
   const [pickingBuiltin, setPickingBuiltin] = useState(false);
   const [showLocation, setShowLocation] = useState(false);
   const [testingWindow, setTestingWindow] = useState(false);
+  const [privateAllowlist, setPrivateAllowlist] = useState("");
+  const [allowlistPinned, setAllowlistPinned] = useState(false);
+  const [savingAllowlist, setSavingAllowlist] = useState(false);
 
   const loadAll = useCallback(async () => {
     try {
-      const [settings, profileList] = await Promise.all([
+      const [settings, profileList, network] = await Promise.all([
         api.getBrowserSettings(),
         api.listBrowserProfiles(),
+        api.getNetworkSettings(),
       ]);
+      setPrivateAllowlist(network.web_private_allowlist.join("\n"));
+      setAllowlistPinned(network.pinned);
       setBinaryOverride(settings.binary_override);
       setOverrideSource(settings.override_source);
       setResolvedBinary(settings.resolved_binary);
@@ -1460,6 +1466,73 @@ function BrowserTab() {
             browser, passwords, and logins are never touched. Works even if you
             only have Safari.
           </p>
+        </div>
+      </section>
+
+      {/* Private-network access */}
+      <section id="network-policy">
+        <h2 className="text-[14px] font-semibold text-[var(--ink)]">
+          Private-network access
+        </h2>
+        <p className="mb-3 mt-0.5 text-[12px] text-[var(--ink-3)]">
+          Local services agents may reach, by exact hostname.
+        </p>
+        <div
+          className="rounded-xl p-5 space-y-3"
+          style={{
+            border: "1px solid var(--border-soft)",
+            background: "var(--surface)",
+          }}
+        >
+          <p className="text-[12px] text-[var(--ink-3)]">
+            Web fetch and browser navigation are limited to public internet
+            addresses by default — agents cannot read localhost, LAN devices,
+            routers, or cloud metadata endpoints. Add a hostname here only if
+            an agent should reach a specific local service (an intranet wiki, a
+            home server). One exact host per line; subdomains are not implied.
+          </p>
+          <textarea
+            value={privateAllowlist}
+            disabled={allowlistPinned || savingAllowlist}
+            onChange={(e) => setPrivateAllowlist(e.target.value)}
+            placeholder={"wiki.internal\n192.168.1.20"}
+            rows={3}
+            className="w-full rounded-lg border px-3 py-2 font-mono text-[12px] text-[var(--ink)] disabled:opacity-60"
+            style={{ borderColor: "var(--border)", background: "var(--ground)" }}
+          />
+          {allowlistPinned && (
+            <p className="text-[11px] text-[var(--ink-3)]">
+              Pinned by AGENTOS_WEB_PRIVATE_ALLOWLIST — edit it in the
+              environment or .env to change this list.
+            </p>
+          )}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={allowlistPinned || savingAllowlist}
+              onClick={async () => {
+                setSavingAllowlist(true);
+                setError(null);
+                try {
+                  const entries = privateAllowlist
+                    .split(/[\n,]+/)
+                    .map((s) => s.trim())
+                    .filter(Boolean);
+                  const result = await api.updateNetworkSettings(entries);
+                  setPrivateAllowlist(result.web_private_allowlist.join("\n"));
+                  setNotice("Private-network exceptions saved.");
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : String(e));
+                } finally {
+                  setSavingAllowlist(false);
+                }
+              }}
+              className="cursor-pointer rounded-lg px-3 py-1.5 text-[12px] font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+              style={{ background: "var(--accent)" }}
+            >
+              {savingAllowlist ? "Saving…" : "Save exceptions"}
+            </button>
+          </div>
         </div>
       </section>
 

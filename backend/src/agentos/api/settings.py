@@ -49,6 +49,85 @@ async def set_yolo_mode(
     return YoloModeOut(yolo_mode=settings.yolo_mode)
 
 
+# --- Network policy --------------------------------------------------------
+
+
+class NetworkSettingsOut(BaseModel):
+    web_private_allowlist: list[str]
+    pinned: bool
+
+
+class NetworkSettingsUpdate(BaseModel):
+    web_private_allowlist: list[str]
+
+
+def _validate_allowlist(entries: list[str]) -> list[str]:
+    """Normalize entries to bare hostnames/IP literals — no scheme or path.
+
+    An entry names one exact destination the agent's web_fetch may reach on
+    a private address; it is not a URL and grants no subdomains.
+    """
+    import ipaddress
+    import re
+
+    cleaned: list[str] = []
+    for raw in entries:
+        entry = raw.strip().lower().rstrip(".")
+        if entry.startswith("*."):
+            entry = entry[2:]
+        if not entry or len(entry) > 253 or len(cleaned) >= 50:
+            continue
+        try:
+            ipaddress.ip_address(entry)
+            cleaned.append(entry)
+            continue
+        except ValueError:
+            pass
+        if re.fullmatch(
+            r"[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?"
+            r"(?:\.[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?)*",
+            entry,
+        ):
+            cleaned.append(entry)
+            continue
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid allowlist entry: {raw!r} — "
+            "enter a bare hostname or IP, no scheme or path",
+        )
+    return cleaned
+
+
+@router.get("/network")
+async def get_network_settings(
+    operator: Operator = Depends(require_operator),
+) -> NetworkSettingsOut:
+    return NetworkSettingsOut(
+        web_private_allowlist=list(settings.web_private_allowlist),
+        pinned=env_pinned("web_private_allowlist"),
+    )
+
+
+@router.put("/network")
+async def set_network_settings(
+    req: NetworkSettingsUpdate,
+    operator: Operator = Depends(require_operator),
+) -> NetworkSettingsOut:
+    from ..config import persist_setting
+
+    if env_pinned("web_private_allowlist"):
+        raise HTTPException(
+            status_code=409,
+            detail="web_private_allowlist is pinned by AGENTOS_WEB_PRIVATE_ALLOWLIST — "
+            "remove it from the environment or .env to manage it here",
+        )
+    persist_setting("web_private_allowlist", _validate_allowlist(req.web_private_allowlist))
+    return NetworkSettingsOut(
+        web_private_allowlist=list(settings.web_private_allowlist),
+        pinned=False,
+    )
+
+
 # --- Browser runtime ------------------------------------------------------
 
 

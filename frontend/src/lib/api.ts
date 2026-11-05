@@ -1757,6 +1757,15 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ binary_override: binaryOverride }),
     }),
+  getNetworkSettings: () =>
+    request<{ web_private_allowlist: string[]; pinned: boolean }>(
+      "/api/settings/network",
+    ),
+  updateNetworkSettings: (allowlist: string[]) =>
+    request<{ web_private_allowlist: string[]; pinned: boolean }>(
+      "/api/settings/network",
+      { method: "PUT", body: JSON.stringify({ web_private_allowlist: allowlist }) },
+    ),
   installBrowserRuntime: () =>
     request<{
       status: string;

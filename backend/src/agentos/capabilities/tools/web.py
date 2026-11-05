@@ -15,6 +15,7 @@ import httpx
 from bs4 import BeautifulSoup
 from sqlalchemy import func, select
 
+from ... import netpolicy
 from ...models.web_source import WebSource
 from ...providers.search import search_provider
 from ...ssl_utils import SSL_CERT_PATH
@@ -249,39 +250,47 @@ async def web_fetch(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     # Cap max_chars at the hard ceiling — the model cannot exceed this
     max_chars = min(max_chars, _WEB_FETCH_HARD_CEILING)
 
+    # Destination policy: http(s) only, no URL credentials, DNS answers checked
+    # at connect time, every redirect hop re-validated, body bounded. Private
+    # destinations require an operator allowlist entry (Settings → Network).
     try:
-        async with httpx.AsyncClient(
-            timeout=20, follow_redirects=True, verify=SSL_CERT_PATH
-        ) as client:
-            resp = await client.get(
-                url,
-                headers={"User-Agent": "CaberOS/0.1 (local-first agent OS)"},
-            )
-            resp.raise_for_status()
+        final_url, resp, body = await netpolicy.policy_fetch(
+            url,
+            allowlist=netpolicy.private_allowlist(),
+            timeout=20,
+            headers={"User-Agent": "CaberOS/0.1 (local-first agent OS)"},
+            verify=SSL_CERT_PATH,
+        )
+        resp.raise_for_status()
+    except netpolicy.DestinationError as e:
+        return {"error": f"Fetch blocked: {e}"}
     except httpx.HTTPError as e:
         return {"error": f"Fetch failed: {e}"}
+
+    text_body = body.decode("utf-8", errors="replace")
 
     # Extract main content as markdown (system-controlled, not a model option).
     # Non-HTML responses (raw files, plain text, JSON) skip extraction entirely —
     # running trafilatura on non-HTML would corrupt the content.
     content_type = resp.headers.get("content-type", "")
     if "html" in content_type:
-        soup = BeautifulSoup(resp.text, "html.parser")
+        soup = BeautifulSoup(text_body, "html.parser")
         title = soup.title.string.strip() if soup.title and soup.title.string else ""
-        text = _extract_markdown(resp.text)
+        text = _extract_markdown(text_body)
     else:
         title = ""
-        text = resp.text
+        text = text_body
 
-    # Persist the fetched page as a source so the reply can cite it
-    await _persist_fetched_source(url, title, text, kwargs)
+    # Persist the landed page (post-redirect URL) as a source — references are
+    # visited URLs, not merely requested ones.
+    await _persist_fetched_source(str(final_url), title, text, kwargs)
 
     # Apply offset and max_chars
     content = text[offset : offset + max_chars]
     has_more = (offset + len(content)) < len(text)
 
     return {
-        "url": url,
+        "url": str(final_url),
         "content": content,
         "title": title,
         "offset": offset,
