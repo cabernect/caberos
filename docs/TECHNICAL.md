@@ -216,6 +216,12 @@ This does not yet enforce destination policy on SDK discovery/token transports
 or isolate local MCP processes. OAuth authorization URLs are no longer logged
 by CaberOS's redirect callback.
 
+Address classification explicitly denies reserved/site-local IPv6 and
+unsupported NAT64, Teredo, and 6to4 ranges rather than assuming `is_global`
+means ordinarily routable. This also applies to self-hosted search through the
+shared classifier. IPv4-mapped addresses are still classified by their IPv4
+destination; explicit loopback grants remain supported.
+
 | Platform | Backend | Notes |
 |---|---|---|
 | macOS | `seatbelt` (sandbox-exec) | Tier 1 |

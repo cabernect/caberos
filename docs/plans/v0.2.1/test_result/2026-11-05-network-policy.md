@@ -243,6 +243,59 @@ W7 remains OPEN; browser-wide enforcement, service-scoped audited grants,
 MCP process/transport isolation, remaining resource/cleanup guarantees, and
 integrated platform evidence are not finished.
 
+### Subsequent Patch: Synchronous Cancellation
+
+Seatbelt, bwrap, MXC, Docker, and explicit open-mode synchronous execution now
+request their existing tree/container cleanup when the parent task is cancelled,
+then propagate `CancelledError`. Previously only the timeout path requested
+cleanup. Synthetic tests patch process creation and cleanup; they do not launch
+shells, browsers, Docker, or MXC. Native termination, double-cancellation,
+escaped descendants, daemon failures, and bounded synchronous output remain
+unverified/open. MXC remains experimental; a kill request is not termination
+evidence.
+
+Additional static commands (repository root):
+
+```sh
+./backend/.venv/bin/ruff check --no-cache backend/src/agentos/sandbox/seatbelt.py backend/src/agentos/sandbox/bwrap.py backend/src/agentos/sandbox/docker.py backend/src/agentos/sandbox/mxc.py backend/src/agentos/capabilities/tools/terminal.py backend/tests/test_terminal_cancellation.py
+./backend/.venv/bin/ruff format --check --no-cache backend/src/agentos/sandbox/seatbelt.py backend/src/agentos/sandbox/bwrap.py backend/src/agentos/sandbox/docker.py backend/src/agentos/sandbox/mxc.py backend/src/agentos/capabilities/tools/terminal.py backend/tests/test_terminal_cancellation.py
+```
+
+Both exit 0; formatting reports six files. New runtime tests executed: zero.
+
+### Subsequent Patch: Special IPv6 Classification
+
+Source review found that `is_global` alone can classify some reserved or
+deprecated site-local IPv6 addresses as globally eligible. The classifier now
+checks reserved/link-local/unspecified/multicast ranges explicitly, preserves
+explicit loopback exceptions, and refuses unsupported NAT64, Teredo, and
+6to4 ranges whose translated/tunneled destination was not otherwise checked.
+IPv4-mapped addresses continue to be unwrapped first. New classifier fixtures
+cover reserved/site-local ranges, encoded private destinations, and retained
+loopback behavior. Compatibility: public destinations on these translation/
+tunnel ranges are also refused; this policy does not claim support for them.
+The shared self-hosted-search classifier inherits the same restriction.
+
+Final static gate from `backend/`:
+
+```sh
+./.venv/bin/ruff check --no-cache src/ tests/
+./.venv/bin/ruff format --check --no-cache src/ tests/
+```
+
+Both exit 0; 317 files pass formatting. These are static results, not runtime
+test counts.
+
+### Local Runner Inventory
+
+The trusted local command `/opt/podman/bin/podman machine list --format=json`
+exited 0. An existing `podman-machine-default` libkrun VM is stopped, configured
+with four CPUs, roughly 4 GB memory, no swap, and a 15 GB disk. This may avoid
+installing Docker Desktop. Starting the VM and inspecting its local images
+requires operator approval; neither was performed. No VM, container, download,
+or external network request was started for this follow-up. Image/toolchain
+availability and native macOS verification remain unknown. W7 is still OPEN.
+
 ## Outbound Request Map
 
 | Path | Before | Now |
