@@ -10,9 +10,9 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from tests.process_fakes import FakeProcess
 
 from agentos.sandbox.mxc import MxcBackend, _build_config, _sandbox_env, _sandbox_path
+from tests.process_fakes import FakeProcess
 
 
 def _reset_class_state() -> None:

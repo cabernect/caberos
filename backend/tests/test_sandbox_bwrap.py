@@ -4,9 +4,9 @@ from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-from tests.process_fakes import FakeProcess
 
 from agentos.sandbox.bwrap import BwrapBackend
+from tests.process_fakes import FakeProcess
 
 
 def test_readiness_uses_real_mounts_and_checks_its_workspace(monkeypatch):
@@ -31,7 +31,9 @@ def test_readiness_uses_real_mounts_and_checks_its_workspace(monkeypatch):
     assert len(calls) == 1
 
 
-@pytest.mark.parametrize("failure", ["status", "missing-write", "outside-write", "launch", "marker"])
+@pytest.mark.parametrize(
+    "failure", ["status", "missing-write", "outside-write", "launch", "marker"]
+)
 def test_readiness_fails_closed_without_an_unconfined_retry(monkeypatch, failure):
     monkeypatch.setattr("agentos.sandbox.bwrap.shutil.which", lambda name: "/synthetic/bwrap")
 

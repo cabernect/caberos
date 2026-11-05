@@ -3,10 +3,10 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from tests.process_fakes import FakeProcess
 
 from agentos.sandbox.base import SandboxLaunch
 from agentos.sandbox.docker import DockerBackend
+from tests.process_fakes import FakeProcess
 
 
 @pytest.fixture(autouse=True)

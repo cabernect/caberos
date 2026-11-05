@@ -4,13 +4,13 @@ import asyncio
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-from tests.process_fakes import FakeProcess
 
 from agentos.capabilities.tools.terminal import terminal_run
 from agentos.sandbox.bwrap import BwrapBackend
 from agentos.sandbox.docker import DockerBackend
 from agentos.sandbox.mxc import MxcBackend
 from agentos.sandbox.seatbelt import SeatbeltBackend
+from tests.process_fakes import FakeProcess
 
 
 @pytest.mark.parametrize(

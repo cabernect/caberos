@@ -38,7 +38,7 @@ class BwrapBackend(SandboxBackend):
                     "printf ok > inside && "
                     f"if cat {outside} >/dev/null 2>&1; then exit 7; fi; "
                     f"if (printf changed > {outside}) 2>/dev/null; then exit 8; fi; "
-                    "test \"$(cat inside)\" = ok && printf bwrap-ready"
+                    'test "$(cat inside)" = ok && printf bwrap-ready'
                 )
                 args = self.spawn_argv(str(workspace), command)
                 args[0] = binary

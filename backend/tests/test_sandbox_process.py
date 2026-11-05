@@ -5,11 +5,11 @@ import time
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-from tests.process_fakes import FakeProcess
 
 from agentos.sandbox import base as sandbox_base
 from agentos.sandbox import process
 from agentos.sandbox.process import collect_process, drain_output
+from tests.process_fakes import FakeProcess
 
 
 async def test_collect_preserves_output_exit_status_and_replacement_decoding():
