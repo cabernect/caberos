@@ -27,6 +27,12 @@ import logging
 from urllib.parse import quote
 
 from mcp.client.auth import OAuthClientProvider
+from mcp.client.auth.exceptions import OAuthFlowError
+from mcp.client.auth.utils import (
+    credentials_match_issuer,
+    issuers_match,
+    validate_metadata_issuer,
+)
 
 from ..db import async_session_factory
 from ..models.mcp import McpServer
@@ -291,6 +297,9 @@ class EncryptedTokenStorage:
 class CaberOSOAuthProvider(OAuthClientProvider):
     async def _initialize(self) -> None:
         await super()._initialize()
+        # The parent marks initialization complete before our cached metadata
+        # is loaded. A validation failure must not let the next call skip it.
+        self._initialized = False
         self._prepare_refresh_window()
         # Reload persisted OAuth metadata so token refresh can use the correct
         # token endpoint on reconnect, even when the authorization server is on
@@ -305,6 +314,35 @@ class CaberOSOAuthProvider(OAuthClientProvider):
             self.context.protected_resource_metadata = (
                 await self.context.storage.get_protected_resource_metadata()
             )
+        try:
+            if self.context.protected_resource_metadata is not None:
+                prm = self.context.protected_resource_metadata
+                if not prm.resource:
+                    raise OAuthFlowError("Stored OAuth resource binding is missing.")
+                await self._validate_resource_match(prm)
+                self.context.auth_server_url = self._select_authorization_server(
+                    [str(url) for url in prm.authorization_servers]
+                )
+            expected = self._expected_issuer()
+            if self.context.oauth_metadata is not None:
+                if self.context.auth_server_url is None and issuers_match(
+                    str(self.context.oauth_metadata.issuer), expected
+                ):
+                    expected = str(self.context.oauth_metadata.issuer)
+                validate_metadata_issuer(self.context.oauth_metadata, expected)
+            if self.context.client_info is not None and not credentials_match_issuer(
+                self.context.client_info, expected, self.context.client_metadata_url
+            ):
+                raise OAuthFlowError("Stored OAuth client does not match the issuer.")
+        except (OAuthFlowError, IndexError):
+            self.context.clear_tokens()
+            self.context.oauth_metadata = None
+            self.context.protected_resource_metadata = None
+            self.context.auth_server_url = None
+            raise OAuthFlowError(
+                "Stored OAuth metadata failed binding validation; reconnect required."
+            ) from None
+        self._initialized = True
 
     def _prepare_refresh_window(self) -> None:
         if self.context.current_tokens and self.context.current_tokens.expires_in is not None:
@@ -388,7 +426,7 @@ async def start_oauth_flow(server: McpServer) -> str:
 
     async def redirect_handler(url: str):
         """Called by the OAuth provider with the authorize URL."""
-        log.info("OAuth redirect_handler called with URL: %s", url[:100])
+        log.info("OAuth authorization URL received for server %s", server.id)
         flow.set_authorize_url(url)
 
     async def callback_handler():
@@ -418,7 +456,7 @@ async def start_oauth_flow(server: McpServer) -> str:
 
     # Drive the OAuth flow in the background by making a request to the
     # actual server URL. The 401 response triggers the full OAuth flow.
-    log.info("Starting OAuth flow for server '%s' (url=%s)", server.name, server.url)
+    log.info("Starting OAuth flow for server %s", server.id)
     asyncio.create_task(_run_oauth_flow(server.id, server.url, auth, flow))
 
     # Wait for the authorize URL to be available (up to 30 seconds)
