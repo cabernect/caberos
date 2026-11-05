@@ -15,6 +15,8 @@ import pytest
 
 from agentos.sandbox.seatbelt import SeatbeltBackend, _build_profile
 
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="Seatbelt profiles use POSIX paths")
+
 
 def test_profile_is_default_deny_with_scoped_file_content_access(tmp_path):
     profile = _build_profile(str(tmp_path), False)
