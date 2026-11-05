@@ -216,6 +216,13 @@ The `/api/health` endpoint also reports provider and agent counts, and the gatew
   shutdown and restart reconciliation remove only the recorded, ownership-
   labeled resource. Failed confirmation reports `orphaned`, not `closed`.
   Native daemon and migration verification remain pending.
+- **Requested resource limits:** 256 MiB memory with no additional swap, one
+  CPU, 64 PIDs, 256 file descriptors, 64 MiB per file, and a private 32 MiB
+  noexec temp mount. The image is read-only and capabilities are dropped.
+  The host-mapped user is non-root; root controllers select UID/GID 65534 and
+  may encounter workspace permission failures. CaberOS does not chmod the
+  workspace or weaken isolation to recover. Total workspace disk quotas and
+  live daemon enforcement remain unverified/open.
 
 ## What happens when no sandbox is available
 

@@ -195,6 +195,27 @@ termination. Legacy local `interrupted` records do not prove descendant cleanup.
 This lifecycle slice has static checks only so far; isolated runtime, migration,
 and daemon-failure tests are still required.
 
+Docker command plans also request a non-root host-mapped UID/GID (65534 when the
+controller runs as root), dropped capabilities, no-new-privileges, a read-only
+image, 64 PIDs, one CPU, 256 MiB memory/no extra swap, 256 file descriptors,
+64 MiB per-file limits, and a 32 MiB private noexec `/tmp`. These are requested
+limits, not yet verified daemon guarantees; aggregate workspace disk quota,
+background lifetime bounds, and equivalent native backend limits remain open.
+
+Generic `policy_fetch` applies one total deadline across DNS/redirects/streaming,
+clears cookies between hops, and accepts only public content request headers.
+It requests identity encoding and rejects encoded responses before decoding,
+rather than claiming the decoded body cap prevents decompression bombs.
+Wildcard/oversized/empty private-host grants now fail validation instead of
+being silently rewritten or dropped. These grants are still host-wide.
+
+Cached MCP OAuth metadata is rechecked against the configured resource, selected
+issuer, and SDK client-credential binding before refresh. Initialization remains
+incomplete after a failed check, and errors do not echo metadata or credentials.
+This does not yet enforce destination policy on SDK discovery/token transports
+or isolate local MCP processes. OAuth authorization URLs are no longer logged
+by CaberOS's redirect callback.
+
 | Platform | Backend | Notes |
 |---|---|---|
 | macOS | `seatbelt` (sandbox-exec) | Tier 1 |

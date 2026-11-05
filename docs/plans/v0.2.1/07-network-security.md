@@ -41,6 +41,14 @@ specific operation; it must not disable filesystem, process, or network limits.
   scoped runtime/workspace grants, workspace-local temp variables, and a
   fail-closed synthetic readiness probe. Policy-construction and opt-in native
   tests are written; isolated native verification is still pending.
+- Background terminals now persist planned Docker identities before activation,
+  clean up through the admitted backend, and retain an orphaned state on
+  unconfirmed termination. Docker resource/privilege flags and cached OAuth
+  binding checks are implemented, but runtime acceptance remains open.
+- Generic fetch now has an operation-wide deadline, stateless cookies,
+  public-content-only headers, and identity-only response handling. Wildcard
+  grants are rejected rather than rewritten. Service-scoped grants and browser
+  connection-level enforcement are still required.
 
 ## Threat Model And Limits
 

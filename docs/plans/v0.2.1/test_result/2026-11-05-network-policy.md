@@ -184,6 +184,65 @@ checks pass on the changed Python files. Runtime/DB/daemon tests remain NOT RUN;
 the isolated-runner blocker has not been bypassed. No real containers were
 created, stopped, or removed by this work.
 
+### Subsequent Patches: Limits, Stateless Fetch, Cached OAuth
+
+`d8d2a43` adds Docker resource/privilege flags to the shared foreground and
+background command builder: non-root UID/GID, dropped capabilities,
+no-new-privileges, read-only image, 64 PIDs, one CPU, 256 MiB memory/no extra
+swap, 256 file descriptors, 64 MiB per-file limits, and a 32 MiB private noexec
+temp mount. Aggregate workspace disk usage and background wall-clock bounds
+are still open. A flag assertion is not proof that the daemon enforces it.
+
+`77a23dd` adds a total fetch deadline across DNS/redirects/streaming, clears
+cookies before each hop (pinned IPs must not become cross-origin cookie keys),
+and refuses credential/custom headers in generic fetching. Identity-only
+responses prevent decompression from allocating an unbounded decoded chunk
+before the body cap. Compatibility: servers ignoring `Accept-Encoding: identity`
+now fail explicitly. Wildcard/empty/oversized grants are rejected rather than
+rewritten or truncated; invalid entries do not echo embedded credentials.
+Host grants still span schemes/ports and require the planned service-scoped
+replacement.
+
+The installed MCP SDK is 2.3.0. Source review shows fresh discovery validates
+resource/issuer relationships and stamped client credentials, and its transport
+redirect helpers constrain origins. CaberOS's cached metadata restoration bypassed
+those fresh-discovery checks before refresh. The follow-up restores resource,
+issuer, and client-binding validation, leaves initialization incomplete on
+failure/retry, and clears in-memory tokens without deleting stored credentials.
+Bound cross-origin authorization servers remain supported through their PRM
+relationship. Legacy unstamped clients retain the SDK's existing behavior.
+Authorization URLs are no longer logged by CaberOS's redirect handler.
+
+Written synthetic tests require invalid cached bindings to fail before the
+first HTTP request, including a repeated attempt on the same provider. They
+also cover bound cross-origin issuers and the SDK's legacy root-slash rule.
+They are NOT RUN. This does not constrain metadata-advertised endpoint origins,
+private-network destinations, or MCP subprocess authority; S04/S05 remain open.
+
+Static follow-up evidence, observed at `2026-11-05T06:57:48Z`:
+macOS 27.0, Python 3.12.11, Ruff 0.16.0. From the repository root:
+
+```sh
+./backend/.venv/bin/ruff check --no-cache backend/src/agentos/netpolicy.py backend/src/agentos/api/settings.py backend/src/agentos/sandbox/docker.py backend/tests/test_netpolicy.py backend/tests/test_network_settings.py backend/tests/test_sandbox_docker.py
+./backend/.venv/bin/ruff format --check --no-cache backend/src/agentos/netpolicy.py backend/src/agentos/api/settings.py backend/src/agentos/sandbox/docker.py backend/tests/test_netpolicy.py backend/tests/test_network_settings.py backend/tests/test_sandbox_docker.py
+./backend/.venv/bin/ruff check --no-cache backend/src/agentos/mcp/oauth.py backend/tests/test_mcp_oauth_security.py
+./backend/.venv/bin/ruff format --check --no-cache backend/src/agentos/mcp/oauth.py backend/tests/test_mcp_oauth_security.py
+./backend/.venv/bin/python -I -S -c 'import ast, pathlib, sys; paths = sys.argv[1:]; [ast.parse(pathlib.Path(p).read_text(), filename=p) for p in paths]; print(f"Parsed {len(paths)} files without importing target code.")' backend/src/agentos/mcp/oauth.py backend/tests/test_mcp_oauth_security.py
+git diff --check
+```
+
+All commands exit 0. Formatting reports six and two files respectively; AST
+parsing reports two files. Runtime tests executed in this follow-up: zero.
+These results do not supersede the earlier isolated-runner blocker.
+
+Docker Desktop installation was proposed for isolated Linux verification;
+operator approval is still pending. No download, Homebrew change, elevated
+setup, native security-test execution, or live probe was performed. Even with
+Docker, native Seatbelt verification still requires an isolated macOS runner.
+W7 remains OPEN; browser-wide enforcement, service-scoped audited grants,
+MCP process/transport isolation, remaining resource/cleanup guarantees, and
+integrated platform evidence are not finished.
+
 ## Outbound Request Map
 
 | Path | Before | Now |
