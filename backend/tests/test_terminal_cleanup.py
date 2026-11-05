@@ -81,9 +81,23 @@ async def test_run_cancel_and_shutdown_use_backend_cleanup(managed):
 
 async def test_concurrent_close_does_not_clean_twice(managed):
     registry, terminal = managed
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_cleanup(*args):
+        entered.set()
+        await release.wait()
+        return True
+
+    terminal.backend.cleanup_launch.side_effect = slow_cleanup
+    first = asyncio.create_task(registry.close(terminal.id, **OWNER))
+    await asyncio.wait_for(entered.wait(), timeout=2)
+    second = asyncio.create_task(registry.close(terminal.id, **OWNER))
+    await asyncio.sleep(0)
+    release.set()
     results = await asyncio.gather(
-        registry.close(terminal.id, **OWNER),
-        registry.close(terminal.id, **OWNER),
+        first,
+        second,
     )
     assert [result["status"] for result in results] == ["closed", "closed"]
     terminal.backend.cleanup_launch.assert_awaited_once()
