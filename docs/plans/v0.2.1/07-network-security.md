@@ -150,6 +150,15 @@ authority. An allowlisted public hostname is not proof its resolved IP is public
 
 ## Deferred — full boundary work
 
+Design note (operator direction, recorded for the follow-up workstream):
+the private-destination UX should become a forced approval, not a static
+allowlist — a blocked local fetch/navigation surfaces "allow once /
+always allow this host" at the syscall approval gate, where "always"
+writes the allowlist entry. An implementation spike exists in this
+session's history (contextvar grants + mediator retry) and was dropped
+as out-of-baseline-scope; the mechanism is sound and cheap to rebuild.
+
+
 Everything below this heading is OUT of baseline scope. It documents the
 complete boundary design (browser-wide traffic enforcement, per-server MCP
 sandbox grants, scoped local-service exceptions, control-plane and remote
