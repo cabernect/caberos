@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 from .base import SandboxBackend, ShellResult, kill_process_group
+from .process import collect_process
 
 # Apple system tools and their runtimes, not arbitrary installed applications,
 # Homebrew prefixes, user homes, or the CaberOS data directory.
@@ -161,24 +162,6 @@ class SeatbeltBackend(SandboxBackend):
             env=self.spawn_env(ws_resolved),
             start_new_session=True,
         )
-        try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-            elapsed = int((time.monotonic() - start) * 1000)
-            return ShellResult(
-                stdout=stdout_bytes.decode("utf-8", errors="replace"),
-                stderr=stderr_bytes.decode("utf-8", errors="replace"),
-                exit_code=proc.returncode if proc.returncode is not None else -1,
-                duration_ms=elapsed,
-            )
-        except asyncio.CancelledError:
-            await kill_process_group(proc)
-            raise
-        except TimeoutError:
-            await kill_process_group(proc)
-            elapsed = int((time.monotonic() - start) * 1000)
-            return ShellResult(
-                stdout="",
-                stderr=f"Command timed out after {timeout}s",
-                exit_code=-1,
-                duration_ms=elapsed,
-            )
+        return await collect_process(
+            proc, timeout=timeout, started_at=start, cleanup=kill_process_group
+        )

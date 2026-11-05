@@ -34,10 +34,11 @@ from ..config import settings
 from ..models.terminal import TerminalSession
 from ..sandbox import get_backend
 from ..sandbox.base import SandboxBackend, SandboxLaunch, kill_process_group
+from ..sandbox.process import OUTPUT_CAP_BYTES, drain_output
 
 # Output spool cap per stream — beyond this we keep draining (so the child
 # never blocks on a full pipe) but stop persisting, and flag truncation.
-SPOOL_CAP_BYTES = 4 * 1024 * 1024
+SPOOL_CAP_BYTES = OUTPUT_CAP_BYTES
 # How often the long-poll checks for new output.
 POLL_INTERVAL_SECONDS = 0.1
 
@@ -354,30 +355,26 @@ class TerminalRegistry:
     ) -> None:
         """Drain the pipe to the spool file; keep draining past the cap so
         the child never blocks, but stop persisting."""
-        if stream is None:
-            return
-        written = 0
+
+        def progress(count: int, truncated: bool) -> None:
+            if which == "stdout":
+                t.stdout_bytes += count
+            else:
+                t.stderr_bytes += count
+            t.truncated = t.truncated or truncated
+
         try:
             with open(path, "ab") as f:
-                while True:
-                    chunk = await stream.read(65536)
-                    if not chunk:
-                        return
-                    if which == "stdout":
-                        t.stdout_bytes += len(chunk)
-                    else:
-                        t.stderr_bytes += len(chunk)
-                    if written < SPOOL_CAP_BYTES:
-                        keep = chunk[: SPOOL_CAP_BYTES - written]
-                        f.write(keep)
-                        f.flush()
-                        written += len(keep)
-                        if written >= SPOOL_CAP_BYTES:
-                            t.truncated = True
-                    else:
-                        t.truncated = True
+
+                def write(chunk: bytes) -> None:
+                    if f.write(chunk) != len(chunk):
+                        raise OSError("Terminal output could not be fully retained.")
+                    f.flush()
+
+                await drain_output(stream, write, limit=SPOOL_CAP_BYTES, progress=progress)
         except (OSError, ValueError):
-            pass
+            t.truncated = True
+            await drain_output(stream, None, limit=0, progress=progress)
 
     async def _monitor(self, t: _ManagedTerminal) -> None:
         try:
@@ -397,11 +394,15 @@ class TerminalRegistry:
                 await self._stop(t)
 
     async def _finalize(self, t: _ManagedTerminal) -> None:
-        """Let pumps flush remaining output to the spool files."""
-        for task in t.pump_tasks:
+        """Allow buffered output to drain, but do not wait forever on inherited pipes."""
+        if not t.pump_tasks:
+            return
+        _, pending = await asyncio.wait(t.pump_tasks, timeout=1.0)
+        if pending:
+            t.truncated = True
+        for task in pending:
             task.cancel()
-        if t.pump_tasks:
-            await asyncio.gather(*t.pump_tasks, return_exceptions=True)
+        await asyncio.gather(*t.pump_tasks, return_exceptions=True)
 
     @staticmethod
     async def _persist(t: _ManagedTerminal) -> None:

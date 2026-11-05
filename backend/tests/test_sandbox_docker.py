@@ -3,6 +3,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from tests.process_fakes import FakeProcess
 
 from agentos.sandbox.base import SandboxLaunch
 from agentos.sandbox.docker import DockerBackend
@@ -143,10 +144,7 @@ async def test_run_command_builds_expected_argv(tmp_path):
 
     async def fake_create_subprocess_exec(*args, **kwargs):
         captured["args"] = args
-        proc = AsyncMock()
-        proc.communicate = AsyncMock(return_value=(b"hello\n", b""))
-        proc.returncode = 0
-        return proc
+        return FakeProcess(b"hello\n")
 
     with patch("asyncio.create_subprocess_exec", side_effect=fake_create_subprocess_exec):
         backend = DockerBackend()
@@ -172,10 +170,7 @@ async def test_run_command_allows_network_when_requested(tmp_path):
 
     async def fake_create_subprocess_exec(*args, **kwargs):
         captured["args"] = args
-        proc = AsyncMock()
-        proc.communicate = AsyncMock(return_value=(b"", b""))
-        proc.returncode = 0
-        return proc
+        return FakeProcess()
 
     with patch("asyncio.create_subprocess_exec", side_effect=fake_create_subprocess_exec):
         backend = DockerBackend()
@@ -193,22 +188,9 @@ async def test_timeout_kills_the_container(tmp_path):
 
     async def fake_create_subprocess_exec(*args, **kwargs):
         docker_calls.append(args)
-        proc = AsyncMock()
         if args[0:2] == ("docker", "kill"):
-            proc.wait = AsyncMock(return_value=0)
-        else:
-            # The `docker run` call — never completes before the timeout.
-            async def hang():
-                import asyncio as _asyncio
-
-                await _asyncio.sleep(10)
-                return (b"", b"")
-
-            proc.communicate = hang
-            proc.returncode = None
-            proc.kill = MagicMock()
-            proc.wait = AsyncMock(return_value=0)
-        return proc
+            return FakeProcess()
+        return FakeProcess(hang=True)
 
     with patch("asyncio.create_subprocess_exec", side_effect=fake_create_subprocess_exec):
         backend = DockerBackend()

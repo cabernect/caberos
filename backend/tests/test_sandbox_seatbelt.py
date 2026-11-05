@@ -9,9 +9,10 @@ import shlex
 import shutil
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pytest
+from tests.process_fakes import FakeProcess
 
 from agentos.sandbox.seatbelt import SeatbeltBackend, _build_profile
 
@@ -138,9 +139,7 @@ def test_missing_seatbelt_does_not_launch_a_probe():
 
 async def test_sync_and_background_use_the_same_profile_and_environment(tmp_path):
     backend = SeatbeltBackend()
-    process = AsyncMock()
-    process.communicate.return_value = (b"ok", b"")
-    process.returncode = 0
+    process = FakeProcess(b"ok")
     with patch(
         "agentos.sandbox.seatbelt.asyncio.create_subprocess_exec", return_value=process
     ) as spawn:

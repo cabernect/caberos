@@ -30,6 +30,7 @@ class ShellResult:
     stderr: str
     exit_code: int
     duration_ms: int
+    truncated: bool = False
 
 
 @dataclass
@@ -76,7 +77,11 @@ async def kill_process_group(proc: asyncio.subprocess.Process, grace: float = 3.
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
             )
-            await killer.wait()
+            try:
+                await asyncio.wait_for(killer.wait(), timeout=grace)
+            except TimeoutError:
+                killer.kill()
+                await asyncio.wait_for(killer.wait(), timeout=grace)
         with contextlib.suppress(ProcessLookupError):
             proc.kill()
         with contextlib.suppress(Exception):
@@ -86,8 +91,9 @@ async def kill_process_group(proc: asyncio.subprocess.Process, grace: float = 3.
         pgid = os.getpgid(proc.pid)
     except (ProcessLookupError, PermissionError):
         pgid = None
-    if pgid is not None and pgid <= 1:
-        # Never signal init's group (everything) - fall back to the single process.
+    if pgid is not None and (pgid <= 1 or pgid != proc.pid):
+        # Only a child launched in its own session owns its group. Never
+        # signal the gateway's or another inherited process group.
         pgid = None
 
     def _kill(sig: int) -> None:
@@ -101,13 +107,13 @@ async def kill_process_group(proc: asyncio.subprocess.Process, grace: float = 3.
 
     _kill(signal.SIGTERM)
     try:
-        await asyncio.wait_for(asyncio.shield(proc.wait()), timeout=grace)
+        await asyncio.wait_for(proc.wait(), timeout=grace)
         return
     except TimeoutError:
         pass
     _kill(signal.SIGKILL)
     with contextlib.suppress(Exception):
-        await proc.wait()
+        await asyncio.wait_for(proc.wait(), timeout=grace)
 
 
 class SandboxBackend(ABC):

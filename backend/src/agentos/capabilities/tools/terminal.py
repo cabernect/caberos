@@ -14,6 +14,7 @@ from typing import Any
 
 from ...sandbox import get_backend
 from ...sandbox.base import kill_process_group
+from ...sandbox.process import collect_process
 
 
 def shell_dialect_note() -> str:
@@ -101,39 +102,24 @@ async def _run_sync(
             # cmd.exe would allocate a visible window on every call.
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-        try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-            elapsed = int((time.monotonic() - start) * 1000)
-            return {
-                "stdout": stdout_bytes.decode("utf-8", errors="replace"),
-                "stderr": stderr_bytes.decode("utf-8", errors="replace"),
-                "exit_code": proc.returncode if proc.returncode is not None else -1,
-                "duration_ms": elapsed,
-            }
-        except asyncio.CancelledError:
-            await kill_process_group(proc)
-            raise
-        except TimeoutError:
-            await kill_process_group(proc)
-            elapsed = int((time.monotonic() - start) * 1000)
-            return {
-                "stdout": "",
-                "stderr": f"Command timed out after {timeout}s",
-                "exit_code": -1,
-                "duration_ms": elapsed,
-            }
-
-    # Strict mode — use sandbox backend
-    backend = get_backend()
-    result = await backend.run_command(
-        workspace_path=workspace_path,
-        command=command,
-        timeout=timeout,
-        allow_network=False,
-    )
-    return {
+        result = await collect_process(
+            proc, timeout=timeout, started_at=start, cleanup=kill_process_group
+        )
+    else:
+        # Strict mode uses only the configured OS-native execution path.
+        backend = get_backend()
+        result = await backend.run_command(
+            workspace_path=workspace_path,
+            command=command,
+            timeout=timeout,
+            allow_network=False,
+        )
+    output = {
         "stdout": result.stdout,
         "stderr": result.stderr,
         "exit_code": result.exit_code,
         "duration_ms": result.duration_ms,
     }
+    if result.truncated:
+        output["truncated"] = True
+    return output

@@ -38,9 +38,11 @@ import shutil
 import subprocess
 import tempfile
 import time
+from functools import partial
 from pathlib import Path
 
 from .base import SandboxBackend, ShellResult, kill_process_group
+from .process import collect_process
 
 _PROBE_TIMEOUT = 10
 
@@ -346,34 +348,12 @@ class MxcBackend(SandboxBackend):
                 stderr=asyncio.subprocess.PIPE,
                 creationflags=_NO_WINDOW,
             )
-            try:
-                stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                    proc.communicate(), timeout=timeout
-                )
-                elapsed = int((time.monotonic() - start) * 1000)
-                return ShellResult(
-                    stdout=stdout_bytes.decode("utf-8", errors="replace"),
-                    stderr=stderr_bytes.decode("utf-8", errors="replace"),
-                    exit_code=proc.returncode if proc.returncode is not None else -1,
-                    duration_ms=elapsed,
-                )
-            except asyncio.CancelledError:
-                await kill_process_group(proc, grace=5)
-                raise
-            except TimeoutError:
-                # Best-effort: unlike DockerBackend there is no separate
-                # "container kill" verb exposed by this CLI - killing the
-                # wxc-exec.exe tree is the only lever available, and
-                # whether that reliably tears down whatever it spawned
-                # inside the ProcessContainer has not been verified live.
-                await kill_process_group(proc, grace=5)
-                elapsed = int((time.monotonic() - start) * 1000)
-                return ShellResult(
-                    stdout="",
-                    stderr=f"Command timed out after {timeout}s",
-                    exit_code=-1,
-                    duration_ms=elapsed,
-                )
+            return await collect_process(
+                proc,
+                timeout=timeout,
+                started_at=start,
+                cleanup=partial(kill_process_group, grace=5),
+            )
         finally:
             Path(argv[1]).unlink(missing_ok=True)
 

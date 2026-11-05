@@ -14,9 +14,11 @@ import shutil
 import subprocess
 import time
 import uuid
+from functools import partial
 from pathlib import Path
 
 from .base import SandboxBackend, SandboxLaunch, ShellResult, kill_process_group
+from .process import collect_process
 
 log = logging.getLogger(__name__)
 
@@ -231,27 +233,12 @@ class DockerBackend(SandboxBackend):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-            elapsed = int((time.monotonic() - start) * 1000)
-            return ShellResult(
-                stdout=stdout_bytes.decode("utf-8", errors="replace"),
-                stderr=stderr_bytes.decode("utf-8", errors="replace"),
-                exit_code=proc.returncode if proc.returncode is not None else -1,
-                duration_ms=elapsed,
-            )
-        except asyncio.CancelledError:
-            await self._kill_container(container_name, proc)
-            raise
-        except TimeoutError:
-            await self._kill_container(container_name, proc)
-            elapsed = int((time.monotonic() - start) * 1000)
-            return ShellResult(
-                stdout="",
-                stderr=f"Command timed out after {timeout}s",
-                exit_code=-1,
-                duration_ms=elapsed,
-            )
+        return await collect_process(
+            proc,
+            timeout=timeout,
+            started_at=start,
+            cleanup=partial(self._kill_container, container_name),
+        )
 
     async def _kill_container(self, container_name: str, proc: asyncio.subprocess.Process) -> None:
         """Stop the container itself, not just the local `docker run` client.

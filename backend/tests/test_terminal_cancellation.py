@@ -1,10 +1,10 @@
 """Cancellation asks each synchronous backend to clean up, without host execution."""
 
 import asyncio
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from tests.process_fakes import FakeProcess
 
 from agentos.capabilities.tools.terminal import terminal_run
 from agentos.sandbox.bwrap import BwrapBackend
@@ -22,7 +22,7 @@ async def test_cancelled_native_command_requests_tree_cleanup(
 ):
     policy = tmp_path / "synthetic-policy.json"
     policy.write_text("{}")
-    proc = SimpleNamespace(communicate=AsyncMock(side_effect=asyncio.CancelledError))
+    proc = FakeProcess(error=asyncio.CancelledError)
     cleanup = AsyncMock()
     backend = backend_type()
     monkeypatch.setattr(backend, "spawn_argv", Mock(return_value=["synthetic-worker", str(policy)]))
@@ -37,7 +37,7 @@ async def test_cancelled_native_command_requests_tree_cleanup(
 
 
 async def test_cancelled_docker_command_requests_actual_container_cleanup(tmp_path, monkeypatch):
-    proc = SimpleNamespace(communicate=AsyncMock(side_effect=asyncio.CancelledError))
+    proc = FakeProcess(error=asyncio.CancelledError)
     backend = DockerBackend()
     cleanup = AsyncMock()
     spawn = AsyncMock(return_value=proc)
@@ -51,7 +51,7 @@ async def test_cancelled_docker_command_requests_actual_container_cleanup(tmp_pa
 
 
 async def test_cancelled_open_command_requests_tree_cleanup(tmp_path, monkeypatch):
-    proc = SimpleNamespace(communicate=AsyncMock(side_effect=asyncio.CancelledError))
+    proc = FakeProcess(error=asyncio.CancelledError)
     cleanup = AsyncMock()
     monkeypatch.setattr("asyncio.create_subprocess_exec", AsyncMock(return_value=proc))
     monkeypatch.setattr("agentos.capabilities.tools.terminal.kill_process_group", cleanup)

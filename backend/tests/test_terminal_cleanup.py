@@ -121,6 +121,20 @@ async def test_cancelled_cleanup_remains_retryable(managed):
     registry._persist.assert_awaited_once_with(terminal)
 
 
+async def test_finalize_allows_pending_output_to_flush_before_cancelling(managed):
+    registry, terminal = managed
+    flushed = []
+
+    async def finish_output():
+        await asyncio.sleep(0)
+        flushed.append("tail")
+
+    terminal.pump_tasks = [asyncio.create_task(finish_output())]
+    await registry._finalize(terminal)
+    assert flushed == ["tail"]
+    assert terminal.truncated is False
+
+
 async def test_durable_resource_identity_precedes_activation(tmp_path, monkeypatch):
     registry = TerminalRegistry()
     launch = SandboxLaunch(["synthetic-worker"], {}, "owned-resource")
