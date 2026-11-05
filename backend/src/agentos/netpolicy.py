@@ -16,6 +16,7 @@ checked at connection time rather than trusted from a preflight lookup.
 
 import asyncio
 import ipaddress
+import math
 import socket
 from urllib.parse import urlsplit
 
@@ -34,6 +35,7 @@ _MAX_REDIRECTS = 5
 # Bodies are read bounded — a hostile or misbehaving endpoint cannot stream
 # unbounded content into the run context or memory.
 MAX_BODY_BYTES = 5 * 1024 * 1024
+_FETCH_HEADER_NAMES = frozenset({"user-agent", "accept", "accept-language", "range"})
 
 
 class DestinationError(ValueError):
@@ -63,13 +65,11 @@ def host_in_allowlist(host: str, allowlist: list[str] | tuple[str, ...] | None) 
 
     Subdomains are not implied: allowing ``wiki.internal`` does not open
     ``db.wiki.internal``. Entries are compared case-insensitively with
-    trailing dots and ``*.`` prefixes normalized away.
+    trailing dots normalized away. Wildcard entries are never interpreted.
     """
     normalized = host.lower().rstrip(".")
     for entry in allowlist or ():
         candidate = str(entry).strip().lower().rstrip(".")
-        if candidate.startswith("*."):
-            candidate = candidate[2:]
         if normalized == candidate:
             return True
     return False
@@ -78,7 +78,11 @@ def host_in_allowlist(host: str, allowlist: list[str] | tuple[str, ...] | None) 
 def validate_fetch_url(url: str) -> httpx.URL:
     """Parse and restrict a fetch URL to plain HTTP(S) with no credentials."""
     value = (url or "").strip()
-    if not value or len(value) > 4096 or any(c.isspace() for c in value):
+    if (
+        not value
+        or len(value) > 4096
+        or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in value)
+    ):
         raise DestinationError("Enter a valid http(s) URL.")
     try:
         parts = urlsplit(value)
@@ -95,9 +99,12 @@ def validate_fetch_url(url: str) -> httpx.URL:
     ):
         raise DestinationError("Use an http(s) URL without credentials.")
     host = parts.hostname
-    if not host or len(host) > 253:
+    if not host or len(host) > 253 or "%" in host:
         raise DestinationError("Enter a valid http(s) URL.")
-    return httpx.URL(value)
+    try:
+        return httpx.URL(value)
+    except httpx.InvalidURL:
+        raise DestinationError("Enter a valid http(s) URL.") from None
 
 
 async def _resolve_checked(
@@ -143,20 +150,27 @@ async def _pinned_get(
     *,
     allow_private: bool,
     allowlist: list[str] | None,
-    headers: dict[str, str],
+    headers: httpx.Headers | dict[str, str],
 ) -> tuple[httpx.Response, bytes]:
     """One request hop: resolve+check, then dial the validated IP directly."""
     host = url.host
     port = url.port or (443 if url.scheme == "https" else 80)
     pinned_ip = await _resolve_checked(host, port, allow_private, allowlist)
     dial = url.copy_with(host=pinned_ip)
-    request_headers = {**headers, "Host": url.netloc.decode("ascii")}
+    request_headers = httpx.Headers(headers)
+    request_headers["Host"] = url.netloc.decode("ascii")
+    request_headers["Accept-Encoding"] = "identity"
+    # The transport URL uses an IP: a cookie jar keyed by that IP could
+    # otherwise carry one origin's cookies to another origin on the same IP.
+    client.cookies.clear()
     async with client.stream(
         "GET",
         dial,
         headers=request_headers,
         extensions={"sni_hostname": host},
     ) as response:
+        if response.headers.get("content-encoding", "").strip().lower() not in {"", "identity"}:
+            raise DestinationError("Encoded fetch responses are not supported.")
         body = bytearray()
         async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
             body.extend(chunk)
@@ -180,23 +194,41 @@ async def policy_fetch(
     and re-resolved before connecting. Returns ``(final_url, response, body)``;
     callers decide how to treat non-2xx statuses.
     """
-    request_headers = dict(headers or {})
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise DestinationError("Fetch requires a positive finite deadline.")
+    request_headers = httpx.Headers(headers)
+    if any(name not in _FETCH_HEADER_NAMES for name in request_headers):
+        raise DestinationError(
+            "Generic fetching accepts only public content headers, not credentials."
+        )
     target = validate_fetch_url(url)
-    async with httpx.AsyncClient(
-        timeout=timeout, follow_redirects=False, verify=verify, trust_env=False
-    ) as client:
-        for _ in range(_MAX_REDIRECTS + 1):
-            response, body = await _pinned_get(
-                client,
-                target,
-                allow_private=allow_private,
-                allowlist=allowlist,
-                headers=request_headers,
-            )
-            if response.is_redirect and response.headers.get("location"):
-                target = validate_fetch_url(str(target.join(response.headers["location"])))
-                continue
-            return target, response, body
+    try:
+        # httpx's inactivity timeouts alone do not bound DNS, slow streams,
+        # or a redirect chain. This deadline covers the whole operation.
+        async with (
+            asyncio.timeout(timeout),
+            httpx.AsyncClient(
+                timeout=timeout, follow_redirects=False, verify=verify, trust_env=False
+            ) as client,
+        ):
+            for _ in range(_MAX_REDIRECTS + 1):
+                response, body = await _pinned_get(
+                    client,
+                    target,
+                    allow_private=allow_private,
+                    allowlist=allowlist,
+                    headers=request_headers,
+                )
+                if response.is_redirect and response.headers.get("location"):
+                    try:
+                        joined = str(target.join(response.headers["location"]))
+                    except (httpx.InvalidURL, ValueError):
+                        raise DestinationError("Invalid redirect destination.") from None
+                    target = validate_fetch_url(joined)
+                    continue
+                return target, response, body
+    except TimeoutError:
+        raise httpx.TimeoutException("Fetch exceeded its total deadline.") from None
     raise DestinationError("Too many redirects.")
 
 

@@ -70,13 +70,16 @@ def _validate_allowlist(entries: list[str]) -> list[str]:
     import ipaddress
     import re
 
+    if len(entries) > 50:
+        raise HTTPException(status_code=422, detail="At most 50 exact private hosts are supported.")
     cleaned: list[str] = []
     for raw in entries:
         entry = raw.strip().lower().rstrip(".")
-        if entry.startswith("*."):
-            entry = entry[2:]
-        if not entry or len(entry) > 253 or len(cleaned) >= 50:
-            continue
+        if not entry or len(entry) > 253 or "*" in entry:
+            raise HTTPException(
+                status_code=422,
+                detail="Enter an exact hostname or IP; wildcards are not supported.",
+            )
         try:
             ipaddress.ip_address(entry)
             cleaned.append(entry)
@@ -92,8 +95,7 @@ def _validate_allowlist(entries: list[str]) -> list[str]:
             continue
         raise HTTPException(
             status_code=422,
-            detail=f"Invalid allowlist entry: {raw!r} — "
-            "enter a bare hostname or IP, no scheme or path",
+            detail="Enter a bare hostname or IP, without credentials, scheme, port, or path.",
         )
     return cleaned
 

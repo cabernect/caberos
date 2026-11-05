@@ -4,6 +4,8 @@ No real private network is contacted: DNS answers are monkeypatched and
 HTTP traffic runs through httpx.MockTransport.
 """
 
+import asyncio
+
 import httpx
 import pytest
 
@@ -74,11 +76,19 @@ def test_allowlist_exact_host_only():
     allow = ["Wiki.Internal.", "*.intranet", "192.168.0.5"]
     assert netpolicy.host_in_allowlist("wiki.internal", allow)
     assert netpolicy.host_in_allowlist("WIKI.INTERNAL", allow)
-    assert netpolicy.host_in_allowlist("intranet", allow)  # *. normalized away
+    assert not netpolicy.host_in_allowlist("intranet", allow)
     assert netpolicy.host_in_allowlist("192.168.0.5", allow)
     assert not netpolicy.host_in_allowlist("sub.wiki.internal", allow)
     assert not netpolicy.host_in_allowlist("other.internal", allow)
     assert not netpolicy.host_in_allowlist("wiki.internal", [])
+
+
+@pytest.mark.parametrize(
+    "url", ["https://example.com/\x00", "https://example.com/\x7f", "http://[fe80::1%25lo0]/"]
+)
+def test_url_control_characters_and_scope_ids_are_rejected(url):
+    with pytest.raises(DestinationError):
+        netpolicy.validate_fetch_url(url)
 
 
 # -- URL validation ---------------------------------------------------------
@@ -182,6 +192,76 @@ async def test_fetch_simple(monkeypatch):
     # Dialed the validated IP directly, original authority preserved.
     assert requests[0].url.host == "93.184.216.34"
     assert requests[0].headers["host"] == "example.com"
+
+
+@pytest.mark.parametrize(
+    "header", ["Authorization", "Cookie", "Proxy-Authorization", "X-Api-Key", "Host"]
+)
+async def test_generic_fetch_rejects_credentials_before_network(monkeypatch, header):
+    calls = []
+    mock_http(monkeypatch, lambda request: calls.append(request))
+    with pytest.raises(DestinationError, match="public content headers") as error:
+        await netpolicy.policy_fetch(
+            "https://example.com/", headers={header: "dummy-private-value"}
+        )
+    assert "dummy-private-value" not in str(error.value)
+    assert calls == []
+
+
+async def test_redirect_cannot_carry_ip_keyed_cookies_to_another_origin(monkeypatch):
+    monkeypatch.setattr(
+        netpolicy.socket, "getaddrinfo", fake_dns({"a.com": ["8.8.8.8"], "b.com": ["8.8.8.8"]})
+    )
+    requests = []
+
+    def handle(request):
+        requests.append(request)
+        assert request.headers["accept-encoding"] == "identity"
+        if len(requests) == 1:
+            return httpx.Response(
+                302,
+                headers={
+                    "location": "https://b.com/final",
+                    "set-cookie": "session=dummy-private-cookie; Path=/",
+                },
+            )
+        return httpx.Response(200, text="ok")
+
+    mock_http(monkeypatch, handle)
+    await netpolicy.policy_fetch("https://a.com/")
+    assert len(requests) == 2
+    assert "cookie" not in requests[1].headers
+
+
+async def test_total_deadline_covers_dns_and_all_hops(monkeypatch):
+    calls = []
+
+    async def slow_hop(*args, **kwargs):
+        calls.append(True)
+        await asyncio.sleep(0.02)
+        return httpx.Response(302, headers={"location": "/again"}), b""
+
+    monkeypatch.setattr(netpolicy, "_pinned_get", slow_hop)
+    with pytest.raises(httpx.TimeoutException, match="total deadline"):
+        await netpolicy.policy_fetch("https://example.com/", timeout=0.03)
+    assert len(calls) == 2
+
+
+async def test_encoded_response_is_rejected_before_decompression(monkeypatch):
+    class NeverRead(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            raise AssertionError("encoded bytes must not be decoded")
+            yield b""  # pragma: no cover
+
+    monkeypatch.setattr(netpolicy.socket, "getaddrinfo", fake_dns({"example.com": ["8.8.8.8"]}))
+    mock_http(
+        monkeypatch,
+        lambda request: httpx.Response(
+            200, headers={"content-encoding": "gzip"}, stream=NeverRead()
+        ),
+    )
+    with pytest.raises(DestinationError, match="Encoded fetch responses"):
+        await netpolicy.policy_fetch("https://example.com/")
 
 
 async def test_fetch_follows_redirect_revalidated(monkeypatch):
