@@ -2,7 +2,8 @@
 
 One classification authority for "may this request leave the machine":
 
-- Global unicast addresses are always allowed.
+- Ordinary global unicast addresses are allowed; IPv6 translation/tunnel
+  ranges are unsupported.
 - Loopback and RFC1918/ULA destinations are allowed only through an explicit
   exception — an operator allowlist entry naming that exact host, or a
   caller-granted ``allow_private`` flag (self-hosted service connections).
@@ -25,6 +26,10 @@ import httpx
 _PRIVATE_NETWORKS = tuple(
     ipaddress.ip_network(network)
     for network in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7")
+)
+_UNSUPPORTED_IPV6_NETWORKS = tuple(
+    ipaddress.ip_network(network)
+    for network in ("64:ff9b::/96", "64:ff9b:1::/48", "2001::/32", "2002::/16")
 )
 
 # Cloud metadata endpoints — never admitted, even under a private exception.
@@ -51,6 +56,20 @@ def addr_allowed(value: str, allow_private: bool) -> bool:
     ip = ipaddress.ip_address(value)
     ip = getattr(ip, "ipv4_mapped", None) or ip
     if str(ip) in _BLOCKED_ADDRESSES:
+        return False
+    if (
+        ip.is_link_local
+        or ip.is_multicast
+        or ip.is_unspecified
+        or (ip.is_reserved and not ip.is_loopback)
+    ):
+        return False
+    # is_global alone admits some reserved/site-local IPv6 ranges. Translation
+    # and tunnel addresses also carry another destination that this policy
+    # does not validate, so refuse them rather than treating them as public.
+    if isinstance(ip, ipaddress.IPv6Address) and (
+        ip.is_site_local or any(ip in network for network in _UNSUPPORTED_IPV6_NETWORKS)
+    ):
         return False
     if ip.is_global and not ip.is_multicast:
         return True

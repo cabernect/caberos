@@ -63,6 +63,17 @@ def fake_dns(answers: dict[str, list[str]]):
         ("169.254.1.1", True, False),  # link-local stays blocked
         ("100.64.1.1", True, False),
         ("8.8.8.8", True, True),
+        ("::1", True, True),
+        ("::ffff:127.0.0.1", True, True),
+        ("4000::1", False, False),  # reserved despite is_global on some Python versions
+        ("4000::1", True, False),
+        ("fec0::1", False, False),  # deprecated site-local, not globally routable
+        ("fec0::1", True, False),
+        ("64:ff9b::a9fe:a9fe", True, False),  # NAT64-encoded metadata
+        ("64:ff9b::808:808", False, False),  # translation networks are unsupported
+        ("64:ff9b:1::1", True, False),
+        ("2002:7f00:1::", True, False),  # 6to4-encoded loopback
+        ("2001:0:4136:e378:8000:63bf:3fff:fdd2", False, False),  # Teredo
     ],
 )
 def test_addr_allowed(ip, allow_private, expected):
@@ -233,17 +244,20 @@ async def test_redirect_cannot_carry_ip_keyed_cookies_to_another_origin(monkeypa
     assert "cookie" not in requests[1].headers
 
 
-async def test_total_deadline_covers_dns_and_all_hops(monkeypatch):
+async def test_total_deadline_covers_the_whole_redirect_chain(monkeypatch):
     calls = []
 
     async def slow_hop(*args, **kwargs):
         calls.append(True)
-        await asyncio.sleep(0.02)
+        if len(calls) > 1:
+            await asyncio.Event().wait()
         return httpx.Response(302, headers={"location": "/again"}), b""
 
     monkeypatch.setattr(netpolicy, "_pinned_get", slow_hop)
     with pytest.raises(httpx.TimeoutException, match="total deadline"):
-        await netpolicy.policy_fetch("https://example.com/", timeout=0.03)
+        await asyncio.wait_for(
+            netpolicy.policy_fetch("https://example.com/", timeout=0.03), timeout=1
+        )
     assert len(calls) == 2
 
 
