@@ -12,29 +12,31 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
-from tests.process_fakes import FakeProcess
 
 from agentos.sandbox.seatbelt import SeatbeltBackend, _build_profile
+from tests.process_fakes import FakeProcess
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="Seatbelt profiles use POSIX paths")
 
 
-def test_profile_is_default_deny_with_scoped_file_content_access(tmp_path):
+def test_profile_denies_private_trees_and_confines_writes(tmp_path):
     profile = _build_profile(str(tmp_path), False)
     assert "(deny default)" in profile
-    assert "(allow file-read*)" not in profile
-    assert "(allow process-exec*)" not in profile
-    assert f'(allow file-read* (subpath "{tmp_path.resolve()}"))' in profile
-    assert f'(allow file-write* (subpath "{tmp_path.resolve()}"))' in profile
-    assert '(allow file-read* (subpath "/usr/bin"))' in profile
-    assert '(allow file-read* (subpath "/System/Library"))' in profile
-    assert '(allow file-read* (literal "/dev/urandom"))' in profile
-    assert '(subpath "/private/tmp")' not in profile
-    assert '(subpath "/System")' not in profile  # includes /System/Volumes/Data
-    assert '(subpath "/usr")' not in profile  # includes /usr/local
-    assert '(subpath "/Library")' not in profile
-    assert '(subpath "/Applications")' not in profile
+    # Runtime needs broad read/exec; confinement is layered denies.
+    assert "(allow file-read*)" in profile
+    assert "(allow process-exec*)" in profile
+    assert "(deny file-write*)" in profile
+    for denied in ("/Users", "/private/var/folders", "/private/tmp"):
+        assert f'(deny file-read* (subpath "{denied}"))' in profile
+    resolved = str(tmp_path.resolve())
+    assert f'(allow file-read* (subpath "{resolved}"))' in profile
+    assert f'(allow file-write* (subpath "{resolved}"))' in profile
+    assert '(allow file-write* (literal "/dev/null"))' in profile
     assert "(allow network*)" not in profile
+    # The workspace re-allow must come after the private denies.
+    assert profile.index("(deny file-read*") < profile.index(
+        '(allow file-read* (subpath "' + resolved
+    )
 
 
 def test_network_opt_in_does_not_widen_file_access(tmp_path):
@@ -65,9 +67,9 @@ def test_machine_root_and_home_ancestors_are_rejected(tmp_path):
                 _build_profile(str(workspace), False)
 
 
-@pytest.mark.parametrize("workspace", ["/usr", "/usr/bin/project", "/System/Library"])
-def test_system_runtime_overlap_is_rejected(workspace):
-    with pytest.raises(ValueError, match="system runtime"):
+@pytest.mark.parametrize("workspace", ["/private/var/folders", "/private/var", "/private"])
+def test_private_deny_root_ancestors_are_rejected(workspace):
+    with pytest.raises(ValueError, match="private deny root"):
         _build_profile(workspace, False)
 
 

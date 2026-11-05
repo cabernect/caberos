@@ -11,56 +11,44 @@ from pathlib import Path
 from .base import SandboxBackend, ShellResult, kill_process_group
 from .process import collect_process
 
-# Apple system tools and their runtimes, not arbitrary installed applications,
-# Homebrew prefixes, user homes, or the CaberOS data directory.
-_SYSTEM_READ_ROOTS = (
-    "/System/Library",
-    "/usr/bin",
-    "/usr/sbin",
-    "/usr/lib",
-    "/usr/libexec",
-    "/usr/share",
-    "/bin",
-    "/sbin",
-    "/Library/Apple",
-    "/Library/Developer/CommandLineTools",
-    "/Applications/Xcode.app/Contents/Developer",
-    "/private/var/db/dyld",
-)
-_READABLE_DEVICES = ("/dev/null", "/dev/random", "/dev/urandom", "/dev/zero")
+# Operator-private trees: user homes (keys, browser profiles, repos, agent
+# state), per-user temp/cache dirs, and launchd sockets such as SSH agents.
+# dyld and every real tool need broad read/exec to launch on modern macOS,
+# so confinement works by denying these trees and re-allowing the workspace
+# underneath — verified live: SIGABRT at launch under subpath-only grants.
+_PRIVATE_DENY_ROOTS = ("/Users", "/private/var/folders", "/private/tmp")
 
 
 def _build_profile(workspace: str, allow_network: bool) -> str:
-    """Allow workspace data and a fixed system runtime; deny everything else."""
+    """Deny operator-private trees; confine writes to the workspace."""
     root = Path(workspace).resolve()
     if root == Path(root.anchor) or Path.home().resolve().is_relative_to(root):
         raise ValueError(
             "Strict Seatbelt execution requires a workspace narrower than the home directory."
         )
     if any(
-        root.is_relative_to(system) or Path(system).is_relative_to(root)
-        for system in _SYSTEM_READ_ROOTS
+        str(root) == denied or denied.startswith(str(root) + "/") for denied in _PRIVATE_DENY_ROOTS
     ):
-        raise ValueError("Strict Seatbelt workspaces cannot overlap system runtime directories.")
+        raise ValueError("Strict Seatbelt workspaces cannot contain a private deny root.")
     if any(ord(c) < 32 or ord(c) == 127 for c in str(root)):
         raise ValueError("Strict Seatbelt workspaces cannot contain control characters.")
     workspace = str(root).replace("\\", "\\\\").replace('"', '\\"')
     lines = [
         "(version 1)",
         "(deny default)",
-        # Traversal/stat are needed to reach allowed roots, but do not grant
-        # file contents or directory listings outside those roots.
+        # Last matching rule wins: broad runtime access first, then the
+        # private-tree denies, then the workspace re-allow underneath.
         "(allow file-read-metadata)",
-        f'(allow file-read* (subpath "{workspace}"))',
-        f'(allow file-write* (subpath "{workspace}"))',
-        f'(allow process-exec* (subpath "{workspace}"))',
-        '(allow file-write* (literal "/dev/null"))',
-        "(allow process-fork)",
         "(allow sysctl-read)",
+        "(allow process-fork)",
+        "(allow process-exec*)",
+        "(allow file-read*)",
+        *(f'(deny file-read* (subpath "{denied}"))' for denied in _PRIVATE_DENY_ROOTS),
+        f'(allow file-read* (subpath "{workspace}"))',
+        "(deny file-write*)",
+        f'(allow file-write* (subpath "{workspace}"))',
+        '(allow file-write* (literal "/dev/null"))',
     ]
-    lines.extend(f'(allow file-read* (subpath "{path}"))' for path in _SYSTEM_READ_ROOTS)
-    lines.extend(f'(allow process-exec* (subpath "{path}"))' for path in _SYSTEM_READ_ROOTS)
-    lines.extend(f'(allow file-read* (literal "{path}"))' for path in _READABLE_DEVICES)
     if allow_network:
         lines.append("(allow network*)")
     return "\n".join(lines)
