@@ -160,8 +160,23 @@ The `/api/health` endpoint also reports provider and agent counts, and the gatew
 - **Platform:** macOS (any version with `sandbox-exec`)
 - **Install:** None — built into macOS
 - **Network:** Disabled by default; agents can request `allow_network=True` per-command
-- **Performance:** Native, ~1ms per sandbox setup
-- **Filesystem access:** Read-only to system; writes limited to agent workspace + `/tmp`
+- **Readiness:** A cached synthetic self-check must prove workspace read/write
+  and sibling-file read/write denial. Failure reports unavailable; CaberOS does
+  not retry the old permissive profile.
+- **Filesystem access:** The W7 worktree uses a default-deny profile. File data
+  and execution are permitted only in the workspace and fixed Apple runtime/
+  developer-tool directories. Only the workspace and `/dev/null` are writable.
+  Global path metadata lookup is allowed, not arbitrary file contents.
+- **Temporary files:** HOME, TMPDIR, TMP, and TEMP point to the selected
+  workspace, not shared host `/tmp`. Agents sharing that workspace also share
+  those files; this is not per-run private storage.
+- **Compatibility:** Filesystem root, the operator home and its ancestors, and
+  system-runtime-overlapping workspaces are refused. Arbitrary applications,
+  Homebrew installations, and user-level runtime directories are not implicitly
+  readable or executable. Tools depending on them may be unavailable.
+- **Verification:** This new profile still needs isolated native macOS regression
+  verification. The startup self-check is a narrow readiness check, not proof
+  of complete host isolation or resource-limit enforcement.
 
 ### bwrap (Linux)
 
@@ -188,7 +203,9 @@ The `/api/health` endpoint also reports provider and agent counts, and the gatew
 - **Platform:** macOS, Linux. Not used on Windows.
 - **Install:** [Docker Desktop](https://www.docker.com/products/docker-desktop) or Docker Engine
 - **Start:** Ensure the Docker daemon is running (`docker ps` should work)
-- **Image:** `alpine:3.20` — pulled once during the first probe (not on the first command, so image pulls don't eat into command timeouts)
+- **Image:** `alpine:3.20` must already be installed locally. Readiness checks
+  inspect it without downloading; execution uses `--pull=never`. A missing or
+  uninspectable image reports unavailable rather than triggering a download.
 - **Network:** Disabled by default (`--network none`); agents can request `allow_network=True` per-command
 - **Container naming:** `caberos-sandbox-<uuid>` — cleaned up automatically after command completion
 - **Performance:** ~100-200ms per sandbox setup (container start + workspace mount). Slower than native backends but more portable.
@@ -303,16 +320,17 @@ The Docker daemon is not running. Start it:
 
 The next health poll (within 15 seconds) picks it up; no restart is needed.
 
-### Docker pull times out
+### Docker sandbox image is missing
 
-If the first health check hangs or times out:
+Review the image and authorize the download yourself before running:
 
 ```bash
-# Manually pull the image (gives you progress feedback):
 docker pull alpine:3.20
 ```
 
-The probe waits up to 120 seconds for the image pull; if your connection is slow, this is expected.
+CaberOS does not run this command automatically. Once the image is installed,
+the next unavailable-backend check can detect it. If a cached image is removed
+after a successful check, commands fail without pulling a replacement.
 
 ### "MXC is present … but not yet set up" (Windows)
 
