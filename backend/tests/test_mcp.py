@@ -205,7 +205,7 @@ async def test_negative_challenges_do_not_flag_oauth(db, monkeypatch, challenge,
     monkeypatch.setattr(
         httpx2,
         "AsyncClient",
-        lambda *a, **k: real_async_client(*a, transport=transport, **k),
+        lambda *a, **k: real_async_client(*a, **{**k, "transport": transport}),
     )
     monkeypatch.setattr(settings, "mcp_connection_timeout", 2.0)
 
@@ -237,9 +237,8 @@ async def _installed_oauth_hook(db, monkeypatch, auth=None):
     def _client(*a, **k):
         captured.update(k)
         # Fail fast at transport level — we only need the installed hooks.
-        return real_async_client(
-            *a, transport=httpx2.MockTransport(lambda r: httpx2.Response(500, request=r)), **k
-        )
+        k["transport"] = httpx2.MockTransport(lambda r: httpx2.Response(500, request=r))
+        return real_async_client(*a, **k)
 
     monkeypatch.setattr(httpx2, "AsyncClient", _client)
     client = McpClient(transport="http", url="https://mcp.test/mcp", timeout=1.0, auth=auth)

@@ -38,6 +38,7 @@ from ..db import async_session_factory
 from ..models.mcp import McpServer
 from . import credentials as mcp_creds
 from .client import _ensure_user_agent
+from .transport import PolicyTransport
 
 log = logging.getLogger("agentos.mcp.oauth")
 
@@ -531,7 +532,7 @@ async def _run_oauth_flow(server_id: str, server_url: str, auth, flow: OAuthFlow
     import httpx2
 
     try:
-        log.info("OAuth flow: making initial request to %s", server_url)
+        log.info("OAuth flow: making initial request for server %s", server_id)
         # No keep-alive: some servers (e.g. mcp.tradingview.com) reply 401
         # with Connection: keep-alive yet immediately close the socket; a
         # pooled client then writes the metadata GET onto the dead connection
@@ -541,6 +542,9 @@ async def _run_oauth_flow(server_id: str, server_url: str, auth, flow: OAuthFlow
             timeout=30.0,
             limits=httpx2.Limits(max_keepalive_connections=0),
             event_hooks={"request": [_ensure_user_agent]},
+            transport=PolicyTransport(server_url),
+            trust_env=False,
+            follow_redirects=False,
         ) as client:
             # Make a request to the actual server URL to trigger the 401.
             # The Accept header is required: MCP servers answer 406 (not the

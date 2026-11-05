@@ -14,7 +14,9 @@ from mcp.shared.auth import (
     ProtectedResourceMetadata,
 )
 
+from agentos import netpolicy
 from agentos.mcp.oauth import CaberOSOAuthProvider
+from agentos.mcp.transport import PolicyTransport
 
 SERVER = "https://resource.example/mcp"
 ISSUER = "https://auth.example/issuer"
@@ -111,3 +113,21 @@ async def test_legacy_root_issuer_trailing_slash_matches_sdk_rules():
     auth.context.storage.get_protected_resource_metadata.return_value = None
     await auth._initialize()
     assert auth._initialized is True
+
+
+async def test_valid_cached_issuer_cannot_send_refresh_credentials_to_private_endpoint(monkeypatch):
+    auth = provider()
+    auth.context.storage.get_oauth_metadata.return_value.token_endpoint = (
+        "http://127.0.0.1:8081/internal"
+    )
+    monkeypatch.setattr(netpolicy, "private_allowlist", lambda: [])
+    requests = []
+    transport = PolicyTransport(
+        SERVER,
+        transport=httpx2.MockTransport(lambda r: requests.append(r) or httpx2.Response(200)),
+    )
+    async with httpx2.AsyncClient(auth=auth, transport=transport, trust_env=False) as client:
+        with pytest.raises(netpolicy.DestinationError, match="private-network") as error:
+            await client.post(SERVER, json={"id": 1})
+    assert "dummy-refresh" not in str(error.value)
+    assert requests == []

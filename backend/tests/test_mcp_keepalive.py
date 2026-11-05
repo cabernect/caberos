@@ -20,6 +20,7 @@ import httpx2
 import pytest
 
 from agentos.mcp.client import _ensure_user_agent
+from agentos.mcp.transport import PolicyTransport
 
 
 async def _read_request(reader: asyncio.StreamReader) -> None:
@@ -139,6 +140,7 @@ async def test_oauth_flow_client_disables_keepalive(monkeypatch):
     real_cls = httpx2.AsyncClient
 
     def _spy(*args, **kwargs):
+        recorded["provided_transport"] = kwargs.get("transport")
         recorded.update(kwargs)
         kwargs["transport"] = httpx2.MockTransport(
             lambda req: httpx2.Response(401, json={"detail": "no"})
@@ -165,6 +167,9 @@ async def test_oauth_flow_client_disables_keepalive(monkeypatch):
     assert limits.max_keepalive_connections == 0
     hooks = recorded.get("event_hooks") or {}
     assert _ensure_user_agent in hooks.get("request", [])
+    assert isinstance(recorded["provided_transport"], PolicyTransport)
+    assert recorded["trust_env"] is False
+    assert recorded["follow_redirects"] is False
 
 
 @pytest.mark.asyncio
@@ -180,7 +185,9 @@ async def test_http_transport_client_disables_keepalive(monkeypatch):
     real_cls = httpx2.AsyncClient
 
     def _spy(*args, **kwargs):
+        recorded["provided_transport"] = kwargs.get("transport")
         recorded.update(kwargs)
+        kwargs["transport"] = httpx2.MockTransport(lambda req: httpx2.Response(500, request=req))
         return real_cls(*args, **kwargs)
 
     monkeypatch.setattr(httpx2, "AsyncClient", _spy)
@@ -214,5 +221,8 @@ async def test_http_transport_client_disables_keepalive(monkeypatch):
         assert limits.max_keepalive_connections == 0
         hooks = recorded.get("event_hooks") or {}
         assert _ensure_user_agent in hooks.get("request", [])
+        assert isinstance(recorded["provided_transport"], PolicyTransport)
+        assert recorded["trust_env"] is False
+        assert recorded["follow_redirects"] is False
     finally:
         await client.disconnect()

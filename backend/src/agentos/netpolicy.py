@@ -163,6 +163,28 @@ async def _resolve_checked(
     return sorted(ips, key=lambda ip: (ipaddress.ip_address(ip).version, ip))[0]
 
 
+async def resolve_destination(
+    url: str,
+    *,
+    allow_private: bool = False,
+    allowlist: list[str] | None = None,
+) -> tuple[httpx.URL, str]:
+    """Validate a logical HTTP destination and return its checked dial address.
+
+    Adapters must connect to the returned IP, preserving the logical authority
+    for Host/TLS. Merely calling this before another client resolves the name
+    again is a preflight, not connection-level enforcement.
+    """
+    parsed = validate_fetch_url(url)
+    address = await _resolve_checked(
+        parsed.host,
+        parsed.port or (443 if parsed.scheme == "https" else 80),
+        allow_private,
+        allowlist,
+    )
+    return parsed, address
+
+
 async def _pinned_get(
     client: httpx.AsyncClient,
     url: httpx.URL,
@@ -172,9 +194,10 @@ async def _pinned_get(
     headers: httpx.Headers | dict[str, str],
 ) -> tuple[httpx.Response, bytes]:
     """One request hop: resolve+check, then dial the validated IP directly."""
+    url, pinned_ip = await resolve_destination(
+        str(url), allow_private=allow_private, allowlist=allowlist
+    )
     host = url.host
-    port = url.port or (443 if url.scheme == "https" else 80)
-    pinned_ip = await _resolve_checked(host, port, allow_private, allowlist)
     dial = url.copy_with(host=pinned_ip)
     request_headers = httpx.Headers(headers)
     request_headers["Host"] = url.netloc.decode("ascii")
