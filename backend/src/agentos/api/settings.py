@@ -216,6 +216,7 @@ from ..capabilities.bindings import (  # noqa: E402
 )
 from ..models.provider import Provider  # noqa: E402
 from ..models.tool_binding import ToolBinding  # noqa: E402
+from ..providers.service_types import SEARCH_PROVIDER_TYPES, SERVICE_PROVIDER_TYPES  # noqa: E402
 
 
 def _options_schema(spec: BindingSpec) -> list[dict[str, Any]]:
@@ -227,6 +228,7 @@ def _options_schema(spec: BindingSpec) -> list[dict[str, Any]]:
             "default": f.default,
             "choices": list(f.choices),
             "required": f.required,
+            "backends": list(f.backends),
         }
         for f in spec.option_fields
     ]
@@ -304,24 +306,34 @@ async def put_tool_binding(
         )
 
     provider: Provider | None = None
-    if spec.kind == "engine":
+    try:
+        options = validate_options(spec, req.options or {})
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    service_search = key == "search.web" and options.get("backend") in SEARCH_PROVIDER_TYPES
+    if spec.kind == "engine" and not service_search:
         if req.provider_id:
             raise HTTPException(status_code=422, detail="engine bindings do not take a provider")
         if req.model:
             raise HTTPException(status_code=422, detail="engine bindings do not take a model")
-    else:  # model-backed
+    else:
         if not req.provider_id:
             raise HTTPException(status_code=422, detail="a provider is required for this tool")
         provider = await db.get(Provider, req.provider_id)
         if provider is None:
             raise HTTPException(status_code=422, detail="provider not found")
-        if req.model is None or not req.model.strip():
+        if service_search and provider.type != options["backend"]:
+            raise HTTPException(
+                status_code=422, detail="Select a connection matching the search backend."
+            )
+        if not service_search and provider.type in SERVICE_PROVIDER_TYPES:
+            raise HTTPException(
+                status_code=422, detail="Select a model provider, not a tool service."
+            )
+        if service_search and req.model:
+            raise HTTPException(status_code=422, detail="Search APIs do not take a model.")
+        if not service_search and (req.model is None or not req.model.strip()):
             raise HTTPException(status_code=422, detail="a model name is required")
-
-    try:
-        options = validate_options(spec, req.options or {})
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e)) from e
 
     binding = await db.scalar(select(ToolBinding).where(ToolBinding.key == key))
     if binding is not None:

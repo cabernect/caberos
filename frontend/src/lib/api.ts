@@ -1151,7 +1151,8 @@ export const api = {
     ),
 
   // Providers
-  listProviders: () => request<Provider[]>("/api/providers"),
+  listProviders: (scope?: "model" | "search" | "all") =>
+    request<Provider[]>(`/api/providers${scope ? `?scope=${scope}` : ""}`),
   createProvider: (
     data: Partial<Provider> & {
       api_key?: string;
@@ -1166,6 +1167,7 @@ export const api = {
     id: string,
     data: Partial<Provider> & {
       api_key?: string;
+      remove_api_key?: boolean;
       credentials?: Record<string, string>;
     },
   ) =>
@@ -1175,6 +1177,11 @@ export const api = {
     }),
   deleteProvider: (id: string) =>
     request<{ status: string }>(`/api/providers/${id}`, { method: "DELETE" }),
+  testSearchProvider: (id: string) =>
+    request<{ ok: boolean; error: string | null }>(`/api/providers/${id}/test-search`, {
+      method: "POST",
+      body: JSON.stringify({ consent: true }),
+    }),
   /** Real 1-token probe against the provider (D40) — validates the
    * credential + model routing; every probe lands on the model-call ledger. */
   validateProviderModel: (id: string, modelName?: string) =>
@@ -1467,9 +1474,11 @@ export const api = {
     command?: string;
     args?: string[];
     url?: string;
+    headers?: Record<string, string>;
     env_template?: Record<string, string>;
     tool_filter?: string[];
     enabled?: boolean;
+    auth?: "none" | "api_key" | "oauth";
   }) =>
     request<{ id: string; name: string; connected: boolean }>(
       "/api/mcp/servers",
@@ -1506,6 +1515,7 @@ export const api = {
       require_approval?: boolean;
       enabled?: boolean;
       tool_filter?: string[] | null;
+      auth?: "none" | "api_key" | "oauth";
     },
   ) =>
     request<{
@@ -1569,7 +1579,7 @@ export const api = {
   },
   listMcpCatalogCategories: () =>
     request<{ name: string; count: number }[]>("/api/mcp/catalog/categories"),
-  installFromCatalog: (name: string) =>
+  installFromCatalog: (name: string, options?: { api_key?: string }) =>
     request<{
       id: string;
       name: string;
@@ -1578,7 +1588,7 @@ export const api = {
       message: string | null;
     }>("/api/mcp/catalog/install", {
       method: "POST",
-      body: JSON.stringify({ name, enabled: true }),
+      body: JSON.stringify({ name, enabled: true, ...options }),
     }),
 
   // Channels (external messaging — Telegram, Discord, Zalo, ...)

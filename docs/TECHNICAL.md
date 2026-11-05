@@ -137,6 +137,35 @@ Chrome-for-Testing runtime — managed install gated on explicit consent. CDP se
 
 `WebSource` rows = URLs the agent **visited** (web_fetch / browser_open landed / browser_act transitions). `web_search` results are trace-only — inspectable in the tool-call record, never citable references. Base prompt instructs: open a page before citing it.
 
+### Search service configuration (v0.2.1 worktree)
+
+Settings -> Tools -> Web Search configures DDGS (free default), Tavily, Exa,
+Brave Search, Firecrawl Cloud, or Firecrawl self-hosted. Service connections
+reuse `Provider` rows and Fernet key custody; there is no separate connection
+table. `search.web` binds a Provider ID without a model. Old DDGS options still
+resolve with their saved engine order, region, and SafeSearch. Changing backend
+never implicitly selects another paid service. Self-hosted Firecrawl requires
+an explicit server URL and `allow_private_network` consent for LAN/loopback
+destinations, validated and pinned at connect time.
+
+`GET /api/providers` defaults to model connections; `scope=search` exposes search
+connections to Tools and `scope=all` exposes both. Scope derives from service
+type. Search connections cannot enter model discovery, catalog mapping, model
+validation, or model dispatch. Blank/omitted key updates preserve the key;
+`remove_api_key=true` explicitly removes it. Reads return `has_key`, never keys.
+
+Opening Tools and saving are local-only. `POST /api/providers/{id}/test-search`
+requires explicit consent and sends one synthetic query (potentially billable).
+Agent searches still pass grants/approval/audit mediation. Binding/provider
+identity is snapshotted before approval and checked again before dispatch.
+Tavily uses a fixed HTTPS destination, no redirects or automatic retries,
+bounded requests/responses, and no provider-generated answers or URL visits.
+Tool results carry request/credit receipts; unavailable prices stay unknown.
+They do not create model-call ledger rows or enter model-token spend totals.
+Exa, Brave Search, and Firecrawl adapters are implemented; the existing backend
+fixture suite primarily covers Tavily. Broader adapter fixtures, live-provider
+verification, probe rate limiting, and service-usage accounting remain open.
+
 ## 12. Sandbox matrix
 
 | Platform | Backend | Notes |

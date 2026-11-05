@@ -8,6 +8,7 @@ from ..models.provider import Provider
 from .interface import ProviderAdapter
 from .litellm_transport import LiteLLMTransport
 from .opencode_zen_adapter import OpenCodeZenMixin
+from .service_types import require_model_provider
 
 
 class LiteLLMProviderAdapter(LiteLLMAdapter):
@@ -31,6 +32,7 @@ class ProviderRegistry:
         provider = result.scalar_one_or_none()
         if provider is None:
             raise ValueError(f"Provider {provider_id} not found")
+        require_model_provider(provider.type)
 
         if (
             provider.type == "openai"

@@ -477,23 +477,19 @@ class SyscallHandler:
         # change — fail honestly instead of executing against a provider the
         # operator never approved. Frozen options ride into the tool.
         if admitted_binding is not None:
-            if admitted_binding.spec.kind == "model" and admitted_binding.binding is not None:
-                async with self._db_lock:
-                    current = await resolve_binding(self.db, binding_key)
-                if (
-                    current.binding is None
-                    or current.binding.revision != admitted_binding.binding.revision
-                ):
-                    await _arrive(False)
-                    return await self._deny(
-                        run_id,
-                        call,
-                        agent_config,
-                        f"{admitted_binding.spec.title} binding changed "
-                        "while the call was pending — retry",
-                        start,
-                        sub_agent_id,
-                    )
+            async with self._db_lock:
+                current = await resolve_binding(self.db, binding_key)
+            if not current.ready or current.identity != admitted_binding.identity:
+                await _arrive(False)
+                return await self._deny(
+                    run_id,
+                    call,
+                    agent_config,
+                    f"{admitted_binding.spec.title} binding changed "
+                    "while the call was pending — retry",
+                    start,
+                    sub_agent_id,
+                )
             extra_kwargs["tool_options"] = admitted_binding.options
             extra_kwargs["tool_binding"] = admitted_binding
 

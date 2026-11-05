@@ -16,6 +16,7 @@ from bs4 import BeautifulSoup
 from sqlalchemy import func, select
 
 from ...models.web_source import WebSource
+from ...providers.search import search_provider
 from ...ssl_utils import SSL_CERT_PATH
 
 # Extraction libraries — trafilatura for main-content → markdown,
@@ -40,6 +41,17 @@ async def web_search(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     """
     query = args["query"]
     max_results = args.get("max_results", 5)
+
+    binding = kwargs.get("tool_binding")
+    if binding and binding.options.get("backend", "ddgs") != "ddgs":
+        if not binding.ready or binding.provider is None:
+            return {"error": "Search provider is not ready."}
+        return await search_provider(
+            binding.provider,
+            query,
+            max_results,
+            options=binding.options,
+        )
 
     # Frozen binding options injected by the mediator (validated server-side);
     # absent binding = built-in defaults (valid ddgs 9.x backend keys only).

@@ -10,6 +10,7 @@ export interface Provider {
   id: string;
   name: string;
   type: string;
+  scope?: "model" | "search";
   has_key: boolean;
   base_url: string | null;
   org_id: string | null;
@@ -756,6 +757,7 @@ export interface McpServerInfo {
   tool_filter: string[] | null;
   require_approval: boolean;
   env_template: Record<string, string> | null;
+  headers_template: Record<string, string> | null;
   oauth_config: { scope?: string; redirect_uri?: string } | null;
   auth_type: "api_key" | "oauth" | "none";
   has_credentials: boolean;
@@ -783,6 +785,7 @@ export interface McpCatalogEntry {
   url: string | null;
   auth_type: string; // "none", "api_key", "oauth"
   env_template: Record<string, string> | null;
+  headers: Record<string, string> | null;
   vendor: string;
   homepage: string;
   installable?: boolean;
@@ -1184,6 +1187,8 @@ export interface ToolBindingOptionField {
   default: unknown;
   choices: string[];
   required: boolean;
+  /** When set, this option only applies to these backend values. */
+  backends?: string[];
 }
 
 export interface ToolBindingInfo {

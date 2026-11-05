@@ -5,8 +5,9 @@ and which validated options. Per-agent capability grants remain the separate
 "who may execute" check (syscall mediation is unchanged).
 
 Kinds:
-- "engine": self-contained tool (web search → DDGS). provider/model unused;
-  options may still tune behavior. Unconfigured == defaults.
+- "engine": built-in execution or a keyed service (web search: DDGS/Tavily).
+  DDGS needs no provider; Tavily binds a Provider ID without a model.
+  Unconfigured == built-in defaults.
 - "model": model-backed tool (TTS/image/…). Ready only when bound to an
   existing provider with credentials and a non-empty model name.
 
@@ -18,6 +19,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from typing import Any, Literal
 
 from sqlalchemy import select
@@ -25,6 +27,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.provider import Provider
 from ..models.tool_binding import ToolBinding
+from ..providers.search_endpoints import SELF_HOSTED, validate_self_hosted
+from ..providers.service_types import SEARCH_PROVIDER_TYPES, SERVICE_PROVIDER_TYPES
 
 # Engines the bundled DDGS 9.x adapter knows how to call (valid backend
 # keys for the "text" category), in default try-order.
@@ -52,6 +56,7 @@ class OptionField:
     default: Any = None
     choices: tuple[str, ...] = ()  # for "select" and the universe of "engine_order"
     required: bool = False
+    backends: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -78,19 +83,58 @@ BINDING_SPECS: tuple[BindingSpec, ...] = (
         key="search.web",
         title="Web search",
         description=(
-            "Engine preference for web_search. Unconfigured uses the default "
-            "DuckDuckGo-first cascade with an HTML fallback — no provider needed."
+            "Use free DDGS engines or Tavily, Exa, Firecrawl, or Brave Search API. "
+            "Search credentials are managed here, independently of the chat model."
         ),
         kind="engine",
         implemented=True,
         capability_names=("web_search",),
         option_fields=(
             OptionField(
+                name="backend",
+                kind="select",
+                label="Search backend",
+                choices=(
+                    "ddgs",
+                    "tavily",
+                    "exa",
+                    "firecrawl",
+                    "firecrawl_self_hosted",
+                    "brave_search",
+                ),
+                default="ddgs",
+            ),
+            OptionField(
+                name="search_depth",
+                kind="select",
+                label="Tavily search depth",
+                choices=("basic", "advanced"),
+                default="basic",
+                backends=("tavily",),
+            ),
+            OptionField(
+                name="exa_search_type",
+                kind="select",
+                label="Exa search type",
+                choices=("auto", "fast"),
+                default="auto",
+                backends=("exa",),
+            ),
+            OptionField(
+                name="brave_safesearch",
+                kind="select",
+                label="Brave SafeSearch",
+                choices=("off", "moderate", "strict"),
+                default="moderate",
+                backends=("brave_search",),
+            ),
+            OptionField(
                 name="engines",
                 kind="engine_order",
                 label="Engines (in try order)",
                 choices=SEARCH_ENGINES,
                 default=list(SEARCH_ENGINES),
+                backends=("ddgs",),
             ),
             OptionField(
                 name="safesearch",
@@ -98,12 +142,14 @@ BINDING_SPECS: tuple[BindingSpec, ...] = (
                 label="SafeSearch",
                 choices=("on", "moderate", "off"),
                 default="moderate",
+                backends=("ddgs",),
             ),
             OptionField(
                 name="region",
                 kind="string",
                 label="Region (e.g. us-en, wt-wt)",
                 default="wt-wt",
+                backends=("ddgs",),
             ),
         ),
     ),
@@ -229,6 +275,23 @@ class BindingResolution:
     state: str  # "unconfigured" | "ready" | "invalid" | "unimplemented"
     reason: str
     options: dict[str, Any]
+    identity: tuple = dataclass_field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        # Snapshot values, not ORM identities: another query can refresh the same
+        # objects while an approval is waiting.
+        self.identity = (
+            self.binding.revision if self.binding else None,
+            self.binding.provider_id if self.binding else None,
+            self.binding.model if self.binding else None,
+            json.dumps(self.options, sort_keys=True),
+            self.provider.type if self.provider else None,
+            self.provider.encrypted_key if self.provider else None,
+            self.provider.encrypted_credentials if self.provider else None,
+            self.provider.base_url if self.provider else None,
+            self.provider.org_id if self.provider else None,
+            self.provider.extra_params if self.provider else None,
+        )
 
 
 async def resolve_binding(db: AsyncSession, key: str) -> BindingResolution:
@@ -248,10 +311,12 @@ async def resolve_binding(db: AsyncSession, key: str) -> BindingResolution:
             options={},
         )
 
-    binding = await db.scalar(select(ToolBinding).where(ToolBinding.key == key))
-    stored = json.loads(binding.options) if binding else {}
+    binding = await db.scalar(
+        select(ToolBinding).where(ToolBinding.key == key).execution_options(populate_existing=True)
+    )
     try:
-        options = validate_options(spec, stored) if stored else default_options(spec)
+        stored = json.loads(binding.options) if binding else {}
+        options = validate_options(spec, stored)
     except ValueError as e:
         return BindingResolution(
             spec=spec,
@@ -263,15 +328,20 @@ async def resolve_binding(db: AsyncSession, key: str) -> BindingResolution:
             options={},
         )
 
-    if spec.kind == "engine":
+    service_search = spec.key == "search.web" and options.get("backend") in SEARCH_PROVIDER_TYPES
+    if spec.kind == "engine" and not service_search:
         # Engine tools run self-contained — a binding only tunes them.
         return BindingResolution(
             spec=spec,
             binding=binding,
             provider=None,
-            ready=True,
-            state="ready" if binding else "unconfigured",
-            reason="" if binding else "Using built-in defaults.",
+            ready=not (binding and binding.provider_id),
+            state="invalid"
+            if binding and binding.provider_id
+            else ("ready" if binding else "unconfigured"),
+            reason="DDGS does not use a provider."
+            if binding and binding.provider_id
+            else ("" if binding else "Using built-in defaults."),
             options=options,
         )
 
@@ -283,7 +353,9 @@ async def resolve_binding(db: AsyncSession, key: str) -> BindingResolution:
             provider=None,
             ready=False,
             state="unconfigured",
-            reason="Choose a provider and model to enable this tool.",
+            reason="Choose a search provider."
+            if service_search
+            else ("Choose a provider and model to enable this tool."),
             options=options,
         )
     if not binding.provider_id:
@@ -296,7 +368,7 @@ async def resolve_binding(db: AsyncSession, key: str) -> BindingResolution:
             reason="Binding has no provider.",
             options=options,
         )
-    provider = await db.get(Provider, binding.provider_id)
+    provider = await db.get(Provider, binding.provider_id, populate_existing=True)
     if provider is None:
         return BindingResolution(
             spec=spec,
@@ -307,8 +379,37 @@ async def resolve_binding(db: AsyncSession, key: str) -> BindingResolution:
             reason="Bound provider no longer exists — pick a new one.",
             options=options,
         )
-    has_key = bool(provider.encrypted_key or provider.encrypted_credentials)
-    if not has_key and provider.type not in _NO_KEY_PROVIDER_TYPES:
+    if (service_search and provider.type != options["backend"]) or (
+        not service_search and provider.type in SERVICE_PROVIDER_TYPES
+    ):
+        return BindingResolution(
+            spec,
+            binding,
+            provider,
+            False,
+            "invalid",
+            "Provider type is incompatible with this tool.",
+            options,
+        )
+    has_key = (
+        bool(provider.encrypted_key)
+        if service_search
+        else bool(provider.encrypted_key or provider.encrypted_credentials)
+    )
+    if service_search and provider.type == SELF_HOSTED:
+        try:
+            validate_self_hosted(provider.base_url, json.loads(provider.extra_params or "{}"))
+        except ValueError:
+            return BindingResolution(
+                spec,
+                binding,
+                provider,
+                False,
+                "invalid",
+                "Check the self-hosted server URL and private-network consent.",
+                options,
+            )
+    if not has_key and provider.type not in _NO_KEY_PROVIDER_TYPES and provider.type != SELF_HOSTED:
         return BindingResolution(
             spec=spec,
             binding=binding,
@@ -318,7 +419,7 @@ async def resolve_binding(db: AsyncSession, key: str) -> BindingResolution:
             reason=f"Provider '{provider.name}' has no credentials.",
             options=options,
         )
-    if not binding.model.strip():
+    if not service_search and not binding.model.strip():
         return BindingResolution(
             spec=spec,
             binding=binding,

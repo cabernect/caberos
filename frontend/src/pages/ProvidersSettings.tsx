@@ -4340,6 +4340,24 @@ const ENGINE_LABELS: Record<string, string> = {
 
 const engineLabel = (key: string) => ENGINE_LABELS[key] ?? key;
 
+/** Search backends that dispatch through a Provider-stored credential. */
+const SEARCH_SERVICE_LABELS: Record<string, string> = {
+  tavily: "Tavily",
+  exa: "Exa",
+  firecrawl: "Firecrawl Cloud",
+  firecrawl_self_hosted: "Firecrawl self-hosted",
+  brave_search: "Brave Search",
+};
+const SELF_HOSTED_BACKEND = "firecrawl_self_hosted";
+const SEARCH_BACKEND_LABELS: Record<string, string> = {
+  ddgs: "DDGS (free)",
+  tavily: "Tavily API",
+  exa: "Exa API",
+  firecrawl: "Firecrawl Cloud",
+  firecrawl_self_hosted: "Firecrawl self-hosted",
+  brave_search: "Brave Search API",
+};
+
 function EngineOrderField({
   value,
   choices,
@@ -4428,6 +4446,14 @@ export function ToolsTab({ providers }: { providers: Provider[] }) {
     Record<string, { options: Record<string, unknown>; providerId: string; model: string }>
   >({});
   const [saving, setSaving] = useState<string | null>(null);
+  const [searchProviders, setSearchProviders] = useState<Provider[]>([]);
+  const [searchName, setSearchName] = useState("");
+  const [searchApiKey, setSearchApiKey] = useState("");
+  const [deletingSearchKey, setDeletingSearchKey] = useState(false);
+  const [testingSearch, setTestingSearch] = useState(false);
+  const [searchTestResult, setSearchTestResult] = useState("");
+  const [searchUrl, setSearchUrl] = useState("");
+  const [searchAllowPrivate, setSearchAllowPrivate] = useState(false);
   // providerId → modality-filtered catalog model ids (assistive suggestions
   // for the free-text model field; failures stay silent — not a hard gate)
   const [catalogModels, setCatalogModels] = useState<Record<string, string[]>>({});
@@ -4472,8 +4498,19 @@ export function ToolsTab({ providers }: { providers: Provider[] }) {
 
   const load = useCallback(async () => {
     try {
-      const r = await api.listToolBindings();
+      const [r, services] = await Promise.all([
+        api.listToolBindings(),
+        api.listProviders("search"),
+      ]);
       setTools(r.tools);
+      setSearchProviders(services);
+      const boundSearch = r.tools.find((t) => t.key === "search.web");
+      const boundSearchProvider = services.find(
+        (p) => p.id === boundSearch?.binding?.provider_id,
+      );
+      setSearchName(boundSearchProvider?.name ?? "");
+      setSearchUrl(boundSearchProvider?.base_url ?? "");
+      setSearchAllowPrivate(boundSearchProvider?.extra_params?.allow_private_network === true);
       setDrafts((prev) => {
         const next = { ...prev };
         for (const t of r.tools) {
@@ -4488,8 +4525,8 @@ export function ToolsTab({ providers }: { providers: Provider[] }) {
             // cheap — prefer the server's truth so stale drafts can't write.
             next[t.key] = {
               options: { ...t.options },
-              providerId: t.binding?.provider_id ?? next[t.key].providerId,
-              model: t.binding?.model ?? next[t.key].model,
+              providerId: t.binding?.provider_id ?? "",
+              model: t.binding?.model ?? "",
             };
           }
         }
@@ -4518,9 +4555,46 @@ export function ToolsTab({ providers }: { providers: Provider[] }) {
     if (!draft) return;
     setSaving(tool.key);
     try {
+      let providerId = draft.providerId;
+      const backend = String(draft.options.backend ?? "");
+      const serviceType = tool.key === "search.web" ? SEARCH_SERVICE_LABELS[backend] : undefined;
+      const selfHosted = backend === SELF_HOSTED_BACKEND;
+      if (serviceType) {
+        if (!providerId && !searchApiKey.trim() && !selfHosted) {
+          throw new Error(`Enter a ${serviceType} API key to create a search connection.`);
+        }
+        if (!providerId && selfHosted && !searchUrl.trim()) {
+          throw new Error("Enter the self-hosted Firecrawl server URL.");
+        }
+        const serviceData = {
+          name: searchName.trim() || `${serviceType} search`,
+          ...(searchApiKey.trim() ? { api_key: searchApiKey.trim() } : {}),
+          ...(selfHosted
+            ? {
+                base_url: searchUrl.trim(),
+                extra_params: { allow_private_network: searchAllowPrivate },
+              }
+            : {}),
+        };
+        if (providerId) {
+          await api.updateProvider(providerId, {
+            ...serviceData,
+          });
+        } else {
+          const created = await api.createProvider({ ...serviceData, type: backend });
+          providerId = created.id;
+          setSearchProviders((prev) => [...prev, created]);
+          setDrafts((prev) => ({
+            ...prev, [tool.key]: { ...prev[tool.key], providerId },
+          }));
+        }
+        setSearchApiKey("");
+        setSearchTestResult("");
+      }
       const body =
         tool.kind === "engine"
           ? {
+              ...(serviceType ? { provider_id: providerId } : {}),
               options: draft.options,
               expected_revision: tool.binding?.revision ?? null,
             }
@@ -4542,6 +4616,47 @@ export function ToolsTab({ providers }: { providers: Provider[] }) {
       }
     } finally {
       setSaving(null);
+    }
+  };
+
+  const testSearch = async () => {
+    const providerId = drafts["search.web"]?.providerId;
+    if (!providerId || searchApiKey) return;
+    const serviceType =
+      SEARCH_SERVICE_LABELS[String(drafts["search.web"]?.options.backend ?? "")] ?? "search";
+    const consent = await confirm({
+      title: `Test ${serviceType} connection?`,
+      message: `Sends one synthetic query to ${serviceType}. This may use paid credits; no conversation or workspace content is sent.`,
+      confirmLabel: "Test connection",
+    });
+    if (!consent) return;
+    setTestingSearch(true);
+    setSearchTestResult("");
+    try {
+      const result = await api.testSearchProvider(providerId);
+      setSearchTestResult(result.ok ? "Connection test passed." : result.error ?? "Connection test failed.");
+    } catch {
+      setSearchTestResult("Connection test failed. Check credentials and try again.");
+    } finally {
+      setTestingSearch(false);
+    }
+  };
+
+  const deleteSearchKey = async () => {
+    const providerId = drafts["search.web"]?.providerId;
+    if (!providerId) return;
+    setDeletingSearchKey(true);
+    try {
+      await api.updateProvider(providerId, { remove_api_key: true });
+      setSearchProviders((prev) =>
+        prev.map((p) => (p.id === providerId ? { ...p, has_key: false } : p)),
+      );
+      setSearchApiKey("");
+      setSearchTestResult("");
+    } catch (e) {
+      toast(String(e));
+    } finally {
+      setDeletingSearchKey(false);
     }
   };
 
@@ -4585,6 +4700,17 @@ export function ToolsTab({ providers }: { providers: Provider[] }) {
           providerId: "",
           model: "",
         };
+        const isSearch = tool.key === "search.web";
+        // Match the Select's display fallback — an unset backend is its default.
+        const backend = String(
+          draft.options.backend ??
+            tool.options_schema.find((f) => f.name === "backend")?.default ??
+            "",
+        );
+        const serviceType = isSearch ? SEARCH_SERVICE_LABELS[backend] : undefined;
+        const serviceSearch = Boolean(serviceType);
+        const selfHosted = backend === SELF_HOSTED_BACKEND;
+        const selectedSearch = searchProviders.find((p) => p.id === draft.providerId);
         const setOption = (name: string, v: unknown) =>
           setDrafts((d) => ({
             ...d,
@@ -4678,7 +4804,11 @@ export function ToolsTab({ providers }: { providers: Provider[] }) {
                   </div>
                 )}
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  {tool.options_schema.map((field) => (
+                  {tool.options_schema.filter((field) => !isSearch || (
+                    field.name === "backend" ||
+                    !field.backends?.length ||
+                    field.backends.includes(backend)
+                  )).map((field) => (
                     <div
                       key={field.name}
                       className={field.kind === "engine_order" ? "sm:col-span-2" : ""}
@@ -4695,9 +4825,32 @@ export function ToolsTab({ providers }: { providers: Provider[] }) {
                       />
                     ) : field.kind === "select" ? (
                       <Select
+                        ariaLabel={field.label}
+                        disabled={testingSearch || saving !== null}
                         value={String(draft.options[field.name] ?? field.default ?? "")}
-                        onChange={(v) => setOption(field.name, v)}
-                        options={field.choices.map((c) => ({ value: c, label: c }))}
+                        onChange={(v) => {
+                          setOption(field.name, v);
+                          // A backend switch invalidates the selected connection —
+                          // providers are typed per service, and a stale id would
+                          // either fail validation or bind the wrong service.
+                          if (isSearch && field.name === "backend" && v !== backend) {
+                            setDrafts((d) => ({
+                              ...d,
+                              [tool.key]: { ...d[tool.key], providerId: "" },
+                            }));
+                            setSearchName("");
+                            setSearchUrl("");
+                            setSearchAllowPrivate(false);
+                            setSearchApiKey("");
+                            setSearchTestResult("");
+                          }
+                        }}
+                        options={field.choices.map((c) => ({
+                          value: c,
+                          label: field.name === "backend"
+                            ? (SEARCH_BACKEND_LABELS[c] ?? c)
+                            : c,
+                        }))}
                         className="w-full rounded-md border border-line bg-ground px-3 py-1.5 text-[13px] text-ink outline-none"
                       />
                     ) : field.kind === "boolean" ? (
@@ -4724,11 +4877,117 @@ export function ToolsTab({ providers }: { providers: Provider[] }) {
                     </div>
                   ))}
                 </div>
+                {serviceSearch && (
+                  <div className="space-y-3">
+                    <Field label="Search connection">
+                      <Select
+                        ariaLabel="Search connection"
+                        disabled={testingSearch || saving !== null}
+                        value={draft.providerId}
+                        options={[
+                          { value: "", label: `New ${serviceType} connection` },
+                          ...searchProviders.filter((p) => p.type === backend).map((p) => ({
+                            value: p.id, label: p.name,
+                          })),
+                        ]}
+                        onChange={(id) => {
+                          setDrafts((prev) => ({
+                            ...prev, [tool.key]: { ...prev[tool.key], providerId: id },
+                          }));
+                          const provider = searchProviders.find((p) => p.id === id);
+                          setSearchName(provider?.name ?? "");
+                          setSearchUrl(provider?.base_url ?? "");
+                          setSearchAllowPrivate(provider?.extra_params?.allow_private_network === true);
+                          setSearchApiKey("");
+                          setSearchTestResult("");
+                        }}
+                        className="w-full rounded-md border border-line bg-ground px-3 py-1.5 text-[13px] text-ink"
+                      />
+                    </Field>
+                    {selfHosted && (
+                      <label className="space-y-1 text-[12px] text-ink-2">
+                        <span>Firecrawl server URL</span>
+                        <input
+                          value={searchUrl}
+                          disabled={testingSearch || saving !== null}
+                          onChange={(e) => {
+                            setSearchUrl(e.target.value);
+                            setSearchTestResult("");
+                          }}
+                          placeholder="https://firecrawl.example.internal"
+                          className="w-full rounded-md border border-line bg-ground px-3 py-1.5 font-mono text-[12px] text-ink"
+                        />
+                      </label>
+                    )}
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <label className="space-y-1 text-[12px] text-ink-2">
+                        <span>Connection name</span>
+                        <input
+                          value={searchName}
+                          disabled={testingSearch || saving !== null}
+                          onChange={(e) => setSearchName(e.target.value)}
+                          placeholder={`${serviceType} search`}
+                          className="w-full rounded-md border border-line bg-ground px-3 py-1.5 text-[13px] text-ink"
+                        />
+                      </label>
+                      <label className="space-y-1 text-[12px] text-ink-2">
+                        <span>{selfHosted ? `${serviceType} API key (optional)` : `${serviceType} API key`}</span>
+                        <div className="flex gap-2">
+                          <input
+                            type="password"
+                            autoComplete="new-password"
+                            value={searchApiKey}
+                            disabled={Boolean(selectedSearch?.has_key) || testingSearch || saving !== null}
+                            onChange={(e) => {
+                              setSearchApiKey(e.target.value);
+                              setSearchTestResult("");
+                            }}
+                            placeholder={selectedSearch?.has_key ? "Stored securely" : "Enter API key"}
+                            className="w-full rounded-md border border-line bg-ground px-3 py-1.5 text-[13px] text-ink disabled:opacity-60"
+                          />
+                          {selectedSearch?.has_key && (
+                            <button
+                              type="button"
+                              disabled={deletingSearchKey || testingSearch || saving !== null}
+                              onClick={() => void deleteSearchKey()}
+                              className="shrink-0 cursor-pointer rounded-md border border-line px-2.5 text-[12px] text-ink-2 transition hover:bg-sunken disabled:opacity-50"
+                            >
+                              {deletingSearchKey ? "Deleting…" : "Delete key"}
+                            </button>
+                          )}
+                        </div>
+                      </label>
+                    </div>
+                    {selfHosted && (
+                      <label className="flex items-center gap-2 text-[12px] text-ink-2">
+                        <input
+                          type="checkbox"
+                          checked={searchAllowPrivate}
+                          disabled={testingSearch || saving !== null}
+                          onChange={(e) => setSearchAllowPrivate(e.target.checked)}
+                        />
+                        Allow private-network addresses (LAN). Leave off for public servers only.
+                      </label>
+                    )}
+                    <p className="text-[12px] text-ink-3">
+                      Saved keys are encrypted in Providers storage. Saving sends no search request.
+                    </p>
+                    <button
+                      type="button"
+                      disabled={!selectedSearch || (!selfHosted && !selectedSearch.has_key) || !!searchApiKey || testingSearch || saving !== null}
+                      onClick={() => void testSearch()}
+                      className="cursor-pointer rounded-md border border-line px-3 py-1.5 text-[12px] text-ink-2 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {testingSearch ? "Testing..." : "Test connection (may use credits)"}
+                    </button>
+                    <p role="status" className="text-[12px] text-ink-2">{searchTestResult}</p>
+                  </div>
+                )}
                 <div className="flex items-center gap-2 pt-1">
                   <button
                     type="button"
                     onClick={() => void save(tool)}
-                    disabled={saving === tool.key}
+                    disabled={saving !== null || testingSearch}
                     className="cursor-pointer rounded-md bg-accent px-3 py-1.5 text-[12px] font-medium text-white transition hover:opacity-90 disabled:opacity-50"
                   >
                     {saving === tool.key ? "Saving…" : tool.binding ? "Save" : "Save configuration"}

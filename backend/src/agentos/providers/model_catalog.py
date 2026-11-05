@@ -35,6 +35,7 @@ from ..secret_store import decrypt
 from ..ssl_utils import SSL_CERT_PATH as _SSL_CERT
 from .catalog import _bounded_error, get_catalog_snapshot
 from .catalog_policy import catalog_identity, resolve_fields, validate_overrides
+from .service_types import provider_scope
 
 logger = logging.getLogger(__name__)
 
@@ -813,6 +814,8 @@ async def _refresh_provider(provider_id: str, session_factory: Any, lock: asynci
         # Session 1: read config only — never hold a session across HTTP.
         async with session_factory() as db:
             provider = await _load_provider_config(db, provider_id)
+        if provider_scope(provider["type"]) != "model":
+            return
         fingerprint = _fingerprint(provider)
         try:
             if not _discoverable(provider):
