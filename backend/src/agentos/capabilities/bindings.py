@@ -76,6 +76,9 @@ class BindingSpec:
     # suggestions (e.g. ("image",) for image generation). Suggestions are
     # assistive — the field stays free-text per D40 override policy.
     model_modalities: tuple[str, ...] | None = None
+    # Model-kind tools bound to dedicated *service* providers (speech): the
+    # bound provider.type must be one of these. Empty = a chat/model provider.
+    service_types: tuple[str, ...] = ()
 
 
 BINDING_SPECS: tuple[BindingSpec, ...] = (
@@ -153,14 +156,48 @@ BINDING_SPECS: tuple[BindingSpec, ...] = (
             ),
         ),
     ),
+    # Speech cards are operator actions (W10) — no capability_names, so no
+    # agent tool can ever route through them. Per-operation provider support
+    # is the adapter registry in speech/service.py.
     BindingSpec(
-        key="media.tts",
-        title="Text to speech",
-        description="Generate spoken audio from text and save it as an artifact.",
+        key="speech.stt",
+        title="Speech to text",
+        description=(
+            "Composer dictation — record, transcribe, review the text, then "
+            "send. Uses a dedicated speech provider, not the chat model."
+        ),
         kind="model",
-        implemented=False,
-        capability_names=("media_speak",),
-        planned_note="Planned for this release — no executable backend yet.",
+        implemented=True,
+        capability_names=(),
+        service_types=("deepgram", "elevenlabs", "gradium"),
+        option_fields=(
+            OptionField(
+                name="language",
+                kind="string",
+                label="Language (blank = auto-detect)",
+                default=None,
+            ),
+        ),
+    ),
+    BindingSpec(
+        key="speech.tts",
+        title="Text to speech",
+        description=(
+            "Read aloud beneath assistant messages — explicit operator "
+            "playback, never automatic. Uses a dedicated speech provider."
+        ),
+        kind="model",
+        implemented=True,
+        capability_names=(),
+        service_types=("elevenlabs", "deepgram", "gradium"),
+        option_fields=(
+            OptionField(
+                name="voice",
+                kind="string",
+                label="Voice",
+                default=None,
+            ),
+        ),
     ),
     BindingSpec(
         key="media.image",
@@ -239,9 +276,15 @@ def validate_options(spec: BindingSpec, options: dict[str, Any]) -> dict[str, An
                 raise ValueError(f"{field.name} must be a number")
             normalized[field.name] = raw
         elif field.kind == "string":
-            if not isinstance(raw, str) or not raw.strip():
+            if not isinstance(raw, str):
                 raise ValueError(f"{field.name} must be a non-empty string")
-            normalized[field.name] = raw.strip()
+            raw = raw.strip()
+            if not raw:
+                if field.required:
+                    raise ValueError(f"{field.name} must be a non-empty string")
+                normalized[field.name] = None
+                continue
+            normalized[field.name] = raw
         elif field.kind == "select":
             if raw not in field.choices:
                 raise ValueError(f"{field.name} must be one of: {', '.join(field.choices)}")
@@ -379,9 +422,13 @@ async def resolve_binding(db: AsyncSession, key: str) -> BindingResolution:
             reason="Bound provider no longer exists — pick a new one.",
             options=options,
         )
-    if (service_search and provider.type != options["backend"]) or (
-        not service_search and provider.type in SERVICE_PROVIDER_TYPES
-    ):
+    if spec.service_types:
+        incompatible = provider.type not in spec.service_types
+    else:
+        incompatible = (service_search and provider.type != options["backend"]) or (
+            not service_search and provider.type in SERVICE_PROVIDER_TYPES
+        )
+    if incompatible:
         return BindingResolution(
             spec,
             binding,

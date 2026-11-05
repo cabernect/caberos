@@ -44,11 +44,13 @@ from .api import (  # noqa: E402
     schedules,
     settings,
     skills,
+    speech,
 )
 from .auth import router as auth_router  # noqa: E402
 from .capabilities.builtin import register_builtin_capabilities  # noqa: E402
 from .db import init_db, is_database_locked  # noqa: E402
 from .logging_config import configure_logging  # noqa: E402
+from .speech.service import SpeechError  # noqa: E402
 
 configure_logging()
 
@@ -644,6 +646,12 @@ app.include_router(data.router)
 app.include_router(browser.router)
 app.include_router(dependencies.router)
 app.include_router(fs.router)
+app.include_router(speech.router)
+
+
+@app.exception_handler(SpeechError)
+async def handle_speech_error(_request: Request, error: SpeechError):
+    return JSONResponse(status_code=error.status_code, content={"detail": str(error)})
 
 
 @app.get("/health")

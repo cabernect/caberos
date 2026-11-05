@@ -207,7 +207,7 @@ async def create_provider(
         ):
             raise HTTPException(
                 status_code=422,
-                detail="Cloud search uses fixed endpoints. "
+                detail="Service providers use fixed endpoints. "
                 "Only self-hosted Firecrawl accepts a server URL.",
             )
         if data.type == SELF_HOSTED:

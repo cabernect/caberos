@@ -326,6 +326,7 @@ async def _binding_out(db: AsyncSession, spec: BindingSpec) -> dict[str, Any]:
         "implemented": spec.implemented,
         "planned_note": spec.planned_note,
         "capability_names": list(spec.capability_names),
+        "service_types": list(spec.service_types) or None,
         "state": resolution.state,
         "ready": resolution.ready,
         "reason": resolution.reason,

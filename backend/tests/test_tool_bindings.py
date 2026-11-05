@@ -84,6 +84,29 @@ def test_validate_options_normalizes_and_rejects():
 # --- resolver ---
 
 
+@pytest.fixture
+def planned_spec():
+    from agentos.capabilities import bindings, catalog
+
+    spec = bindings.BindingSpec(
+        key="test.planned",
+        title="Planned",
+        description="d",
+        kind="model",
+        implemented=False,
+        capability_names=("test_planned",),
+        planned_note="later",
+    )
+    bindings._SPECS_BY_KEY["test.planned"] = spec
+    bindings._CAPABILITY_TO_KEY["test_planned"] = "test.planned"
+    old_specs = catalog.BINDING_SPECS
+    catalog.BINDING_SPECS = old_specs + (spec,)
+    yield spec
+    catalog.BINDING_SPECS = old_specs
+    bindings._SPECS_BY_KEY.pop("test.planned", None)
+    bindings._CAPABILITY_TO_KEY.pop("test_planned", None)
+
+
 async def test_engine_unconfigured_is_usable(db):
     resolution = await resolve_binding(db, "search.web")
     assert resolution.state == "unconfigured"
@@ -91,8 +114,8 @@ async def test_engine_unconfigured_is_usable(db):
     assert resolution.options["engines"][0] == "duckduckgo"
 
 
-async def test_unimplemented_spec_resolves_unready(db):
-    resolution = await resolve_binding(db, "media.tts")
+async def test_unimplemented_spec_resolves_unready(db, planned_spec):
+    resolution = await resolve_binding(db, "test.planned")
     assert resolution.state == "unimplemented"
     assert resolution.ready is False
 
@@ -131,11 +154,11 @@ async def test_model_binding_states(db):
     assert "no longer exists" in r.reason
 
 
-async def test_capability_ready_reflects_binding(db):
+async def test_capability_ready_reflects_binding(db, planned_spec):
     # Engine tool — usable unconfigured.
     assert await capability_ready(db, "web_search") is True
     # Model-backed planned tool — never ready while spec unimplemented.
-    assert await capability_ready(db, "media_speak") is False
+    assert await capability_ready(db, "test_planned") is False
 
 
 # --- settings API ---
@@ -150,9 +173,9 @@ async def test_list_tools_endpoint(client):
     assert search["kind"] == "engine"
     assert search["ready"] is True
     assert search["options_schema"]
-    tts = tools["media.tts"]
-    assert tts["implemented"] is False
-    assert tts["planned_note"]
+    tts = tools["speech.tts"]
+    assert tts["implemented"] is True
+    assert tts["kind"] == "model"
 
 
 async def test_put_engine_binding_and_conflict(client, db):
@@ -197,9 +220,9 @@ async def test_put_engine_rejects_provider_and_bad_options(client):
     assert r.status_code == 422
 
 
-async def test_put_unimplemented_is_refused(client):
+async def test_put_unimplemented_is_refused(client, planned_spec):
     r = await client.put(
-        "/api/settings/tools/media.tts",
+        "/api/settings/tools/test.planned",
         json={"provider_id": "p", "model": "tts-1"},
     )
     assert r.status_code == 422
@@ -225,7 +248,7 @@ async def test_unknown_key_404_and_reset(client, db):
 # --- catalog gate ---
 
 
-async def test_catalog_hides_unready_binding_tools(db):
+async def test_catalog_hides_unready_binding_tools(db, planned_spec):
     from agentos.capabilities.catalog import CapabilityRunCatalog
     from agentos.capabilities.registry import CapabilityDef, registry
     from agentos.config_schema import AgentConfig
@@ -233,7 +256,7 @@ async def test_catalog_hides_unready_binding_tools(db):
     # A test model-backed capability gated by an unimplemented spec.
     registry.register(
         CapabilityDef(
-            name="media_speak",
+            name="test_planned",
             kind="tool",
             description="test tts",
             parameters_schema={"type": "object", "properties": {}},
@@ -243,10 +266,10 @@ async def test_catalog_hides_unready_binding_tools(db):
     config = AgentConfig(id="a", name="A", model={"provider_id": "p", "name": "m"})
     catalog = CapabilityRunCatalog(agent_config=config, db=db)
     names = [m["name"] for m in await catalog._metadata()]
-    assert "media_speak" not in names
+    assert "test_planned" not in names
 
     # load() rejects with the not-configured reason
-    out = await catalog.load(["media_speak"])
+    out = await catalog.load(["test_planned"])
     assert out["rejected"][0]["reason"].startswith("Tool is not configured")
 
     # web_search remains available (engine defaults)

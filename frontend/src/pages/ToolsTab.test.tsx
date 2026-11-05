@@ -114,7 +114,7 @@ describe("ToolsTab", () => {
 
   it("renders the search card and planned media after load", async () => {
     vi.spyOn(api, "listToolBindings").mockResolvedValue({
-      tools: [searchTool(), plannedTool("media.tts", "Text to speech")],
+      tools: [searchTool(), plannedTool("test.planned", "Planned capability")],
     });
     renderTab();
     await act(async () => {});

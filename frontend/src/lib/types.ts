@@ -1199,6 +1199,7 @@ export interface ToolBindingInfo {
   implemented: boolean;
   planned_note: string | null;
   capability_names: string[];
+  service_types?: string[] | null;
   state: "unconfigured" | "ready" | "invalid" | "unimplemented";
   ready: boolean;
   reason: string;
