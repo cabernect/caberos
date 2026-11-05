@@ -257,6 +257,8 @@ class SQLiteBackend(DatabaseBackend):
             ("elicitation_requests", "sub_agent_id", "VARCHAR(36)"),
             ("terminal_sessions", "call_id", "VARCHAR(255)"),
             ("terminal_sessions", "sub_agent_id", "VARCHAR(36)"),
+            ("terminal_sessions", "backend_kind", "TEXT"),
+            ("terminal_sessions", "resource_id", "TEXT"),
             ("artifact_revisions", "call_id", "VARCHAR(255)"),
             ("artifact_revisions", "sub_agent_id", "VARCHAR(36)"),
             ("run_sources", "call_id", "VARCHAR(255)"),

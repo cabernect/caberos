@@ -153,6 +153,37 @@ backend-specific termination. Browser egress, service-scoped network exceptions,
 MCP transport enforcement, and resource limits remain blockers; W7 and S05/S09
 are still OPEN.
 
+### Subsequent Patch: Background Resource Lifecycle
+
+Background launch planning is now side-effect-free. The terminal registry saves
+the backend/resource identity in a `starting` row before resource activation;
+the production shared write-lock commits on clean exit. Docker then explicitly
+creates an owned, labeled container before attaching. This avoids a late
+container creation racing the death of a `docker run` client.
+
+Close, run cancellation, natural client exit, and gateway shutdown use the
+captured backend/launch rather than current settings or model-supplied identity.
+Cleanup checks the generated resource-name shape and ownership label before
+force-removing that exact container; it never requests volume removal or broad
+container cleanup. A failed inspect requires a separate successful absence
+query, not an assumption that the container disappeared.
+
+SQLite and Postgres additive patches preserve backend/resource metadata.
+Restart reconciliation retries recorded `starting`, `running`, and `orphaned`
+Docker resources. Unconfirmed cleanup stays `orphaned` and retryable, including
+when the local CLI has already exited successfully. Concurrent close/monitor
+paths serialize cleanup; cancellation does not manufacture a closed state.
+Legacy local interrupted rows remain unknown with respect to descendant
+termination. Daemon requests whose completion is unknown still require repeated
+reconciliation; this is not a lease-expiry guarantee.
+
+Written tests cover durable admission before activation, ownership mismatch,
+invalid cleanup identities, inspect/daemon failure, retry, concurrent close,
+cancel/shutdown, natural client exit, and restart outcomes. Ruff and formatting
+checks pass on the changed Python files. Runtime/DB/daemon tests remain NOT RUN;
+the isolated-runner blocker has not been bypassed. No real containers were
+created, stopped, or removed by this work.
+
 ## Outbound Request Map
 
 | Path | Before | Now |

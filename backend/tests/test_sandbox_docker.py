@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from agentos.sandbox.base import SandboxLaunch
 from agentos.sandbox.docker import DockerBackend
 
 
@@ -217,3 +218,84 @@ async def test_timeout_kills_the_container(tmp_path):
     assert "timed out" in result.stderr
     kill_calls = [c for c in docker_calls if c[0:2] == ("docker", "kill")]
     assert kill_calls, "expected `docker kill <container>` to be invoked on timeout"
+
+
+async def test_background_prepares_resource_before_attaching(tmp_path):
+    backend = DockerBackend()
+    with patch.object(backend, "_control", AsyncMock(return_value=b"a" * 64)) as control:
+        launch = await backend.prepare_launch(str(tmp_path), "echo --name not-the-resource")
+    args = control.call_args.args
+    assert args[0] == "create"
+    assert "--pull=never" in args
+    assert "--rm" not in args
+    assert launch.argv == ["docker", "start", "--attach", launch.resource_id]
+    assert args[args.index("--name") + 1] == launch.resource_id
+    assert f"io.caberos.sandbox={launch.resource_id}" in args
+
+
+async def test_failed_resource_creation_attempts_cleanup(tmp_path):
+    backend = DockerBackend()
+    with (
+        patch.object(backend, "_control", AsyncMock(side_effect=RuntimeError("dummy failure"))),
+        patch.object(backend, "cleanup_launch", AsyncMock(return_value=False)) as cleanup,
+    ):
+        with pytest.raises(RuntimeError, match="dummy failure"):
+            await backend.prepare_launch(str(tmp_path), "true")
+    cleanup.assert_awaited_once()
+
+
+async def test_cleanup_requires_matching_ownership_label():
+    name = "caberos-sandbox-" + "a" * 32
+    backend = DockerBackend()
+    with patch.object(backend, "_control", AsyncMock(return_value=b"someone-else")) as control:
+        confirmed = await backend.cleanup_launch(SandboxLaunch([], None, name), None)
+    assert confirmed is False
+    assert control.await_count == 1
+    assert control.call_args.args[0] == "inspect"
+
+
+async def test_cleanup_removes_only_the_captured_owned_resource():
+    name = "caberos-sandbox-" + "a" * 32
+    backend = DockerBackend()
+    with patch.object(
+        backend, "_control", AsyncMock(side_effect=[name.encode(), name.encode()])
+    ) as control:
+        confirmed = await backend.cleanup_launch(SandboxLaunch([], None, name), None)
+    assert confirmed is True
+    assert control.call_args.args == ("rm", "--force", name)
+
+
+@pytest.mark.parametrize("identity", [None, "other-container", "--all"])
+async def test_invalid_cleanup_identity_never_reaches_docker(identity):
+    backend = DockerBackend()
+    with patch.object(backend, "_control", AsyncMock()) as control:
+        confirmed = await backend.cleanup_launch(SandboxLaunch([], None, identity), None)
+    assert confirmed is False
+    control.assert_not_awaited()
+
+
+@pytest.mark.parametrize("remaining", [b"", b"existing-container"])
+async def test_failed_inspect_needs_separate_absence_evidence(remaining):
+    name = "caberos-sandbox-" + "a" * 32
+    backend = DockerBackend()
+    with patch.object(
+        backend, "_control", AsyncMock(side_effect=[RuntimeError("inspect failed"), remaining])
+    ) as control:
+        confirmed = await backend.cleanup_launch(SandboxLaunch([], None, name), None)
+    assert confirmed is (remaining == b"")
+    assert control.call_args.args == (
+        "ps",
+        "--all",
+        "--filter",
+        f"name=^/{name}$",
+        "--format",
+        "{{.ID}}",
+    )
+
+
+async def test_daemon_disconnect_never_claims_resource_stopped():
+    name = "caberos-sandbox-" + "a" * 32
+    backend = DockerBackend()
+    with patch.object(backend, "_control", AsyncMock(side_effect=OSError("offline"))):
+        confirmed = await backend.cleanup_launch(SandboxLaunch([], None, name), None)
+    assert confirmed is False

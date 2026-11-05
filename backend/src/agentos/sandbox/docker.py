@@ -9,13 +9,14 @@ Windows uses MXC instead, see mxc.py and base._candidates_for().
 
 import asyncio
 import logging
+import re
 import shutil
 import subprocess
 import time
 import uuid
 from pathlib import Path
 
-from .base import SandboxBackend, ShellResult
+from .base import SandboxBackend, SandboxLaunch, ShellResult, kill_process_group
 
 log = logging.getLogger(__name__)
 
@@ -100,6 +101,8 @@ class DockerBackend(SandboxBackend):
             "--rm",
             "--name",
             container_name,
+            "--label",
+            f"io.caberos.sandbox={container_name}",
             "-v",
             f"{workspace}:/workspace",
             "-w",
@@ -126,6 +129,83 @@ class DockerBackend(SandboxBackend):
         return self._docker_argv(
             workspace_path, command, allow_network, f"caberos-sandbox-{uuid.uuid4().hex}"
         )
+
+    async def _control(self, *argv: str) -> bytes:
+        """Bounded controller command; errors never expose daemon response bodies."""
+        proc = await asyncio.create_subprocess_exec(
+            "docker",
+            *argv,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            async with asyncio.timeout(_KILL_GRACE):
+                if proc.stdout is None:
+                    raise RuntimeError("Docker resource output is unavailable.")
+                output = await proc.stdout.read(4097)
+                if len(output) > 4096 or await proc.wait() != 0:
+                    raise RuntimeError("Docker resource operation failed.")
+                return output.strip()
+        finally:
+            if proc.returncode is None:
+                proc.kill()
+                await asyncio.wait_for(proc.wait(), timeout=_KILL_GRACE)
+
+    def plan_launch(self, workspace_path: str, command: str) -> SandboxLaunch:
+        # Create first: stopping an attach client must not race a late container
+        # creation. Once acknowledged, removing this resource also stops a late start.
+        name = f"caberos-sandbox-{uuid.uuid4().hex}"
+        args = self._docker_argv(workspace_path, command, False, name)
+        args[1] = "create"
+        args.remove("--rm")
+        return SandboxLaunch(
+            argv=["docker", "start", "--attach", name],
+            env=None,
+            resource_id=name,
+            setup_argv=args[1:],
+        )
+
+    async def activate_launch(self, launch: SandboxLaunch) -> None:
+        try:
+            if launch.setup_argv is None:
+                raise RuntimeError("Docker resource plan is missing.")
+            resource = await self._control(*launch.setup_argv)
+            if re.fullmatch(rb"[0-9a-f]{64}", resource) is None:
+                raise RuntimeError("Docker did not confirm resource creation.")
+        except BaseException:
+            # The request may have reached the daemon before a disconnect.
+            await self.cleanup_launch(launch, None)
+            raise
+
+    async def cleanup_launch(
+        self, launch: SandboxLaunch, proc: asyncio.subprocess.Process | None
+    ) -> bool:
+        if proc is not None:
+            await kill_process_group(proc)
+        name = launch.resource_id or ""
+        if re.fullmatch(r"caberos-sandbox-[0-9a-f]{32}", name) is None:
+            return False
+        try:
+            try:
+                owner = await self._control(
+                    "inspect",
+                    "--format",
+                    '{{ index .Config.Labels "io.caberos.sandbox" }}',
+                    name,
+                )
+            except (OSError, RuntimeError, TimeoutError):
+                # A failed inspect alone is not evidence that a resource is gone.
+                remaining = await self._control(
+                    "ps", "--all", "--filter", f"name=^/{name}$", "--format", "{{.ID}}"
+                )
+                return remaining == b""
+            if owner != name.encode("ascii"):
+                return False
+            await self._control("rm", "--force", name)
+            return True
+        except (OSError, RuntimeError, TimeoutError):
+            log.warning("Docker launch cleanup could not be confirmed.")
+            return False
 
     async def run_command(
         self, workspace_path: str, command: str, timeout: int = 30, allow_network: bool = False

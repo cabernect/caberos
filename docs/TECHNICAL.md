@@ -183,6 +183,18 @@ verification, probe rate limiting, and service-usage accounting remain open.
 
 ## 12. Sandbox matrix
 
+Background terminals retain their admitted backend and a controller-owned launch
+identity. Docker uses create-then-attach, with the planned identity committed
+before activation, rather than treating a `docker run` CLI PID as the container.
+Close, run cancellation, natural CLI exit, and gateway shutdown invoke backend
+cleanup. Removal requires the exact generated resource name and matching CaberOS
+ownership label. SQLite/Postgres patches retain `backend_kind`/`resource_id`;
+startup retries known external resources. Failed cleanup reports `orphaned` and
+remains retryable; a disconnected daemon or failed inspect is not proof of
+termination. Legacy local `interrupted` records do not prove descendant cleanup.
+This lifecycle slice has static checks only so far; isolated runtime, migration,
+and daemon-failure tests are still required.
+
 | Platform | Backend | Notes |
 |---|---|---|
 | macOS | `seatbelt` (sandbox-exec) | Tier 1 |

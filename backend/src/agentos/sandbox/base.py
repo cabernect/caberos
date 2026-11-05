@@ -34,6 +34,16 @@ class ShellResult:
 
 
 @dataclass
+class SandboxLaunch:
+    """Controller-owned launch identity; never reconstructed from model arguments."""
+
+    argv: list[str]
+    env: dict[str, str] | None
+    resource_id: str | None = None
+    setup_argv: list[str] | None = None
+
+
+@dataclass
 class SandboxProbe:
     """What the operator needs to know about shell isolation on this machine."""
 
@@ -136,6 +146,31 @@ class SandboxBackend(ABC):
     def spawn_env(self, workspace_path: str) -> dict[str, str] | None:
         """Env for a spawned sandbox process; None = inherit parent env."""
         return None
+
+    def plan_launch(self, workspace_path: str, command: str) -> SandboxLaunch:
+        """Choose an owned identity without creating processes or external resources."""
+        return SandboxLaunch(
+            argv=self.spawn_argv(workspace_path, command),
+            env=self.spawn_env(workspace_path),
+        )
+
+    async def activate_launch(self, launch: SandboxLaunch) -> None:
+        """Create a resource only after the controller has persisted its identity."""
+
+    async def prepare_launch(self, workspace_path: str, command: str) -> SandboxLaunch:
+        """Convenience for callers that do not need durable admission."""
+        launch = self.plan_launch(workspace_path, command)
+        await self.activate_launch(launch)
+        return launch
+
+    async def cleanup_launch(
+        self, launch: SandboxLaunch, proc: asyncio.subprocess.Process | None
+    ) -> bool:
+        """Stop an owned launch; False means termination could not be confirmed."""
+        if proc is None:
+            return True
+        await kill_process_group(proc)
+        return proc.returncode is not None
 
     @abstractmethod
     def is_available(self) -> bool:

@@ -211,6 +211,11 @@ The `/api/health` endpoint also reports provider and agent counts, and the gatew
 - **Performance:** ~100-200ms per sandbox setup (container start + workspace mount). Slower than native backends but more portable.
 - **Filesystem access:** Workspace is bind-mounted to `/workspace` inside the container; container sees only its `/workspace` and system libraries
 - **Timeout behavior:** On timeout, CaberOS runs `docker kill <container>` to stop the actual container (not just the local `docker run` client process)
+- **Background lifecycle (W7 worktree):** The controller records a generated
+  resource name before creating and attaching to a container. Close/cancel/
+  shutdown and restart reconciliation remove only the recorded, ownership-
+  labeled resource. Failed confirmation reports `orphaned`, not `closed`.
+  Native daemon and migration verification remain pending.
 
 ## What happens when no sandbox is available
 
