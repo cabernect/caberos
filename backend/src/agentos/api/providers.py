@@ -180,7 +180,7 @@ class ModelInfo(BaseModel):
 
 @router.get("")
 async def list_providers(
-    scope: Literal["model", "search", "all"] = "model",
+    scope: Literal["model", "search", "speech", "all"] = "model",
     operator: Operator = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ) -> list[ProviderOut]:

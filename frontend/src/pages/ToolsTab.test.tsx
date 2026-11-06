@@ -120,7 +120,7 @@ describe("ToolsTab", () => {
     await act(async () => {});
     expect(screen.getByText("Web search")).toBeTruthy();
     expect(screen.getByText("Not configured")).toBeTruthy();
-    expect(screen.getByText("Text to speech")).toBeTruthy();
+    expect(screen.getByText("Planned capability")).toBeTruthy();
     expect(screen.getByText("Not yet available")).toBeTruthy();
     expect(screen.getByText("Planned for a future release.")).toBeTruthy();
     // Planned cards expose no executable controls.

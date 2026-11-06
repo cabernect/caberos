@@ -1151,7 +1151,7 @@ export const api = {
     ),
 
   // Providers
-  listProviders: (scope?: "model" | "search" | "all") =>
+  listProviders: (scope?: "model" | "search" | "speech" | "all") =>
     request<Provider[]>(`/api/providers${scope ? `?scope=${scope}` : ""}`),
   createProvider: (
     data: Partial<Provider> & {

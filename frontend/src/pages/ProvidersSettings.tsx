@@ -4520,6 +4520,7 @@ export function ToolsTab({ providers }: { providers: Provider[] }) {
   >({});
   const [saving, setSaving] = useState<string | null>(null);
   const [searchProviders, setSearchProviders] = useState<Provider[]>([]);
+  const [speechProviders, setSpeechProviders] = useState<Provider[]>([]);
   const [searchName, setSearchName] = useState("");
   const [searchApiKey, setSearchApiKey] = useState("");
   const [deletingSearchKey, setDeletingSearchKey] = useState(false);
@@ -4571,12 +4572,14 @@ export function ToolsTab({ providers }: { providers: Provider[] }) {
 
   const load = useCallback(async () => {
     try {
-      const [r, services] = await Promise.all([
+      const [r, services, speechServices] = await Promise.all([
         api.listToolBindings(),
         api.listProviders("search"),
+        api.listProviders("speech"),
       ]);
       setTools(r.tools);
       setSearchProviders(services);
+      setSpeechProviders(speechServices);
       const boundSearch = r.tools.find((t) => t.key === "search.web");
       const boundSearchProvider = services.find(
         (p) => p.id === boundSearch?.binding?.provider_id,
@@ -4844,10 +4847,16 @@ export function ToolsTab({ providers }: { providers: Provider[] }) {
                         }}
                         options={[
                           { value: "", label: "Choose provider…" },
-                          ...providers.map((p) => ({
-                            value: p.id,
-                            label: `${p.name} (${p.type})`,
-                          })),
+                          ...[...providers, ...speechProviders]
+                            .filter(
+                              (p) =>
+                                !tool.service_types?.length ||
+                                tool.service_types.includes(p.type),
+                            )
+                            .map((p) => ({
+                              value: p.id,
+                              label: `${p.name} (${p.type})`,
+                            })),
                         ]}
                         className="w-full rounded-md border border-line bg-ground px-3 py-1.5 text-[13px] text-ink outline-none"
                       />
