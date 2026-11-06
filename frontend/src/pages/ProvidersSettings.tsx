@@ -4414,6 +4414,12 @@ const ENGINE_LABELS: Record<string, string> = {
 const engineLabel = (key: string) => ENGINE_LABELS[key] ?? key;
 
 /** Search backends that dispatch through a Provider-stored credential. */
+const SPEECH_SERVICE_LABELS: Record<string, string> = {
+  deepgram: "Deepgram",
+  elevenlabs: "ElevenLabs",
+  gradium: "Gradium",
+};
+
 const SEARCH_SERVICE_LABELS: Record<string, string> = {
   tavily: "Tavily",
   exa: "Exa",
@@ -4521,6 +4527,10 @@ export function ToolsTab({ providers }: { providers: Provider[] }) {
   const [saving, setSaving] = useState<string | null>(null);
   const [searchProviders, setSearchProviders] = useState<Provider[]>([]);
   const [speechProviders, setSpeechProviders] = useState<Provider[]>([]);
+  // Per-tool draft for "+ New connection" — dedicated speech provider types.
+  const [speechNew, setSpeechNew] = useState<
+    Record<string, { name: string; apiKey: string }>
+  >({});
   const [searchName, setSearchName] = useState("");
   const [searchApiKey, setSearchApiKey] = useState("");
   const [deletingSearchKey, setDeletingSearchKey] = useState(false);
@@ -4667,6 +4677,23 @@ export function ToolsTab({ providers }: { providers: Provider[] }) {
         setSearchApiKey("");
         setSearchTestResult("");
       }
+      // Speech card "+ New connection" — create the dedicated provider inline
+      // (encrypted custody, same as search) before binding it.
+      if (providerId.startsWith("new:")) {
+        const type = providerId.slice(4);
+        const newDraft = speechNew[tool.key] ?? { name: "", apiKey: "" };
+        if (!newDraft.apiKey.trim()) {
+          throw new Error(`Enter a ${SPEECH_SERVICE_LABELS[type] ?? type} API key.`);
+        }
+        const created = await api.createProvider({
+          type,
+          name: newDraft.name.trim() || `${SPEECH_SERVICE_LABELS[type] ?? type} speech`,
+          api_key: newDraft.apiKey.trim(),
+        });
+        providerId = created.id;
+        setSpeechProviders((prev) => [...prev, created]);
+        setSpeechNew((prev) => ({ ...prev, [tool.key]: { name: "", apiKey: "" } }));
+      }
       const body =
         tool.kind === "engine"
           ? {
@@ -4675,7 +4702,7 @@ export function ToolsTab({ providers }: { providers: Provider[] }) {
               expected_revision: tool.binding?.revision ?? null,
             }
           : {
-              provider_id: draft.providerId || null,
+              provider_id: providerId || null,
               model: draft.model,
               options: draft.options,
               expected_revision: tool.binding?.revision ?? null,
@@ -4857,6 +4884,12 @@ export function ToolsTab({ providers }: { providers: Provider[] }) {
                               value: p.id,
                               label: `${p.name} (${p.type})`,
                             })),
+                          ...(tool.service_types ?? [])
+                            .filter((t) => SPEECH_SERVICE_LABELS[t])
+                            .map((t) => ({
+                              value: `new:${t}`,
+                              label: `＋ New ${SPEECH_SERVICE_LABELS[t]} connection`,
+                            })),
                         ]}
                         className="w-full rounded-md border border-line bg-ground px-3 py-1.5 text-[13px] text-ink outline-none"
                       />
@@ -4882,6 +4915,38 @@ export function ToolsTab({ providers }: { providers: Provider[] }) {
                           <option key={id} value={id} />
                         ))}
                       </datalist>
+                    </Field>
+                  </div>
+                )}
+                {tool.kind === "model" && draft.providerId.startsWith("new:") && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <Field label="Connection name">
+                      <input
+                        value={speechNew[tool.key]?.name ?? ""}
+                        onChange={(e) =>
+                          setSpeechNew((prev) => ({
+                            ...prev,
+                            [tool.key]: { name: e.target.value, apiKey: prev[tool.key]?.apiKey ?? "" },
+                          }))
+                        }
+                        placeholder={`${SPEECH_SERVICE_LABELS[draft.providerId.slice(4)] ?? "Speech"} speech`}
+                        className="w-full rounded-md border border-line bg-ground px-3 py-1.5 text-[13px] text-ink outline-none"
+                      />
+                    </Field>
+                    <Field label="API key">
+                      <input
+                        type="password"
+                        autoComplete="new-password"
+                        value={speechNew[tool.key]?.apiKey ?? ""}
+                        onChange={(e) =>
+                          setSpeechNew((prev) => ({
+                            ...prev,
+                            [tool.key]: { name: prev[tool.key]?.name ?? "", apiKey: e.target.value },
+                          }))
+                        }
+                        placeholder="Stored encrypted — write-only"
+                        className="w-full rounded-md border border-line bg-ground px-3 py-1.5 text-[13px] text-ink outline-none"
+                      />
                     </Field>
                   </div>
                 )}
