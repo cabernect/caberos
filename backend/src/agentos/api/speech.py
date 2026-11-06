@@ -19,6 +19,7 @@ from ..auth import Operator, require_operator
 from ..capabilities.bindings import resolve_binding
 from ..db import get_db
 from ..models.run import Message, Run
+from ..speech import adapters as _speech_adapters  # noqa: F401 — registers adapters
 from ..speech.renderer import has_speakable_text, render_speakable
 from ..speech.service import (
     SPEECH_STT_KEY,

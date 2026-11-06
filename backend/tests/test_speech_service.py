@@ -231,7 +231,7 @@ async def test_status_reports_readiness(client, db):
     r = await client.get("/api/speech/status")
     body = r.json()["stt"]
     assert body["configured"] is True
-    assert body["adapter"] is False  # no real adapter registered
+    assert body["adapter"] is True  # deepgram stt adapter is registered
     assert body["provider"] == "SpeechProv" and body["model"] == "nova-3"
 
 
