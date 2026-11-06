@@ -375,3 +375,121 @@ async def test_elevenlabs_tts_error_no_key_echo(monkeypatch):
     with pytest.raises(SpeechProviderError, match="429") as exc:
         await _elevenlabs_tts(_el_req(operation="tts", options={"voice": "v"}, text="x"))
     assert "el-secret" not in str(exc.value)
+
+
+# --- Deepgram Aura TTS --------------------------------------------------------
+
+from agentos.speech.adapters import _deepgram_tts  # noqa: E402
+
+
+def _dg_tts_req(**over) -> SpeechRequest:
+    base = dict(
+        operation="tts",
+        request_id="r5",
+        provider_id="p5",
+        provider_type="deepgram",
+        model="aura-2-thalia-en",
+        options={},
+        api_key="dg-secret",
+        binding_revision=1,
+        text="read me",
+    )
+    base.update(over)
+    return SpeechRequest(**base)
+
+
+async def test_deepgram_tts_posts_text_and_collects_audio(monkeypatch):
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, content=b"MP3BYTES", headers={"dg-char-count": "7"})
+
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kw: _REAL_CLIENT(transport=httpx.MockTransport(handler)),
+    )
+    result = await _deepgram_tts(_dg_tts_req())
+    request = seen[0]
+    assert str(request.url).startswith("https://api.deepgram.com/v1/speak")
+    assert request.url.params["model"] == "aura-2-thalia-en"
+    assert request.url.params["encoding"] == "mp3"
+    assert request.headers["authorization"] == "Token dg-secret"
+    assert json.loads(request.content) == {"text": "read me"}
+    assert result.audio == b"MP3BYTES" and result.mime == "audio/mpeg"
+    assert result.usage["characters_reported"] == 7
+
+
+async def test_deepgram_tts_error_no_key_echo(monkeypatch):
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _bytes_client(b"err", status=403))
+    with pytest.raises(SpeechProviderError, match="403") as exc:
+        await _deepgram_tts(_dg_tts_req())
+    assert "dg-secret" not in str(exc.value)
+
+
+# --- Gradium ------------------------------------------------------------------
+
+from agentos.speech.adapters import _gradium_stt, _gradium_tts  # noqa: E402
+
+
+def _gr_req(**over) -> SpeechRequest:
+    base = dict(
+        operation="stt",
+        request_id="r6",
+        provider_id="p6",
+        provider_type="gradium",
+        model="default",
+        options={},
+        api_key="gr-secret",
+        binding_revision=1,
+        audio=b"wav-bytes",
+        mime="audio/wav",
+    )
+    base.update(over)
+    return SpeechRequest(**base)
+
+
+async def test_gradium_stt_ndjson_and_shape(monkeypatch):
+    seen = []
+    ndjson = b'{"type":"text","text":"hello"}\n{"type":"step"}\n{"type":"text","text":"world"}\n'
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _bytes_client(ndjson, capture=seen))
+    result = await _gradium_stt(_gr_req(options={"language": "en"}))
+    request = seen[0]
+    assert str(request.url).startswith("https://api.gradium.ai/api/post/speech/asr")
+    assert request.headers["x-api-key"] == "gr-secret"
+    assert request.headers["content-type"] == "audio/wav"
+    assert request.url.params["model"] == "default"
+    assert json.loads(request.url.params["json_config"]) == {"language": "en"}
+    assert result.text == "hello world"
+
+
+async def test_gradium_stt_rejects_webm_upfront(monkeypatch):
+    called = []
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: called.append(1) or _client({}))
+    with pytest.raises(SpeechError, match="wav/ogg/pcm"):
+        await _gradium_stt(_gr_req(mime="audio/webm"))
+    assert called == []
+
+
+async def test_gradium_stt_stream_error_is_honest(monkeypatch):
+    ndjson = b'{"type":"text","text":"hi"}\n{"type":"error","message":"x"}\n'
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _bytes_client(ndjson))
+    with pytest.raises(SpeechProviderError, match="mid-stream"):
+        await _gradium_stt(_gr_req())
+
+
+async def test_gradium_tts_only_audio_shape(monkeypatch):
+    seen = []
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _bytes_client(b"WAVDATA", capture=seen))
+    result = await _gradium_tts(
+        _gr_req(operation="tts", options={"voice": "YTpq7expH9539ERJ"}, text="hi")
+    )
+    request = seen[0]
+    assert str(request.url) == "https://api.gradium.ai/api/post/speech/tts"
+    payload = json.loads(request.content)
+    assert payload["only_audio"] is True
+    assert payload["output_format"] == "wav"
+    assert payload["voice_id"] == "YTpq7expH9539ERJ"
+    assert payload["text"] == "hi" and payload["model_name"] == "default"
+    assert result.audio == b"WAVDATA" and result.mime == "audio/wav"

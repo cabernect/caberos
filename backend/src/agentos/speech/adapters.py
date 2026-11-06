@@ -451,5 +451,180 @@ async def _elevenlabs_tts(req: SpeechRequest) -> SynthesisResult:
 register_adapter("elevenlabs", "stt", _elevenlabs_stt)
 register_adapter("elevenlabs", "tts", _elevenlabs_tts)
 
-# Registered as provider contracts are verified (W10 unit 6):
-# deepgram tts (aura), gradium tts.
+
+# --- Deepgram Aura TTS -------------------------------------------------------
+#
+# Verified contract: POST /v1/speak?model=aura-* JSON {"text": ...} → audio
+# bytes (encoding=mp3). Token auth like /v1/listen. The dg-char-count
+# response header reports billed characters.
+
+_DEEPGRAM_SPEAK = "https://api.deepgram.com/v1/speak"
+
+
+async def _deepgram_tts(req: SpeechRequest) -> SynthesisResult:
+    if not req.api_key:
+        raise SpeechError("Deepgram provider has no API key.")
+    params = {"model": req.model, "encoding": "mp3"}
+    headers = {
+        "Authorization": f"Token {req.api_key}",
+        "Content-Type": "application/json",
+    }
+    try:
+        async with asyncio.timeout(_TIMEOUT_S):
+            async with httpx.AsyncClient(
+                verify=SSL_CERT_PATH,
+                timeout=_TIMEOUT_S,
+                follow_redirects=False,
+                trust_env=False,
+            ) as client:
+                response = await client.post(
+                    _DEEPGRAM_SPEAK,
+                    params=params,
+                    headers=headers,
+                    json={"text": req.text},
+                )
+                if response.status_code != 200:
+                    raise SpeechProviderError(
+                        f"Deepgram synthesis failed (HTTP {response.status_code})."
+                    )
+                char_count = response.headers.get("dg-char-count")
+                audio = bytearray()
+                async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
+                    audio.extend(chunk)
+                    if len(audio) > _RESPONSE_LIMIT:
+                        raise ValueError("oversized response")
+    except (TimeoutError, httpx.TimeoutException) as exc:
+        raise TimeoutError("Deepgram synthesis timed out; it may have been billed.") from exc
+    except (httpx.HTTPError, OSError) as exc:
+        raise SpeechProviderError("Deepgram synthesis request failed.") from exc
+    usage: dict[str, object] = {}
+    if char_count and char_count.isdigit():
+        usage["characters_reported"] = int(char_count)
+    return SynthesisResult(
+        audio=bytes(audio), mime="audio/mpeg", characters=len(req.text), usage=usage
+    )
+
+
+register_adapter("deepgram", "tts", _deepgram_tts)
+
+
+# --- Gradium -----------------------------------------------------------------
+#
+# Verified contract (docs.gradium.ai):
+#   STT: POST /api/post/speech/asr, raw audio bytes, Content-Type selects
+#   format (wav/pcm/ogg only — no webm/mp4), optional model + json_config
+#   query params. Response is NDJSON: collect "text" messages, "error"
+#   messages fail the request.
+#   TTS: POST /api/post/speech/tts JSON {text, voice_id?, model_name,
+#   output_format, only_audio:true} → raw audio bytes. x-api-key auth.
+
+_GRADIUM_BASE = "https://api.gradium.ai/api"
+_GRADIUM_STT_MIME = {"audio/wav", "audio/x-wav", "audio/pcm", "audio/ogg", "audio/opus"}
+
+
+def _gradium_base(req: SpeechRequest) -> str:
+    return (req.base_url or _GRADIUM_BASE).rstrip("/")
+
+
+async def _gradium_stt(req: SpeechRequest) -> TranscriptResult:
+    if not req.api_key:
+        raise SpeechError("Gradium provider has no API key.")
+    if req.mime and req.mime not in _GRADIUM_STT_MIME:
+        raise SpeechError(f"Gradium transcription accepts wav/ogg/pcm audio, not '{req.mime}'.")
+    base = _gradium_base(req)
+    params: dict[str, str] = {"model": req.model}
+    language = (req.options.get("language") or "").strip() if req.options.get("language") else ""
+    if language:
+        params["json_config"] = json.dumps({"language": language})
+    headers = {
+        "x-api-key": req.api_key,
+        "Content-Type": req.mime or "audio/wav",
+    }
+    try:
+        async with asyncio.timeout(_TIMEOUT_S):
+            async with httpx.AsyncClient(
+                verify=SSL_CERT_PATH,
+                timeout=_TIMEOUT_S,
+                follow_redirects=False,
+                trust_env=False,
+            ) as client:
+                response = await client.post(
+                    f"{base}/post/speech/asr",
+                    params=params,
+                    headers=headers,
+                    content=req.audio,
+                )
+                if response.status_code != 200:
+                    raise SpeechProviderError(
+                        f"Gradium transcription failed (HTTP {response.status_code})."
+                    )
+                body = response.content
+                if len(body) > _RESPONSE_LIMIT:
+                    raise ValueError("oversized response")
+    except (TimeoutError, httpx.TimeoutException) as exc:
+        raise TimeoutError("Gradium transcription timed out; it may have been billed.") from exc
+    except (httpx.HTTPError, OSError) as exc:
+        raise SpeechProviderError("Gradium transcription request failed.") from exc
+
+    parts: list[str] = []
+    for line in body.decode("utf-8", "replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if msg.get("type") == "error":
+            raise SpeechProviderError("Gradium transcription failed mid-stream.")
+        if msg.get("type") == "text" and msg.get("text"):
+            parts.append(str(msg["text"]))
+    return TranscriptResult(text=" ".join(parts).strip())
+
+
+async def _gradium_tts(req: SpeechRequest) -> SynthesisResult:
+    if not req.api_key:
+        raise SpeechError("Gradium provider has no API key.")
+    base = _gradium_base(req)
+    headers = {
+        "x-api-key": req.api_key,
+        "Content-Type": "application/json",
+    }
+    voice = (req.options.get("voice") or "").strip() if req.options.get("voice") else ""
+    payload: dict[str, object] = {
+        "text": req.text,
+        "model_name": req.model,
+        "output_format": "wav",
+        "only_audio": True,
+    }
+    if voice:
+        payload["voice_id"] = voice
+    try:
+        async with asyncio.timeout(_TIMEOUT_S):
+            async with httpx.AsyncClient(
+                verify=SSL_CERT_PATH,
+                timeout=_TIMEOUT_S,
+                follow_redirects=False,
+                trust_env=False,
+            ) as client:
+                response = await client.post(
+                    f"{base}/post/speech/tts", headers=headers, json=payload
+                )
+                if response.status_code != 200:
+                    raise SpeechProviderError(
+                        f"Gradium synthesis failed (HTTP {response.status_code})."
+                    )
+                audio = bytearray()
+                async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
+                    audio.extend(chunk)
+                    if len(audio) > _RESPONSE_LIMIT:
+                        raise ValueError("oversized response")
+    except (TimeoutError, httpx.TimeoutException) as exc:
+        raise TimeoutError("Gradium synthesis timed out; it may have been billed.") from exc
+    except (httpx.HTTPError, OSError) as exc:
+        raise SpeechProviderError("Gradium synthesis request failed.") from exc
+    return SynthesisResult(audio=bytes(audio), mime="audio/wav", characters=len(req.text))
+
+
+register_adapter("gradium", "stt", _gradium_stt)
+register_adapter("gradium", "tts", _gradium_tts)

@@ -179,9 +179,11 @@ async def test_adapter_error_records_failed_receipt(db, monkeypatch):
     assert "provider exploded" not in (rows[0].error or "")  # type-only receipt
 
 
-async def test_unknown_provider_type_is_honest_unavailable(db):
+async def test_unknown_provider_type_is_honest_unavailable(db, monkeypatch):
     provider = await _speech_provider(db, type_="gradium")
     await _bind(db, "speech.stt", provider)
+    # Adapter absent at dispatch (e.g. binding predates a registry change).
+    monkeypatch.delitem(speech_service._ADAPTERS, ("gradium", "stt"))
     with pytest.raises(SpeechUnavailable, match="gradium.*stt"):
         await transcribe(db=db, audio=b"x", mime="audio/wav")
 
