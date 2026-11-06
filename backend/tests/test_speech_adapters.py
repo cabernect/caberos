@@ -119,3 +119,93 @@ async def test_missing_key_is_clear_error():
 
     with pytest.raises(SpeechError, match="no API key"):
         await _deepgram_stt(_req(api_key=None))
+
+
+# --- OpenAI-compatible audio adapters ---------------------------------------
+
+from agentos.speech.adapters import _openai_stt, _openai_tts  # noqa: E402
+
+
+def _oai_req(**over) -> SpeechRequest:
+    base = dict(
+        operation="stt",
+        request_id="r2",
+        provider_id="p2",
+        provider_type="openai",
+        model="whisper-1",
+        options={},
+        api_key="sk-test",
+        binding_revision=1,
+        audio=b"wav-bytes",
+        mime="audio/wav",
+    )
+    base.update(over)
+    return SpeechRequest(**base)
+
+
+async def test_openai_stt_multipart_shape_and_defaults(monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kw: _client({"text": "hi there"}, capture=seen)
+    )
+    result = await _openai_stt(_oai_req(options={"language": "vi"}))
+    request = seen[0]
+    assert str(request.url) == "https://api.openai.com/v1/audio/transcriptions"
+    assert request.headers["authorization"] == "Bearer sk-test"
+    body = request.content.decode()
+    assert 'name="model"' in body and "whisper-1" in body
+    assert 'name="language"' in body and "vi" in body
+    assert 'name="file"' in body and "audio/wav" in body
+    assert result.text == "hi there"
+
+
+async def test_openai_stt_groq_base_and_no_language_param(monkeypatch):
+    seen = []
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _client({"text": "x"}, capture=seen))
+    await _openai_stt(_oai_req(provider_type="groq", model="whisper-large-v3"))
+    assert str(seen[0].url).startswith("https://api.groq.com/openai/v1/audio/transcriptions")
+    assert 'name="language"' not in seen[0].content.decode()
+
+
+async def test_openai_stt_custom_base_url_wins(monkeypatch):
+    seen = []
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _client({"text": "x"}, capture=seen))
+    await _openai_stt(_oai_req(base_url="http://localhost:9999/api"))
+    assert str(seen[0].url).startswith("http://localhost:9999/api/v1/audio/transcriptions")
+
+
+async def test_openai_tts_shape_and_bytes(monkeypatch):
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, content=b"MP3BYTES", headers={"content-type": "audio/mpeg"})
+
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kw: _REAL_CLIENT(transport=httpx.MockTransport(handler))
+    )
+    req = _oai_req(operation="tts", model="tts-1", options={"voice": "nova"}, text="say this")
+    result = await _openai_tts(req)
+    request = seen[0]
+    assert str(request.url) == "https://api.openai.com/v1/audio/speech"
+    payload = json.loads(request.content)
+    assert payload == {
+        "model": "tts-1",
+        "voice": "nova",
+        "input": "say this",
+        "response_format": "mp3",
+    }
+    assert result.audio == b"MP3BYTES" and result.mime == "audio/mpeg"
+
+
+@pytest.mark.parametrize("fn", [_openai_stt, _openai_tts])
+async def test_openai_errors_never_echo_key(monkeypatch, fn):
+    def handler(request):
+        return httpx.Response(401, content=b'{"error": "bad key sk-test"}')
+
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kw: _REAL_CLIENT(transport=httpx.MockTransport(handler))
+    )
+    with pytest.raises(SpeechProviderError) as exc:
+        await fn(_oai_req(operation="stt" if fn is _openai_stt else "tts"))
+    assert "sk-test" not in str(exc.value)

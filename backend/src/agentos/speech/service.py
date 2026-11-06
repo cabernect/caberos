@@ -83,6 +83,9 @@ class SpeechRequest:
     options: dict[str, Any]
     api_key: str | None
     binding_revision: int
+    # Resolved provider base URL (None = adapter default) — lets an
+    # OpenAI-compatible provider's custom endpoint drive audio calls.
+    base_url: str | None = None
     audio: bytes = b""
     mime: str = ""
     text: str = ""
@@ -200,6 +203,7 @@ async def transcribe(
         options=dict(resolution.options),
         api_key=_key(provider),
         binding_revision=binding.revision,
+        base_url=provider.base_url,
         audio=audio,
         mime=mime_base,
     )
@@ -261,6 +265,7 @@ async def synthesize(
         options=dict(resolution.options),
         api_key=_key(provider),
         binding_revision=binding.revision,
+        base_url=provider.base_url,
         text=text,
     )
     started = time.monotonic()
