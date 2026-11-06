@@ -1,6 +1,7 @@
 """Deepgram STT adapter fixtures — request shape, auth, normalization, and
 honest failures. No live calls: verified contract is encoded in fixtures."""
 
+import base64
 import json
 
 import httpx
@@ -209,3 +210,81 @@ async def test_openai_errors_never_echo_key(monkeypatch, fn):
     with pytest.raises(SpeechProviderError) as exc:
         await fn(_oai_req(operation="stt" if fn is _openai_stt else "tts"))
     assert "sk-test" not in str(exc.value)
+
+
+# --- OpenRouter chat-completions audio --------------------------------------
+
+from agentos.speech.adapters import _openrouter_stt, _openrouter_tts  # noqa: E402
+
+
+def _or_req(**over) -> SpeechRequest:
+    base = dict(
+        operation="stt",
+        request_id="r3",
+        provider_id="p3",
+        provider_type="openrouter",
+        model="openai/gpt-4o-audio-preview",
+        options={},
+        api_key="sk-or-test",
+        binding_revision=1,
+        audio=b"wav-bytes",
+        mime="audio/wav",
+    )
+    base.update(over)
+    return SpeechRequest(**base)
+
+
+async def test_openrouter_stt_uses_input_audio_parts(monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kw: _client(
+            {"choices": [{"message": {"role": "assistant", "content": "spoken words"}}]},
+            capture=seen,
+        ),
+    )
+    result = await _openrouter_stt(_or_req(options={"language": "vi"}))
+    request = seen[0]
+    assert str(request.url) == "https://openrouter.ai/api/v1/chat/completions"
+    assert request.headers["authorization"] == "Bearer sk-or-test"
+    payload = json.loads(request.content)
+    parts = payload["messages"][0]["content"]
+    assert parts[0]["type"] == "text" and "vi" in parts[0]["text"]
+    audio = parts[1]["input_audio"]
+    assert base64.b64decode(audio["data"]) == b"wav-bytes" and audio["format"] == "wav"
+    assert result.text == "spoken words"
+
+
+async def test_openrouter_tts_requests_modalities_and_decodes(monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kw: _client(
+            {"choices": [{"message": {"audio": {"data": base64.b64encode(b"MP3X").decode()}}}]},
+            capture=seen,
+        ),
+    )
+    req = _or_req(
+        operation="tts",
+        model="openai/gpt-4o-audio-preview",
+        options={"voice": "shimmer"},
+        text="read me",
+    )
+    result = await _openrouter_tts(req)
+    payload = json.loads(seen[0].content)
+    assert payload["modalities"] == ["text", "audio"]
+    assert payload["audio"] == {"voice": "shimmer", "format": "mp3"}
+    assert "read me" in payload["messages"][0]["content"]
+    assert result.audio == b"MP3X" and result.mime == "audio/mpeg"
+
+
+async def test_openrouter_tts_missing_audio_is_honest(monkeypatch):
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kw: _client({"choices": [{"message": {"content": "no audio"}}]}),
+    )
+    with pytest.raises(SpeechProviderError, match="no audio"):
+        await _openrouter_tts(_or_req(operation="tts", text="x"))

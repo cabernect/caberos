@@ -169,7 +169,7 @@ BINDING_SPECS: tuple[BindingSpec, ...] = (
         kind="model",
         implemented=True,
         capability_names=(),
-        service_types=("deepgram", "elevenlabs", "gradium", "openai", "groq"),
+        service_types=("deepgram", "elevenlabs", "gradium", "openai", "groq", "openrouter"),
         option_fields=(
             OptionField(
                 name="language",
@@ -189,7 +189,7 @@ BINDING_SPECS: tuple[BindingSpec, ...] = (
         kind="model",
         implemented=True,
         capability_names=(),
-        service_types=("elevenlabs", "deepgram", "gradium", "openai", "groq"),
+        service_types=("elevenlabs", "deepgram", "gradium", "openai", "groq", "openrouter"),
         model_modalities=("audio",),
         option_fields=(
             OptionField(

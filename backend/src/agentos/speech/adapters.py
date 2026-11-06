@@ -15,6 +15,7 @@ content).
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import time
 
@@ -210,6 +211,135 @@ register_adapter("openai", "stt", _openai_stt)
 register_adapter("openai", "tts", _openai_tts)
 register_adapter("groq", "stt", _openai_stt)
 register_adapter("groq", "tts", _openai_tts)
+
+
+# --- OpenRouter chat-completions audio --------------------------------------
+#
+# Verified contract (OpenRouter multimodal audio guide): audio travels through
+# /api/v1/chat/completions, not /v1/audio/*.
+#   STT: input_audio content part (base64 data + format string); the model's
+#   reply text is the transcript.
+#   TTS: modalities ["text","audio"] + audio {voice, format}; the reply
+#   message's audio.data is base64 audio bytes.
+
+_OPENROUTER_BASE = "https://openrouter.ai/api/v1"
+_MIME_TO_FORMAT = {
+    "wav": "wav",
+    "x-wav": "wav",
+    "mpeg": "mp3",
+    "mp3": "mp3",
+    "ogg": "ogg",
+    "flac": "flac",
+    "m4a": "m4a",
+    "mp4": "m4a",
+    "webm": "webm",
+}
+
+
+def _openrouter_base(req: SpeechRequest) -> str:
+    return (req.base_url or _OPENROUTER_BASE).rstrip("/")
+
+
+async def _chat_audio_request(req: SpeechRequest, payload: dict) -> dict:
+    base = _openrouter_base(req)
+    headers = {
+        "Authorization": f"Bearer {req.api_key}",
+        "Content-Type": "application/json",
+    }
+    try:
+        async with asyncio.timeout(_TIMEOUT_S):
+            async with httpx.AsyncClient(
+                verify=SSL_CERT_PATH,
+                timeout=_TIMEOUT_S,
+                follow_redirects=False,
+                trust_env=False,
+            ) as client:
+                response = await client.post(
+                    f"{base}/chat/completions", headers=headers, json=payload
+                )
+                if response.status_code != 200:
+                    raise SpeechProviderError(
+                        f"Audio request failed (HTTP {response.status_code})."
+                    )
+                body = response.content
+                if len(body) > _RESPONSE_LIMIT * 4:  # base64 inflates ~33%
+                    raise ValueError("oversized response")
+        return json.loads(body)
+    except (TimeoutError, httpx.TimeoutException) as exc:
+        raise TimeoutError("Audio request timed out; it may have been billed.") from exc
+    except (httpx.HTTPError, OSError, json.JSONDecodeError) as exc:
+        raise SpeechProviderError("Audio request failed.") from exc
+
+
+async def _openrouter_stt(req: SpeechRequest) -> TranscriptResult:
+    if not req.api_key:
+        raise SpeechError("OpenRouter provider has no API key.")
+    fmt = _MIME_TO_FORMAT.get(req.mime.split("/")[-1], "wav")
+    language = (req.options.get("language") or "").strip() if req.options.get("language") else ""
+    hint = f" The spoken language is {language}." if language else ""
+    payload = {
+        "model": req.model,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "Transcribe this audio verbatim. Output only the "
+                            f"transcript text, nothing else.{hint}"
+                        ),
+                    },
+                    {
+                        "type": "input_audio",
+                        "input_audio": {
+                            "data": base64.b64encode(req.audio).decode(),
+                            "format": fmt,
+                        },
+                    },
+                ],
+            }
+        ],
+    }
+    out = await _chat_audio_request(req, payload)
+    try:
+        content = out["choices"][0]["message"]["content"]
+        transcript = (
+            content
+            if isinstance(content, str)
+            else " ".join(p.get("text", "") for p in content if isinstance(p, dict))
+        ).strip()
+    except (KeyError, IndexError, TypeError) as exc:
+        raise SpeechProviderError("Provider returned an unreadable transcription.") from exc
+    return TranscriptResult(text=transcript)
+
+
+async def _openrouter_tts(req: SpeechRequest) -> SynthesisResult:
+    if not req.api_key:
+        raise SpeechError("OpenRouter provider has no API key.")
+    voice = (req.options.get("voice") or "").strip() if req.options.get("voice") else ""
+    payload = {
+        "model": req.model,
+        "modalities": ["text", "audio"],
+        "audio": {"voice": voice or "alloy", "format": "mp3"},
+        "messages": [
+            {
+                "role": "user",
+                "content": f"Read the following text aloud exactly as written:\n\n{req.text}",
+            }
+        ],
+    }
+    out = await _chat_audio_request(req, payload)
+    try:
+        audio_b64 = out["choices"][0]["message"]["audio"]["data"]
+        audio = base64.b64decode(audio_b64)
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        raise SpeechProviderError("Provider returned no audio output.") from exc
+    return SynthesisResult(audio=audio, mime="audio/mpeg", characters=len(req.text))
+
+
+register_adapter("openrouter", "stt", _openrouter_stt)
+register_adapter("openrouter", "tts", _openrouter_tts)
 
 # Registered as provider contracts are verified (W10 units 3/5/6):
 # elevenlabs tts+stt(scribe), deepgram tts(aura), gradium tts.
