@@ -1,7 +1,123 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Copy } from "lucide-react";
+import { Check, Copy, Square, Volume2 } from "lucide-react";
+import { getSpeechStatus, synthesizeSpeech } from "@/lib/api";
 
-export function MessageActions({ content }: { content: string }) {
+// Cheap client-side mirror of backend/speech/renderer.has_speakable_text:
+// strip fenced code, tables and images — anything left means there's prose
+// worth a speaker button. The backend re-validates authoritatively.
+
+// One playback at a time across all messages — switching stops the prior.
+let _activeAudio: { stop: () => void } | null = null;
+
+function hasProse(markdown: string): boolean {
+  const stripped = markdown
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/~~~[\s\S]*?~~~/g, " ")
+    .replace(/```[\s\S]*$/g, " ")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+    .replace(/^\s*\|.*$/gm, " ");
+  return stripped.trim().length > 0;
+}
+
+type SpeechState = "idle" | "generating" | "playing" | "failed";
+
+function SpeakerButton({ messageId }: { messageId: string }) {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [state, setState] = useState<SpeechState>("idle");
+  const [error, setError] = useState("");
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const urlRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    getSpeechStatus()
+      .then((s) => live && setEnabled(s.tts.ready))
+      .catch(() => live && setEnabled(false));
+    return () => {
+      live = false;
+      stopPlayback();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const stopPlayback = () => {
+    audioRef.current?.pause();
+    audioRef.current = null;
+    if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+    urlRef.current = null;
+    if (_activeAudio) _activeAudio = null;
+    setState((s) => (s === "playing" ? "idle" : s));
+  };
+
+  const speak = async () => {
+    if (state === "playing") {
+      stopPlayback();
+      return;
+    }
+    _activeAudio?.stop();
+    setError("");
+    setState("generating");
+    try {
+      const blob = await synthesizeSpeech(messageId);
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      urlRef.current = url;
+      audioRef.current = audio;
+      _activeAudio = { stop: stopPlayback };
+      audio.onended = () => stopPlayback();
+      audio.onerror = () => {
+        setError("Playback failed");
+        setState("failed");
+        stopPlayback();
+      };
+      await audio.play();
+      setState("playing");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Speech failed");
+      setState("failed");
+    }
+  };
+
+  if (enabled !== true) return null;
+  const label =
+    state === "generating"
+      ? "Generating speech…"
+      : state === "playing"
+        ? "Stop reading"
+        : "Read aloud";
+  return (
+    <>
+      <button
+        type="button"
+        onClick={speak}
+        disabled={state === "generating"}
+        aria-label={label}
+        title={label}
+        className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-md text-[var(--ink-3)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] disabled:cursor-wait"
+      >
+        {state === "playing" ? (
+          <Square className="h-3.5 w-3.5" />
+        ) : (
+          <Volume2 className="h-3.5 w-3.5" />
+        )}
+      </button>
+      <span
+        role="status"
+        className={state === "failed" ? "text-[12px] text-[var(--ink-2)]" : "sr-only"}
+      >
+        {state === "generating" ? "Generating…" : state === "failed" ? error : ""}
+      </span>
+    </>
+  );
+}
+
+export function MessageActions({
+  content,
+  messageId,
+}: {
+  content: string;
+  messageId?: string;
+}) {
   const [status, setStatus] = useState<"idle" | "copying" | "copied" | "error">("idle");
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -36,6 +152,7 @@ export function MessageActions({ content }: { content: string }) {
       >
         {status === "copied" ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
       </button>
+      {messageId && hasProse(content) ? <SpeakerButton messageId={messageId} /> : null}
       <span role="status" className={status === "error" ? "text-[12px] text-[var(--ink-2)]" : "sr-only"}>
         {status === "copied" ? "Message copied" : status === "error" ? "Couldn't copy. Try again or select the text manually." : ""}
       </span>

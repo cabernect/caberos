@@ -2466,7 +2466,7 @@ function MessageRow({
           <Markdown onWorkspaceLink={(p) => onPreview?.({ path: p })}>{message.content}</Markdown>
         </div>
         <div className="mt-1.5 flex items-center gap-3">
-          <MessageActions content={message.content} />
+          <MessageActions content={message.content} messageId={message.id} />
         </div>
       </div>
     );
@@ -2494,7 +2494,7 @@ function MessageRow({
       )}
       {message.citations && message.citations.length > 0 && <CitationList citations={message.citations} />}
       <div className="mt-1.5 flex items-center gap-1.5">
-        <MessageActions content={message.content} />
+        <MessageActions content={message.content} messageId={message.id} />
         {hasCost && (
           <div className="shrink-0 font-mono text-[11px]" style={{ color: "var(--ink-3)" }}>
             {message.tokens_out || 0} tokens · ${(message.cost || 0).toFixed(3)}

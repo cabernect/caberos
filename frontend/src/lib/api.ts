@@ -1866,3 +1866,67 @@ export function skillBackend(
       api.fetchSkillPdfPage(skillId, page, { ...source, revision }),
   };
 }
+
+// --- speech (W10 operator actions) ---
+
+export interface SpeechOpStatus {
+  ready: boolean;
+  configured: boolean;
+  adapter: boolean;
+  provider: string | null;
+  provider_type: string | null;
+  model: string;
+  reason: string;
+}
+
+export interface SpeechStatus {
+  stt: SpeechOpStatus;
+  tts: SpeechOpStatus;
+}
+
+let _speechStatus: Promise<SpeechStatus> | null = null;
+
+/** Cached per page-view — status changes when the operator edits Tools. */
+export function getSpeechStatus(): Promise<SpeechStatus> {
+  if (!_speechStatus) {
+    _speechStatus = request<SpeechStatus>("/api/speech/status");
+    _speechStatus.catch(() => {
+      _speechStatus = null;
+    });
+  }
+  return _speechStatus;
+}
+
+/** Read-aloud synthesis for a persisted assistant message → audio bytes. */
+export async function synthesizeSpeech(messageId: string): Promise<Blob> {
+  const base = await baseReady;
+  const resp = await fetch(`${base}/api/speech/synthesize`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ message_id: messageId }),
+  });
+  if (!resp.ok) throw await apiError(resp);
+  return resp.blob();
+}
+
+/** Dictation transcription — recorded blob → transcript. */
+export async function transcribeAudio(file: Blob, filename = "recording.webm"): Promise<{
+  request_id: string;
+  transcript: string;
+  provider: string | null;
+  model: string;
+  audio_seconds: number | null;
+}> {
+  const base = await baseReady;
+  const form = new FormData();
+  form.append("file", file, filename);
+  const resp = await fetch(`${base}/api/speech/transcribe`, {
+    method: "POST",
+    credentials: "include",
+    headers: authHeaders(),
+    body: form,
+  });
+  if (!resp.ok) throw await apiError(resp);
+  return resp.json();
+}
