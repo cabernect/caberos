@@ -341,5 +341,115 @@ async def _openrouter_tts(req: SpeechRequest) -> SynthesisResult:
 register_adapter("openrouter", "stt", _openrouter_stt)
 register_adapter("openrouter", "tts", _openrouter_tts)
 
-# Registered as provider contracts are verified (W10 units 3/5/6):
-# elevenlabs tts+stt(scribe), deepgram tts(aura), gradium tts.
+
+# --- ElevenLabs --------------------------------------------------------------
+#
+# Verified contract (ElevenLabs API reference):
+#   STT: multipart POST /v1/speech-to-text, fields file + model_id
+#   (scribe_v1/scribe_v2, optional language_code) → {"text": ...}.
+#   TTS: JSON POST /v1/text-to-speech/{voice_id} {text, model_id}
+#   → raw audio bytes. Auth is the xi-api-key header. The voice option is
+#   the path voice_id — ElevenLabs voices have no usable default, so a
+#   missing voice is an honest configuration error, never a guess.
+
+_ELEVENLABS_BASE = "https://api.elevenlabs.io"
+
+
+def _elevenlabs_base(req: SpeechRequest) -> str:
+    return (req.base_url or _ELEVENLABS_BASE).rstrip("/")
+
+
+async def _elevenlabs_stt(req: SpeechRequest) -> TranscriptResult:
+    if not req.api_key:
+        raise SpeechError("ElevenLabs provider has no API key.")
+    base = _elevenlabs_base(req)
+    headers = {"xi-api-key": req.api_key}
+    data: dict[str, str] = {"model_id": req.model}
+    language = (req.options.get("language") or "").strip() if req.options.get("language") else ""
+    if language:
+        data["language_code"] = language
+    ext = _MIME_TO_FORMAT.get(req.mime.split("/")[-1], "bin")
+    files = {"file": (f"audio.{ext}", req.audio, req.mime or "application/octet-stream")}
+    started = time.monotonic()
+    try:
+        async with asyncio.timeout(_TIMEOUT_S):
+            async with httpx.AsyncClient(
+                verify=SSL_CERT_PATH,
+                timeout=_TIMEOUT_S,
+                follow_redirects=False,
+                trust_env=False,
+            ) as client:
+                response = await client.post(
+                    f"{base}/v1/speech-to-text",
+                    headers=headers,
+                    data=data,
+                    files=files,
+                )
+                if response.status_code != 200:
+                    raise SpeechProviderError(
+                        f"ElevenLabs transcription failed (HTTP {response.status_code})."
+                    )
+                body = response.content
+                if len(body) > _RESPONSE_LIMIT:
+                    raise ValueError("oversized response")
+        payload = json.loads(body)
+        transcript = str(payload.get("text") or "").strip()
+    except (TimeoutError, httpx.TimeoutException) as exc:
+        raise TimeoutError("ElevenLabs transcription timed out; it may have been billed.") from exc
+    except (httpx.HTTPError, OSError, json.JSONDecodeError) as exc:
+        raise SpeechProviderError("ElevenLabs transcription request failed.") from exc
+    return TranscriptResult(
+        text=transcript,
+        usage={"latency_ms": int((time.monotonic() - started) * 1000)},
+    )
+
+
+async def _elevenlabs_tts(req: SpeechRequest) -> SynthesisResult:
+    if not req.api_key:
+        raise SpeechError("ElevenLabs provider has no API key.")
+    voice = (req.options.get("voice") or "").strip() if req.options.get("voice") else ""
+    if not voice:
+        raise SpeechError(
+            "ElevenLabs synthesis needs a voice ID — set Voice on the "
+            "Text to Speech binding (e.g. from your ElevenLabs voice library)."
+        )
+    base = _elevenlabs_base(req)
+    headers = {
+        "xi-api-key": req.api_key,
+        "Content-Type": "application/json",
+    }
+    payload = {"text": req.text, "model_id": req.model}
+    try:
+        async with asyncio.timeout(_TIMEOUT_S):
+            async with httpx.AsyncClient(
+                verify=SSL_CERT_PATH,
+                timeout=_TIMEOUT_S,
+                follow_redirects=False,
+                trust_env=False,
+            ) as client:
+                response = await client.post(
+                    f"{base}/v1/text-to-speech/{voice}",
+                    headers=headers,
+                    json=payload,
+                )
+                if response.status_code != 200:
+                    raise SpeechProviderError(
+                        f"ElevenLabs synthesis failed (HTTP {response.status_code})."
+                    )
+                audio = bytearray()
+                async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
+                    audio.extend(chunk)
+                    if len(audio) > _RESPONSE_LIMIT:
+                        raise ValueError("oversized response")
+    except (TimeoutError, httpx.TimeoutException) as exc:
+        raise TimeoutError("ElevenLabs synthesis timed out; it may have been billed.") from exc
+    except (httpx.HTTPError, OSError) as exc:
+        raise SpeechProviderError("ElevenLabs synthesis request failed.") from exc
+    return SynthesisResult(audio=bytes(audio), mime="audio/mpeg", characters=len(req.text))
+
+
+register_adapter("elevenlabs", "stt", _elevenlabs_stt)
+register_adapter("elevenlabs", "tts", _elevenlabs_tts)
+
+# Registered as provider contracts are verified (W10 unit 6):
+# deepgram tts (aura), gradium tts.

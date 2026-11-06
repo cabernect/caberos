@@ -288,3 +288,90 @@ async def test_openrouter_tts_missing_audio_is_honest(monkeypatch):
     )
     with pytest.raises(SpeechProviderError, match="no audio"):
         await _openrouter_tts(_or_req(operation="tts", text="x"))
+
+
+# --- ElevenLabs -------------------------------------------------------------
+
+from agentos.speech.adapters import _elevenlabs_stt, _elevenlabs_tts  # noqa: E402
+from agentos.speech.service import SpeechError  # noqa: E402
+
+
+def _bytes_client(body: bytes, status=200, capture=None):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if capture is not None:
+            capture.append(request)
+        return httpx.Response(status, content=body)
+
+    return _REAL_CLIENT(transport=httpx.MockTransport(handler))
+
+
+def _el_req(**over) -> SpeechRequest:
+    base = dict(
+        operation="stt",
+        request_id="r4",
+        provider_id="p4",
+        provider_type="elevenlabs",
+        model="scribe_v2",
+        options={},
+        api_key="el-secret",
+        binding_revision=1,
+        audio=b"wav-bytes",
+        mime="audio/wav",
+    )
+    base.update(over)
+    return SpeechRequest(**base)
+
+
+async def test_elevenlabs_stt_multipart_shape(monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kw: _client({"text": "spoken"}, capture=seen)
+    )
+    result = await _elevenlabs_stt(_el_req(options={"language": "eng"}))
+    request = seen[0]
+    assert str(request.url) == "https://api.elevenlabs.io/v1/speech-to-text"
+    assert request.headers["xi-api-key"] == "el-secret"
+    body = request.content.decode()
+    assert 'name="model_id"' in body and "scribe_v2" in body
+    assert 'name="language_code"' in body and "eng" in body
+    assert 'name="file"' in body
+    assert result.text == "spoken"
+
+
+async def test_elevenlabs_tts_posts_to_voice_path(monkeypatch):
+    seen = []
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _bytes_client(b"MP3DATA", capture=seen))
+    req = _el_req(
+        operation="tts",
+        model="eleven_multilingual_v2",
+        options={"voice": "21m00Tcm4TlvDq8ikWAM"},
+        text="hi",
+    )
+    result = await _elevenlabs_tts(req)
+    request = seen[0]
+    assert str(request.url) == "https://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM"
+    payload = json.loads(request.content)
+    assert payload == {"text": "hi", "model_id": "eleven_multilingual_v2"}
+    assert result.audio == b"MP3DATA" and result.mime == "audio/mpeg"
+
+
+async def test_elevenlabs_tts_missing_voice_is_honest(monkeypatch):
+    called = []
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: called.append(1) or _client({}))
+    with pytest.raises(SpeechError, match="voice ID"):
+        await _elevenlabs_tts(_el_req(operation="tts", text="x"))
+    assert called == []
+
+
+async def test_elevenlabs_stt_error_no_key_echo(monkeypatch):
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _client({"detail": "bad"}, status=401))
+    with pytest.raises(SpeechProviderError, match="401") as exc:
+        await _elevenlabs_stt(_el_req())
+    assert "el-secret" not in str(exc.value)
+
+
+async def test_elevenlabs_tts_error_no_key_echo(monkeypatch):
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _bytes_client(b"err", status=429))
+    with pytest.raises(SpeechProviderError, match="429") as exc:
+        await _elevenlabs_tts(_el_req(operation="tts", options={"voice": "v"}, text="x"))
+    assert "el-secret" not in str(exc.value)
