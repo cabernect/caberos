@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect, useImperativeHandle, useCallback, forwardRef } from "react";
-import { Paperclip, FileText, Image as ImageIcon, Link, Wrench, ArrowUp, HelpCircle, Check, Sparkles, Square, Flame } from "lucide-react";
+import { Paperclip, FileText, Image as ImageIcon, Link, Wrench, ArrowUp, HelpCircle, Check, Sparkles, Square, Flame, Mic, Loader2 } from "lucide-react";
 import { ModelPicker, type SelectedModel } from "@/components/ModelPicker";
 import { ThinkingToggle } from "@/components/ThinkingToggle";
 import { AttachmentCard } from "@/components/AttachmentCard";
 import { Markdown } from "@/components/Markdown";
-import { api } from "@/lib/api";
+import { api, getSpeechStatus, transcribeAudio } from "@/lib/api";
 import { fileHash, formatAttachmentSize, moveItem } from "@/lib/attachmentUtils";
 import type { SkillInfo } from "@/lib/types";
 
@@ -117,6 +117,17 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
   const [pendingFiles, setPendingFiles] = useState(0);
   // Transient tray note — e.g. "duplicate skipped". Auto-clears.
   const [trayNote, setTrayNote] = useState<string | null>(null);
+  // Dictation (W10) — operator voice input, never an agent tool. The
+  // transcript lands in the editable draft; nothing auto-sends.
+  const [dictation, setDictation] = useState<"idle" | "recording" | "transcribing">("idle");
+  const [sttReady, setSttReady] = useState(false);
+  const [recordSecs, setRecordSecs] = useState(0);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const discardRef = useRef(false);
+  const dictTimerRef = useRef<number | null>(null);
+  const dictTimeoutRef = useRef<number | null>(null);
   const [showContextMenu, setShowContextMenu] = useState(false);
   const [showUrlInput, setShowUrlInput] = useState(false);
   const [urlValue, setUrlValue] = useState("");
@@ -205,6 +216,146 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
     const t = setTimeout(() => setTrayNote(null), 4000);
     return () => clearTimeout(t);
   }, [trayNote]);
+
+  // Dictation availability — the mic only appears when STT is actually
+  // configured (Tools → Speech to Text); no dead controls.
+  useEffect(() => {
+    getSpeechStatus()
+      .then((s) => setSttReady(s.stt.ready))
+      .catch(() => setSttReady(false));
+  }, []);
+
+  const stopDictationStream = useCallback(() => {
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    if (dictTimerRef.current) {
+      window.clearInterval(dictTimerRef.current);
+      dictTimerRef.current = null;
+    }
+    if (dictTimeoutRef.current) {
+      window.clearTimeout(dictTimeoutRef.current);
+      dictTimeoutRef.current = null;
+    }
+  }, []);
+
+  // Insert the transcript at the caret — never clobbers an existing draft.
+  const insertTranscript = useCallback((transcript: string) => {
+    const ta = textareaRef.current;
+    const start = ta ? ta.selectionStart : -1;
+    const end = ta ? ta.selectionEnd : -1;
+    let caretPos = -1;
+    setText((prev) => {
+      const pos = start >= 0 ? start : prev.length;
+      const endPos = end >= 0 ? end : pos;
+      const before = prev.slice(0, pos);
+      const after = prev.slice(endPos);
+      const sepL = before && !/\s$/.test(before) ? " " : "";
+      const sepR = after && !/^\s/.test(after) ? " " : "";
+      caretPos = (before + sepL + transcript).length;
+      return before + sepL + transcript + sepR + after;
+    });
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.focus();
+      if (caretPos >= 0) el.setSelectionRange(caretPos, caretPos);
+    });
+  }, []);
+
+  const finishDictation = useCallback(
+    async (blob: Blob, mime: string) => {
+      if (blob.size === 0) {
+        setDictation("idle");
+        setTrayNote("Nothing was recorded.");
+        return;
+      }
+      setDictation("transcribing");
+      try {
+        const ext = mime.includes("webm") ? "webm" : mime.includes("mp4") ? "m4a" : "ogg";
+        const out = await transcribeAudio(blob, `dictation.${ext}`);
+        const t = out.transcript.trim();
+        if (t) insertTranscript(t);
+        else setTrayNote("No speech detected in the recording.");
+      } catch (err) {
+        setTrayNote(err instanceof Error ? err.message : "Transcription failed.");
+      } finally {
+        setDictation("idle");
+      }
+    },
+    [insertTranscript],
+  );
+
+  const stopDictation = useCallback(() => {
+    const rec = recorderRef.current;
+    if (rec && rec.state !== "inactive") rec.stop();
+  }, []);
+
+  const cancelDictation = useCallback(() => {
+    discardRef.current = true;
+    stopDictation();
+  }, [stopDictation]);
+
+  const startDictation = useCallback(async () => {
+    if (typeof MediaRecorder === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+      setTrayNote("Voice recording isn't supported in this browser.");
+      return;
+    }
+    const mime = ["audio/webm", "audio/mp4", "audio/ogg"].find((m) =>
+      MediaRecorder.isTypeSupported(m),
+    );
+    if (!mime) {
+      setTrayNote("No supported recording format in this browser.");
+      return;
+    }
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err) {
+      setTrayNote(
+        err instanceof DOMException && err.name === "NotAllowedError"
+          ? "Microphone access denied — enable it in browser settings."
+          : "Microphone unavailable.",
+      );
+      return;
+    }
+    streamRef.current = stream;
+    chunksRef.current = [];
+    discardRef.current = false;
+    const rec = new MediaRecorder(stream, { mimeType: mime });
+    recorderRef.current = rec;
+    rec.ondataavailable = (e) => {
+      if (e.data.size > 0) chunksRef.current.push(e.data);
+    };
+    rec.onstop = () => {
+      const blob = new Blob(chunksRef.current, { type: mime });
+      chunksRef.current = [];
+      stopDictationStream();
+      if (discardRef.current) {
+        setDictation("idle");
+        return;
+      }
+      void finishDictation(blob, mime);
+    };
+    rec.start(250);
+    setRecordSecs(0);
+    setDictation("recording");
+    dictTimerRef.current = window.setInterval(() => setRecordSecs((s) => s + 1), 1000);
+    // Hard cap — a forgotten mic shouldn't run up unbounded audio.
+    dictTimeoutRef.current = window.setTimeout(() => {
+      setTrayNote("Recording stopped at the 60s limit.");
+      stopDictation();
+    }, 60_000);
+  }, [finishDictation, stopDictation, stopDictationStream]);
+
+  // Unmount — release the mic and discard any in-flight recording.
+  useEffect(() => {
+    return () => {
+      discardRef.current = true;
+      recorderRef.current?.stop?.();
+      stopDictationStream();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Object URLs outlive their cards only while the attachment exists —
   // revoked on remove and after a successful send.
@@ -560,6 +711,13 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
         }
         return;
       }
+    }
+
+    // Escape during recording cancels without transcribing.
+    if (e.key === "Escape" && dictation === "recording") {
+      e.preventDefault();
+      cancelDictation();
+      return;
     }
 
     if (isElicitation) {
@@ -1009,6 +1167,55 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
               defaultModelName={defaultModelName}
               onChange={(m) => onModelChange?.(m)}
             />
+          </div>
+        )}
+        {/* Dictation (W10) — shown only when STT is configured; records,
+            transcribes, and inserts into the draft for review. Esc cancels. */}
+        {sttReady && !isElicitation && (
+          <div className="flex items-center gap-1.5">
+            {dictation === "recording" && (
+              <span
+                className="text-[11px] font-medium tabular-nums"
+                style={{ color: "var(--danger, #dc2626)" }}
+                aria-live="polite"
+              >
+                {Math.floor(recordSecs / 60)}:{String(recordSecs % 60).padStart(2, "0")}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() =>
+                dictation === "recording" ? stopDictation() : void startDictation()
+              }
+              disabled={dictation === "transcribing"}
+              title={
+                dictation === "recording"
+                  ? "Stop recording (Esc cancels)"
+                  : dictation === "transcribing"
+                    ? "Transcribing…"
+                    : "Dictate — audio is sent to your configured STT provider"
+              }
+              aria-label={dictation === "recording" ? "Stop dictation" : "Start dictation"}
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[12px] border transition"
+              style={{
+                background:
+                  dictation === "recording" ? "var(--danger, #dc2626)" : "transparent",
+                color:
+                  dictation === "recording" ? "var(--white)" : "var(--ink-3)",
+                borderColor:
+                  dictation === "recording" ? "var(--danger, #dc2626)" : "var(--border)",
+                cursor: dictation === "transcribing" ? "wait" : "pointer",
+                opacity: dictation === "transcribing" ? 0.7 : 1,
+              }}
+            >
+              {dictation === "transcribing" ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : dictation === "recording" ? (
+                <Square className="h-3.5 w-3.5 fill-current" />
+              ) : (
+                <Mic className="h-4 w-4" />
+              )}
+            </button>
           </div>
         )}
         {/* Send / Stop — stop button replaces send while a run is active */}
