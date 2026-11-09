@@ -6,8 +6,11 @@ import { getSpeechStatus, synthesizeSpeech } from "@/lib/api";
 // strip fenced code, tables and images — anything left means there's prose
 // worth a speaker button. The backend re-validates authoritatively.
 
-// One playback at a time across all messages — switching stops the prior.
+// One playback at a time across all messages — a newer request claims a
+// fresh generation; a superseded or unmounted request never reaches
+// playback, so overlapping synthesis can never double up.
 let _activeAudio: { stop: () => void } | null = null;
+let _playbackToken = 0;
 
 function hasProse(markdown: string): boolean {
   const stripped = markdown
@@ -27,26 +30,30 @@ function SpeakerButton({ messageId }: { messageId: string }) {
   const [error, setError] = useState("");
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const urlRef = useRef<string | null>(null);
+  const liveRef = useRef(true);
 
   useEffect(() => {
+    liveRef.current = true;
     let live = true;
     getSpeechStatus()
       .then((s) => live && setEnabled(s.tts.ready))
       .catch(() => live && setEnabled(false));
     return () => {
       live = false;
+      liveRef.current = false;
       stopPlayback();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const stopPlayback = () => {
+    _playbackToken += 1; // invalidate any pending synthesis claim
     audioRef.current?.pause();
     audioRef.current = null;
     if (urlRef.current) URL.revokeObjectURL(urlRef.current);
     urlRef.current = null;
     if (_activeAudio) _activeAudio = null;
-    setState((s) => (s === "playing" ? "idle" : s));
+    if (liveRef.current) setState((s) => (s === "playing" ? "idle" : s));
   };
 
   const speak = async () => {
@@ -55,10 +62,17 @@ function SpeakerButton({ messageId }: { messageId: string }) {
       return;
     }
     _activeAudio?.stop();
+    const token = ++_playbackToken;
     setError("");
     setState("generating");
     try {
       const blob = await synthesizeSpeech(messageId);
+      if (token !== _playbackToken) {
+        // Superseded by a newer request or invalidated on unmount —
+        // a stale blob never reaches playback.
+        if (liveRef.current) setState("idle");
+        return;
+      }
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
       urlRef.current = url;
@@ -73,6 +87,7 @@ function SpeakerButton({ messageId }: { messageId: string }) {
       await audio.play();
       setState("playing");
     } catch (e) {
+      if (token !== _playbackToken || !liveRef.current) return;
       setError(e instanceof Error ? e.message : "Speech failed");
       setState("failed");
     }
