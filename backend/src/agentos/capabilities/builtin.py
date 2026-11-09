@@ -436,8 +436,10 @@ def register_builtin_capabilities() -> None:
             name="web_search",
             effects=frozenset({"read"}),
             kind="tool",
-            description="Search the web using DuckDuckGo. Returns titles, URLs, and snippets. "
-            "Use this to find current information, look up documentation, or research topics.",
+            description="Search the web. Returns titles, URLs, and snippets. Uses the "
+            "operator-configured search provider (Settings → Tools); falls back to "
+            "DuckDuckGo when none is bound. Use this to find current information, "
+            "look up documentation, or research topics.",
             parameters_schema={
                 "type": "object",
                 "properties": {
