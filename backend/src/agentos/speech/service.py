@@ -31,6 +31,7 @@ from ..models.provider import Provider
 from ..models.speech_audio import SpeechAudioCache
 from ..secret_store import decrypt
 from ..services.model_ledger import record_system_call
+from .pricing import estimate_speech_cost
 from .renderer import RENDERER_VERSION
 
 log = logging.getLogger(__name__)
@@ -255,13 +256,26 @@ async def _receipt(
     error: BaseException | None = None,
     units: dict[str, Any] | None = None,
 ) -> None:
+    merged = {**(units or {}), **(result.usage if result else {})}
     detail = {
         "operation": operation,
         "request_id": req.request_id,
         "binding_revision": req.binding_revision,
-        **(units or {}),
-        **(result.usage if result else {}),
+        **merged,
     }
+    # Estimated cost from the seeded rate table — provider-reported billed
+    # characters (e.g. dg-char-count) beat our submitted length when present.
+    est = None
+    if error is None:
+        est = estimate_speech_cost(
+            req.provider_type,
+            req.model,
+            operation,
+            audio_seconds=merged.get("audio_seconds"),
+            characters=merged.get("characters_reported") or merged.get("text_chars"),
+        )
+    if est is not None:
+        detail["price_basis"] = est[1]
     await record_system_call(
         kind="speech",
         purpose="transcription" if operation == "stt" else "synthesis",
@@ -272,6 +286,8 @@ async def _receipt(
         latency_ms=latency_ms,
         detail=detail,
         error=error,
+        explicit_cost=est[0] if est else None,
+        cost_source="estimated" if est else None,
     )
 
 

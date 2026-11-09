@@ -83,6 +83,8 @@ async def record_system_call(
     latency_ms: int = 0,
     detail: dict | None = None,
     capture_ref: Any = None,
+    explicit_cost: float | None = None,
+    cost_source: str | None = None,
 ) -> None:
     """Append a non-run ModelCall row. Failures are swallowed + logged.
 
@@ -126,6 +128,12 @@ async def record_system_call(
             receipt = getattr(response, "cost_receipt", None)
             if receipt:
                 detail = {**(detail or {}), **receipt}
+        elif explicit_cost is not None:
+            # Non-response callers (speech ops) pass a computed figure that is
+            # always labelled — never silently treated as provider-reported.
+            cost = explicit_cost
+            if cost_source is not None:
+                detail = {**(detail or {}), "cost_source": cost_source}
 
         if capture_ref is not None:
             detail = {

@@ -157,7 +157,11 @@ async def test_transcribe_dispatch_records_receipt(db, monkeypatch):
     row = rows[0]
     assert row.kind == "speech" and row.purpose == "transcription"
     assert row.provider_id == provider.id and row.model_name == "nova-3"
-    assert row.status == "ok" and row.tokens_in == 0 and row.cost == 0.0
+    assert row.status == "ok" and row.tokens_in == 0
+    # nova-3 pre-recorded PAYG: $0.0043/min → 1.2s ≈ $0.000086, estimated.
+    assert row.cost == pytest.approx(1.2 * 0.0043 / 60)
+    assert row.detail["cost_source"] == "estimated"
+    assert row.detail["price_basis"]
     assert row.detail["request_id"] == request_id
     assert row.detail["operation"] == "stt"
     assert row.detail["audio_seconds"] == 1.2
@@ -307,9 +311,7 @@ async def test_synthesize_replay_skips_dispatch(db, monkeypatch):
 
     async def fake(req):
         calls.append(req)
-        return SynthesisResult(
-            audio=b"mp3bytes", mime="audio/mpeg", characters=len(req.text)
-        )
+        return SynthesisResult(audio=b"mp3bytes", mime="audio/mpeg", characters=len(req.text))
 
     monkeypatch.setitem(speech_service._ADAPTERS, ("elevenlabs", "tts"), fake)
     r1, _ = await synthesize(db=db, text="read this")
@@ -337,3 +339,66 @@ async def test_synthesize_model_change_redispatches(db, monkeypatch):
     await db.flush()
     await synthesize(db=db, text="again")
     assert len(calls) == 2
+
+
+# --- Estimated cost on receipts -------------------------------------------
+
+
+async def test_synthesize_estimates_cost_from_rate_table(db, monkeypatch):
+    provider = await _speech_provider(db, type_="elevenlabs")
+    await _bind(db, "speech.tts", provider, model="eleven_multilingual_v2")
+
+    async def fake(req):
+        return SynthesisResult(audio=b"audio")
+
+    monkeypatch.setitem(speech_service._ADAPTERS, ("elevenlabs", "tts"), fake)
+    await synthesize(db=db, text="x" * 100)
+    row = (await db.scalars(select(ModelCall))).all()[0]
+    # eleven multilingual family: $0.08/1k chars → 100 chars = $0.008
+    assert row.cost == pytest.approx(100 * 0.08 / 1000)
+    assert row.detail["cost_source"] == "estimated"
+    assert "/1k chars" in row.detail["price_basis"]
+
+
+async def test_tts_cost_prefers_provider_reported_chars(db, monkeypatch):
+    provider = await _speech_provider(db, type_="deepgram")
+    await _bind(db, "speech.tts", provider, model="aura-2-thalia-en")
+
+    async def fake(req):
+        return SynthesisResult(audio=b"audio", usage={"characters_reported": 40})
+
+    monkeypatch.setitem(speech_service._ADAPTERS, ("deepgram", "tts"), fake)
+    await synthesize(db=db, text="this text is sixty characters long but billed forty!")
+    row = (await db.scalars(select(ModelCall))).all()[0]
+    # aura-2: $0.030/1k chars on the REPORTED 40, not the submitted length
+    assert row.cost == pytest.approx(40 * 0.03 / 1000)
+
+
+async def test_speech_cost_unknown_model_stays_unknown(db, monkeypatch):
+    provider = await _speech_provider(db, type_="openrouter")
+    await _bind(db, "speech.tts", provider, model="some/model:free")
+
+    async def fake(req):
+        return SynthesisResult(audio=b"audio")
+
+    monkeypatch.setitem(speech_service._ADAPTERS, ("openrouter", "tts"), fake)
+    await synthesize(db=db, text="hi")
+    row = (await db.scalars(select(ModelCall))).all()[0]
+    assert row.cost == 0.0
+    assert "cost_source" not in (row.detail or {})
+    assert "price_basis" not in (row.detail or {})
+
+
+async def test_failed_speech_call_has_no_estimated_cost(db, monkeypatch):
+    provider = await _speech_provider(db, type_="elevenlabs")
+    await _bind(db, "speech.tts", provider, model="eleven_multilingual_v2")
+
+    async def boom(req):
+        raise speech_service.SpeechProviderError("nope")
+
+    monkeypatch.setitem(speech_service._ADAPTERS, ("elevenlabs", "tts"), boom)
+    with pytest.raises(Exception):
+        await synthesize(db=db, text="hi")
+    row = (await db.scalars(select(ModelCall))).all()[0]
+    assert row.cost == 0.0
+    assert "cost_source" not in (row.detail or {})

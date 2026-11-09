@@ -132,7 +132,8 @@ def _audio_url(base: str, path: str) -> str:
 
 
 async def _audio_transcriptions(req: SpeechRequest, base: str) -> TranscriptResult:
-    data: dict[str, str] = {"model": req.model, "response_format": "json"}
+    # verbose_json adds "duration" — the audio_seconds the receipt prices on.
+    data: dict[str, str] = {"model": req.model, "response_format": "verbose_json"}
     language = (req.options.get("language") or "").strip() if req.options.get("language") else ""
     if language:
         data["language"] = language
@@ -167,7 +168,11 @@ async def _audio_transcriptions(req: SpeechRequest, base: str) -> TranscriptResu
         transcript = str(payload["text"]).strip()
     except (KeyError, TypeError, json.JSONDecodeError) as exc:
         raise SpeechProviderError("Provider returned an unreadable transcription.") from exc
-    return TranscriptResult(text=transcript)
+    duration = payload.get("duration") if isinstance(payload, dict) else None
+    return TranscriptResult(
+        text=transcript,
+        audio_seconds=duration if isinstance(duration, (int, float)) else None,
+    )
 
 
 def _pcm_to_wav(pcm: bytes, *, rate: int, channels: int, bits: int = 16) -> bytes:
