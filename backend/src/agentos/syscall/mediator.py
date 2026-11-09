@@ -409,6 +409,7 @@ class SyscallHandler:
             "doc_list",
             "doc_search",
             "doc_inspect",
+            "doc_query_rows",
             "web_search",
             "web_fetch",
         ):

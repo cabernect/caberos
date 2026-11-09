@@ -191,3 +191,56 @@ async def test_tabular_stale_cursor_scope_and_refusals(client):
     )
     assert refused.status_code == 400
     assert ".xlsx or .csv" in refused.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_doc_query_rows_executes_through_mediator(client, db, workspace):
+    """The row-query tool must run through the syscall mediator — the
+    injection path supplies db/agent_id, so a mediated call returns real
+    rows, never `execution error: 'db'`."""
+    from types import SimpleNamespace
+
+    from agentos.capabilities.builtin import register_builtin_capabilities
+    from agentos.capabilities.registry import registry
+    from agentos.config_schema import AgentConfig, CapabilityGrant, ModelConfig
+    from agentos.syscall.mediator import SyscallHandler
+    from agentos.syscall.protocol import ToolCall
+
+    resp = await client.post(
+        "/api/knowledge/scopes/shared/documents/upload",
+        files={"file": ("stock.csv", CSV_BYTES, "text/csv")},
+    )
+    doc_id = resp.json()["id"]
+
+    registry._caps.clear()
+    register_builtin_capabilities()
+    try:
+        handler = SyscallHandler(db=db, workspace_path=workspace)
+        result = await handler.mediate(
+            call=ToolCall(
+                id="1",
+                name="doc_query_rows",
+                args={
+                    "document_id": doc_id,
+                    "sheet": "csv",
+                    "aggregates": [{"op": "count"}],
+                },
+            ),
+            session=SimpleNamespace(contact_id="c1", id="s1", channel=None),
+            agent_config=AgentConfig(
+                id="a",
+                name="A",
+                model=ModelConfig(provider_id="p", name="m"),
+                capabilities=[CapabilityGrant(name="doc_query_rows", require_approval=False)],
+            ),
+            run_id="r1",
+        )
+    finally:
+        registry._caps.clear()
+
+    assert result.allowed is True
+    out = result.output
+    assert "error" not in out
+    assert out["matched_count"] == 4
+    assert out["aggregates"] == [{"op": "count", "column": None, "value": 4}]
+    assert len(out["rows"]) == 4
