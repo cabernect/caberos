@@ -8,6 +8,10 @@ import { api, getSpeechStatus, transcribeAudio } from "@/lib/api";
 import { fileHash, formatAttachmentSize, moveItem } from "@/lib/attachmentUtils";
 import type { SkillInfo } from "@/lib/types";
 
+// Dictation level meter — trailing window of mic amplitudes shown as a
+// waveform strip while recording. ~2.4s of history at the 80ms tick.
+const DICTATION_LEVEL_BARS = 30;
+
 export interface Attachment {
   type: "image" | "url" | "file";
   mimeType: string;
@@ -132,8 +136,8 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
   // recording bars. Visual only; never affects what's recorded.
   const audioCtxRef = useRef<AudioContext | null>(null);
   const vuTimerRef = useRef<number | null>(null);
-  const levelsRef = useRef<number[]>([0, 0, 0, 0, 0]);
-  const [levels, setLevels] = useState<number[]>([0, 0, 0, 0, 0]);
+  const levelsRef = useRef<number[]>(Array(DICTATION_LEVEL_BARS).fill(0));
+  const [levels, setLevels] = useState<number[]>(() => Array(DICTATION_LEVEL_BARS).fill(0));
   const [showContextMenu, setShowContextMenu] = useState(false);
   const [showUrlInput, setShowUrlInput] = useState(false);
   const [urlValue, setUrlValue] = useState("");
@@ -248,7 +252,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
     }
     void audioCtxRef.current?.close().catch(() => {});
     audioCtxRef.current = null;
-    levelsRef.current = [0, 0, 0, 0, 0];
+    levelsRef.current = Array(DICTATION_LEVEL_BARS).fill(0);
     setLevels(levelsRef.current);
   }, []);
 
@@ -1201,7 +1205,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
             wrap so send pins to the row's right edge; the send keyhint lives
             on the button tooltip to keep everything on one line at 672px. */}
         <div className="order-4 ml-auto flex min-w-0 items-center gap-2">
-        {!isElicitation && (
+        {!isElicitation && dictation !== "recording" && (
           <div className="flex min-w-0 items-center">
             <ModelPicker
               defaultProviderId={defaultProviderId}
@@ -1211,21 +1215,26 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
           </div>
         )}
         {/* Dictation (W10) — shown only when STT is configured; records,
-            transcribes, and inserts into the draft for review. Esc cancels. */}
+            transcribes, and inserts into the draft for review. Esc cancels.
+            While recording, the picker hides so the level strip can take
+            the row's free width. */}
         {sttReady && !isElicitation && (
-          <div className="flex items-center gap-1.5">
+          <div
+            className={`flex items-center gap-1.5 ${
+              dictation === "recording" ? "min-w-0 flex-1" : ""
+            }`}
+          >
             {dictation === "recording" && (
-              <span className="flex items-center gap-1.5">
-                <span className="flex h-[16px] items-end gap-[3px]" aria-hidden="true">
+              <span className="flex min-w-0 flex-1 items-center gap-2">
+                <span className="flex h-[18px] min-w-0 flex-1 items-center gap-[2px]" aria-hidden="true">
                   {levels.map((v, i) => (
                     <span
                       key={i}
-                      className="w-[3.5px] rounded-full"
+                      className="min-w-[2px] flex-1 rounded-full"
                       style={{
-                        height: `${5 + Math.round(v * 11)}px`,
+                        height: `${3 + Math.round(v * 15)}px`,
                         background: "var(--danger, #dc2626)",
-                        opacity: 0.6 + v * 0.4,
-                        transition: "height 80ms linear, opacity 80ms linear",
+                        opacity: 0.55 + v * 0.45,
                       }}
                     />
                   ))}
