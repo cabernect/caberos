@@ -1205,6 +1205,17 @@ export interface ToolBindingInfo {
   reason: string;
   options: Record<string, unknown>;
   options_schema: ToolBindingOptionField[];
+  // exec.terminal only: per-backend readiness (OS support, isolation
+  // strength, what Auto resolves to) — separate from binding state.
+  backends?: {
+    name: string;
+    os_requirement: string;
+    supported_here: boolean;
+    available: boolean;
+    experimental: boolean;
+    auto: boolean;
+    reason: string | null;
+  }[] | null;
   model_modalities: string[] | null;
   binding: {
     provider_id: string | null;

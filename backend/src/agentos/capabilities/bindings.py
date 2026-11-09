@@ -156,6 +156,28 @@ BINDING_SPECS: tuple[BindingSpec, ...] = (
             ),
         ),
     ),
+    BindingSpec(
+        key="exec.terminal",
+        title="Terminal",
+        description=(
+            "Where agent shell commands run. Auto picks the OS-native sandbox "
+            "(Seatbelt on macOS, Bubblewrap on Linux, MXC on Windows). An "
+            "explicit backend must be supported and installed — a bad pick "
+            "refuses honestly rather than falling back to another backend."
+        ),
+        kind="engine",
+        implemented=True,
+        capability_names=("terminal",),
+        option_fields=(
+            OptionField(
+                name="backend",
+                kind="select",
+                label="Execution backend",
+                choices=("auto", "seatbelt", "bwrap", "mxc"),
+                default="auto",
+            ),
+        ),
+    ),
     # Speech cards are operator actions (W10) — no capability_names, so no
     # agent tool can ever route through them. Per-operation provider support
     # is the adapter registry in speech/service.py.

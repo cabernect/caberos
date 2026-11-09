@@ -236,6 +236,113 @@ class UnavailableBackend(SandboxBackend):
         )
 
 
+# Explicit terminal-backend picks the operator can make in Settings → Tools →
+# Terminal ("auto" resolves through get_backend instead). Each value names the
+# OS the backend is native to — a foreign pick refuses rather than falling
+# back. Remote transports (SSH/Daytona/Modal) join this map with their drivers.
+LOCAL_BACKEND_OSES: dict[str, str] = {
+    "seatbelt": "macOS",
+    "bwrap": "Linux",
+    "mxc": "Windows",
+}
+
+
+def _local_makers() -> dict[str, Callable[[], SandboxBackend]]:
+    """Local backends constructible on this platform, keyed by pick name."""
+    if sys.platform == "win32":
+        from .mxc import MxcBackend
+
+        return {"mxc": MxcBackend}
+    if sys.platform == "darwin":
+        from .seatbelt import SeatbeltBackend
+
+        return {"seatbelt": SeatbeltBackend}
+    if sys.platform.startswith("linux"):
+        from .bwrap import BwrapBackend
+
+        return {"bwrap": BwrapBackend}
+    return {}
+
+
+def backend_named(name: str) -> SandboxBackend:
+    """Instantiate an explicitly selected local backend — never falls back.
+
+    An unknown name, a backend foreign to this OS, or a missing tool returns
+    an UnavailableBackend so the refusal reads exactly like an unavailable
+    auto backend instead of crashing differently.
+    """
+    if name not in LOCAL_BACKEND_OSES:
+        return UnavailableBackend(reason=f"Unknown terminal backend {name!r}.")
+    make = _local_makers().get(name)
+    if make is None:
+        return UnavailableBackend(
+            reason=f"The {name} backend is native to {LOCAL_BACKEND_OSES[name]} — "
+            f"this machine runs {sys.platform}."
+        )
+    backend = make()
+    if backend.is_available():
+        return backend
+    return UnavailableBackend(
+        reason=f"{name}: {backend.unavailable_reason() or 'not available'}",
+        setup_required=backend.needs_host_setup(),
+    )
+
+
+@dataclass
+class BackendStatus:
+    """One row of the Terminal card's per-backend readiness table."""
+
+    name: str
+    os_requirement: str
+    supported_here: bool
+    available: bool
+    experimental: bool
+    auto: bool  # what Auto resolves to on this machine
+    reason: str | None = None
+
+
+def backend_catalog() -> list[BackendStatus]:
+    """Readiness for every local backend pick — OS support, availability,
+    isolation strength (experimental), and what Auto resolves to.
+
+    Probing instantiates each backend and may spawn a subprocess; callers run
+    it off the event loop (asyncio.to_thread) and only on operator-facing
+    reads, never on mediation.
+    """
+    auto_kind = get_backend().kind
+    makers = _local_makers()
+    rows: list[BackendStatus] = []
+    for name, requirement in LOCAL_BACKEND_OSES.items():
+        make = makers.get(name)
+        if make is None:
+            rows.append(
+                BackendStatus(
+                    name=name,
+                    os_requirement=requirement,
+                    supported_here=False,
+                    available=False,
+                    experimental=False,
+                    auto=False,
+                    reason=f"requires {requirement}",
+                )
+            )
+            continue
+        backend = make()
+        available = backend.is_available()
+        rows.append(
+            BackendStatus(
+                name=name,
+                os_requirement=requirement,
+                supported_here=True,
+                available=available,
+                experimental=available and not backend.trusted,
+                auto=auto_kind == backend.kind,
+                reason=None if available else backend.unavailable_reason(),
+            )
+        )
+    return rows
+
+
 def _candidates_for(platform: str) -> list[Callable[[], SandboxBackend]]:
     """Only the OS-native backend; Docker setup is future, explicit opt-in."""
     if platform == "win32":

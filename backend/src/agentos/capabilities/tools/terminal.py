@@ -57,7 +57,11 @@ async def terminal_run(
             db_lock=kwargs.get("db_lock"),
         )
     return await _run_sync(
-        args["command"], workspace_path, kwargs.get("sandbox_mode", "strict"), timeout
+        args["command"],
+        workspace_path,
+        kwargs.get("sandbox_mode", "strict"),
+        timeout,
+        db=kwargs.get("db"),
     )
 
 
@@ -87,7 +91,7 @@ async def close_terminal(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
 
 
 async def _run_sync(
-    command: str, workspace_path: str, sandbox_mode: str, timeout: int
+    command: str, workspace_path: str, sandbox_mode: str, timeout: int, db: Any = None
 ) -> dict[str, Any]:
     """Run a command to completion — the terminal capability's sync path."""
     if sandbox_mode == "open":
@@ -106,8 +110,14 @@ async def _run_sync(
             proc, timeout=timeout, started_at=start, cleanup=kill_process_group
         )
     else:
-        # Strict mode uses only the configured OS-native execution path.
-        backend = get_backend()
+        # Strict mode uses the exec.terminal binding's backend — Auto or an
+        # explicit native pick, never a silent fallback (W11.2).
+        if db is not None:
+            from ...terminal.resolution import resolve_terminal_backend
+
+            backend, _ = await resolve_terminal_backend(db)
+        else:
+            backend = get_backend()
         result = await backend.run_command(
             workspace_path=workspace_path,
             command=command,

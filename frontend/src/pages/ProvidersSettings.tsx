@@ -4435,6 +4435,18 @@ const SEARCH_BACKEND_LABELS: Record<string, string> = {
   brave_search: "Brave Search API",
 };
 
+const TERMINAL_BACKEND_LABELS: Record<string, string> = {
+  auto: "Auto (OS-native)",
+  seatbelt: "Seatbelt (macOS)",
+  bwrap: "Bubblewrap (Linux)",
+  mxc: "MXC (Windows, experimental)",
+};
+
+const backendOptionLabel = (toolKey: string, choice: string) =>
+  toolKey === "exec.terminal"
+    ? (TERMINAL_BACKEND_LABELS[choice] ?? choice)
+    : (SEARCH_BACKEND_LABELS[choice] ?? choice);
+
 function EngineOrderField({
   value,
   choices,
@@ -4802,6 +4814,7 @@ export function ToolsTab({ providers }: { providers: Provider[] }) {
           model: "",
         };
         const isSearch = tool.key === "search.web";
+        const isTerminal = tool.key === "exec.terminal";
         // Match the Select's display fallback — an unset backend is its default.
         const backend = String(
           draft.options.backend ??
@@ -4993,7 +5006,7 @@ export function ToolsTab({ providers }: { providers: Provider[] }) {
                         options={field.choices.map((c) => ({
                           value: c,
                           label: field.name === "backend"
-                            ? (SEARCH_BACKEND_LABELS[c] ?? c)
+                            ? backendOptionLabel(tool.key, c)
                             : c,
                         }))}
                         className="w-full rounded-md border border-line bg-ground px-3 py-1.5 text-[13px] text-ink outline-none"
@@ -5022,6 +5035,27 @@ export function ToolsTab({ providers }: { providers: Provider[] }) {
                     </div>
                   ))}
                 </div>
+                {isTerminal && tool.backends && (
+                  <div className="space-y-1">
+                    {tool.backends.map((b) => (
+                      <p key={b.name} className="text-[12px] text-[var(--ink-3)]">
+                        <span className="font-medium text-[var(--ink-2)]">
+                          {TERMINAL_BACKEND_LABELS[b.name] ?? b.name}
+                        </span>
+                        {" — "}
+                        {!b.supported_here
+                          ? (b.reason ?? "not supported on this OS")
+                          : b.available
+                            ? `${b.os_requirement} · installed${b.experimental ? " · experimental (not a vendor-attested security boundary)" : ""}${b.auto ? " · Auto resolves here" : ""}`
+                            : `${b.os_requirement} · ${b.reason ?? "not installed"}`}
+                      </p>
+                    ))}
+                    <p className="text-[12px] text-[var(--ink-3)]">
+                      Applies to new terminal sessions; open mode always runs
+                      unsandboxed on the host.
+                    </p>
+                  </div>
+                )}
                 {serviceSearch && (
                   <div className="space-y-3">
                     <Field label="Search connection">

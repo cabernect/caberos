@@ -89,11 +89,7 @@ async def _audio_transcriptions(req: SpeechRequest, base: str) -> TranscriptResu
                     body = response.content[:_RESPONSE_LIMIT]
                     if response.status_code == 200:
                         break
-                    if (
-                        attempt == 0
-                        and response.status_code == 400
-                        and b"response_format" in body
-                    ):
+                    if attempt == 0 and response.status_code == 400 and b"response_format" in body:
                         data["response_format"] = "json"
                         continue
                     raise SpeechProviderError(

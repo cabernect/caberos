@@ -135,7 +135,7 @@ async def test_finalize_allows_pending_output_to_flush_before_cancelling(managed
     assert terminal.truncated is False
 
 
-async def test_durable_resource_identity_precedes_activation(tmp_path, monkeypatch):
+async def test_durable_resource_identity_precedes_activation(tmp_path, monkeypatch, db):
     registry = TerminalRegistry()
     launch = SandboxLaunch(["synthetic-worker"], {}, "owned-resource")
     backend = Mock(spec=SandboxBackend, kind="docker")
@@ -161,7 +161,7 @@ async def test_durable_resource_identity_precedes_activation(tmp_path, monkeypat
     monkeypatch.setattr("agentos.terminal.registry.os.getpgid", lambda pid: pid)
     monkeypatch.setattr("agentos.terminal.registry.asyncio.create_subprocess_exec", spawn)
     await registry.start(
-        Mock(), command="true", workspace_path=str(tmp_path), sandbox_mode="strict", **OWNER
+        db, command="true", workspace_path=str(tmp_path), sandbox_mode="strict", **OWNER
     )
     await asyncio.sleep(0)
     assert events == [
@@ -172,7 +172,7 @@ async def test_durable_resource_identity_precedes_activation(tmp_path, monkeypat
     ]
 
 
-async def test_failed_durable_admission_never_creates_resource(tmp_path, monkeypatch):
+async def test_failed_durable_admission_never_creates_resource(tmp_path, monkeypatch, db):
     registry = TerminalRegistry()
     backend = Mock(spec=SandboxBackend)
     backend.plan_launch.return_value = SandboxLaunch(["synthetic"], {}, "owned-resource")
@@ -182,7 +182,7 @@ async def test_failed_durable_admission_never_creates_resource(tmp_path, monkeyp
     monkeypatch.setattr("agentos.terminal.registry.get_backend", lambda: backend)
     with pytest.raises(OSError, match="dummy DB error"):
         await registry.start(
-            Mock(), command="true", workspace_path=str(tmp_path), sandbox_mode="strict", **OWNER
+            db, command="true", workspace_path=str(tmp_path), sandbox_mode="strict", **OWNER
         )
     backend.activate_launch.assert_not_awaited()
 

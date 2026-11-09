@@ -259,6 +259,8 @@ class SQLiteBackend(DatabaseBackend):
             ("terminal_sessions", "sub_agent_id", "VARCHAR(36)"),
             ("terminal_sessions", "backend_kind", "TEXT"),
             ("terminal_sessions", "resource_id", "TEXT"),
+            # W11 admission pin — NULL on open-mode and legacy rows.
+            ("terminal_sessions", "binding_revision", "INTEGER"),
             ("artifact_revisions", "call_id", "VARCHAR(255)"),
             ("artifact_revisions", "sub_agent_id", "VARCHAR(36)"),
             ("run_sources", "call_id", "VARCHAR(255)"),

@@ -1,5 +1,6 @@
 """Global app settings API — runtime toggles like YOLO mode."""
 
+import asyncio
 import json
 import uuid
 from typing import Any
@@ -298,6 +299,11 @@ from ..capabilities.bindings import (  # noqa: E402
 from ..models.provider import Provider  # noqa: E402
 from ..models.tool_binding import ToolBinding  # noqa: E402
 from ..providers.service_types import SEARCH_PROVIDER_TYPES, SERVICE_PROVIDER_TYPES  # noqa: E402
+from ..sandbox.base import (  # noqa: E402
+    LOCAL_BACKEND_OSES,
+    _local_makers,
+    backend_catalog,
+)
 
 
 def _options_schema(spec: BindingSpec) -> list[dict[str, Any]]:
@@ -318,6 +324,14 @@ def _options_schema(spec: BindingSpec) -> list[dict[str, Any]]:
 async def _binding_out(db: AsyncSession, spec: BindingSpec) -> dict[str, Any]:
     resolution = await resolve_binding(db, spec.key)
     provider = resolution.provider
+    # The Terminal card also shows per-backend readiness — OS support,
+    # availability, isolation strength — computed separately from binding
+    # state. Probing can spawn subprocesses, so it runs off the loop.
+    backends = None
+    if spec.key == "exec.terminal":
+        backends = [
+            {k: v for k, v in vars(row).items()} for row in await asyncio.to_thread(backend_catalog)
+        ]
     return {
         "key": spec.key,
         "title": spec.title,
@@ -332,6 +346,7 @@ async def _binding_out(db: AsyncSession, spec: BindingSpec) -> dict[str, Any]:
         "reason": resolution.reason,
         "options": resolution.options,
         "options_schema": _options_schema(spec),
+        "backends": backends,
         "model_modalities": (list(spec.model_modalities) if spec.model_modalities else None),
         "binding": (
             {
@@ -392,6 +407,18 @@ async def put_tool_binding(
         options = validate_options(spec, req.options or {})
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
+    # Local validation only (W11.2): an explicit terminal backend must be one
+    # this OS can construct — a foreign pick could never work, so refuse the
+    # save instead of letting the first shell call discover it.
+    if key == "exec.terminal":
+        pick = options.get("backend") or "auto"
+        if pick != "auto" and pick not in _local_makers():
+            raise HTTPException(
+                status_code=422,
+                detail=f"The {pick} backend is native to "
+                f"{LOCAL_BACKEND_OSES.get(pick, 'another platform')} — "
+                "it cannot run on this machine.",
+            )
     service_search = key == "search.web" and options.get("backend") in SEARCH_PROVIDER_TYPES
     if spec.kind == "engine" and not service_search:
         if req.provider_id:

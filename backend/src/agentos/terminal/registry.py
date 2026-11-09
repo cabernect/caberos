@@ -34,6 +34,7 @@ from ..models.terminal import TerminalSession
 from ..sandbox import get_backend
 from ..sandbox.base import SandboxBackend, SandboxLaunch, kill_process_group
 from ..sandbox.process import OUTPUT_CAP_BYTES, drain_output
+from .resolution import resolve_terminal_backend
 from .transport import LOCAL_TRANSPORT, SpawnedProcess, TerminalTransport
 
 # Output spool cap per stream — beyond this we keep draining (so the child
@@ -104,11 +105,12 @@ class TerminalRegistry:
 
         backend = None
         launch = None
+        binding_revision = None
         if sandbox_mode == "open":
             argv = open_mode_shell(command)
             env = None
         else:
-            backend = get_backend()
+            backend, binding_revision = await resolve_terminal_backend(db, native=get_backend)
             launch = backend.plan_launch(workspace_path, command)
             argv, env = launch.argv, launch.env
 
@@ -122,6 +124,7 @@ class TerminalRegistry:
             workspace_path=workspace_path,
             backend_kind=backend.kind if backend is not None else "open",
             resource_id=launch.resource_id if launch is not None else None,
+            binding_revision=binding_revision,
             status="starting",
             command=command[:2048],
             stdout_path=str(stdout_path),
