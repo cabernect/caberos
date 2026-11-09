@@ -377,8 +377,9 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
         levelsRef.current = next;
         setLevels(next);
       }, 80);
-    } catch {
+    } catch (err) {
       // Level meter unavailable — recording still works, bars stay flat.
+      console.warn("dictation level meter unavailable", err);
     }
     // Hard cap — a forgotten mic shouldn't run up unbounded audio.
     dictTimeoutRef.current = window.setTimeout(() => {
@@ -1215,15 +1216,15 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
           <div className="flex items-center gap-1.5">
             {dictation === "recording" && (
               <span className="flex items-center gap-1.5">
-                <span className="flex h-[14px] items-end gap-[2px]" aria-hidden="true">
+                <span className="flex h-[16px] items-end gap-[3px]" aria-hidden="true">
                   {levels.map((v, i) => (
                     <span
                       key={i}
-                      className="w-[3px] rounded-full"
+                      className="w-[3.5px] rounded-full"
                       style={{
-                        height: `${3 + Math.round(v * 11)}px`,
+                        height: `${5 + Math.round(v * 11)}px`,
                         background: "var(--danger, #dc2626)",
-                        opacity: 0.45 + v * 0.55,
+                        opacity: 0.6 + v * 0.4,
                         transition: "height 80ms linear, opacity 80ms linear",
                       }}
                     />
