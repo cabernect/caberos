@@ -144,8 +144,16 @@ async def test_xlsx_multi_sheet_and_query_rows(client, db):
         filters=[{"column": "Revenue", "op": "gte", "value": 10}],
         after_row=int(result["next_cursor"]),
         limit=2,
+        aggregates=[{"op": "count"}, {"op": "sum", "column": "Revenue"}],
     )
     assert [i["row_number"] for i in page2["items"]] == [4]
+    # Page 2 must not re-scope count/aggregates — they still describe the
+    # full filtered set, never the returned page.
+    assert page2["matched_count"] == 3
+    assert page2["aggregates"] == [
+        {"op": "count", "column": None, "value": 3},
+        {"op": "sum", "column": "Revenue", "value": 75},
+    ]
 
     # Allowlist enforcement and unknown columns — errors, never raw SQL.
     assert "error" in await query_rows(
@@ -191,6 +199,63 @@ async def test_tabular_stale_cursor_scope_and_refusals(client):
     )
     assert refused.status_code == 400
     assert ".xlsx or .csv" in refused.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_csv_cells_are_typed_and_codes_stay_text(client, db):
+    """CSV has no cell types — canonical numeric spellings coerce so
+    filters/aggregates are semantic, while codes like '007' keep their
+    text instead of silently becoming 7."""
+    from sqlalchemy import select
+
+    from agentos.knowledge.tabular import query_rows
+    from agentos.models.document import Document
+
+    resp = await client.post(
+        "/api/knowledge/scopes/shared/documents/upload",
+        files={
+            "file": (
+                "codes.csv",
+                b"Code,Qty\n007,5\n008,12\n009,3\n",
+                "text/csv",
+            )
+        },
+    )
+    doc_id = resp.json()["id"]
+
+    sheets = (await client.get(f"/api/knowledge/scopes/shared/documents/{doc_id}/sheets")).json()[
+        "sheets"
+    ]
+    kinds = {c["label"]: c["kind"] for c in sheets[0]["columns"]}
+    assert kinds == {"Code": "text", "Qty": "number"}
+
+    document = await db.scalar(select(Document).where(Document.id == doc_id))
+
+    # Numeric filter compares semantically — only 12 ≥ 10; under string
+    # coercion '3', '5', '9' would all lexicographically pass '10'.
+    filtered = await query_rows(
+        db,
+        document,
+        sheet_name="csv",
+        filters=[{"column": "Qty", "op": "gte", "value": 10}],
+    )
+    assert filtered["matched_count"] == 1
+    assert filtered["items"][0]["cells"]["col_2"] == 12
+
+    # Aggregates see typed numbers, not nulls.
+    summed = await query_rows(
+        db, document, sheet_name="csv", aggregates=[{"op": "sum", "column": "Qty"}]
+    )
+    assert summed["aggregates"][0]["value"] == 20
+
+    # Leading-zero codes keep their text — '007' eq-matches as a string.
+    code = await query_rows(
+        db,
+        document,
+        sheet_name="csv",
+        filters=[{"column": "Code", "op": "eq", "value": "007"}],
+    )
+    assert code["matched_count"] == 1
 
 
 @pytest.mark.asyncio

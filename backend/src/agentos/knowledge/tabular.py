@@ -75,6 +75,25 @@ def _cell_value(value: Any, warnings: list[str]) -> Any:
     return text
 
 
+# CSV has no cell types — only canonical numeric spellings coerce to
+# numbers (canonical = no leading zeros, no underscores, no sign-only or
+# bare-dot forms), so '007' or '1_000' stay text instead of silently
+# corrupting IDs/codes into 7 or 1000. Anything else keeps its text.
+_CSV_NUMBER_RE = re.compile(r"-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?")
+
+
+def _csv_cell(record_value: str | None, warnings: list[str]) -> Any:
+    value = _cell_value(record_value, warnings)
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if not text or not _CSV_NUMBER_RE.fullmatch(text):
+        return value
+    if "." not in text and "e" not in text.lower():
+        return int(text)
+    return float(text)
+
+
 def _infer_kinds(columns: list[ParsedColumn], rows: list[ParsedRow]) -> None:
     """Assign each column a value kind from observed cells (mixed is explicit)."""
     for col in columns:
@@ -154,7 +173,7 @@ def _parse_csv(path: Path) -> ParsedSheet:
                     f"Row {row_number} has {len(record)} cells — extra cells were dropped"
                 )
             cells = {
-                col.id: _cell_value(record[i] if i < len(record) else None, warnings)
+                col.id: _csv_cell(record[i] if i < len(record) else None, warnings)
                 for i, col in enumerate(columns)
             }
             rows.append(ParsedRow(row_number, cells))
@@ -380,16 +399,14 @@ async def query_rows(
         aggs.append((op, col_id))
 
     ordering = DocumentRow.row_number.asc() if order != "desc" else DocumentRow.row_number.desc()
-    if after_row and order == "desc":
-        boundary = DocumentRow.row_number < after_row
-    elif after_row:
-        boundary = DocumentRow.row_number > after_row
-    else:
-        boundary = DocumentRow.id.isnot(None)
+    # Scan the whole sheet — matched_count and aggregates describe the full
+    # filtered set, not the returned page. The cursor below gates only
+    # which matching rows enter this page's items.
     stream = await db.stream(
-        select(DocumentRow).where(DocumentRow.sheet_id == sheet.id, boundary).order_by(ordering)
+        select(DocumentRow).where(DocumentRow.sheet_id == sheet.id).order_by(ordering)
     )
     matched = 0
+    paged = 0
     page: list[DocumentRow] = []
     agg_values: list[float | None] = [None] * len(aggs)
     async for record in stream.scalars():
@@ -397,8 +414,6 @@ async def query_rows(
         if not all(_matches(cells, cid, op, val) for cid, op, val in predicates):
             continue
         matched += 1
-        if len(page) < limit:
-            page.append(record)
         for i, (op, cid) in enumerate(aggs):
             if op == "count":
                 agg_values[i] = (agg_values[i] or 0) + 1
@@ -414,6 +429,13 @@ async def query_rows(
                 agg_values[i] = min(agg_values[i], value)
             elif op == "max":
                 agg_values[i] = max(agg_values[i], value)
+        if after_row and (
+            record.row_number >= after_row if order == "desc" else record.row_number <= after_row
+        ):
+            continue
+        paged += 1
+        if len(page) < limit:
+            page.append(record)
 
     col_by_id = {c["id"]: c for c in columns}
     items = [
@@ -438,8 +460,9 @@ async def query_rows(
             for i, (op, cid) in enumerate(aggs)
         ],
         "items": items,
-        # Cursor resumes after the last *returned* row — matched_count scans
-        # the whole set, but paging continues from the page boundary.
-        "next_cursor": str(page[-1].row_number) if matched > len(page) else None,
-        "truncated": matched > len(page),
+        # Cursor resumes after the last *returned* row — count/aggregates
+        # covered the full filtered set, but paging continues from the
+        # post-cursor page boundary.
+        "next_cursor": str(page[-1].row_number) if paged > len(page) else None,
+        "truncated": paged > len(page),
     }
