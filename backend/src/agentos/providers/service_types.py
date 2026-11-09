@@ -13,10 +13,10 @@ SEARCH_PROVIDER_TYPES = frozenset(SEARCH_PROVIDER_LABELS)
 
 # Dedicated speech providers (W10). STT/TTS support is per operation — the
 # adapter registry in speech/service.py is the operation support matrix.
+# Gemini is deliberately NOT here: it is a model-scoped provider that also
+# serves speech; the speech binding specs allowlist it via service_types.
 SPEECH_PROVIDER_LABELS = {
     "elevenlabs": "ElevenLabs",
-    "deepgram": "Deepgram",
-    "gradium": "Gradium",
 }
 SPEECH_PROVIDER_TYPES = frozenset(SPEECH_PROVIDER_LABELS)
 

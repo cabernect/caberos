@@ -1,5 +1,6 @@
-"""Deepgram STT adapter fixtures — request shape, auth, normalization, and
-honest failures. No live calls: verified contract is encoded in fixtures."""
+"""Gemini speech adapter fixtures — generateContent shapes for STT
+inlineData and TTS audio modality, auth, PCM→WAV wrapping, and honest
+failures. No live calls: verified contract is encoded in fixtures."""
 
 import base64
 import json
@@ -7,7 +8,7 @@ import json
 import httpx
 import pytest
 
-from agentos.speech.adapters import SpeechProviderError, _deepgram_stt
+from agentos.speech.adapters import SpeechProviderError, _gemini_stt
 from agentos.speech.service import SpeechRequest
 
 
@@ -16,10 +17,10 @@ def _req(**over) -> SpeechRequest:
         operation="stt",
         request_id="r1",
         provider_id="p1",
-        provider_type="deepgram",
-        model="nova-3",
+        provider_type="gemini",
+        model="gemini-2.5-flash",
         options={},
-        api_key="dg-secret-key",
+        api_key="gm-secret-key",
         binding_revision=3,
         audio=b"RIFF-fake",
         mime="audio/wav",
@@ -40,66 +41,54 @@ def _client(payload, status=200, capture=None):
     return _REAL_CLIENT(transport=httpx.MockTransport(handler))
 
 
-def _payload(text="hello world", duration=1.5):
+def _bytes_client(body: bytes, status=200, capture=None, ctype="application/octet-stream"):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if capture is not None:
+            capture.append(request)
+        return httpx.Response(status, content=body, headers={"content-type": ctype})
+
+    return _REAL_CLIENT(transport=httpx.MockTransport(handler))
+
+
+def _stt_payload(text="hello world"):
     return {
-        "metadata": {"request_id": "dg-123", "duration": duration},
-        "results": {"channels": [{"alternatives": [{"transcript": text}]}]},
+        "candidates": [{"content": {"parts": [{"text": text}]}}],
+        "usageMetadata": {"totalTokenCount": 42},
     }
 
 
-async def test_request_shape_auth_and_model(monkeypatch):
+async def test_stt_request_shape_auth_and_transcript(monkeypatch):
     seen = []
-    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _client(_payload(), capture=seen))
-    req = _req(options={"language": "en"})
-    result = await _deepgram_stt(req)
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _client(_stt_payload(), capture=seen))
+    result = await _gemini_stt(_req(options={"language": "vi"}))
 
     request = seen[0]
-    assert str(request.url).startswith("https://api.deepgram.com/v1/listen")
-    assert request.url.params["model"] == "nova-3"
-    assert request.url.params["language"] == "en"
-    assert request.url.params["smart_format"] == "true"
-    assert request.headers["authorization"] == "Token dg-secret-key"
-    assert request.headers["content-type"] == "audio/wav"
-    assert request.content == b"RIFF-fake"
+    assert (
+        str(request.url)
+        == "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+    )
+    assert request.headers["x-goog-api-key"] == "gm-secret-key"
+    parts = json.loads(request.content)["contents"][0]["parts"]
+    assert parts[0]["inlineData"]["mimeType"] == "audio/wav"
+    assert base64.b64decode(parts[0]["inlineData"]["data"]) == b"RIFF-fake"
+    assert "vi" in parts[1]["text"]
     assert result.text == "hello world"
-    assert result.audio_seconds == 1.5
-    assert result.usage["dg_request_id"] == "dg-123"
-
-
-async def test_blank_language_enables_detect_language(monkeypatch):
-    seen = []
-    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _client(_payload(), capture=seen))
-    await _deepgram_stt(_req(options={"language": ""}))
-    params = seen[0].url.params
-    assert params["detect_language"] == "true"
-    assert "language" not in params
-
-
-async def test_empty_transcript_is_empty_result(monkeypatch):
-    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _client(_payload(text="", duration=0.2)))
-    result = await _deepgram_stt(_req())
-    assert result.text == "" and result.audio_seconds == 0.2
+    assert result.usage["tokens_reported"] == 42
 
 
 @pytest.mark.parametrize(
     "payload",
-    [
-        {},
-        {"results": {}},
-        {"results": {"channels": []}},
-        {"results": {"channels": [{"alternatives": None}]}},
-        "not a dict",
-    ],
+    [{}, {"candidates": []}, {"candidates": [{"content": {"parts": None}}]}, "not a dict"],
 )
-async def test_malformed_payload_is_honest_error(monkeypatch, payload):
+async def test_stt_malformed_payload_is_honest_error(monkeypatch, payload):
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _client(payload))
     with pytest.raises(SpeechProviderError, match="unreadable"):
-        await _deepgram_stt(_req())
+        await _gemini_stt(_req())
 
 
 @pytest.mark.parametrize("status", [400, 401, 403, 429, 500])
 async def test_status_errors_never_echo_key_or_body(monkeypatch, status):
-    body = json.dumps({"err": "key dg-secret-key rejected"}).encode()
+    body = json.dumps({"err": "key gm-secret-key rejected"}).encode()
 
     def handler(request):
         return httpx.Response(status, content=body)
@@ -110,16 +99,16 @@ async def test_status_errors_never_echo_key_or_body(monkeypatch, status):
         lambda **kw: _REAL_CLIENT(transport=httpx.MockTransport(handler)),
     )
     with pytest.raises(SpeechProviderError) as exc:
-        await _deepgram_stt(_req())
+        await _gemini_stt(_req())
     assert f"HTTP {status}" in str(exc.value)
-    assert "dg-secret-key" not in str(exc.value)
+    assert "gm-secret-key" not in str(exc.value)
 
 
 async def test_missing_key_is_clear_error():
     from agentos.speech.service import SpeechError
 
     with pytest.raises(SpeechError, match="no API key"):
-        await _deepgram_stt(_req(api_key=None))
+        await _gemini_stt(_req(api_key=None))
 
 
 # --- OpenAI-compatible audio adapters ---------------------------------------
@@ -392,20 +381,20 @@ async def test_elevenlabs_tts_error_no_key_echo(monkeypatch):
     assert "el-secret" not in str(exc.value)
 
 
-# --- Deepgram Aura TTS --------------------------------------------------------
+# --- Gemini TTS ---------------------------------------------------------------
 
-from agentos.speech.adapters import _deepgram_tts  # noqa: E402
+from agentos.speech.adapters import _gemini_tts  # noqa: E402
 
 
-def _dg_tts_req(**over) -> SpeechRequest:
+def _gm_tts_req(**over) -> SpeechRequest:
     base = dict(
         operation="tts",
         request_id="r5",
         provider_id="p5",
-        provider_type="deepgram",
-        model="aura-2-thalia-en",
-        options={},
-        api_key="dg-secret",
+        provider_type="gemini",
+        model="gemini-2.5-flash-preview-tts",
+        options={"voice": "Kore"},
+        api_key="gm-secret",
         binding_revision=1,
         text="read me",
     )
@@ -413,101 +402,66 @@ def _dg_tts_req(**over) -> SpeechRequest:
     return SpeechRequest(**base)
 
 
-async def test_deepgram_tts_posts_text_and_collects_audio(monkeypatch):
+def _tts_payload(pcm: bytes, mime="audio/L16;rate=24000;channels=1"):
+    return {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {"inlineData": {"mimeType": mime, "data": base64.b64encode(pcm).decode()}}
+                    ]
+                }
+            }
+        ],
+        "usageMetadata": {"totalTokenCount": 30},
+    }
+
+
+async def test_gemini_tts_shape_and_pcm_to_wav(monkeypatch):
     seen = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen.append(request)
-        return httpx.Response(200, content=b"MP3BYTES", headers={"dg-char-count": "7"})
-
-    monkeypatch.setattr(
-        httpx,
-        "AsyncClient",
-        lambda **kw: _REAL_CLIENT(transport=httpx.MockTransport(handler)),
-    )
-    result = await _deepgram_tts(_dg_tts_req())
+    pcm = b"\x01\x02" * 240  # pretend s16le frames
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _client(_tts_payload(pcm), capture=seen))
+    result = await _gemini_tts(_gm_tts_req())
     request = seen[0]
-    assert str(request.url).startswith("https://api.deepgram.com/v1/speak")
-    assert request.url.params["model"] == "aura-2-thalia-en"
-    assert request.url.params["encoding"] == "mp3"
-    assert request.headers["authorization"] == "Token dg-secret"
-    assert json.loads(request.content) == {"text": "read me"}
-    assert result.audio == b"MP3BYTES" and result.mime == "audio/mpeg"
-    assert result.usage["characters_reported"] == 7
+    assert (
+        str(request.url) == "https://generativelanguage.googleapis.com/v1beta/models/"
+        "gemini-2.5-flash-preview-tts:generateContent"
+    )
+    assert request.headers["x-goog-api-key"] == "gm-secret"
+    payload = json.loads(request.content)
+    assert payload["contents"][0]["parts"][0]["text"] == "read me"
+    gc = payload["generationConfig"]
+    assert gc["responseModalities"] == ["AUDIO"]
+    assert gc["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
+    assert result.mime == "audio/wav"
+    assert result.audio[:4] == b"RIFF" and result.audio[8:12] == b"WAVE"
+    assert result.audio[44:] == pcm
+    assert result.usage["tokens_reported"] == 30
 
 
-async def test_deepgram_tts_error_no_key_echo(monkeypatch):
+async def test_gemini_tts_voiceless_omits_speech_config(monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kw: _client(_tts_payload(b"\x00" * 4), capture=seen)
+    )
+    await _gemini_tts(_gm_tts_req(options={}))
+    gc = json.loads(seen[0].content)["generationConfig"]
+    assert gc["responseModalities"] == ["AUDIO"]
+    assert "speechConfig" not in gc
+
+
+async def test_gemini_tts_no_audio_part_is_honest(monkeypatch):
+    payload = {"candidates": [{"content": {"parts": [{"text": "no audio"}]}}]}
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _client(payload))
+    with pytest.raises(SpeechProviderError, match="no audio"):
+        await _gemini_tts(_gm_tts_req())
+
+
+async def test_gemini_tts_error_no_key_echo(monkeypatch):
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _bytes_client(b"err", status=403))
     with pytest.raises(SpeechProviderError, match="403") as exc:
-        await _deepgram_tts(_dg_tts_req())
-    assert "dg-secret" not in str(exc.value)
-
-
-# --- Gradium ------------------------------------------------------------------
-
-from agentos.speech.adapters import _gradium_stt, _gradium_tts  # noqa: E402
-
-
-def _gr_req(**over) -> SpeechRequest:
-    base = dict(
-        operation="stt",
-        request_id="r6",
-        provider_id="p6",
-        provider_type="gradium",
-        model="default",
-        options={},
-        api_key="gr-secret",
-        binding_revision=1,
-        audio=b"wav-bytes",
-        mime="audio/wav",
-    )
-    base.update(over)
-    return SpeechRequest(**base)
-
-
-async def test_gradium_stt_ndjson_and_shape(monkeypatch):
-    seen = []
-    ndjson = b'{"type":"text","text":"hello"}\n{"type":"step"}\n{"type":"text","text":"world"}\n'
-    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _bytes_client(ndjson, capture=seen))
-    result = await _gradium_stt(_gr_req(options={"language": "en"}))
-    request = seen[0]
-    assert str(request.url).startswith("https://api.gradium.ai/api/post/speech/asr")
-    assert request.headers["x-api-key"] == "gr-secret"
-    assert request.headers["content-type"] == "audio/wav"
-    assert request.url.params["model"] == "default"
-    assert json.loads(request.url.params["json_config"]) == {"language": "en"}
-    assert result.text == "hello world"
-
-
-async def test_gradium_stt_rejects_webm_upfront(monkeypatch):
-    called = []
-    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: called.append(1) or _client({}))
-    with pytest.raises(SpeechError, match="wav/ogg/pcm"):
-        await _gradium_stt(_gr_req(mime="audio/webm"))
-    assert called == []
-
-
-async def test_gradium_stt_stream_error_is_honest(monkeypatch):
-    ndjson = b'{"type":"text","text":"hi"}\n{"type":"error","message":"x"}\n'
-    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _bytes_client(ndjson))
-    with pytest.raises(SpeechProviderError, match="mid-stream"):
-        await _gradium_stt(_gr_req())
-
-
-async def test_gradium_tts_only_audio_shape(monkeypatch):
-    seen = []
-    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _bytes_client(b"WAVDATA", capture=seen))
-    result = await _gradium_tts(
-        _gr_req(operation="tts", options={"voice": "YTpq7expH9539ERJ"}, text="hi")
-    )
-    request = seen[0]
-    assert str(request.url) == "https://api.gradium.ai/api/post/speech/tts"
-    payload = json.loads(request.content)
-    assert payload["only_audio"] is True
-    assert payload["output_format"] == "wav"
-    assert payload["voice_id"] == "YTpq7expH9539ERJ"
-    assert payload["text"] == "hi" and payload["model_name"] == "default"
-    assert result.audio == b"WAVDATA" and result.mime == "audio/wav"
+        await _gemini_tts(_gm_tts_req())
+    assert "gm-secret" not in str(exc.value)
 
 
 async def test_openrouter_dedicated_tts_uses_audio_speech(monkeypatch):

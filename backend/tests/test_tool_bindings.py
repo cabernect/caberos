@@ -230,7 +230,7 @@ async def test_put_speech_binding_accepts_speech_provider(client, db):
     assert r.json()["binding"]["provider_id"] == p.id
 
     # A provider type outside the spec's allowlist is still refused.
-    other = await _provider(db, name="Gemini", type_="gemini")
+    other = await _provider(db, name="Exa", type_="exa")
     r = await client.put(
         "/api/settings/tools/speech.tts",
         json={"provider_id": other.id, "model": "x"},

@@ -63,7 +63,7 @@ def clean_rate_limit():
     yield
 
 
-async def _speech_provider(db, type_="deepgram") -> Provider:
+async def _speech_provider(db, type_="elevenlabs") -> Provider:
     p = Provider(
         id=str(uuid.uuid4()),
         name="SpeechProv",
@@ -125,7 +125,7 @@ async def test_cancel_before_dispatch_makes_no_calls(db, monkeypatch):
     called = False
     monkeypatch.setitem(
         speech_service._ADAPTERS,
-        ("deepgram", "stt"),
+        ("elevenlabs", "stt"),
         lambda req: called or True,  # would flag if reached
     )
     cancel = asyncio.Event()
@@ -147,7 +147,7 @@ async def test_transcribe_dispatch_records_receipt(db, monkeypatch):
         seen["revision"] = req.binding_revision
         return TranscriptResult(text="hello world", audio_seconds=1.2)
 
-    monkeypatch.setitem(speech_service._ADAPTERS, ("deepgram", "stt"), fake)
+    monkeypatch.setitem(speech_service._ADAPTERS, ("elevenlabs", "stt"), fake)
     result, request_id = await transcribe(db=db, audio=b"pcm", mime="audio/wav")
     assert result.text == "hello world"
     assert seen == {"model": "nova-3", "options": {"language": "en"}, "revision": binding.revision}
@@ -171,7 +171,7 @@ async def test_adapter_error_records_failed_receipt(db, monkeypatch):
     async def boom(req):
         raise RuntimeError("provider exploded")
 
-    monkeypatch.setitem(speech_service._ADAPTERS, ("deepgram", "stt"), boom)
+    monkeypatch.setitem(speech_service._ADAPTERS, ("elevenlabs", "stt"), boom)
     with pytest.raises(RuntimeError):
         await transcribe(db=db, audio=b"x", mime="audio/wav")
     rows = (await db.scalars(select(ModelCall))).all()
@@ -180,11 +180,11 @@ async def test_adapter_error_records_failed_receipt(db, monkeypatch):
 
 
 async def test_unknown_provider_type_is_honest_unavailable(db, monkeypatch):
-    provider = await _speech_provider(db, type_="gradium")
+    provider = await _speech_provider(db, type_="elevenlabs")
     await _bind(db, "speech.stt", provider)
     # Adapter absent at dispatch (e.g. binding predates a registry change).
-    monkeypatch.delitem(speech_service._ADAPTERS, ("gradium", "stt"))
-    with pytest.raises(SpeechUnavailable, match="gradium.*stt"):
+    monkeypatch.delitem(speech_service._ADAPTERS, ("elevenlabs", "stt"))
+    with pytest.raises(SpeechUnavailable, match="elevenlabs.*stt"):
         await transcribe(db=db, audio=b"x", mime="audio/wav")
 
 
@@ -233,7 +233,7 @@ async def test_status_reports_readiness(client, db):
     r = await client.get("/api/speech/status")
     body = r.json()["stt"]
     assert body["configured"] is True
-    assert body["adapter"] is True  # deepgram stt adapter is registered
+    assert body["adapter"] is True  # elevenlabs stt adapter is registered
     assert body["provider"] == "SpeechProv" and body["model"] == "nova-3"
 
 
@@ -244,7 +244,7 @@ async def test_transcribe_endpoint_flow(client, db, monkeypatch):
     async def fake(req):
         return TranscriptResult(text="transcribed words", audio_seconds=0.5)
 
-    monkeypatch.setitem(speech_service._ADAPTERS, ("deepgram", "stt"), fake)
+    monkeypatch.setitem(speech_service._ADAPTERS, ("elevenlabs", "stt"), fake)
     r = await client.post(
         "/api/speech/transcribe",
         files={"file": ("note.wav", b"RIFF-data", "audio/wav")},

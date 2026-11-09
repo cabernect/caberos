@@ -4415,9 +4415,8 @@ const engineLabel = (key: string) => ENGINE_LABELS[key] ?? key;
 
 /** Search backends that dispatch through a Provider-stored credential. */
 const SPEECH_SERVICE_LABELS: Record<string, string> = {
-  deepgram: "Deepgram",
   elevenlabs: "ElevenLabs",
-  gradium: "Gradium",
+  gemini: "Gemini",
 };
 
 const SEARCH_SERVICE_LABELS: Record<string, string> = {
