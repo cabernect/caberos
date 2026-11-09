@@ -460,3 +460,67 @@ async def test_pipeline_admission_resolves_before_run_exists(db, tmp_path):
     assert run.status == "completed"
     assert session.workspace_path == real
     assert run.workspace_path == real
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_session_surfaces_through_start_run(db, tmp_path):
+    """start_run()'s startup wait resolves on run_started — a refused
+    admission must still emit it or the send-message endpoint hangs ~30s
+    on 'Run failed to start'. The failed run row carries the real
+    workspace-mapping error instead."""
+    import asyncio
+
+    from agentos.db import async_session_factory
+    from agentos.models.contact import Contact
+    from agentos.models.run import Run
+    from agentos.models.session import Session
+    from agentos.run_manager import start_run
+
+    agent = await _agent(db)
+    for name in ("repo a", "repo b"):
+        (tmp_path / name).mkdir()
+    contact = Contact(
+        id="ct-amb",
+        channel="dashboard_chat",
+        bot_id=agent.id,
+        external_user_id="test-operator",
+        display_name="op",
+    )
+    db.add(contact)
+    db.add(
+        Session(
+            id="s-amb2",
+            contact_id="ct-amb",
+            agent_id=agent.id,
+            status="active",
+        )
+    )
+    for i, name in enumerate(("repo a", "repo b")):
+        db.add(
+            Run(
+                id=f"r-amb{i}",
+                session_id="s-amb2",
+                contact_id="ct-amb",
+                agent_id=agent.id,
+                trigger="chat",
+                status="completed",
+                workspace_path=str(tmp_path / name),
+            )
+        )
+    await db.commit()  # start_run opens its own DB session — data must be durable
+
+    result = await asyncio.wait_for(
+        start_run(
+            agent_id=agent.id,
+            text="resume",
+            user_id="test-operator",
+            is_test=True,
+            session_id="s-amb2",
+        ),
+        timeout=15,
+    )
+    async with async_session_factory() as check:
+        run = await check.get(Run, result["run_id"])
+        assert run is not None
+        assert run.status == "failed"
+        assert "multiple workspaces" in (run.error or "")

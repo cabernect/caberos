@@ -375,6 +375,20 @@ class Pipeline:
             )
             self.db.add(run)
             await self.db.commit()
+            # Admission still emits run_started — start_run()'s startup
+            # contract resolves on it; the failed row carries the
+            # workspace-mapping error to the timeline.
+            if event_emitter:
+                result_emit = event_emitter(
+                    "run_started",
+                    {
+                        "run_id": run.id,
+                        "session_id": session.id,
+                        "agent_id": message.bot_id,
+                    },
+                )
+                if hasattr(result_emit, "__await__"):
+                    await result_emit
             return run
         if not session.workspace_path:
             session.workspace_path = str(workspace_path)
