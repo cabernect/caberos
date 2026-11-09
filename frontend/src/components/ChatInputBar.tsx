@@ -128,6 +128,12 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
   const discardRef = useRef(false);
   const dictTimerRef = useRef<number | null>(null);
   const dictTimeoutRef = useRef<number | null>(null);
+  // Live level meter — trailing window of recent mic amplitudes for the
+  // recording bars. Visual only; never affects what's recorded.
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const vuTimerRef = useRef<number | null>(null);
+  const levelsRef = useRef<number[]>([0, 0, 0, 0, 0]);
+  const [levels, setLevels] = useState<number[]>([0, 0, 0, 0, 0]);
   const [showContextMenu, setShowContextMenu] = useState(false);
   const [showUrlInput, setShowUrlInput] = useState(false);
   const [urlValue, setUrlValue] = useState("");
@@ -236,6 +242,14 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
       window.clearTimeout(dictTimeoutRef.current);
       dictTimeoutRef.current = null;
     }
+    if (vuTimerRef.current) {
+      window.clearInterval(vuTimerRef.current);
+      vuTimerRef.current = null;
+    }
+    void audioCtxRef.current?.close().catch(() => {});
+    audioCtxRef.current = null;
+    levelsRef.current = [0, 0, 0, 0, 0];
+    setLevels(levelsRef.current);
   }, []);
 
   // Insert the transcript at the caret — never clobbers an existing draft.
@@ -340,6 +354,32 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
     setRecordSecs(0);
     setDictation("recording");
     dictTimerRef.current = window.setInterval(() => setRecordSecs((s) => s + 1), 1000);
+    // Audio-reactive level bars: RMS energy of the mic stream drives the
+    // trailing bars. Visual feedback only — VAD/auto-stop stays out.
+    try {
+      const ctx = new AudioContext();
+      audioCtxRef.current = ctx;
+      void ctx.resume().catch(() => {});
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 1024;
+      analyser.smoothingTimeConstant = 0.5;
+      ctx.createMediaStreamSource(stream).connect(analyser);
+      const buf = new Uint8Array(analyser.fftSize);
+      vuTimerRef.current = window.setInterval(() => {
+        analyser.getByteTimeDomainData(buf);
+        let sum = 0;
+        for (let i = 0; i < buf.length; i += 4) {
+          const s = (buf[i] - 128) / 128;
+          sum += s * s;
+        }
+        const rms = Math.sqrt(sum / (buf.length / 4));
+        const next = [...levelsRef.current.slice(1), Math.min(1, rms * 5)];
+        levelsRef.current = next;
+        setLevels(next);
+      }, 80);
+    } catch {
+      // Level meter unavailable — recording still works, bars stay flat.
+    }
     // Hard cap — a forgotten mic shouldn't run up unbounded audio.
     dictTimeoutRef.current = window.setTimeout(() => {
       setTrayNote("Recording stopped at the 60s limit.");
@@ -1174,12 +1214,28 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
         {sttReady && !isElicitation && (
           <div className="flex items-center gap-1.5">
             {dictation === "recording" && (
-              <span
-                className="text-[11px] font-medium tabular-nums"
-                style={{ color: "var(--danger, #dc2626)" }}
-                aria-live="polite"
-              >
-                {Math.floor(recordSecs / 60)}:{String(recordSecs % 60).padStart(2, "0")}
+              <span className="flex items-center gap-1.5">
+                <span className="flex h-[14px] items-end gap-[2px]" aria-hidden="true">
+                  {levels.map((v, i) => (
+                    <span
+                      key={i}
+                      className="w-[3px] rounded-full"
+                      style={{
+                        height: `${3 + Math.round(v * 11)}px`,
+                        background: "var(--danger, #dc2626)",
+                        opacity: 0.45 + v * 0.55,
+                        transition: "height 80ms linear, opacity 80ms linear",
+                      }}
+                    />
+                  ))}
+                </span>
+                <span
+                  className="text-[11px] font-medium tabular-nums"
+                  style={{ color: "var(--danger, #dc2626)" }}
+                  aria-live="polite"
+                >
+                  {Math.floor(recordSecs / 60)}:{String(recordSecs % 60).padStart(2, "0")}
+                </span>
               </span>
             )}
             <button
@@ -1196,7 +1252,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
                     : "Dictate — audio is sent to your configured STT provider"
               }
               aria-label={dictation === "recording" ? "Stop dictation" : "Start dictation"}
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[12px] border transition"
+              className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-[12px] border transition"
               style={{
                 background:
                   dictation === "recording" ? "var(--danger, #dc2626)" : "transparent",
@@ -1208,10 +1264,17 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
                 opacity: dictation === "transcribing" ? 0.7 : 1,
               }}
             >
+              {dictation === "recording" && (
+                <span
+                  className="absolute inset-0 animate-ping rounded-[12px] opacity-30"
+                  style={{ background: "var(--danger, #dc2626)" }}
+                  aria-hidden="true"
+                />
+              )}
               {dictation === "transcribing" ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : dictation === "recording" ? (
-                <Square className="h-3.5 w-3.5 fill-current" />
+                <Square className="relative h-3.5 w-3.5 fill-current" />
               ) : (
                 <Mic className="h-4 w-4" />
               )}
