@@ -87,7 +87,13 @@ function SpeakerButton({ messageId }: { messageId: string }) {
       await audio.play();
       setState("playing");
     } catch (e) {
-      if (token !== _playbackToken || !liveRef.current) return;
+      if (token !== _playbackToken) {
+        // Superseded — release this button's spinner only; the newer
+        // playback is untouched.
+        if (liveRef.current) setState("idle");
+        return;
+      }
+      if (!liveRef.current) return;
       setError(e instanceof Error ? e.message : "Speech failed");
       setState("failed");
     }

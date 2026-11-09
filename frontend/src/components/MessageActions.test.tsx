@@ -135,6 +135,32 @@ describe("SpeakerButton", () => {
     expect(screen.getAllByRole("button", { name: "Read aloud" })).toHaveLength(1);
   });
 
+  it("a superseded request that later rejects still releases its button", async () => {
+    speechReady();
+    const { playMock } = stubAudio();
+    let rejectFirst!: (e: Error) => void;
+    vi.mocked(synthesizeSpeech)
+      .mockImplementationOnce(() => new Promise<Blob>((_r, rej) => (rejectFirst = rej)))
+      .mockResolvedValueOnce(new Blob(["b"]));
+
+    render(
+      <>
+        <MessageActions content="first" messageId="m1" />
+        <MessageActions content="second" messageId="m2" />
+      </>,
+    );
+    const buttons = await screen.findAllByRole("button", { name: "Read aloud" });
+    fireEvent.click(buttons[0]); // pending
+    fireEvent.click(buttons[1]); // supersedes, plays
+    await waitFor(() => expect(playMock).toHaveBeenCalledTimes(1));
+
+    await act(async () => rejectFirst(new Error("synthesis blew up")));
+    // The stale failure settles its own button to idle — never stuck on
+    // "Generating" — while the newer playback keeps playing untouched.
+    expect(screen.getAllByRole("button", { name: "Read aloud" })).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Stop reading" })).toBeTruthy();
+  });
+
   it("a pending read-aloud request never plays after unmount", async () => {
     speechReady();
     const { playMock, audioCtor } = stubAudio();
