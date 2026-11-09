@@ -414,7 +414,7 @@ async def put_tool_binding(
             raise HTTPException(
                 status_code=422, detail="Select a connection matching the search backend."
             )
-        elif provider.type in SERVICE_PROVIDER_TYPES:
+        elif not service_search and provider.type in SERVICE_PROVIDER_TYPES:
             raise HTTPException(
                 status_code=422, detail="Select a model provider, not a tool service."
             )
