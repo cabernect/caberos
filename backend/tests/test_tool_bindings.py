@@ -220,6 +220,24 @@ async def test_put_engine_rejects_provider_and_bad_options(client):
     assert r.status_code == 422
 
 
+async def test_put_speech_binding_accepts_speech_provider(client, db):
+    p = await _provider(db, name="ElevenLabs", type_="elevenlabs")
+    r = await client.put(
+        "/api/settings/tools/speech.tts",
+        json={"provider_id": p.id, "model": "eleven_multilingual_v2"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["binding"]["provider_id"] == p.id
+
+    # A provider type outside the spec's allowlist is still refused.
+    other = await _provider(db, name="Gemini", type_="gemini")
+    r = await client.put(
+        "/api/settings/tools/speech.tts",
+        json={"provider_id": other.id, "model": "x"},
+    )
+    assert r.status_code == 422
+
+
 async def test_put_unimplemented_is_refused(client, planned_spec):
     r = await client.put(
         "/api/settings/tools/test.planned",

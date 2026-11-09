@@ -404,11 +404,17 @@ async def put_tool_binding(
         provider = await db.get(Provider, req.provider_id)
         if provider is None:
             raise HTTPException(status_code=422, detail="provider not found")
-        if service_search and provider.type != options["backend"]:
+        if spec.service_types:
+            if provider.type not in spec.service_types:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Select a provider compatible with this tool.",
+                )
+        elif service_search and provider.type != options["backend"]:
             raise HTTPException(
                 status_code=422, detail="Select a connection matching the search backend."
             )
-        if not service_search and provider.type in SERVICE_PROVIDER_TYPES:
+        elif provider.type in SERVICE_PROVIDER_TYPES:
             raise HTTPException(
                 status_code=422, detail="Select a model provider, not a tool service."
             )
