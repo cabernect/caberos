@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import re
 import time
 
 import httpx
@@ -122,12 +123,14 @@ def _audio_base(req: SpeechRequest) -> str:
     return (req.base_url or _OPENAI_BASES.get(req.provider_type) or "").rstrip("/")
 
 
-async def _openai_stt(req: SpeechRequest) -> TranscriptResult:
-    if not req.api_key:
-        raise SpeechError(f"{req.provider_type} provider has no API key.")
-    base = _audio_base(req)
-    if not base:
-        raise SpeechError(f"No audio endpoint known for provider type '{req.provider_type}'.")
+def _audio_url(base: str, path: str) -> str:
+    """Provider base_urls may already end in /v1 (OpenAI-compatible presets)
+    or carry no version (api.openai.com) — join without doubling."""
+    b = base.rstrip("/")
+    return f"{b}/{path}" if re.search(r"/v\d+(?:beta)?$", b) else f"{b}/v1/{path}"
+
+
+async def _audio_transcriptions(req: SpeechRequest, base: str) -> TranscriptResult:
     data: dict[str, str] = {"model": req.model, "response_format": "json"}
     language = (req.options.get("language") or "").strip() if req.options.get("language") else ""
     if language:
@@ -142,7 +145,7 @@ async def _openai_stt(req: SpeechRequest) -> TranscriptResult:
                 trust_env=False,
             ) as client:
                 response = await client.post(
-                    f"{base}/v1/audio/transcriptions",
+                    _audio_url(base, "audio/transcriptions"),
                     headers=headers,
                     data=data,
                     files={"file": ("audio", req.audio, req.mime)},
@@ -166,19 +169,18 @@ async def _openai_stt(req: SpeechRequest) -> TranscriptResult:
     return TranscriptResult(text=transcript)
 
 
-async def _openai_tts(req: SpeechRequest) -> SynthesisResult:
-    if not req.api_key:
-        raise SpeechError(f"{req.provider_type} provider has no API key.")
-    base = _audio_base(req)
-    if not base:
-        raise SpeechError(f"No audio endpoint known for provider type '{req.provider_type}'.")
+async def _audio_speech(
+    req: SpeechRequest, base: str, *, default_voice: str | None = "alloy"
+) -> SynthesisResult:
     voice = (req.options.get("voice") or "").strip() if req.options.get("voice") else ""
-    payload = {
+    payload: dict[str, str] = {
         "model": req.model,
-        "voice": voice or "alloy",
         "input": req.text,
         "response_format": "mp3",
     }
+    effective_voice = voice or default_voice
+    if effective_voice:
+        payload["voice"] = effective_voice
     headers = {"Authorization": f"Bearer {req.api_key}", "Content-Type": "application/json"}
     try:
         async with asyncio.timeout(_TIMEOUT_S):
@@ -189,7 +191,7 @@ async def _openai_tts(req: SpeechRequest) -> SynthesisResult:
                 trust_env=False,
             ) as client:
                 async with client.stream(
-                    "POST", f"{base}/v1/audio/speech", headers=headers, json=payload
+                    "POST", _audio_url(base, "audio/speech"), headers=headers, json=payload
                 ) as response:
                     if response.status_code != 200:
                         raise SpeechProviderError(
@@ -205,6 +207,23 @@ async def _openai_tts(req: SpeechRequest) -> SynthesisResult:
     except (httpx.HTTPError, OSError) as exc:
         raise SpeechProviderError("Speech synthesis request failed.") from exc
     return SynthesisResult(audio=bytes(audio), mime="audio/mpeg", characters=len(req.text))
+
+
+def _audio_base_or_raise(req: SpeechRequest) -> str:
+    if not req.api_key:
+        raise SpeechError(f"{req.provider_type} provider has no API key.")
+    base = _audio_base(req)
+    if not base:
+        raise SpeechError(f"No audio endpoint known for provider type '{req.provider_type}'.")
+    return base
+
+
+async def _openai_stt(req: SpeechRequest) -> TranscriptResult:
+    return await _audio_transcriptions(req, _audio_base_or_raise(req))
+
+
+async def _openai_tts(req: SpeechRequest) -> SynthesisResult:
+    return await _audio_speech(req, _audio_base_or_raise(req))
 
 
 register_adapter("openai", "stt", _openai_stt)
@@ -271,9 +290,20 @@ async def _chat_audio_request(req: SpeechRequest, payload: dict) -> dict:
         raise SpeechProviderError("Audio request failed.") from exc
 
 
+# OpenRouter exposes two audio surfaces: dedicated speech models route to
+# /audio/speech and /audio/transcriptions (same OpenAI shapes — heygen,
+# voxtral-tts, whisper), while multimodal chat models use chat-completions
+# input_audio / modalities. Slug heuristics pick the surface the model
+# actually serves; the wrong surface answers with a pre-billing 4xx.
+_OR_DEDICATED_STT = ("whisper", "stt", "transcri")
+_OR_DEDICATED_TTS = ("tts", "voice", "speak")
+
+
 async def _openrouter_stt(req: SpeechRequest) -> TranscriptResult:
     if not req.api_key:
         raise SpeechError("OpenRouter provider has no API key.")
+    if any(h in req.model.lower() for h in _OR_DEDICATED_STT):
+        return await _audio_transcriptions(req, _openrouter_base(req))
     fmt = _MIME_TO_FORMAT.get(req.mime.split("/")[-1], "wav")
     language = (req.options.get("language") or "").strip() if req.options.get("language") else ""
     hint = f" The spoken language is {language}." if language else ""
@@ -317,11 +347,20 @@ async def _openrouter_stt(req: SpeechRequest) -> TranscriptResult:
 async def _openrouter_tts(req: SpeechRequest) -> SynthesisResult:
     if not req.api_key:
         raise SpeechError("OpenRouter provider has no API key.")
+    if any(h in req.model.lower() for h in _OR_DEDICATED_TTS):
+        # Dedicated TTS models (heygen-voice, voxtral-tts, gpt-*-tts) serve
+        # the OpenAI /audio/speech shape; voice passes through only when set.
+        return await _audio_speech(req, _openrouter_base(req), default_voice=None)
     voice = (req.options.get("voice") or "").strip() if req.options.get("voice") else ""
+    # No invented default — a voice ID is provider/model-specific, so an
+    # unset option means "the model's own default voice", not an OpenAI name.
+    audio_cfg: dict[str, str] = {"format": "mp3"}
+    if voice:
+        audio_cfg["voice"] = voice
     payload = {
         "model": req.model,
         "modalities": ["text", "audio"],
-        "audio": {"voice": voice or "alloy", "format": "mp3"},
+        "audio": audio_cfg,
         "messages": [
             {
                 "role": "user",

@@ -280,6 +280,21 @@ async def test_openrouter_tts_requests_modalities_and_decodes(monkeypatch):
     assert result.audio == b"MP3X" and result.mime == "audio/mpeg"
 
 
+async def test_openrouter_tts_no_voice_omits_voice_field(monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kw: _client(
+            {"choices": [{"message": {"audio": {"data": base64.b64encode(b"A").decode()}}}]},
+            capture=seen,
+        ),
+    )
+    await _openrouter_tts(_or_req(operation="tts", text="x"))
+    payload = json.loads(seen[0].content)
+    assert payload["audio"] == {"format": "mp3"}  # no invented provider default
+
+
 async def test_openrouter_tts_missing_audio_is_honest(monkeypatch):
     monkeypatch.setattr(
         httpx,
@@ -493,3 +508,50 @@ async def test_gradium_tts_only_audio_shape(monkeypatch):
     assert payload["voice_id"] == "YTpq7expH9539ERJ"
     assert payload["text"] == "hi" and payload["model_name"] == "default"
     assert result.audio == b"WAVDATA" and result.mime == "audio/wav"
+
+
+async def test_openrouter_dedicated_tts_uses_audio_speech(monkeypatch):
+    """heygen-voice-* serves POST /api/v1/audio/speech, not chat completions."""
+    seen = []
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _bytes_client(b"PCM", capture=seen))
+    result = await _openrouter_tts(
+        _or_req(
+            operation="tts",
+            model="heygen/heygen-voice-1-turbo",
+            options={"voice": "nadine"},
+            text="hi",
+        )
+    )
+    request = seen[0]
+    assert str(request.url) == "https://openrouter.ai/api/v1/audio/speech"
+    payload = json.loads(request.content)
+    assert payload == {
+        "model": "heygen/heygen-voice-1-turbo",
+        "input": "hi",
+        "response_format": "mp3",
+        "voice": "nadine",
+    }
+    assert result.audio == b"PCM"
+
+
+async def test_openrouter_dedicated_stt_uses_audio_transcriptions(monkeypatch):
+    seen = []
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _client({"text": "hi"}, capture=seen))
+    result = await _openrouter_stt(_or_req(model="openai/whisper-1"))
+    request = seen[0]
+    assert str(request.url) == "https://openrouter.ai/api/v1/audio/transcriptions"
+    assert result.text == "hi"
+
+
+async def test_audio_url_joins_without_double_v1():
+    from agentos.speech.adapters import _audio_url
+
+    assert _audio_url("https://api.openai.com", "audio/speech") == (
+        "https://api.openai.com/v1/audio/speech"
+    )
+    assert _audio_url("http://localhost:8000/v1", "audio/speech") == (
+        "http://localhost:8000/v1/audio/speech"
+    )
+    assert _audio_url("https://openrouter.ai/api/v1", "audio/speech") == (
+        "https://openrouter.ai/api/v1/audio/speech"
+    )
