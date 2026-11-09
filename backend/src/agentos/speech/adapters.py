@@ -63,6 +63,9 @@ def _audio_url(base: str, path: str) -> str:
 
 async def _audio_transcriptions(req: SpeechRequest, base: str) -> TranscriptResult:
     # verbose_json adds "duration" — the audio_seconds the receipt prices on.
+    # Newer transcribe models (gpt-transcribe, gpt-4o-transcribe family) only
+    # accept "json"/"text"; on their explicit 400 we retry once with "json",
+    # whose usage.seconds still reports the duration.
     data: dict[str, str] = {"model": req.model, "response_format": "verbose_json"}
     language = (req.options.get("language") or "").strip() if req.options.get("language") else ""
     if language:
@@ -76,19 +79,26 @@ async def _audio_transcriptions(req: SpeechRequest, base: str) -> TranscriptResu
                 follow_redirects=False,
                 trust_env=False,
             ) as client:
-                response = await client.post(
-                    _audio_url(base, "audio/transcriptions"),
-                    headers=headers,
-                    data=data,
-                    files={"file": ("audio", req.audio, req.mime)},
-                )
-                if response.status_code != 200:
+                for attempt in (0, 1):
+                    response = await client.post(
+                        _audio_url(base, "audio/transcriptions"),
+                        headers=headers,
+                        data=data,
+                        files={"file": ("audio", req.audio, req.mime)},
+                    )
+                    body = response.content[:_RESPONSE_LIMIT]
+                    if response.status_code == 200:
+                        break
+                    if (
+                        attempt == 0
+                        and response.status_code == 400
+                        and b"response_format" in body
+                    ):
+                        data["response_format"] = "json"
+                        continue
                     raise SpeechProviderError(
                         f"Transcription failed (HTTP {response.status_code})."
                     )
-                body = response.content
-                if len(body) > _RESPONSE_LIMIT:
-                    raise ValueError("oversized response")
     except (TimeoutError, httpx.TimeoutException) as exc:
         raise TimeoutError("Transcription timed out; it may have been billed.") from exc
     except (httpx.HTTPError, OSError) as exc:
@@ -98,7 +108,9 @@ async def _audio_transcriptions(req: SpeechRequest, base: str) -> TranscriptResu
         transcript = str(payload["text"]).strip()
     except (KeyError, TypeError, json.JSONDecodeError) as exc:
         raise SpeechProviderError("Provider returned an unreadable transcription.") from exc
-    duration = payload.get("duration") if isinstance(payload, dict) else None
+    duration = payload.get("duration")
+    if not isinstance(duration, (int, float)):
+        duration = (payload.get("usage") or {}).get("seconds")
     return TranscriptResult(
         text=transcript,
         audio_seconds=duration if isinstance(duration, (int, float)) else None,

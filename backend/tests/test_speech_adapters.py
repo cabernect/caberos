@@ -164,6 +164,50 @@ async def test_openai_stt_custom_base_url_wins(monkeypatch):
     assert str(seen[0].url).startswith("http://localhost:9999/api/v1/audio/transcriptions")
 
 
+async def test_openai_stt_verbose_json_400_retries_once_with_json(monkeypatch):
+    """gpt-transcribe family rejects verbose_json; the adapter retries once
+    with json and still reads duration from usage.seconds."""
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        if len(seen) == 1:
+            return httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "message": "response_format 'verbose_json' is not compatible "
+                        "with model 'gpt-transcribe'. Use 'json' or 'text' instead."
+                    }
+                },
+            )
+        return httpx.Response(200, json={"text": "hi", "usage": {"seconds": 1.0}})
+
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kw: _REAL_CLIENT(transport=httpx.MockTransport(handler))
+    )
+    result = await _openai_stt(_oai_req(model="gpt-transcribe"))
+    assert len(seen) == 2
+    assert 'verbose_json' in seen[0].content.decode()
+    assert 'name="response_format"\r\n\r\njson' in seen[1].content.decode()
+    assert result.text == "hi" and result.audio_seconds == 1.0
+
+
+async def test_openai_stt_non_format_400_does_not_retry(monkeypatch):
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(400, json={"error": {"message": "corrupted file"}})
+
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kw: _REAL_CLIENT(transport=httpx.MockTransport(handler))
+    )
+    with pytest.raises(SpeechProviderError, match="400"):
+        await _openai_stt(_oai_req())
+    assert len(seen) == 1
+
+
 async def test_openai_tts_shape_and_bytes(monkeypatch):
     seen = []
 
