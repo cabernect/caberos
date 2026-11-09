@@ -23,7 +23,7 @@ import httpx
 
 from ...artifacts import service as artifact_service
 from ...artifacts.service import ArtifactError
-from ...sandbox.workspace import WorkspaceManager
+from ...sandbox.workspace import WorkspaceManager, resolve_within
 from ...secret_store import decrypt
 from ...services.call_accounting import capture_call_rates, unknown_call_rates
 from ...services.model_ledger import record_system_call
@@ -342,11 +342,17 @@ async def _run_image(
     ext, mime = classified
 
     # Stage under artifacts/ and track — artifact row + revision with exact
-    # call correlation. Cleanup the staged file if tracking fails.
-    media_dir = Path(workspace_path) / "artifacts" / "media"
-    media_dir.mkdir(parents=True, exist_ok=True)
+    # call correlation. Resolve the destination BEFORE mkdir/write: a
+    # symlinked artifacts/ or artifacts/media would otherwise land bytes
+    # outside the workspace before adopt()'s containment check ever runs.
+    # Cleanup the staged file if tracking fails.
     rel_path = f"artifacts/media/image-{uuid.uuid4().hex[:12]}.{ext}"
-    target = Path(workspace_path) / rel_path
+    try:
+        media_dir = resolve_within(workspace_path, "artifacts", "media")
+        target = resolve_within(workspace_path, rel_path)
+    except ValueError as e:
+        return {"error": f"could not stage generated image: {e}"}
+    media_dir.mkdir(parents=True, exist_ok=True)
     try:
         target.write_bytes(data)
         artifact, revision = await artifact_service.adopt(
@@ -360,7 +366,7 @@ async def _run_image(
             sub_agent_id=kwargs.get("sub_agent_id"),
             change_summary=f"{'edited' if source else 'generated'} image ({model})",
         )
-    except (ArtifactError, OSError) as e:
+    except (ArtifactError, OSError, ValueError) as e:
         target.unlink(missing_ok=True)
         return {"error": f"could not stage generated image: {e}"}
 

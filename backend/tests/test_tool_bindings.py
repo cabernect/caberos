@@ -3,7 +3,9 @@ catalog gating, and mediation of bound tools."""
 
 import base64
 import json
+import os
 import uuid
+from pathlib import Path
 
 import httpx
 import pytest
@@ -618,6 +620,32 @@ async def test_media_image_rejects_non_image_bytes(db, workspace, monkeypatch):
     monkeypatch.setattr(litellm, "aimage_generation", fake_gen)
     out = await image_generate({"prompt": "x"}, workspace, **kwargs)
     assert "not a recognized image format" in out["error"]
+    assert (await db.execute(select(Artifact))).scalars().all() == []
+
+
+async def test_media_image_refuses_symlinked_artifacts_dir(db, workspace, tmp_path, monkeypatch):
+    """A symlinked artifacts/ must never land bytes outside the workspace —
+    containment is validated BEFORE mkdir/write, and the refusal is an
+    honest tool error, not an uncaught ValueError."""
+    import litellm
+
+    from agentos.capabilities.tools.media import image_generate
+    from agentos.models.artifact import Artifact
+
+    _, kwargs = await _bound_image(db, workspace)
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    os.symlink(str(outside), Path(workspace) / "artifacts")
+
+    async def fake_gen(**kw):
+        return _fake_image_response(None)
+
+    monkeypatch.setattr(litellm, "aimage_generation", fake_gen)
+
+    out = await image_generate({"prompt": "a cat"}, workspace, **kwargs)
+    assert "error" in out and "escapes" in out["error"]
+    assert list(outside.iterdir()) == []  # zero bytes outside the workspace
     assert (await db.execute(select(Artifact))).scalars().all() == []
 
 
