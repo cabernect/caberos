@@ -1,6 +1,11 @@
 # Local And Remote Terminal Backends
 
-Status: included in v0.2.1 scope; implementation pending. Backend configuration
+Status: gates 1–2 delivered (execution-transport seam, `exec.terminal`
+binding, local backend selection + admission pin — see
+[test_result/2026-11-09-terminal-backends.md](test_result/2026-11-09-terminal-backends.md)).
+Gates 3–7 (remote connections, transfers, SSH/Daytona/Modal drivers,
+reconciliation) deferred — they require verifiable remote infrastructure;
+no selector-only placeholders ship. Backend configuration
 does not authorize connections, workspace uploads, cloud provisioning, or commits.
 
 ## Product Decision
