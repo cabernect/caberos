@@ -184,6 +184,16 @@ pub fn run() {
                 .map_err(std::io::Error::other)?;
             Ok(())
         })
+        // Microphone is operator-initiated dictation only; macOS still shows
+        // the one-time TCC prompt for the app itself (Info.plist carries the
+        // usage string). Everything else keeps the webview's own prompt flow.
+        .on_permission_request(|_webview, kind| {
+            use tauri::webview::{PermissionKind, PermissionResponse};
+            match kind {
+                PermissionKind::Microphone => PermissionResponse::Allow,
+                _ => PermissionResponse::Default,
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             quit_app,
             restart_app,
