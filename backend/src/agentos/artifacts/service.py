@@ -485,12 +485,38 @@ async def _get(db: AsyncSession, artifact_id: str) -> Artifact:
     return artifact
 
 
+async def evidence_root(db: AsyncSession, artifact: Artifact) -> str | None:
+    """Evidence-backed root for a legacy artifact row (no recorded
+    workspace_path): the root its creating run recorded, else the pinned
+    session that run belonged to. None = nothing recorded."""
+    from ..models.run import Run
+    from ..models.session import Session
+
+    if not artifact.source_run_id:
+        return None
+    run = await db.get(Run, artifact.source_run_id)
+    if run is None:
+        return None
+    if run.workspace_path:
+        return run.workspace_path
+    if run.session_id:
+        session = await db.get(Session, run.session_id)
+        if session and session.workspace_path:
+            return session.workspace_path
+    return None
+
+
 async def get_by_path(
     db: AsyncSession, workspace_id: str, rel_path: str, workspace_path: str | Path
-) -> Artifact | None:
-    """Look up the artifact tracking a path under a specific workspace root —
-    None for ordinary files. The root narrows the lookup so a same-named
-    file in a different workspace can never alias this artifact."""
+) -> tuple[Artifact | None, bool]:
+    """Look up the artifact tracking a path under a specific workspace root.
+
+    Returns (artifact, unresolved): the artifact only when evidence proves
+    it lives under this root — the recorded workspace_path, or for legacy
+    rows the root its creating run/session pinned. unresolved=True means a
+    legacy row claims this path but nothing proves where it lives — the
+    caller exposes that state instead of silently calling the file
+    ordinary."""
     import os
 
     from sqlalchemy import select
@@ -504,10 +530,17 @@ async def get_by_path(
         )
     ).all()
     root = os.path.realpath(str(workspace_path))
+    unresolved = False
     for artifact in candidates:
-        if os.path.realpath(artifact.workspace_path or "") == root:
-            return artifact
-    return None
+        root_str = artifact.workspace_path or await evidence_root(db, artifact)
+        if root_str is None:
+            unresolved = True
+            continue
+        if os.path.realpath(root_str) == root:
+            # A proven match settles tracking — a sibling row's unproven
+            # claim stays noise, not a flag.
+            return artifact, False
+    return None, unresolved
 
 
 async def _store_revision(

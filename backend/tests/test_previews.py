@@ -5,6 +5,7 @@ Seam under test: agentos.previews renderers (pure bytes→payload) plus the
 payloads and HTTP responses, never internals.
 """
 
+import os
 from pathlib import Path
 
 import pytest
@@ -395,6 +396,91 @@ async def test_artifact_preview_resolves_recorded_workspace(
     assert resp.status_code == 200
     assert resp.json()["content"] == "from-repo-b"
     assert resp.json()["artifact"] is None
+
+
+async def test_legacy_artifact_unresolved_tracking_is_exposed(
+    db, client, workspace_root, artifact_storage, tmp_path
+):
+    """A pre-v0.2.1 artifact (NULL workspace_path, no run provenance) can't
+    prove where it lives — the lookup marks tracking unresolved instead of
+    silently calling the file ordinary."""
+    from agentos.artifacts import service
+
+    ws = _agent_workspace(workspace_root)
+    art, _ = await service.create(
+        db,
+        workspace_id="agent-1",
+        workspace_path=ws,
+        rel_path="legacy.txt",
+        data=b"legacy-bytes",
+    )
+    # Simulate the upgraded row — no recorded root, no creating run.
+    art.workspace_path = None
+    art.source_run_id = None
+    await db.flush()
+
+    resp = await client.get("/api/agents/agent-1/workspace/preview?path=legacy.txt")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["artifact"] is None
+    assert body["tracking"] == "unresolved"
+
+    # And its live preview refuses honestly — revisions still resolve.
+    resp = await client.get(f"/api/agents/agent-1/workspace/preview?artifact_id={art.id}")
+    assert resp.status_code == 409
+
+
+async def test_legacy_artifact_resolves_via_session_pin_provenance(
+    db, client, workspace_root, artifact_storage, tmp_path
+):
+    """Legacy artifact evidence chain: recorded root missing → creating
+    run → its session's pinned root — provenance still lands the file."""
+    from agentos.artifacts import service
+    from agentos.models.run import Run
+    from agentos.models.session import Session
+
+    ws = _agent_workspace(workspace_root)
+    db.add(
+        Session(
+            id="s-prov",
+            contact_id="c1",
+            agent_id="agent-1",
+            status="active",
+            workspace_path=os.path.realpath(str(ws)),
+        )
+    )
+    db.add(
+        Run(
+            id="r-prov",
+            session_id="s-prov",
+            contact_id="c1",
+            agent_id="agent-1",
+            trigger="chat",
+            status="completed",
+        )
+    )
+    await db.flush()
+
+    art, _ = await service.create(
+        db,
+        workspace_id="agent-1",
+        workspace_path=ws,
+        rel_path="legacy.txt",
+        data=b"legacy-bytes",
+    )
+    art.workspace_path = None  # upgraded row — root unrecorded
+    art.source_run_id = "r-prov"  # provenance survives via its run
+    await db.flush()
+
+    # Path lookup matches on provenance — the artifact stays tracked.
+    resp = await client.get("/api/agents/agent-1/workspace/preview?path=legacy.txt")
+    assert resp.status_code == 200
+    assert resp.json()["artifact"]["id"] == art.id
+
+    # artifact_id preview serves the live bytes from the proven root.
+    resp = await client.get(f"/api/agents/agent-1/workspace/preview?artifact_id={art.id}")
+    assert resp.status_code == 200
+    assert resp.json()["content"] == "legacy-bytes"
 
 
 async def test_preview_rejects_cross_agent_artifact(db, client, workspace_root, artifact_storage):

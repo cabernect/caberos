@@ -3,6 +3,7 @@
 import os
 import re
 from pathlib import Path
+from typing import NamedTuple
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from pydantic import BaseModel
@@ -35,6 +36,15 @@ def _child_path(parent: Path, name: str) -> Path:
     from ..sandbox.workspace import resolve_within
 
     return resolve_within(parent, name)
+
+
+class _ResolvedSource(NamedTuple):
+    data: bytes
+    name: str
+    artifact: object | None
+    file_path: Path | None
+    live_root: Path | None = None
+    unresolved_tracking: bool = False
 
 
 def _agent_home(agent_id: str) -> Path:
@@ -701,12 +711,15 @@ async def _resolve_source(
     path: str,
     artifact_id: str | None,
     revision_id: str | None,
-) -> tuple[bytes, str, object | None, Path | None]:
+) -> _ResolvedSource:
     """Resolve preview bytes + owning artifact.
 
-    Returns (data, name, artifact, file_path). file_path is set only when
-    the bytes are the live workspace file (raw endpoint streams it without
-    a memory copy); revision bytes always load from managed storage.
+    file_path is set only when the bytes are the live workspace file (raw
+    endpoint streams it without a memory copy); revision bytes always load
+    from managed storage. live_root is the root the live file resolves
+    under — the artifact's evidence-backed root, never the request's
+    workspace when they differ. unresolved_tracking means a legacy
+    artifact row claims this path but its root can't be established.
     """
     from ..artifacts import service as artifact_service
     from ..artifacts.service import ArtifactError
@@ -727,6 +740,12 @@ async def _resolve_source(
             raise HTTPException(status_code=404, detail=str(e)) from e
         if artifact.workspace_id != agent_id:
             raise HTTPException(status_code=404, detail="Artifact not found")
+        # The live root comes from evidence — the recorded workspace_path,
+        # or for legacy rows the creating run/session's recorded root —
+        # never the request's workspace, where a same-named file could
+        # masquerade as this artifact.
+        root_str = artifact.workspace_path or await artifact_service.evidence_root(db, artifact)
+        live_root = Path(root_str) if root_str else None
         if revision_id:
             from ..models.artifact import ArtifactRevision
 
@@ -735,16 +754,20 @@ async def _resolve_source(
                 raise HTTPException(status_code=404, detail="Revision not found")
             data = await artifact_service.revision_bytes(db, revision_id)
         else:
-            # Live bytes come from the artifact's recorded root — never
-            # the request's workspace, where a same-named file could
-            # masquerade as this artifact. Legacy rows with no recorded
-            # root keep the request-root interpretation.
-            root = Path(artifact.workspace_path) if artifact.workspace_path else ws
-            target = _child_path(root, artifact.current_path)
+            if live_root is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "This artifact's workspace can't be established — it "
+                        "predates recorded locations. Its tracked revisions "
+                        "remain available."
+                    ),
+                )
+            target = _child_path(live_root, artifact.current_path)
             if not target.exists() or not target.is_file():
                 raise HTTPException(status_code=404, detail="File not found")
             data = target.read_bytes()
-        return data, Path(artifact.current_path).name, artifact, None
+        return _ResolvedSource(data, Path(artifact.current_path).name, artifact, None, live_root)
 
     try:
         target = Path(WorkspaceManager().validate_path(str(ws), path))
@@ -752,8 +775,8 @@ async def _resolve_source(
         raise HTTPException(status_code=403, detail="Path outside workspace") from error
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="File not found")
-    artifact = await artifact_service.get_by_path(db, agent_id, path, ws)
-    return target.read_bytes(), target.name, artifact, target
+    artifact, unresolved = await artifact_service.get_by_path(db, agent_id, path, ws)
+    return _ResolvedSource(target.read_bytes(), target.name, artifact, target, ws, unresolved)
 
 
 async def _artifact_meta(db: AsyncSession, artifact, revision_id: str | None) -> dict:
@@ -811,19 +834,25 @@ async def preview_workspace_file(
     from .. import previews
 
     ws = await _workspace_root(db, agent_id, session_id)
-    data, name, artifact, _ = await _resolve_source(
-        db, ws, agent_id, path, artifact_id, revision_id
+    src = await _resolve_source(db, ws, agent_id, path, artifact_id, revision_id)
+    payload = previews.preview_bytes(src.data, src.name)
+    payload["artifact"] = (
+        await _artifact_meta(db, src.artifact, revision_id) if src.artifact else None
     )
-    payload = previews.preview_bytes(data, name)
-    payload["artifact"] = await _artifact_meta(db, artifact, revision_id) if artifact else None
-    if artifact and not artifact_id and not revision_id:
-        payload["path"] = artifact.current_path
+    if src.unresolved_tracking:
+        # A legacy artifact row claims this path but its root can't be
+        # established — expose that instead of calling the file ordinary.
+        payload["tracking"] = "unresolved"
+    if src.artifact and not artifact_id and not revision_id:
+        payload["path"] = src.artifact.current_path
     else:
         payload["path"] = path
     # Operator-only: the desktop shell uses the absolute path for
-    # open/reveal-in-finder. Revision previews point at the live file.
-    live_path = artifact.current_path if artifact else path
-    payload["absolute_path"] = str(ws / live_path)
+    # open/reveal-in-finder. Revision previews point at the live file —
+    # under the artifact's evidence root when it differs from ws; None
+    # when no root can be established at all.
+    live_path = src.artifact.current_path if src.artifact else path
+    payload["absolute_path"] = str(src.live_root / live_path) if src.live_root else None
     return payload
 
 
@@ -844,13 +873,11 @@ async def raw_workspace_file(
     from .. import previews
 
     ws = await _workspace_root(db, agent_id, session_id)
-    data, name, _, file_path = await _resolve_source(
-        db, ws, agent_id, path, artifact_id, revision_id
-    )
-    mime = previews.media_type(name)
-    if file_path is not None:
-        return FileResponse(file_path, media_type=mime, filename=name)
-    return Response(content=data, media_type=mime)
+    src = await _resolve_source(db, ws, agent_id, path, artifact_id, revision_id)
+    mime = previews.media_type(src.name)
+    if src.file_path is not None:
+        return FileResponse(src.file_path, media_type=mime, filename=src.name)
+    return Response(content=src.data, media_type=mime)
 
 
 @router.get("/{agent_id}/workspace/pdf-page")
@@ -870,11 +897,11 @@ async def pdf_page(
     from .. import previews
 
     ws = await _workspace_root(db, agent_id, session_id)
-    data, name, _, _ = await _resolve_source(db, ws, agent_id, path, artifact_id, revision_id)
-    if not name.lower().endswith(".pdf"):
+    src = await _resolve_source(db, ws, agent_id, path, artifact_id, revision_id)
+    if not src.name.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Not a PDF")
     try:
-        png = previews.render_pdf_page(data, page)
+        png = previews.render_pdf_page(src.data, page)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
