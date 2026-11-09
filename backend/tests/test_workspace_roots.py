@@ -396,3 +396,67 @@ async def test_shared_folder_two_agents(client, db, tmp_path):
         assert resp.status_code == 200
         resp = await client.get(f"/api/agents/{agent.id}/workspace")
         assert "code.py" in [e["name"] for e in resp.json()["entries"]]
+
+
+@pytest.mark.asyncio
+async def test_pipeline_admission_resolves_before_run_exists(db, tmp_path):
+    """Pipeline-level regression: the run being admitted must not count
+    as its own unknown historical evidence. Resolution happens before the
+    Run row exists, so clean evidence resolves and the new run records
+    that same root instead of failing on a self-created NULL row."""
+    import uuid
+
+    from agentos.harness.loop import Harness
+    from agentos.harness.scripted_model import ScriptedModel, ScriptedResponse
+    from agentos.models.contact import Contact
+    from agentos.models.run import Run
+    from agentos.models.session import Session
+    from agentos.pipeline import InboundMessage, Pipeline
+
+    agent = await _agent(db)
+    old = tmp_path / "old repo"
+    old.mkdir()
+    # The contact the pipeline resolves for this channel+user — session
+    # resume requires contact_id to match.
+    contact = Contact(
+        id="ct-hist",
+        channel="test",
+        bot_id=agent.id,
+        external_user_id="u",
+        display_name="u",
+    )
+    db.add(contact)
+    session = Session(id="s-hist", contact_id="ct-hist", agent_id=agent.id, status="active")
+    db.add(session)
+    db.add(
+        Run(
+            id="r-hist",
+            session_id="s-hist",
+            contact_id="ct-hist",
+            agent_id=agent.id,
+            trigger="chat",
+            status="completed",
+            workspace_path=str(old),
+        )
+    )
+    await db.flush()
+
+    model = ScriptedModel([ScriptedResponse(content="done")])
+    pipeline = Pipeline(db=db, harness=Harness(model=model))
+    run = await pipeline.handle_inbound(
+        InboundMessage(
+            channel="test",
+            bot_id=agent.id,
+            external_user_id="u",
+            text="resume",
+            message_id=str(uuid.uuid4()),
+            session_id="s-hist",
+        ),
+        trigger="user_message",
+        is_test=True,
+    )
+    await db.refresh(session)
+    real = os.path.realpath(str(old))
+    assert run.status == "completed"
+    assert session.workspace_path == real
+    assert run.workspace_path == real

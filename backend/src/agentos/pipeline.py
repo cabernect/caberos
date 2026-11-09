@@ -23,7 +23,7 @@ from .harness.loop import Harness, RunResult
 from .models.contact import Contact
 from .models.run import Message, Run
 from .models.session import Session
-from .sandbox.workspace import WorkspaceManager
+from .sandbox.workspace import WorkspaceAmbiguousError, WorkspaceManager
 from .skills.resolution import resolve_effective_skills, skill_pins
 from .syscall.lock import session_locks
 from .syscall.mediator import SyscallHandler
@@ -347,6 +347,38 @@ class Pipeline:
                 message.bot_id, contact.id, exclude_session_id=session.id
             )
 
+        # Resolve the session's workspace BEFORE the Run row exists. A run
+        # is provenance only once it has actually run somewhere — resolving
+        # first keeps the pending row out of its own evidence check, and
+        # admission failures can't leave NULL-root rows that would read as
+        # unknown historical runs on the next attempt.
+        agent_config = await get_active_config(self.db, message.bot_id)
+        wm = WorkspaceManager()
+        try:
+            workspace_path = await wm.resolve_session_root(
+                self.db,
+                session,
+                message.bot_id,
+                agent_config.workspace if agent_config else None,
+            )
+        except WorkspaceAmbiguousError as e:
+            run = Run(
+                id=str(uuid.uuid4()),
+                session_id=session.id,
+                contact_id=contact.id,
+                agent_id=message.bot_id,
+                status="failed",
+                trigger=trigger,
+                message_id=message.message_id,
+                is_test=is_test or message.is_test,
+                error=str(e),
+            )
+            self.db.add(run)
+            await self.db.commit()
+            return run
+        if not session.workspace_path:
+            session.workspace_path = str(workspace_path)
+
         # Step 3: Persist and acknowledge — create Run row with valid FKs
         run = Run(
             id=str(uuid.uuid4()),
@@ -431,8 +463,8 @@ class Pipeline:
             await self.db.flush()
 
             try:
-                # Step 7: Assemble context — get agent config
-                agent_config = await get_active_config(self.db, message.bot_id)
+                # Step 7: Assemble context — agent config was already
+                # loaded at admission for workspace resolution.
                 if agent_config is None:
                     raise ValueError(f"Agent {message.bot_id} not found or has no active config")
 
@@ -523,26 +555,8 @@ class Pipeline:
 
                 conversation = await Conversation.load(self.db, session, exclude_run_id=run.id)
 
-                # Set up workspace — the session's pinned root wins. A
-                # missing pin (legacy row) resolves through run evidence —
-                # never today's agent default — and is then pinned, so a
-                # later default change can't reinterpret where this
-                # session's files live. Conflicting evidence fails the run
-                # honestly rather than silently re-anchoring.
-                from .sandbox.workspace import WorkspaceAmbiguousError
-
-                wm = WorkspaceManager()
-                try:
-                    workspace_path = await wm.resolve_session_root(
-                        self.db, session, message.bot_id, agent_config.workspace
-                    )
-                except WorkspaceAmbiguousError as e:
-                    run.status = "failed"
-                    run.error = str(e)
-                    await self.db.commit()
-                    return run
-                if not session.workspace_path:
-                    session.workspace_path = str(workspace_path)
+                # Workspace root was resolved and the session pinned at
+                # admission, before the Run row existed.
                 if wm.is_managed_root(message.bot_id, workspace_path):
                     wm.create_workspace(message.bot_id)
                 elif not workspace_path.is_dir():
