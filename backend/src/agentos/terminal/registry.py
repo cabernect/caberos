@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import subprocess
 import sys
 import time
 import uuid
@@ -35,6 +34,7 @@ from ..models.terminal import TerminalSession
 from ..sandbox import get_backend
 from ..sandbox.base import SandboxBackend, SandboxLaunch, kill_process_group
 from ..sandbox.process import OUTPUT_CAP_BYTES, drain_output
+from .transport import LOCAL_TRANSPORT, SpawnedProcess, TerminalTransport
 
 # Output spool cap per stream — beyond this we keep draining (so the child
 # never blocks on a full pipe) but stop persisting, and flag truncation.
@@ -51,8 +51,8 @@ class _ManagedTerminal:
     agent_id: str
     session_id: str | None
     run_id: str
-    proc: asyncio.subprocess.Process
-    pgid: int
+    proc: SpawnedProcess
+    pgid: int | None
     stdout_path: Path
     stderr_path: Path
     stdout_bytes: int = 0
@@ -92,6 +92,7 @@ class TerminalRegistry:
         call_id: str | None = None,
         sub_agent_id: str | None = None,
         db_lock: asyncio.Lock | None = None,
+        transport: TerminalTransport = LOCAL_TRANSPORT,
     ) -> dict[str, Any]:
         """Spawn a background process and return its terminal handle."""
         terminal_id = uuid.uuid4().hex
@@ -131,21 +132,12 @@ class TerminalRegistry:
         await self._save_start(db, row, db_lock)
 
         # Host-side cwd matters for seatbelt; bwrap overrides with --chdir.
-        # The packaged gateway has no console (CREATE_NO_WINDOW in the shell),
-        # so console-subsystem children (cmd.exe, wxc-exec.exe) would each
-        # allocate a visible window without the flag.
+        # Remote transports interpret argv/env/cwd on their own substrate —
+        # the local spawn flags live inside LocalTransport, not here.
         try:
             if backend is not None and launch is not None:
                 await backend.activate_launch(launch)
-            proc = await asyncio.create_subprocess_exec(
-                *argv,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=workspace_path,
-                env=env,
-                start_new_session=True,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
+            proc = await transport.spawn(argv, env=env, cwd=workspace_path)
         except BaseException:
             if backend is not None and launch is not None:
                 await backend.cleanup_launch(launch, None)
