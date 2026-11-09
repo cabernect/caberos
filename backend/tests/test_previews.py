@@ -414,10 +414,12 @@ async def test_legacy_artifact_unresolved_tracking_is_exposed(
         rel_path="legacy.txt",
         data=b"legacy-bytes",
     )
-    # Simulate the upgraded row — no recorded root, no creating run.
+    # Simulate the upgraded row — no recorded root, no revision provenance.
     art.workspace_path = None
-    art.source_run_id = None
     await db.flush()
+    # Force a fresh database load — transient attributes on the identity-
+    # mapped instance would hide field-name bugs in the evidence lookup.
+    db.expunge_all()
 
     resp = await client.get("/api/agents/agent-1/workspace/preview?path=legacy.txt")
     assert resp.status_code == 200
@@ -467,10 +469,11 @@ async def test_legacy_artifact_resolves_via_session_pin_provenance(
         workspace_path=ws,
         rel_path="legacy.txt",
         data=b"legacy-bytes",
+        source_run_id="r-prov",
     )
     art.workspace_path = None  # upgraded row — root unrecorded
-    art.source_run_id = "r-prov"  # provenance survives via its run
     await db.flush()
+    db.expunge_all()
 
     # Path lookup matches on provenance — the artifact stays tracked.
     resp = await client.get("/api/agents/agent-1/workspace/preview?path=legacy.txt")

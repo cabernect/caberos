@@ -6,6 +6,7 @@ managed app data (next to the DB), never in the workspace.
 """
 
 import hashlib
+import os
 from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -487,23 +488,36 @@ async def _get(db: AsyncSession, artifact_id: str) -> Artifact:
 
 async def evidence_root(db: AsyncSession, artifact: Artifact) -> str | None:
     """Evidence-backed root for a legacy artifact row (no recorded
-    workspace_path): the root its creating run recorded, else the pinned
-    session that run belonged to. None = nothing recorded."""
+    workspace_path): roots its revisions' source runs recorded, or the
+    pinned sessions those runs belonged to.
+
+    Exactly one distinct root = resolved; zero or conflicting roots =
+    nothing proven, the caller exposes the unresolved state."""
+    from sqlalchemy import distinct, select
+
     from ..models.run import Run
     from ..models.session import Session
 
-    if not artifact.source_run_id:
-        return None
-    run = await db.get(Run, artifact.source_run_id)
-    if run is None:
-        return None
-    if run.workspace_path:
-        return run.workspace_path
-    if run.session_id:
-        session = await db.get(Session, run.session_id)
-        if session and session.workspace_path:
-            return session.workspace_path
-    return None
+    run_ids = (
+        await db.scalars(
+            select(distinct(ArtifactRevision.source_run_id)).where(
+                ArtifactRevision.artifact_id == artifact.id,
+                ArtifactRevision.source_run_id.is_not(None),
+            )
+        )
+    ).all()
+    roots: set[str] = set()
+    for run_id in run_ids:
+        run = await db.get(Run, run_id)
+        if run is None:
+            continue
+        root = run.workspace_path
+        if not root:
+            session = await db.get(Session, run.session_id)
+            root = session.workspace_path if session else None
+        if root:
+            roots.add(os.path.realpath(root))
+    return next(iter(roots)) if len(roots) == 1 else None
 
 
 async def get_by_path(
@@ -517,8 +531,6 @@ async def get_by_path(
     legacy row claims this path but nothing proves where it lives — the
     caller exposes that state instead of silently calling the file
     ordinary."""
-    import os
-
     from sqlalchemy import select
 
     candidates = (
