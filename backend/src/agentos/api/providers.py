@@ -74,7 +74,7 @@ class ProviderOut(BaseModel):
     id: str
     name: str
     type: str
-    scope: Literal["model", "search"] = "model"
+    scope: Literal["model", "search", "speech"] = "model"
     has_key: bool
     base_url: str | None = None
     org_id: str | None = None
