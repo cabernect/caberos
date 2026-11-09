@@ -201,52 +201,102 @@ def _pcm_params(content_type: str) -> tuple[int, int]:
     return rate, ch
 
 
+# Format tokens recognised in provider error bodies, in the order providers
+# tend to list them. Used for one-shot format retry below.
+_KNOWN_FORMATS = (
+    "mp3",
+    "wav",
+    "pcm",
+    "opus",
+    "aac",
+    "flac",
+    "ulaw",
+    "mulaw",
+    "alaw",
+    "ogg",
+    "linear16",
+    "mp4",
+)
+_FORMAT_RE = re.compile(r"\b(" + "|".join(_KNOWN_FORMATS) + r")\b")
+
+
+def _suggest_formats(body: bytes, attempted: str) -> str | None:
+    """Extract an alternative response_format from an error body.
+
+    HeyGen answers 'only supports response_format "pcm"'; ZodError-style
+    bodies enumerate '"values": ["mp3","pcm"]'. First listed wins.
+    """
+    text = body[:4096].decode("utf-8", "replace").lower()
+    for m in _FORMAT_RE.finditer(text):
+        if m.group(1) != attempted:
+            return m.group(1)
+    return None
+
+
+async def _post_speech(
+    base: str, headers: dict[str, str], payload: dict[str, str]
+) -> tuple[int, str, bytes]:
+    """One /audio/speech POST. Returns (status, content_type, body).
+
+    Body is the full audio stream on 200 (bounded 20 MiB), else the first
+    4 KiB of the error body for format-hint parsing.
+    """
+    async with httpx.AsyncClient(
+        verify=SSL_CERT_PATH,
+        timeout=_TIMEOUT_S,
+        follow_redirects=False,
+        trust_env=False,
+    ) as client:
+        async with client.stream(
+            "POST", _audio_url(base, "audio/speech"), headers=headers, json=payload
+        ) as response:
+            status = response.status_code
+            ctype = response.headers.get("content-type", "")
+            if status != 200:
+                return status, ctype, (await response.aread())[:4096]
+            audio = bytearray()
+            async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
+                audio.extend(chunk)
+                if len(audio) > 20 * 1024 * 1024:
+                    raise ValueError("oversized response")
+            return status, ctype, bytes(audio)
+
+
 async def _audio_speech(
     req: SpeechRequest, base: str, *, default_voice: str | None = "alloy"
 ) -> SynthesisResult:
     voice = (req.options.get("voice") or "").strip() if req.options.get("voice") else ""
-    # HeyGen Voice serves PCM only; an explicit operator format wins either way.
     fmt = (
         (req.options.get("response_format") or "").strip().lower()
         if req.options.get("response_format")
         else ""
-    ) or ("pcm" if "heygen" in req.model.lower() else "mp3")
-    payload: dict[str, str] = {
-        "model": req.model,
-        "input": req.text,
-        "response_format": fmt,
-    }
+    ) or "mp3"
+    payload: dict[str, str] = {"model": req.model, "input": req.text}
     effective_voice = voice or default_voice
     if effective_voice:
         payload["voice"] = effective_voice
     headers = {"Authorization": f"Bearer {req.api_key}", "Content-Type": "application/json"}
     try:
         async with asyncio.timeout(_TIMEOUT_S):
-            async with httpx.AsyncClient(
-                verify=SSL_CERT_PATH,
-                timeout=_TIMEOUT_S,
-                follow_redirects=False,
-                trust_env=False,
-            ) as client:
-                async with client.stream(
-                    "POST", _audio_url(base, "audio/speech"), headers=headers, json=payload
-                ) as response:
-                    if response.status_code != 200:
-                        raise SpeechProviderError(
-                            f"Speech synthesis failed (HTTP {response.status_code})."
-                        )
-                    ctype = response.headers.get("content-type", "")
-                    audio = bytearray()
-                    async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
-                        audio.extend(chunk)
-                        if len(audio) > 20 * 1024 * 1024:
-                            raise ValueError("oversized response")
+            for attempt in (0, 1):
+                status, ctype, body = await _post_speech(
+                    base, headers, {**payload, "response_format": fmt}
+                )
+                if status == 200:
+                    break
+                # Some models (HeyGen) accept only one format. On a 4xx,
+                # parse the provider's own error for the allowed value and
+                # retry once — never more.
+                retry_fmt = _suggest_formats(body, fmt) if 400 <= status < 500 else None
+                if attempt == 0 and retry_fmt:
+                    fmt = retry_fmt
+                    continue
+                raise SpeechProviderError(f"Speech synthesis failed (HTTP {status}).")
     except (TimeoutError, httpx.TimeoutException) as exc:
         raise TimeoutError("Speech synthesis timed out; it may have been billed.") from exc
     except (httpx.HTTPError, OSError) as exc:
         raise SpeechProviderError("Speech synthesis request failed.") from exc
     mime = "audio/mpeg"
-    body = bytes(audio)
     if "audio/pcm" in ctype:
         rate, channels = _pcm_params(ctype)
         body = _pcm_to_wav(body, rate=rate, channels=channels)

@@ -511,12 +511,24 @@ async def test_gradium_tts_only_audio_shape(monkeypatch):
 
 
 async def test_openrouter_dedicated_tts_uses_audio_speech(monkeypatch):
-    """heygen-voice-* serves POST /api/v1/audio/speech, not chat completions,
-    and accepts PCM only — auto-selects it, then wraps to WAV for playback."""
+    """heygen-voice-* serves POST /api/v1/audio/speech, not chat completions.
+    It rejects mp3 — the adapter parses the error's allowed format and
+    retries once with pcm, then wraps to WAV for playback."""
     seen = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request)
+        fmt = json.loads(request.content)["response_format"]
+        if fmt != "pcm":
+            return httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "message": 'HeyGen Voice only supports response_format "pcm".',
+                        "code": 400,
+                    }
+                },
+            )
         return httpx.Response(
             200,
             content=b"PCM16",
@@ -536,18 +548,67 @@ async def test_openrouter_dedicated_tts_uses_audio_speech(monkeypatch):
             text="hi",
         )
     )
-    request = seen[0]
-    assert str(request.url) == "https://openrouter.ai/api/v1/audio/speech"
-    payload = json.loads(request.content)
-    assert payload == {
-        "model": "heygen/heygen-voice-1-turbo",
-        "input": "hi",
-        "response_format": "pcm",
-        "voice": "nadine",
-    }
+    assert len(seen) == 2
+    assert str(seen[0].url) == "https://openrouter.ai/api/v1/audio/speech"
+    first, second = (json.loads(r.content) for r in seen)
+    assert first["response_format"] == "mp3" and first["voice"] == "nadine"
+    assert second["response_format"] == "pcm" and second["voice"] == "nadine"
     assert result.mime == "audio/wav"
     assert result.audio[:4] == b"RIFF" and result.audio[8:12] == b"WAVE"
     assert result.audio.endswith(b"PCM16")
+
+
+async def test_audio_speech_no_retry_without_format_hint(monkeypatch):
+    """A 4xx whose body mentions no other format fails after one request."""
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(400, json={"error": {"message": "voice not found"}})
+
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kw: _REAL_CLIENT(transport=httpx.MockTransport(handler)),
+    )
+    with pytest.raises(SpeechProviderError):
+        await _openrouter_tts(
+            _or_req(
+                operation="tts",
+                model="heygen/heygen-voice-1-turbo",
+                options={"voice": "bogus"},
+                text="hi",
+            )
+        )
+    assert len(seen) == 1
+
+
+async def test_audio_speech_retry_exhausted_raises(monkeypatch):
+    """A second 4xx is not retried again."""
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            400,
+            json={"error": {"message": 'HeyGen Voice only supports response_format "pcm".'}},
+        )
+
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kw: _REAL_CLIENT(transport=httpx.MockTransport(handler)),
+    )
+    with pytest.raises(SpeechProviderError):
+        await _openrouter_tts(
+            _or_req(
+                operation="tts",
+                model="heygen/heygen-voice-1-turbo",
+                options={"voice": "nadine"},
+                text="hi",
+            )
+        )
+    assert len(seen) == 2
 
 
 async def test_audio_speech_explicit_format_wins(monkeypatch):
