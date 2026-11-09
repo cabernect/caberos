@@ -1,7 +1,10 @@
 # v0.2.1 Verification Results
 
-No implementation verification has been performed for these plans yet.
-Do not create placeholder passing reports or reuse old release counts.
+Implementation verification is recorded per workstream. Do not create placeholder
+passing reports or reuse old release counts.
+
+- [2026-11-04: Provider reuse and initial Tavily slice](2026-11-04-search-provider-reuse.md)
+- [2026-11-09: W10 speech — dictation STT, read-aloud TTS, Tauri mic bridge](2026-11-09-speech.md)
 
 When implementation is tested, add a dated workstream report containing:
 
