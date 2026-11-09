@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Copy, Square, Volume2 } from "lucide-react";
+import { Check, Copy, Loader2, Square, Volume2 } from "lucide-react";
 import { getSpeechStatus, synthesizeSpeech } from "@/lib/api";
 
 // Cheap client-side mirror of backend/speech/renderer.has_speakable_text:
@@ -93,9 +93,11 @@ function SpeakerButton({ messageId }: { messageId: string }) {
         disabled={state === "generating"}
         aria-label={label}
         title={label}
-        className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-md text-[var(--ink-3)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] disabled:cursor-wait"
+        className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-[var(--ink-3)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] disabled:cursor-wait"
       >
-        {state === "playing" ? (
+        {state === "generating" ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        ) : state === "playing" ? (
           <Square className="h-3.5 w-3.5" />
         ) : (
           <Volume2 className="h-3.5 w-3.5" />
@@ -141,14 +143,14 @@ export function MessageActions({
 
   const label = status === "copied" ? "Copied" : "Copy message";
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-1">
       <button
         type="button"
         onClick={copyMessage}
         disabled={status === "copying"}
         aria-label={label}
         title={label}
-        className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-md text-[var(--ink-3)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] disabled:cursor-wait"
+        className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-[var(--ink-3)] transition-colors hover:bg-[var(--hover)] hover:text-[var(--ink)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] disabled:cursor-wait"
       >
         {status === "copied" ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
       </button>
