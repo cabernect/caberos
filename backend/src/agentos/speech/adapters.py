@@ -18,6 +18,7 @@ import asyncio
 import base64
 import json
 import re
+import struct
 import time
 
 import httpx
@@ -169,14 +170,51 @@ async def _audio_transcriptions(req: SpeechRequest, base: str) -> TranscriptResu
     return TranscriptResult(text=transcript)
 
 
+def _pcm_to_wav(pcm: bytes, *, rate: int, channels: int, bits: int = 16) -> bytes:
+    """Wrap raw s16le PCM in a RIFF/WAVE header so browsers can play it."""
+    byte_rate = rate * channels * bits // 8
+    block_align = channels * bits // 8
+    return (
+        struct.pack(
+            "<4sI4s4sIHHIIHH4sI",
+            b"RIFF",
+            36 + len(pcm),
+            b"WAVE",
+            b"fmt ",
+            16,
+            1,
+            channels,
+            rate,
+            byte_rate,
+            block_align,
+            bits,
+            b"data",
+            len(pcm),
+        )
+        + pcm
+    )
+
+
+def _pcm_params(content_type: str) -> tuple[int, int]:
+    rate = int(m.group(1)) if (m := re.search(r"rate=(\d+)", content_type)) else 24000
+    ch = int(m.group(1)) if (m := re.search(r"channels=(\d+)", content_type)) else 1
+    return rate, ch
+
+
 async def _audio_speech(
     req: SpeechRequest, base: str, *, default_voice: str | None = "alloy"
 ) -> SynthesisResult:
     voice = (req.options.get("voice") or "").strip() if req.options.get("voice") else ""
+    # HeyGen Voice serves PCM only; an explicit operator format wins either way.
+    fmt = (
+        (req.options.get("response_format") or "").strip().lower()
+        if req.options.get("response_format")
+        else ""
+    ) or ("pcm" if "heygen" in req.model.lower() else "mp3")
     payload: dict[str, str] = {
         "model": req.model,
         "input": req.text,
-        "response_format": "mp3",
+        "response_format": fmt,
     }
     effective_voice = voice or default_voice
     if effective_voice:
@@ -197,6 +235,7 @@ async def _audio_speech(
                         raise SpeechProviderError(
                             f"Speech synthesis failed (HTTP {response.status_code})."
                         )
+                    ctype = response.headers.get("content-type", "")
                     audio = bytearray()
                     async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
                         audio.extend(chunk)
@@ -206,7 +245,13 @@ async def _audio_speech(
         raise TimeoutError("Speech synthesis timed out; it may have been billed.") from exc
     except (httpx.HTTPError, OSError) as exc:
         raise SpeechProviderError("Speech synthesis request failed.") from exc
-    return SynthesisResult(audio=bytes(audio), mime="audio/mpeg", characters=len(req.text))
+    mime = "audio/mpeg"
+    body = bytes(audio)
+    if "audio/pcm" in ctype:
+        rate, channels = _pcm_params(ctype)
+        body = _pcm_to_wav(body, rate=rate, channels=channels)
+        mime = "audio/wav"
+    return SynthesisResult(audio=body, mime=mime, characters=len(req.text))
 
 
 def _audio_base_or_raise(req: SpeechRequest) -> str:

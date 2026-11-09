@@ -511,9 +511,23 @@ async def test_gradium_tts_only_audio_shape(monkeypatch):
 
 
 async def test_openrouter_dedicated_tts_uses_audio_speech(monkeypatch):
-    """heygen-voice-* serves POST /api/v1/audio/speech, not chat completions."""
+    """heygen-voice-* serves POST /api/v1/audio/speech, not chat completions,
+    and accepts PCM only — auto-selects it, then wraps to WAV for playback."""
     seen = []
-    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _bytes_client(b"PCM", capture=seen))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200,
+            content=b"PCM16",
+            headers={"content-type": "audio/pcm;rate=44100;channels=1"},
+        )
+
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kw: _REAL_CLIENT(transport=httpx.MockTransport(handler)),
+    )
     result = await _openrouter_tts(
         _or_req(
             operation="tts",
@@ -528,10 +542,36 @@ async def test_openrouter_dedicated_tts_uses_audio_speech(monkeypatch):
     assert payload == {
         "model": "heygen/heygen-voice-1-turbo",
         "input": "hi",
-        "response_format": "mp3",
+        "response_format": "pcm",
         "voice": "nadine",
     }
-    assert result.audio == b"PCM"
+    assert result.mime == "audio/wav"
+    assert result.audio[:4] == b"RIFF" and result.audio[8:12] == b"WAVE"
+    assert result.audio.endswith(b"PCM16")
+
+
+async def test_audio_speech_explicit_format_wins(monkeypatch):
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, content=b"MP3", headers={"content-type": "audio/mpeg"})
+
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kw: _REAL_CLIENT(transport=httpx.MockTransport(handler)),
+    )
+    result = await _openrouter_tts(
+        _or_req(
+            operation="tts",
+            model="heygen/heygen-voice-1-turbo",
+            options={"voice": "nadine", "response_format": "mp3"},
+            text="hi",
+        )
+    )
+    assert json.loads(seen[0].content)["response_format"] == "mp3"
+    assert result.mime == "audio/mpeg" and result.audio == b"MP3"
 
 
 async def test_openrouter_dedicated_stt_uses_audio_transcriptions(monkeypatch):

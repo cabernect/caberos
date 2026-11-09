@@ -157,13 +157,9 @@ def _cache_dir() -> Path:
     return root
 
 
-async def _cache_lookup(
-    db: AsyncSession, key: str
-) -> tuple[SpeechAudioCache, bytes] | None:
+async def _cache_lookup(db: AsyncSession, key: str) -> tuple[SpeechAudioCache, bytes] | None:
     row = (
-        await db.scalars(
-            select(SpeechAudioCache).where(SpeechAudioCache.cache_key == key)
-        )
+        await db.scalars(select(SpeechAudioCache).where(SpeechAudioCache.cache_key == key))
     ).first()
     if row is None:
         return None
@@ -194,9 +190,7 @@ async def _cache_store(
         tmp.write_bytes(result.audio)
         tmp.replace(path)
         async with db.begin_nested():
-            await db.execute(
-                delete(SpeechAudioCache).where(SpeechAudioCache.cache_key == key)
-            )
+            await db.execute(delete(SpeechAudioCache).where(SpeechAudioCache.cache_key == key))
             db.add(
                 SpeechAudioCache(
                     cache_key=key,
