@@ -8,10 +8,9 @@ from ..config import settings
 
 
 class WorkspaceAmbiguousError(ValueError):
-    """A legacy unpinned session has run evidence under multiple roots.
-
-    Refusing beats silently re-anchoring the conversation to one of them —
-    the operator must map the session to a root explicitly.
+    """A legacy unpinned session's root can't be established — conflicting
+    or missing run evidence. Refusing beats silently re-anchoring the
+    conversation; the operator must map the session to a root explicitly.
     """
 
 
@@ -53,21 +52,34 @@ class WorkspaceManager:
         return Path(os.path.realpath(str(self.get_workspace_path(agent_id))))
 
     @staticmethod
-    async def _evidence_roots(db: Any, session_id: str) -> list[str]:
-        """Canonicalized workspace roots this session's runs demonstrably
-        used — the only acceptable evidence for a legacy unpinned row."""
-        from sqlalchemy import distinct, select
+    async def _evidence(db: Any, session_id: str) -> tuple[list[str], int]:
+        """(canonicalized roots runs recorded, count of runs whose root is
+        unknown) — the only acceptable evidence for a legacy unpinned row.
+
+        A NULL-root run is a real run from before the column existed — its
+        location is unknown, NOT proof the session never ran.
+        """
+        from sqlalchemy import distinct, func, select
 
         from ..models.run import Run
 
-        rows = await db.scalars(
-            select(distinct(Run.workspace_path)).where(
-                Run.session_id == session_id, Run.workspace_path.is_not(None)
+        roots = (
+            await db.scalars(
+                select(distinct(Run.workspace_path)).where(
+                    Run.session_id == session_id, Run.workspace_path.is_not(None)
+                )
             )
-        )
+        ).all()
+        unknown = (
+            await db.scalar(
+                select(func.count(Run.id)).where(
+                    Run.session_id == session_id, Run.workspace_path.is_(None)
+                )
+            )
+        ) or 0
         # realpath collapses alias spellings (/tmp/x vs /private/tmp/x) so
         # only genuinely different roots count as conflicting evidence.
-        return sorted({os.path.realpath(r) for r in rows if r})
+        return sorted({os.path.realpath(r) for r in roots if r}), unknown
 
     async def resolve_session_root(
         self, db: Any, session: Any, agent_id: str, configured: str | None
@@ -77,19 +89,28 @@ class WorkspaceManager:
         A pinned session keeps its recorded root forever — changing the
         agent's default only affects sessions created afterward. Legacy
         unpinned rows resolve through *evidence* (roots their runs actually
-        recorded), never today's default: one evidence root wins,
-        conflicting evidence raises WorkspaceAmbiguousError for explicit
-        operator mapping, and a session that never ran pins the current
-        default on first use — the same semantics a brand-new session has.
+        recorded), never today's default: every recorded run must agree on
+        exactly one root or the session raises WorkspaceAmbiguousError for
+        explicit operator mapping — runs with unknown roots can't prove
+        they lived under the known one. Only a session that never ran pins
+        the current default, the same semantics a brand-new session has.
         """
         pinned = getattr(session, "workspace_path", None)
         if pinned:
             return Path(pinned)
-        roots = await self._evidence_roots(db, getattr(session, "id", ""))
+        roots, unknown_runs = await self._evidence(db, getattr(session, "id", ""))
         if len(roots) > 1:
             raise WorkspaceAmbiguousError(
                 "This conversation has run evidence under multiple workspaces: "
                 f"{roots}. Set its workspace explicitly before resuming."
+            )
+        if unknown_runs:
+            raise WorkspaceAmbiguousError(
+                "This conversation ran before workspace locations were recorded "
+                f"({unknown_runs} run(s) with unknown roots"
+                + (f"; other runs used {roots}" if roots else "")
+                + "). Its files' location can't be established — set the "
+                "workspace explicitly before resuming."
             )
         if roots:
             return Path(roots[0])
@@ -133,13 +154,20 @@ class WorkspaceManager:
             if session.workspace_path:
                 return Path(session.workspace_path)
             # Legacy unpinned row — same evidence rule as run admission:
-            # a recorded root wins, conflicting evidence refuses, and only
-            # a session with no runs falls through to the agent default.
-            roots = await self._evidence_roots(db, session_id)
+            # a recorded root wins, conflicting or missing evidence
+            # refuses, and only a session with no runs at all falls
+            # through to the agent default.
+            roots, unknown_runs = await self._evidence(db, session_id)
             if len(roots) > 1:
                 raise WorkspaceAmbiguousError(
                     f"session {session_id} has run evidence under multiple "
                     f"workspaces: {roots}. Set its workspace explicitly."
+                )
+            if unknown_runs:
+                raise WorkspaceAmbiguousError(
+                    f"session {session_id} has {unknown_runs} run(s) from "
+                    "before workspace locations were recorded — its root "
+                    "can't be established. Set its workspace explicitly."
                 )
             if roots:
                 return Path(roots[0])

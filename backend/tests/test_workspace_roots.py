@@ -168,6 +168,71 @@ async def test_legacy_session_conflicting_evidence_refuses(db, tmp_path):
         await wm.resolve_api_root(db, "a1", "s-amb")
 
 
+@pytest.mark.asyncio
+async def test_legacy_session_unknown_run_roots_refuses(db, tmp_path):
+    """A v0.2.0 session's runs all have NULL workspace_path — the column
+    didn't exist. Unknown roots are NOT 'never ran': the session refuses
+    to silently re-anchor to today's default."""
+    from agentos.models.run import Run
+    from agentos.models.session import Session
+    from agentos.sandbox.workspace import WorkspaceAmbiguousError
+
+    db.add(Session(id="s-old", contact_id="c1", agent_id="a1", status="active"))
+    db.add(
+        Run(
+            id="r-pre",
+            session_id="s-old",
+            contact_id="c1",
+            agent_id="a1",
+            trigger="chat",
+            status="completed",
+            workspace_path=None,  # pre-column run — root unrecorded
+        )
+    )
+    await db.flush()
+
+    wm = WorkspaceManager()
+    session = await db.get(Session, "s-old")
+    with pytest.raises(WorkspaceAmbiguousError):
+        await wm.resolve_session_root(db, session, "a1", str(tmp_path))
+    with pytest.raises(WorkspaceAmbiguousError):
+        await wm.resolve_api_root(db, "a1", "s-old")
+
+
+@pytest.mark.asyncio
+async def test_legacy_session_known_root_plus_unknown_runs_refuses(db, tmp_path):
+    """One populated root plus a NULL-root run still refuses — the unknown
+    run could have lived under a different root, so nothing proves the
+    session's files are all in the known one."""
+    from agentos.models.run import Run
+    from agentos.models.session import Session
+    from agentos.sandbox.workspace import WorkspaceAmbiguousError
+
+    known = tmp_path / "known repo"
+    known.mkdir()
+    db.add(Session(id="s-mix", contact_id="c1", agent_id="a1", status="active"))
+    for i, ws in enumerate((str(known), None)):
+        db.add(
+            Run(
+                id=f"r-{i}",
+                session_id="s-mix",
+                contact_id="c1",
+                agent_id="a1",
+                trigger="chat",
+                status="completed",
+                workspace_path=ws,
+            )
+        )
+    await db.flush()
+
+    wm = WorkspaceManager()
+    session = await db.get(Session, "s-mix")
+    with pytest.raises(WorkspaceAmbiguousError):
+        await wm.resolve_session_root(db, session, "a1", str(tmp_path))
+    with pytest.raises(WorkspaceAmbiguousError):
+        await wm.resolve_api_root(db, "a1", "s-mix")
+
+
 def test_strict_containment_holds_inside_external_root(tmp_path):
     wm = WorkspaceManager()
     root = tmp_path / "repo"
