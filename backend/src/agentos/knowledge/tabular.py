@@ -7,6 +7,7 @@ predicate grammar. No raw SQL, no evaluated expressions, no guessed totals.
 
 import csv
 import json
+import math
 import re
 import zipfile
 from dataclasses import dataclass, field
@@ -91,7 +92,12 @@ def _csv_cell(record_value: str | None, warnings: list[str]) -> Any:
         return value
     if "." not in text and "e" not in text.lower():
         return int(text)
-    return float(text)
+    number = float(text)
+    # Non-finite results ('1e309' → inf) can't serialize honestly — the
+    # cell keeps its text instead of poisoning the JSON corpus.
+    if not math.isfinite(number):
+        return value
+    return number
 
 
 def _infer_kinds(columns: list[ParsedColumn], rows: list[ParsedRow]) -> None:

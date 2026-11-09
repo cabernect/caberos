@@ -259,6 +259,33 @@ async def test_csv_cells_are_typed_and_codes_stay_text(client, db):
 
 
 @pytest.mark.asyncio
+async def test_csv_nonfinite_number_stays_text(client):
+    """'1e309' matches the numeric shape but float() overflows to inf —
+    unserializable. The cell keeps its text and the corpus still serves."""
+    resp = await client.post(
+        "/api/knowledge/scopes/shared/documents/upload",
+        files={"file": ("big.csv", b"Name,Val\ninf,1e309\nok,2\n", "text/csv")},
+    )
+    assert resp.status_code == 200
+    doc_id = resp.json()["id"]
+
+    sheets = (await client.get(f"/api/knowledge/scopes/shared/documents/{doc_id}/sheets")).json()[
+        "sheets"
+    ]
+    kinds = {c["label"]: c["kind"] for c in sheets[0]["columns"]}
+    assert kinds["Val"] == "mixed"  # 1e309 text + 2 number
+
+    # The row endpoint serializes — before the guard this raised
+    # 'Out of range float values are not JSON compliant'.
+    rows = await client.get(
+        f"/api/knowledge/scopes/shared/documents/{doc_id}/rows",
+        params={"sheet": "csv"},
+    )
+    assert rows.status_code == 200
+    assert rows.json()["items"][0]["cells"]["col_2"] == "1e309"
+
+
+@pytest.mark.asyncio
 async def test_doc_query_rows_executes_through_mediator(client, db, workspace):
     """The row-query tool must run through the syscall mediator — the
     injection path supplies db/agent_id, so a mediated call returns real
