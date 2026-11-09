@@ -73,7 +73,8 @@ def test_validate_external_root_canonicalizes(tmp_path):
     assert " " not in real or "spaced dir" in real
 
 
-def test_resolve_session_root_pin_wins_over_default_change(tmp_path):
+@pytest.mark.asyncio
+async def test_resolve_session_root_pin_wins_over_default_change(db, tmp_path):
     wm = WorkspaceManager()
     pinned = tmp_path / "old"
     pinned.mkdir()
@@ -82,15 +83,89 @@ def test_resolve_session_root_pin_wins_over_default_change(tmp_path):
 
     class _S:
         workspace_path = str(pinned)
+        id = "s-pinned"
 
-    assert wm.resolve_session_root(_S(), "a1", str(other)) == Path(str(pinned))
+    assert await wm.resolve_session_root(db, _S(), "a1", str(other)) == Path(str(pinned))
 
     class _Legacy:
         workspace_path = None
+        id = "s-legacy"
 
-    assert wm.resolve_session_root(_Legacy(), "a1", str(other)) == Path(
+    # No run evidence → a never-worked session pins the current default,
+    # same as a brand-new session would.
+    assert await wm.resolve_session_root(db, _Legacy(), "a1", str(other)) == Path(
         os.path.realpath(str(other))
     )
+
+
+@pytest.mark.asyncio
+async def test_legacy_session_resolves_run_evidence_not_default(db, tmp_path):
+    """An unpinned legacy session anchors to the root its runs actually
+    used — a later agent-default change must never re-anchor it."""
+    from agentos.models.run import Run
+    from agentos.models.session import Session
+
+    old = tmp_path / "old repo"
+    old.mkdir()
+    new = tmp_path / "new repo"
+    new.mkdir()
+    db.add(Session(id="s-ev", contact_id="c1", agent_id="a1", status="active"))
+    db.add(
+        Run(
+            id="r-old",
+            session_id="s-ev",
+            contact_id="c1",
+            agent_id="a1",
+            trigger="chat",
+            status="completed",
+            workspace_path=str(old),
+        )
+    )
+    await db.flush()
+
+    wm = WorkspaceManager()
+    session = await db.get(Session, "s-ev")
+    root = await wm.resolve_session_root(db, session, "a1", str(new))
+    assert root == Path(os.path.realpath(str(old)))
+    # The API path follows the same evidence — historical attachments and
+    # previews resolve where they were actually written.
+    api_root = await wm.resolve_api_root(db, "a1", "s-ev")
+    assert api_root == Path(os.path.realpath(str(old)))
+
+
+@pytest.mark.asyncio
+async def test_legacy_session_conflicting_evidence_refuses(db, tmp_path):
+    """Runs under two different roots = ambiguous provenance — refuse
+    honestly for explicit mapping, never silently pick one."""
+    from agentos.models.run import Run
+    from agentos.models.session import Session
+    from agentos.sandbox.workspace import WorkspaceAmbiguousError
+
+    a = tmp_path / "repo a"
+    a.mkdir()
+    b = tmp_path / "repo b"
+    b.mkdir()
+    db.add(Session(id="s-amb", contact_id="c1", agent_id="a1", status="active"))
+    for i, root in enumerate((a, b)):
+        db.add(
+            Run(
+                id=f"r-{i}",
+                session_id="s-amb",
+                contact_id="c1",
+                agent_id="a1",
+                trigger="chat",
+                status="completed",
+                workspace_path=str(root),
+            )
+        )
+    await db.flush()
+
+    wm = WorkspaceManager()
+    session = await db.get(Session, "s-amb")
+    with pytest.raises(WorkspaceAmbiguousError):
+        await wm.resolve_session_root(db, session, "a1", str(tmp_path))
+    with pytest.raises(WorkspaceAmbiguousError):
+        await wm.resolve_api_root(db, "a1", "s-amb")
 
 
 def test_strict_containment_holds_inside_external_root(tmp_path):

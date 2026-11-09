@@ -7,6 +7,14 @@ from typing import Any
 from ..config import settings
 
 
+class WorkspaceAmbiguousError(ValueError):
+    """A legacy unpinned session has run evidence under multiple roots.
+
+    Refusing beats silently re-anchoring the conversation to one of them —
+    the operator must map the session to a root explicitly.
+    """
+
+
 def resolve_within(base: str | Path, *parts: str | Path) -> Path:
     """Resolve path segments under ``base`` and verify containment.
 
@@ -44,17 +52,47 @@ class WorkspaceManager:
             return Path(os.path.realpath(os.path.expanduser(configured.strip())))
         return Path(os.path.realpath(str(self.get_workspace_path(agent_id))))
 
-    def resolve_session_root(self, session: Any, agent_id: str, configured: str | None) -> Path:
+    @staticmethod
+    async def _evidence_roots(db: Any, session_id: str) -> list[str]:
+        """Canonicalized workspace roots this session's runs demonstrably
+        used — the only acceptable evidence for a legacy unpinned row."""
+        from sqlalchemy import distinct, select
+
+        from ..models.run import Run
+
+        rows = await db.scalars(
+            select(distinct(Run.workspace_path)).where(
+                Run.session_id == session_id, Run.workspace_path.is_not(None)
+            )
+        )
+        # realpath collapses alias spellings (/tmp/x vs /private/tmp/x) so
+        # only genuinely different roots count as conflicting evidence.
+        return sorted({os.path.realpath(r) for r in rows if r})
+
+    async def resolve_session_root(
+        self, db: Any, session: Any, agent_id: str, configured: str | None
+    ) -> Path:
         """The root a session's work actually happens in.
 
         A pinned session keeps its recorded root forever — changing the
         agent's default only affects sessions created afterward. Legacy
-        unpinned rows resolve the current default (the pre-pin behavior,
-        which is also where their files demonstrably were written).
+        unpinned rows resolve through *evidence* (roots their runs actually
+        recorded), never today's default: one evidence root wins,
+        conflicting evidence raises WorkspaceAmbiguousError for explicit
+        operator mapping, and a session that never ran pins the current
+        default on first use — the same semantics a brand-new session has.
         """
         pinned = getattr(session, "workspace_path", None)
         if pinned:
             return Path(pinned)
+        roots = await self._evidence_roots(db, getattr(session, "id", ""))
+        if len(roots) > 1:
+            raise WorkspaceAmbiguousError(
+                "This conversation has run evidence under multiple workspaces: "
+                f"{roots}. Set its workspace explicitly before resuming."
+            )
+        if roots:
+            return Path(roots[0])
         return self.resolve_agent_root(agent_id, configured)
 
     def is_managed_root(self, agent_id: str, path: str | Path) -> bool:
@@ -94,6 +132,17 @@ class WorkspaceManager:
                 raise LookupError(f"session {session_id} not found for agent {agent_id}")
             if session.workspace_path:
                 return Path(session.workspace_path)
+            # Legacy unpinned row — same evidence rule as run admission:
+            # a recorded root wins, conflicting evidence refuses, and only
+            # a session with no runs falls through to the agent default.
+            roots = await self._evidence_roots(db, session_id)
+            if len(roots) > 1:
+                raise WorkspaceAmbiguousError(
+                    f"session {session_id} has run evidence under multiple "
+                    f"workspaces: {roots}. Set its workspace explicitly."
+                )
+            if roots:
+                return Path(roots[0])
         config = await get_active_config(db, agent_id)
         return self.resolve_agent_root(agent_id, config.workspace if config else "")
 

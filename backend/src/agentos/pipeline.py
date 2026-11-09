@@ -524,13 +524,23 @@ class Pipeline:
                 conversation = await Conversation.load(self.db, session, exclude_run_id=run.id)
 
                 # Set up workspace — the session's pinned root wins. A
-                # missing pin (legacy row) resolves the agent default once
-                # and is then pinned, so a later default change can't
-                # reinterpret where this session's files live.
+                # missing pin (legacy row) resolves through run evidence —
+                # never today's agent default — and is then pinned, so a
+                # later default change can't reinterpret where this
+                # session's files live. Conflicting evidence fails the run
+                # honestly rather than silently re-anchoring.
+                from .sandbox.workspace import WorkspaceAmbiguousError
+
                 wm = WorkspaceManager()
-                workspace_path = wm.resolve_session_root(
-                    session, message.bot_id, agent_config.workspace
-                )
+                try:
+                    workspace_path = await wm.resolve_session_root(
+                        self.db, session, message.bot_id, agent_config.workspace
+                    )
+                except WorkspaceAmbiguousError as e:
+                    run.status = "failed"
+                    run.error = str(e)
+                    await self.db.commit()
+                    return run
                 if not session.workspace_path:
                     session.workspace_path = str(workspace_path)
                 if wm.is_managed_root(message.bot_id, workspace_path):
