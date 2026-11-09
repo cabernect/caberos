@@ -77,7 +77,7 @@ async def _workspace_root(db: AsyncSession, agent_id: str, session_id: str | Non
     attach-only and never created here. A foreign session 404s — no
     silent fallback to another directory.
     """
-    from ..sandbox.workspace import WorkspaceManager
+    from ..sandbox.workspace import WorkspaceAmbiguousError, WorkspaceManager
 
     wm = WorkspaceManager()
     agent_id = _safe_component(agent_id, "agent id")
@@ -85,6 +85,8 @@ async def _workspace_root(db: AsyncSession, agent_id: str, session_id: str | Non
         root = await wm.resolve_api_root(db, agent_id, session_id)
     except LookupError as e:
         raise HTTPException(status_code=404, detail="Session not found") from e
+    except WorkspaceAmbiguousError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
     if wm.is_managed_root(agent_id, root):
         root.mkdir(parents=True, exist_ok=True)
     return root
@@ -733,7 +735,12 @@ async def _resolve_source(
                 raise HTTPException(status_code=404, detail="Revision not found")
             data = await artifact_service.revision_bytes(db, revision_id)
         else:
-            target = _child_path(ws, artifact.current_path)
+            # Live bytes come from the artifact's recorded root — never
+            # the request's workspace, where a same-named file could
+            # masquerade as this artifact. Legacy rows with no recorded
+            # root keep the request-root interpretation.
+            root = Path(artifact.workspace_path) if artifact.workspace_path else ws
+            target = _child_path(root, artifact.current_path)
             if not target.exists() or not target.is_file():
                 raise HTTPException(status_code=404, detail="File not found")
             data = target.read_bytes()
@@ -745,7 +752,7 @@ async def _resolve_source(
         raise HTTPException(status_code=403, detail="Path outside workspace") from error
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="File not found")
-    artifact = await artifact_service.get_by_path(db, agent_id, path)
+    artifact = await artifact_service.get_by_path(db, agent_id, path, ws)
     return target.read_bytes(), target.name, artifact, target
 
 

@@ -365,6 +365,38 @@ async def test_preview_revision_uses_stored_bytes_and_flags_newer(
     assert resp.json()["artifact"]["newer_exists"] is False
 
 
+async def test_artifact_preview_resolves_recorded_workspace(
+    db, client, workspace_root, artifact_storage, tmp_path
+):
+    """A live artifact preview resolves under the artifact's recorded
+    root — a same-named file in the request's workspace can never stand
+    in for it. Path-based tracking lookups are workspace-aware too."""
+    from agentos.artifacts import service
+
+    ws_a = tmp_path / "repo-a"
+    ws_a.mkdir()
+    art, _ = await service.create(
+        db,
+        workspace_id="agent-1",
+        workspace_path=ws_a,
+        rel_path="same.txt",
+        data=b"from-repo-a",
+    )
+    ws_b = _agent_workspace(workspace_root)  # the request's default root
+    (ws_b / "same.txt").write_text("from-repo-b")
+
+    # artifact_id preview returns A's bytes, never B's same-named file.
+    resp = await client.get(f"/api/agents/agent-1/workspace/preview?artifact_id={art.id}")
+    assert resp.status_code == 200
+    assert resp.json()["content"] == "from-repo-a"
+
+    # B's same-named file is untracked — no artifact meta leaks across.
+    resp = await client.get("/api/agents/agent-1/workspace/preview?path=same.txt")
+    assert resp.status_code == 200
+    assert resp.json()["content"] == "from-repo-b"
+    assert resp.json()["artifact"] is None
+
+
 async def test_preview_rejects_cross_agent_artifact(db, client, workspace_root, artifact_storage):
     from agentos.artifacts import service
 

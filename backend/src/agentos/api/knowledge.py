@@ -36,7 +36,7 @@ from ..models.knowledge_index import EmbeddingResource, IndexGeneration
 from ..models.model_call import ModelCall
 from ..models.operator import Operator, OperatorAuditLog
 from ..models.provider import Provider
-from ..sandbox.workspace import WorkspaceManager
+from ..sandbox.workspace import WorkspaceAmbiguousError, WorkspaceManager
 
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
 # Large-PDF friendly while still bounding disk usage; uploads stream to disk
@@ -635,6 +635,8 @@ async def ingest_workspace_file(
         workspace = (await wm.resolve_api_root(db, agent_id, request.session_id)).resolve()
     except LookupError:
         raise HTTPException(status_code=404, detail="Session not found") from None
+    except WorkspaceAmbiguousError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
     source = Path(wm.validate_path(str(workspace), request.path))
     if not source.is_file():
         raise HTTPException(status_code=400, detail="Document does not exist")

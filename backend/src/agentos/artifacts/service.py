@@ -485,17 +485,29 @@ async def _get(db: AsyncSession, artifact_id: str) -> Artifact:
     return artifact
 
 
-async def get_by_path(db: AsyncSession, workspace_id: str, rel_path: str) -> Artifact | None:
-    """Look up the artifact tracking a workspace path — None for ordinary
-    files. The preview API uses this to split tracked vs untracked actions."""
+async def get_by_path(
+    db: AsyncSession, workspace_id: str, rel_path: str, workspace_path: str | Path
+) -> Artifact | None:
+    """Look up the artifact tracking a path under a specific workspace root —
+    None for ordinary files. The root narrows the lookup so a same-named
+    file in a different workspace can never alias this artifact."""
+    import os
+
     from sqlalchemy import select
 
-    return await db.scalar(
-        select(Artifact).where(
-            Artifact.workspace_id == workspace_id,
-            Artifact.current_path == rel_path,
+    candidates = (
+        await db.scalars(
+            select(Artifact).where(
+                Artifact.workspace_id == workspace_id,
+                Artifact.current_path == rel_path,
+            )
         )
-    )
+    ).all()
+    root = os.path.realpath(str(workspace_path))
+    for artifact in candidates:
+        if os.path.realpath(artifact.workspace_path or "") == root:
+            return artifact
+    return None
 
 
 async def _store_revision(
