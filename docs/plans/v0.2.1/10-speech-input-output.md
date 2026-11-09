@@ -1,6 +1,6 @@
 # Speech Input And Output
 
-Status: included in v0.2.1 scope; implementation pending. Supersedes the earlier
+Status: delivered and verified — see [test_result/2026-11-09-speech.md](test_result/2026-11-09-speech.md). Supersedes the earlier
 W6 speech deferral, not the implemented image tool contract.
 
 ## Product Decisions

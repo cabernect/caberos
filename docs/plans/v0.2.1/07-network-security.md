@@ -1,6 +1,6 @@
 # Local Host Hardening Baseline (W7)
 
-Status: BASELINE — the workstream was re-scoped down on operator direction.
+Status: BASELINE DELIVERED — the workstream was re-scoped down on operator direction.
 What is in scope is listed under "Baseline scope" below; the original
 full-scope sections are kept under "Deferred — full boundary work" so the
 threat review and requirements remain available when a later workstream
