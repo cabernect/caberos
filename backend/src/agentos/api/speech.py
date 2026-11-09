@@ -147,5 +147,8 @@ async def synthesize_speech(
     return Response(
         content=result.audio,
         media_type=result.mime,
-        headers={"X-Speech-Request-Id": request_id},
+        headers={
+            "X-Speech-Request-Id": request_id,
+            **({"X-Speech-Reused": "true"} if result.usage.get("reused") else {}),
+        },
     )

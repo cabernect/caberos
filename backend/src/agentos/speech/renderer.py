@@ -10,6 +10,10 @@ No model call, no paraphrasing, no fetching linked content.
 
 import re
 
+# Bumped when rendering rules change — cached audio keys on this so an
+# older rendering never replays under a new renderer.
+RENDERER_VERSION = 1
+
 _FENCE = re.compile(r"^\s*(```|~~~)")
 _TABLE_ROW = re.compile(r"^\s*\|")
 _TABLE_SEP = re.compile(r"^\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*$")

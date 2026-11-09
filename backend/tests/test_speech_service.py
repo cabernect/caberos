@@ -298,3 +298,42 @@ async def test_synthesize_endpoint_renders_and_returns_audio(client, db, monkeyp
 
     row = (await db.scalars(select(ModelCall))).all()[-1]
     assert row.session_id == run.session_id and row.detail["message_id"] == msg.id
+
+
+async def test_synthesize_replay_skips_dispatch(db, monkeypatch):
+    provider = await _speech_provider(db, type_="elevenlabs")
+    await _bind(db, "speech.tts", provider, model="eleven_multilingual_v2")
+    calls = []
+
+    async def fake(req):
+        calls.append(req)
+        return SynthesisResult(
+            audio=b"mp3bytes", mime="audio/mpeg", characters=len(req.text)
+        )
+
+    monkeypatch.setitem(speech_service._ADAPTERS, ("elevenlabs", "tts"), fake)
+    r1, _ = await synthesize(db=db, text="read this")
+    r2, _ = await synthesize(db=db, text="read this")
+    assert len(calls) == 1  # second call replayed from cache
+    assert r1.audio == b"mp3bytes" and not r1.usage.get("reused")
+    assert r2.audio == b"mp3bytes" and r2.usage.get("reused") is True
+    rows = (await db.scalars(select(ModelCall))).all()
+    purposes = [r.purpose for r in rows]
+    assert "synthesis" in purposes and "synthesis_replay" in purposes
+
+
+async def test_synthesize_model_change_redispatches(db, monkeypatch):
+    provider = await _speech_provider(db, type_="elevenlabs")
+    binding = await _bind(db, "speech.tts", provider, model="eleven_multilingual_v2")
+    calls = []
+
+    async def fake(req):
+        calls.append(req)
+        return SynthesisResult(audio=b"audio" + str(len(calls)).encode())
+
+    monkeypatch.setitem(speech_service._ADAPTERS, ("elevenlabs", "tts"), fake)
+    await synthesize(db=db, text="again")
+    binding.model = "eleven_flash_v2_5"  # frozen binding change = new key
+    await db.flush()
+    await synthesize(db=db, text="again")
+    assert len(calls) == 2

@@ -12,18 +12,28 @@ honest "not supported yet", never a silent fallback to another provider.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
+import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..capabilities.bindings import BindingResolution, resolve_binding
+from ..config import settings
 from ..models.provider import Provider
+from ..models.speech_audio import SpeechAudioCache
 from ..secret_store import decrypt
 from ..services.model_ledger import record_system_call
+from .renderer import RENDERER_VERSION
+
+log = logging.getLogger(__name__)
 
 SPEECH_STT_KEY = "speech.stt"
 SPEECH_TTS_KEY = "speech.tts"
@@ -109,6 +119,106 @@ class SynthesisResult:
 
 AdapterFn = Callable[[SpeechRequest], Awaitable[Any]]
 _ADAPTERS: dict[tuple[str, str], AdapterFn] = {}
+
+_MIME_EXT = {
+    "audio/mpeg": "mp3",
+    "audio/mp3": "mp3",
+    "audio/wav": "wav",
+    "audio/x-wav": "wav",
+    "audio/ogg": "ogg",
+    "audio/mp4": "m4a",
+    "audio/m4a": "m4a",
+    "audio/x-m4a": "m4a",
+    "audio/webm": "webm",
+    "audio/flac": "flac",
+    "audio/pcm": "pcm",
+}
+
+
+def _cache_key(text: str, req: SpeechRequest) -> str:
+    """Replay key — rendered text + renderer version + frozen binding."""
+    payload = json.dumps(
+        {
+            "v": RENDERER_VERSION,
+            "text": text,
+            "provider": req.provider_id,
+            "model": req.model,
+            "options": req.options,
+            "revision": req.binding_revision,
+        },
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def _cache_dir() -> Path:
+    root = settings.db_path.parent / "speech-audio"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+async def _cache_lookup(
+    db: AsyncSession, key: str
+) -> tuple[SpeechAudioCache, bytes] | None:
+    row = (
+        await db.scalars(
+            select(SpeechAudioCache).where(SpeechAudioCache.cache_key == key)
+        )
+    ).first()
+    if row is None:
+        return None
+    try:
+        audio = Path(row.audio_path).read_bytes()
+    except OSError:
+        return None
+    if not audio:
+        return None  # stale row — dispatch replaces it on success
+    return row, audio
+
+
+async def _cache_store(
+    db: AsyncSession,
+    *,
+    key: str,
+    req: SpeechRequest,
+    result: SynthesisResult,
+    message_id: str | None,
+    session_id: str | None,
+    agent_id: str | None,
+) -> None:
+    """Best-effort write-through — publication failure never eats a receipt."""
+    ext = _MIME_EXT.get(result.mime, "bin")
+    path = _cache_dir() / f"{key}.{ext}"
+    tmp = path.with_name(f"{key}.{req.request_id}.tmp")
+    try:
+        tmp.write_bytes(result.audio)
+        tmp.replace(path)
+        async with db.begin_nested():
+            await db.execute(
+                delete(SpeechAudioCache).where(SpeechAudioCache.cache_key == key)
+            )
+            db.add(
+                SpeechAudioCache(
+                    cache_key=key,
+                    message_id=message_id,
+                    session_id=session_id,
+                    agent_id=agent_id,
+                    provider_id=req.provider_id,
+                    provider_type=req.provider_type,
+                    model=req.model,
+                    binding_revision=req.binding_revision,
+                    mime=result.mime,
+                    size_bytes=len(result.audio),
+                    audio_path=str(path),
+                    source_request_id=req.request_id,
+                )
+            )
+    except Exception as exc:  # noqa: BLE001 — cache must not fail synthesis
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        log.warning("speech audio cache store failed: %s", type(exc).__name__)
 
 
 def register_adapter(provider_type: str, operation: str, fn: AdapterFn) -> None:
@@ -268,6 +378,40 @@ async def synthesize(
         base_url=provider.base_url,
         text=text,
     )
+
+    # Replay check — validated audio keyed on the rendered text + frozen
+    # binding replays without a provider call (and without billing).
+    key = _cache_key(text, req)
+    hit = await _cache_lookup(db, key)
+    if hit is not None:
+        row, audio = hit
+        await record_system_call(
+            kind="speech",
+            purpose="synthesis_replay",
+            provider_id=req.provider_id,
+            model_name=req.model,
+            session_id=session_id,
+            agent_id=agent_id,
+            detail={
+                "reused": True,
+                "cache_key": key,
+                "request_id": req.request_id,
+                "source_request_id": row.source_request_id,
+                "text_chars": len(text),
+                "audio_bytes": len(audio),
+                **({"message_id": message_id} if message_id else {}),
+            },
+        )
+        return (
+            SynthesisResult(
+                audio=audio,
+                mime=row.mime,
+                characters=len(text),
+                usage={"reused": True},
+            ),
+            req.request_id,
+        )
+
     started = time.monotonic()
     units: dict[str, Any] = {"text_chars": len(text)}
     if message_id:
@@ -307,5 +451,14 @@ async def synthesize(
         latency_ms=int((time.monotonic() - started) * 1000),
         result=result,
         units=units,
+    )
+    await _cache_store(
+        db,
+        key=key,
+        req=req,
+        result=result,
+        message_id=message_id,
+        session_id=session_id,
+        agent_id=agent_id,
     )
     return result, req.request_id

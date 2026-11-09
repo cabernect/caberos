@@ -37,6 +37,7 @@ from .skill import Skill, SkillAssignment, SkillRevision
 from .skill_reflection import SkillReflection
 from .skill_usage import SkillActivation
 from .source import RunSource
+from .speech_audio import SpeechAudioCache
 from .sub_agent import SubAgent
 from .terminal import TerminalSession
 from .tool_binding import ToolBinding
@@ -80,6 +81,7 @@ __all__ = [
     "RevisionedEntityMixin",
     "RevisionMixin",
     "Session",
+    "SpeechAudioCache",
     "Skill",
     "SkillAssignment",
     "SkillRevision",
