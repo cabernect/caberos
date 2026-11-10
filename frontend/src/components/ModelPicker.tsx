@@ -95,7 +95,11 @@ export function ModelPicker({
                   entry.provider.id === provider.id
                     ? {
                         ...entry,
-                        models: resp.models,
+                        // Media models stay discoverable on the Models tab
+                        // but never pickable as a chat/reasoning model.
+                        models: resp.models.filter(
+                          (m) => m.model_kind !== "media",
+                        ),
                         listRevision: resp.revision,
                       }
                     : entry,

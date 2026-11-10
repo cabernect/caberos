@@ -28,8 +28,10 @@ A scope is a retrieval boundary, not an external access-control system. The loca
 | Text (`.txt`) | Extracts plain-text paragraphs. |
 | PDF (`.pdf`) | Extracts text by page and uses PDF outline paths when available. |
 | Word (`.docx`) | Extracts paragraphs, heading hierarchy, tables, and embedded-image references. |
+| CSV (`.csv`) | Persists typed rows and column metadata for exact queries, plus text for discovery. |
+| Excel (`.xlsx`) | Persists sheets, rows, cells, and source locations without executing formulas. |
 
-Tabular files (`.xlsx`, `.xls`, `.csv`) are **refused** — flattening rows to text loses queryability, so they wait for a row-query ingest layer.
+Legacy Excel `.xls` files are not supported; convert them to `.xlsx` or `.csv`.
 
 The upload limit is **250 MB per document**. Image-only OCR is not currently supported. A scanned PDF may index with little or no useful text unless it already contains a text layer.
 
@@ -57,6 +59,34 @@ Indexing creates local chunks and preserves source metadata where the format pro
 
 The dashboard displays document status, file size, chunks, sections, pages, tables, and images. If extraction fails, the document row displays an error.
 
+## Inspect stored chunks
+
+Open a document's chunk inspector to expand its persisted parent/child tree.
+It shows chunk kind, source location when known, token count, and bounded text.
+Children load on demand through a paginated API. This inspects the stored corpus,
+not a reconstructed model prompt or a historical snapshot of every index generation.
+
+## Query spreadsheets and CSV
+
+Grant the agent `doc_query_rows` in **Agent Settings → Capabilities**. Use
+`doc_list`/`doc_search` to find the document, then query rows for questions such
+as "count all matching orders" or "sum Qty for matching rows." Top-k text excerpts
+alone cannot establish a complete spreadsheet total.
+
+Queries support allowlisted filters and aggregates, with at most 200 returned
+rows per page. Counts and aggregates cover the complete matching set regardless
+of pagination. Results retain sheet/row provenance. No raw SQL or spreadsheet
+formula execution is exposed.
+
+CSV canonical numeric values become numbers; identifiers such as `007` and
+non-finite numeric-looking text such as `1e309` stay text. Column types can be
+mixed, so inspect metadata before assuming a numeric column.
+
+Parsing is bounded to 32 sheets, 50,000 data rows per sheet, and 200 columns.
+Cell text is bounded to 2,000 characters with a warning; XLSX decompressed
+content is capped at 256 MiB. Files exceeding structural limits are refused
+rather than silently treated as a complete table.
+
 ## Preview retrieval
 
 Use **Retrieval preview** inside a scope before expecting an agent to answer from a document.
@@ -78,6 +108,7 @@ The agent needs the relevant document capabilities:
 - `doc_list` to inspect available document metadata;
 - `doc_search` to retrieve excerpts;
 - `doc_inspect` to inspect a PDF page or embedded DOCX image with a vision-capable model.
+- `doc_query_rows` to filter, count, or aggregate persisted CSV/XLSX rows.
 
 Configure these under **Agent Settings → Capabilities**. Use **Always** when document retrieval is central to the agent, or **On demand** when it is occasional.
 
@@ -143,7 +174,9 @@ To keep retrieved document content on the machine, use a compatible local model 
 
 ### Unsupported document format
 
-Convert the source to Markdown, text, PDF with a text layer, or DOCX. Tabular files (`.xlsx`, `.xls`, `.csv`) are refused at ingest — they wait for the row-query layer.
+Convert the source to Markdown, text, PDF with a text layer, DOCX, CSV, or XLSX.
+Legacy `.xls` is unsupported; convert it to `.xlsx` or `.csv`. For tabular
+parse failures, review the row, column, sheet, and decompression limits.
 
 ### Upload rejected
 

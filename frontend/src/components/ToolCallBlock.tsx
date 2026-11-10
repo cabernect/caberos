@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { CheckCircle2, ChevronDown, Eye, FileText, HelpCircle, Loader2, ShieldAlert, XCircle } from "lucide-react";
-import { api, type PreviewSource } from "@/lib/api";
+import { api, workspaceBackend, type PreviewSource } from "@/lib/api";
+import { useObjectUrl } from "@/components/previews/useObjectUrl";
 import { DiffBlock } from "@/components/DiffBlock";
 import { ThinkingBlock } from "@/components/ThinkingBlock";
 import { Select } from "@/components/ui/select";
@@ -57,7 +58,7 @@ interface ToolCallBlockProps {
 export function previewSourceFor(call: ToolCallData): PreviewSource | null {
   if (call.status !== "complete") return null;
   const result = (call.result ?? {}) as Record<string, unknown>;
-  if (call.capability.startsWith("artifact_")) {
+  if (call.capability.startsWith("artifact_") || call.capability.startsWith("image_")) {
     const artifactId = (result.pdf_artifact_id ?? result.artifact_id) as string | undefined;
     if (artifactId) {
       return {
@@ -78,12 +79,16 @@ export interface FileRef {
   name: string;
   /** true = the run created/modified the file; false = it only consulted it. */
   produced: boolean;
+  /** image_* results render their bytes inline, not just a card. */
+  image?: boolean;
 }
 
 const FILE_ARTIFACT_PRODUCERS = new Set([
   "artifact_create",
   "artifact_revise",
   "artifact_restore",
+  "image_generate",
+  "image_edit",
 ]);
 /**
  * Collect the output files a set of completed tool calls produced — chips
@@ -129,6 +134,7 @@ export function collectFileRefs(calls: ToolCallData[]): FileRef[] {
         },
         name: path ? base(path) : "artifact",
         produced: true,
+        image: call.capability.startsWith("image_") || undefined,
       });
     }
   }
@@ -141,9 +147,13 @@ export function collectFileRefs(calls: ToolCallData[]): FileRef[] {
 export function FileChips({
   refs,
   onPreview,
+  agentId,
+  sessionId,
 }: {
   refs: FileRef[];
   onPreview?: (source: PreviewSource) => void;
+  agentId?: string;
+  sessionId?: string | null;
 }) {
   if (!onPreview || refs.length === 0) return null;
   const kindOf = (name: string) => {
@@ -170,7 +180,10 @@ export function FileChips({
   };
   return (
     <div className="mb-3 mt-3 space-y-2">
-      {refs.map((ref, i) => (
+      {refs.map((ref, i) =>
+        ref.image && agentId ? (
+          <ImageChip key={i} ref_={ref} agentId={agentId} sessionId={sessionId} onPreview={onPreview} />
+        ) : (
         <button
           key={i}
           onClick={() => onPreview(ref.source)}
@@ -196,8 +209,51 @@ export function FileChips({
             Open ›
           </span>
         </button>
-      ))}
+        )
+      )}
     </div>
+  );
+}
+
+/** Produced image rendered inline — bare <img>, click opens the preview.
+    No card chrome: the image itself is the affordance. */
+function ImageChip({
+  ref_,
+  agentId,
+  sessionId,
+  onPreview,
+}: {
+  ref_: FileRef;
+  agentId: string;
+  sessionId?: string | null;
+  onPreview: (source: PreviewSource) => void;
+}) {
+  const { url, loading, error } = useObjectUrl(
+    () => workspaceBackend(agentId, sessionId ?? undefined).blob(ref_.source),
+    [agentId, sessionId, ref_.source.artifactId, ref_.source.revisionId, ref_.source.path],
+  );
+  if (error) {
+    return (
+      <span className="block rounded-md border border-[var(--border)] px-3 py-2 text-[12px] text-ink-muted">
+        {ref_.name} — preview unavailable
+      </span>
+    );
+  }
+  if (loading || !url) {
+    return (
+      <span className="flex h-24 w-40 items-center justify-center rounded-md border border-[var(--border)]">
+        <Loader2 className="h-5 w-5 animate-spin text-[var(--ink-3)]" />
+      </span>
+    );
+  }
+  return (
+    <img
+      src={url}
+      alt={ref_.name}
+      title={`${ref_.source.path ?? ref_.name} — open in workspace`}
+      onClick={() => onPreview(ref_.source)}
+      className="max-h-72 w-auto max-w-full cursor-pointer rounded-[10px] object-contain transition-opacity hover:opacity-90"
+    />
   );
 }
 

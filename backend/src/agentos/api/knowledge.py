@@ -9,7 +9,7 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,34 +31,29 @@ from ..knowledge.indexing import (
 from ..knowledge.ingest import delete_document, ingest_document, list_documents
 from ..knowledge.retrieval import retrieve
 from ..models.agent import Agent
-from ..models.document import Document, DocumentChunk
+from ..models.document import Document, DocumentChunk, DocumentRow, DocumentSheet
 from ..models.knowledge_index import EmbeddingResource, IndexGeneration
 from ..models.model_call import ModelCall
 from ..models.operator import Operator, OperatorAuditLog
 from ..models.provider import Provider
-from ..sandbox.workspace import WorkspaceManager
+from ..sandbox.workspace import WorkspaceAmbiguousError, WorkspaceManager
 
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
 # Large-PDF friendly while still bounding disk usage; uploads stream to disk
 # so the cap doesn't sit in memory.
 _MAX_UPLOAD_BYTES = 250 * 1024 * 1024
-_SUPPORTED_SUFFIXES = {".md", ".markdown", ".txt", ".pdf", ".docx"}
-# Tabular files are refused, not chunked: flattening rows to text destroys
-# queryability (no COUNT/filter/column semantics) and doc_search's top-K
-# sample masquerades as coverage. A row-record ingest layer is deferred
-# post-v0.2 (see v0.2-release-plan.md → "Structured sources get a row layer").
-_TABULAR_SUFFIXES = {".xlsx", ".xls", ".csv"}
+_SUPPORTED_SUFFIXES = {".md", ".markdown", ".txt", ".pdf", ".docx", ".csv", ".xlsx"}
+# .xls (legacy binary) stays refused — openpyxl can't read it and an
+# approximated conversion would misreport the corpus. CSV/XLSX are supported
+# through the row layer in knowledge/tabular.py (W4).
+_TABULAR_SUFFIXES = {".xls"}
 
 
 def _check_supported(file_name: str) -> None:
     suffix = Path(file_name).suffix.lower()
     if suffix in _TABULAR_SUFFIXES:
         raise HTTPException(
-            status_code=400,
-            detail=(
-                "Tabular files are not indexed yet — rows need a queryable "
-                "layer, not text chunks (deferred)"
-            ),
+            status_code=400, detail="Legacy .xls is not supported — save as .xlsx or .csv first"
         )
     if suffix not in _SUPPORTED_SUFFIXES:
         raise HTTPException(status_code=400, detail="Unsupported document format")
@@ -85,6 +80,7 @@ async def _stream_upload(file: UploadFile, target: Path) -> int:
 
 class IngestRequest(BaseModel):
     path: str = Field(min_length=1, max_length=4096)
+    session_id: str | None = None
 
 
 class SearchRequest(BaseModel):
@@ -288,6 +284,232 @@ async def get_scope_documents(
     }
 
 
+_CHUNK_PREVIEW_CHARS = 400
+
+
+def _corpus_version(document: Document) -> str:
+    """Marker that changes whenever the document's chunk corpus mutates —
+    re-ingest/reindex bumps ``indexed_at``; chunk rows carry no timestamps."""
+    stamp = document.indexed_at.isoformat() if document.indexed_at else "pending"
+    return f"{document.content_hash}:{stamp}"
+
+
+@router.get("/scopes/{scope}/documents/{document_id}/chunks")
+async def get_document_chunks(
+    scope: str,
+    document_id: str,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+    parent_id: str | None = None,
+    cursor: str | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+) -> dict:
+    """Bounded, cursor-paged inspection of a document's persisted chunks.
+
+    ``parent_id`` loads one branch lazily; absent = top level (parents and
+    flat chunks). The cursor pins a corpus version — a re-ingested document
+    rejects stale pages with 409 instead of mixing corpora.
+    """
+    agent_id = await _resolve_scope(scope, db)
+    document = await db.scalar(
+        select(Document).where(Document.id == document_id, Document.agent_id == agent_id)
+    )
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    version = _corpus_version(document)
+    cursor_seq: int | None = None
+    if cursor:
+        try:
+            cursor_version, raw_seq = cursor.rsplit(":", 1)
+            cursor_seq = int(raw_seq)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Malformed cursor") from None
+        if cursor_version != version:
+            raise HTTPException(
+                status_code=409,
+                detail="Document was re-indexed — reload the inspection",
+            )
+
+    query = select(DocumentChunk).where(DocumentChunk.document_id == document_id)
+    if parent_id:
+        parent = await db.get(DocumentChunk, parent_id)
+        if parent is None or parent.document_id != document_id:
+            raise HTTPException(status_code=404, detail="Chunk parent not found")
+        query = query.where(DocumentChunk.parent_id == parent_id)
+    else:
+        query = query.where(DocumentChunk.parent_id.is_(None))
+    if cursor_seq is not None:
+        query = query.where(DocumentChunk.seq > cursor_seq)
+
+    rows = list(
+        (await db.execute(query.order_by(DocumentChunk.seq).limit(limit + 1))).scalars().all()
+    )
+    next_cursor = None
+    if len(rows) > limit:
+        rows = rows[:limit]
+        next_cursor = f"{version}:{rows[-1].seq}"
+
+    # Children exist? One grouped count — no N+1 when rendering chevrons.
+    has_children: set[str] = set()
+    if rows:
+        counts = await db.execute(
+            select(DocumentChunk.parent_id, func.count(DocumentChunk.id))
+            .where(
+                DocumentChunk.document_id == document_id,
+                DocumentChunk.parent_id.in_([r.id for r in rows]),
+            )
+            .group_by(DocumentChunk.parent_id)
+        )
+        has_children = {pid for pid, _ in counts.all() if pid}
+
+    items = []
+    for row in rows:
+        text = row.text or ""
+        items.append(
+            {
+                "id": row.id,
+                "kind": row.kind,
+                "parent_id": row.parent_id,
+                "seq": row.seq,
+                "heading_path": json.loads(row.heading_path or "[]"),
+                "page_number": row.page_number,
+                "source_location": row.source_location,
+                "block_type": row.block_type,
+                "token_count": row.token_count,
+                "has_children": row.id in has_children,
+                "preview": text[:_CHUNK_PREVIEW_CHARS],
+                "preview_truncated": len(text) > _CHUNK_PREVIEW_CHARS,
+            }
+        )
+
+    return {
+        "document_id": document.id,
+        "corpus_version": version,
+        "status": document.status,
+        "chunk_count": await _document_chunk_count(db, document_id),
+        "preview_chars": _CHUNK_PREVIEW_CHARS,
+        "items": items,
+        "next_cursor": next_cursor,
+    }
+
+
+async def _scoped_document(db: AsyncSession, scope: str, document_id: str) -> Document:
+    agent_id = await _resolve_scope(scope, db)
+    document = await db.scalar(
+        select(Document).where(Document.id == document_id, Document.agent_id == agent_id)
+    )
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return document
+
+
+@router.get("/scopes/{scope}/documents/{document_id}/sheets")
+async def get_document_sheets(
+    scope: str,
+    document_id: str,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """List parsed sheets (headers, kinds, warnings) for a tabular document."""
+    document = await _scoped_document(db, scope, document_id)
+    sheets = list(
+        (
+            await db.execute(
+                select(DocumentSheet)
+                .where(DocumentSheet.document_id == document.id)
+                .order_by(DocumentSheet.sheet_index)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return {
+        "document_id": document.id,
+        "corpus_version": _corpus_version(document),
+        "sheets": [
+            {
+                "id": s.id,
+                "name": s.name,
+                "sheet_index": s.sheet_index,
+                "row_count": s.row_count,
+                "columns": json.loads(s.columns_json or "[]"),
+                "warnings": json.loads(s.warnings_json or "[]"),
+            }
+            for s in sheets
+        ],
+    }
+
+
+@router.get("/scopes/{scope}/documents/{document_id}/rows")
+async def get_document_rows(
+    scope: str,
+    document_id: str,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+    sheet: str | None = None,
+    cursor: str | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+) -> dict:
+    """Bounded, corpus-versioned row inspection — same cursor contract as
+    the chunks endpoint (stale cursor → 409)."""
+    document = await _scoped_document(db, scope, document_id)
+    version = _corpus_version(document)
+    after_row = 0
+    if cursor:
+        try:
+            cursor_version, raw = cursor.rsplit(":", 1)
+            after_row = int(raw)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Malformed cursor") from None
+        if cursor_version != version:
+            raise HTTPException(
+                status_code=409,
+                detail="Document was re-indexed — reload the inspection",
+            )
+
+    sheet_q = select(DocumentSheet).where(DocumentSheet.document_id == document.id)
+    if sheet:
+        sheet_q = sheet_q.where(DocumentSheet.name == sheet)
+    sheets = list((await db.execute(sheet_q.order_by(DocumentSheet.sheet_index))).scalars())
+    if not sheets:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Sheet not found: '{sheet}'" if sheet else "No sheets persisted",
+        )
+    if len(sheets) > 1:
+        raise HTTPException(status_code=400, detail="Multiple sheets — pass 'sheet'")
+
+    target = sheets[0]
+    rows = list(
+        (
+            await db.execute(
+                select(DocumentRow)
+                .where(DocumentRow.sheet_id == target.id, DocumentRow.row_number > after_row)
+                .order_by(DocumentRow.row_number)
+                .limit(limit + 1)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    next_cursor = None
+    if len(rows) > limit:
+        rows = rows[:limit]
+        next_cursor = f"{version}:{rows[-1].row_number}"
+    return {
+        "document_id": document.id,
+        "corpus_version": version,
+        "sheet": target.name,
+        "columns": json.loads(target.columns_json or "[]"),
+        "items": [
+            {"row_number": r.row_number, "coord": r.coord, "cells": json.loads(r.cells_json)}
+            for r in rows
+        ],
+        "next_cursor": next_cursor,
+    }
+
+
 @router.post("/scopes/{scope}/documents/{document_id}/reindex")
 async def reindex_scope_document(
     scope: str,
@@ -408,8 +630,14 @@ async def ingest_workspace_file(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Copy and index an existing agent workspace file into the shared Vault."""
-    workspace = Path(WorkspaceManager().get_workspace_path(agent_id)).resolve()
-    source = Path(WorkspaceManager().validate_path(str(workspace), request.path))
+    wm = WorkspaceManager()
+    try:
+        workspace = (await wm.resolve_api_root(db, agent_id, request.session_id)).resolve()
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Session not found") from None
+    except WorkspaceAmbiguousError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    source = Path(wm.validate_path(str(workspace), request.path))
     if not source.is_file():
         raise HTTPException(status_code=400, detail="Document does not exist")
     _check_supported(source.name)

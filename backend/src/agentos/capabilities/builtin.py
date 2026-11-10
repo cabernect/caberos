@@ -23,7 +23,8 @@ from .tools.browser import (
 from .tools.catalog import capabilities_load, capabilities_search
 from .tools.datetime_tool import datetime_now
 from .tools.file import read_file, search_files, write_file
-from .tools.knowledge import doc_inspect, doc_list, doc_search
+from .tools.knowledge import doc_inspect, doc_list, doc_query_rows, doc_search
+from .tools.media import image_edit, image_generate
 from .tools.memory import (
     memory_query_facts,
     memory_recall,
@@ -360,6 +361,74 @@ def register_builtin_capabilities() -> None:
         )
     )
 
+    registry.register(
+        CapabilityDef(
+            name="doc_query_rows",
+            effects=frozenset({"read"}),
+            kind="tool",
+            description=(
+                "Query rows of a CSV/XLSX document in the Knowledge Vault exactly: "
+                "allowlisted filters (eq, ne, lt, lte, gt, gte, contains), aggregates "
+                "(count, sum, min, max) over the complete matching set, and paged rows "
+                "with source coordinates. Use this for 'all rows where…', counts, or "
+                "totals — doc_search only samples excerpts and cannot answer "
+                "complete-set questions."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "document_id": {
+                        "type": "string",
+                        "description": "Document ID from doc_search/doc_list",
+                    },
+                    "sheet": {
+                        "type": "string",
+                        "description": "Sheet name (required when the document has several)",
+                    },
+                    "filters": {
+                        "type": "array",
+                        "description": "AND-combined predicates on columns (id or unique label)",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "column": {"type": "string"},
+                                "op": {
+                                    "type": "string",
+                                    "enum": ["eq", "ne", "lt", "lte", "gt", "gte", "contains"],
+                                },
+                                "value": {},
+                            },
+                            "required": ["column", "op", "value"],
+                        },
+                    },
+                    "aggregates": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "op": {"type": "string", "enum": ["count", "sum", "min", "max"]},
+                                "column": {"type": "string"},
+                            },
+                            "required": ["op"],
+                        },
+                    },
+                    "order": {"type": "string", "enum": ["asc", "desc"], "default": "asc"},
+                    "limit": {"type": "integer", "default": 50, "maximum": 200},
+                    "after_row": {
+                        "type": "integer",
+                        "description": "Continue after this source row (prior next_cursor)",
+                        "default": 0,
+                    },
+                },
+                "required": ["document_id"],
+            },
+            egress=False,
+            require_approval=False,
+            subject_scoped=False,
+            execute=doc_query_rows,
+        )
+    )
+
     # --- Web ops ---
 
     registry.register(
@@ -367,8 +436,10 @@ def register_builtin_capabilities() -> None:
             name="web_search",
             effects=frozenset({"read"}),
             kind="tool",
-            description="Search the web using DuckDuckGo. Returns titles, URLs, and snippets. "
-            "Use this to find current information, look up documentation, or research topics.",
+            description="Search the web. Returns titles, URLs, and snippets. Uses the "
+            "operator-configured search provider (Settings → Tools); falls back to "
+            "DuckDuckGo when none is bound. Use this to find current information, "
+            "look up documentation, or research topics.",
             parameters_schema={
                 "type": "object",
                 "properties": {
@@ -1010,25 +1081,17 @@ def register_builtin_capabilities() -> None:
             effects=frozenset({"read"}),
             kind="tool",
             description=(
-                "Search the capabilities permitted for this run by name or description. "
-                "Returns compact metadata only; use capabilities_load to make selected "
-                "tool schemas available for the next model turn."
+                "Search the capabilities permitted for this run by name, server name, "
+                "or description — covers built-in tools, memory tools, and MCP server "
+                "tools alike. Returns compact metadata only; use capabilities_load to "
+                "make selected tool schemas available for the next model turn."
             ),
             parameters_schema={
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Optional text to match against capability names and descriptions",
-                    },
-                    "server": {
-                        "type": "string",
-                        "description": "Optional MCP server name or ID filter",
-                    },
-                    "kind": {
-                        "type": "string",
-                        "enum": ["tool", "memory", "mcp_tool"],
-                        "description": "Optional capability kind filter",
+                        "description": "Text to match against capability names, server names, and descriptions",
                     },
                     "limit": {
                         "type": "integer",
@@ -1229,5 +1292,63 @@ def register_builtin_capabilities() -> None:
             require_approval=False,
             subject_scoped=False,
             execute=artifact_restore,
+        )
+    )
+
+    registry.register(
+        CapabilityDef(
+            name="image_generate",
+            effects=frozenset({"workspace_write"}),
+            kind="tool",
+            description="Generate one image from a text prompt and save it as a "
+            "tracked workspace artifact. To edit an existing workspace image, "
+            "use image_edit instead. Requires a configured image binding "
+            "(Settings → Tools) — provider, model, size and quality are "
+            "operator-set, not call arguments.",
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "prompt": {
+                        "type": "string",
+                        "description": "Image prompt (max 4000 chars)",
+                    },
+                },
+                "required": ["prompt"],
+            },
+            egress=True,
+            require_approval=True,
+            subject_scoped=False,
+            execute=image_generate,
+        )
+    )
+
+    registry.register(
+        CapabilityDef(
+            name="image_edit",
+            effects=frozenset({"workspace_write"}),
+            kind="tool",
+            description="Edit a workspace image (e.g. an attachment or prior "
+            "artifact) following an instruction, and save the result as a "
+            "tracked workspace artifact. For fresh generation without a source "
+            "image, use image_generate instead. Requires a configured image "
+            "binding (Settings → Tools).",
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "prompt": {
+                        "type": "string",
+                        "description": "Edit instruction (max 4000 chars)",
+                    },
+                    "source_image": {
+                        "type": "string",
+                        "description": "Workspace-relative path to the image to edit",
+                    },
+                },
+                "required": ["prompt", "source_image"],
+            },
+            egress=True,
+            require_approval=True,
+            subject_scoped=False,
+            execute=image_edit,
         )
     )

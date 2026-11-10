@@ -1,11 +1,19 @@
 """Global app settings API — runtime toggles like YOLO mode."""
 
+import asyncio
+import json
+import uuid
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import require_operator
 from ..config import env_pinned, settings
-from ..models.operator import Operator
+from ..db import get_db
+from ..models.operator import Operator, OperatorAuditLog
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -40,6 +48,87 @@ async def set_yolo_mode(
         )
     persist_setting("yolo_mode", req.yolo_mode)
     return YoloModeOut(yolo_mode=settings.yolo_mode)
+
+
+# --- Network policy --------------------------------------------------------
+
+
+class NetworkSettingsOut(BaseModel):
+    web_private_allowlist: list[str]
+    pinned: bool
+
+
+class NetworkSettingsUpdate(BaseModel):
+    web_private_allowlist: list[str]
+
+
+def _validate_allowlist(entries: list[str]) -> list[str]:
+    """Normalize entries to bare hostnames/IP literals — no scheme or path.
+
+    An entry names one exact destination the agent's web_fetch may reach on
+    a private address; it is not a URL and grants no subdomains.
+    """
+    import ipaddress
+    import re
+
+    if len(entries) > 50:
+        raise HTTPException(status_code=422, detail="At most 50 exact private hosts are supported.")
+    cleaned: list[str] = []
+    for raw in entries:
+        entry = raw.strip().lower().rstrip(".")
+        if not entry or len(entry) > 253 or "*" in entry:
+            raise HTTPException(
+                status_code=422,
+                detail="Enter an exact hostname or IP; wildcards are not supported.",
+            )
+        try:
+            ipaddress.ip_address(entry)
+            cleaned.append(entry)
+            continue
+        except ValueError:
+            pass
+        if re.fullmatch(
+            r"[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?"
+            r"(?:\.[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?)*",
+            entry,
+        ):
+            cleaned.append(entry)
+            continue
+        raise HTTPException(
+            status_code=422,
+            detail="Enter a bare hostname or IP, without credentials, scheme, port, or path.",
+        )
+    return cleaned
+
+
+@router.get("/network")
+async def get_network_settings(
+    operator: Operator = Depends(require_operator),
+) -> NetworkSettingsOut:
+    return NetworkSettingsOut(
+        web_private_allowlist=list(settings.web_private_allowlist),
+        pinned=env_pinned("web_private_allowlist"),
+    )
+
+
+@router.put("/network")
+async def set_network_settings(
+    req: NetworkSettingsUpdate,
+    operator: Operator = Depends(require_operator),
+) -> NetworkSettingsOut:
+    from ..config import persist_setting
+
+    if env_pinned("web_private_allowlist"):
+        raise HTTPException(
+            status_code=409,
+            detail="web_private_allowlist is pinned by AGENTOS_WEB_PRIVATE_ALLOWLIST — "
+            "remove it from the environment or .env to manage it here",
+        )
+    persist_setting("web_private_allowlist", _validate_allowlist(req.web_private_allowlist))
+    return NetworkSettingsOut(
+        web_private_allowlist=list(settings.web_private_allowlist),
+        pinned=False,
+    )
 
 
 # --- Browser runtime ------------------------------------------------------
@@ -193,3 +282,228 @@ async def refresh_model_catalog(
         "scheduled": True,
         **_catalog_status().model_dump(),
     }
+
+
+# --- Global tool bindings (W5) ----------------------------------------------
+# How supported tools execute — engine options or provider/model — kept
+# separate from per-agent capability authority. No provider calls happen
+# here: validation is local-only by contract.
+
+from ..capabilities.bindings import (  # noqa: E402
+    BINDING_SPECS,
+    BindingSpec,
+    resolve_binding,
+    spec_for,
+    validate_options,
+)
+from ..models.provider import Provider  # noqa: E402
+from ..models.tool_binding import ToolBinding  # noqa: E402
+from ..providers.service_types import SEARCH_PROVIDER_TYPES, SERVICE_PROVIDER_TYPES  # noqa: E402
+from ..sandbox.base import (  # noqa: E402
+    LOCAL_BACKEND_OSES,
+    _local_makers,
+    backend_catalog,
+)
+
+
+def _options_schema(spec: BindingSpec) -> list[dict[str, Any]]:
+    return [
+        {
+            "name": f.name,
+            "kind": f.kind,
+            "label": f.label,
+            "default": f.default,
+            "choices": list(f.choices),
+            "required": f.required,
+            "backends": list(f.backends),
+        }
+        for f in spec.option_fields
+    ]
+
+
+async def _binding_out(db: AsyncSession, spec: BindingSpec) -> dict[str, Any]:
+    resolution = await resolve_binding(db, spec.key)
+    provider = resolution.provider
+    # The Terminal card also shows per-backend readiness — OS support,
+    # availability, isolation strength — computed separately from binding
+    # state. Probing can spawn subprocesses, so it runs off the loop.
+    backends = None
+    if spec.key == "exec.terminal":
+        backends = [
+            {k: v for k, v in vars(row).items()} for row in await asyncio.to_thread(backend_catalog)
+        ]
+    return {
+        "key": spec.key,
+        "title": spec.title,
+        "description": spec.description,
+        "kind": spec.kind,
+        "implemented": spec.implemented,
+        "planned_note": spec.planned_note,
+        "capability_names": list(spec.capability_names),
+        "service_types": list(spec.service_types) or None,
+        "state": resolution.state,
+        "ready": resolution.ready,
+        "reason": resolution.reason,
+        "options": resolution.options,
+        "options_schema": _options_schema(spec),
+        "backends": backends,
+        "model_modalities": (list(spec.model_modalities) if spec.model_modalities else None),
+        "binding": (
+            {
+                "provider_id": resolution.binding.provider_id,
+                "provider_name": provider.name if provider else None,
+                "provider_type": provider.type if provider else None,
+                "model": resolution.binding.model,
+                "revision": resolution.binding.revision,
+                "updated_at": resolution.binding.updated_at.isoformat()
+                if resolution.binding.updated_at
+                else None,
+            }
+            if resolution.binding
+            else None
+        ),
+    }
+
+
+@router.get("/tools")
+async def list_tool_bindings(
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Every bindable tool with resolution state — configured, ready or
+    unimplemented reasons kept separate. Never returns secrets."""
+    return {
+        "tools": [await _binding_out(db, spec) for spec in BINDING_SPECS],
+    }
+
+
+class ToolBindingUpdate(BaseModel):
+    provider_id: str | None = None
+    model: str | None = None
+    options: dict[str, Any] | None = None
+    # Optimistic concurrency — required only when a binding already exists.
+    expected_revision: int | None = None
+
+
+@router.put("/tools/{key}")
+async def put_tool_binding(
+    key: str,
+    req: ToolBindingUpdate,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    spec = spec_for(key)
+    if spec is None:
+        raise HTTPException(status_code=404, detail=f"unknown tool binding: {key}")
+    if not spec.implemented:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{spec.title} is not implemented in this release — "
+            "there is nothing to bind yet",
+        )
+
+    provider: Provider | None = None
+    try:
+        options = validate_options(spec, req.options or {})
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    # Local validation only (W11.2): an explicit terminal backend must be one
+    # this OS can construct — a foreign pick could never work, so refuse the
+    # save instead of letting the first shell call discover it.
+    if key == "exec.terminal":
+        pick = options.get("backend") or "auto"
+        if pick != "auto" and pick not in _local_makers():
+            raise HTTPException(
+                status_code=422,
+                detail=f"The {pick} backend is native to "
+                f"{LOCAL_BACKEND_OSES.get(pick, 'another platform')} — "
+                "it cannot run on this machine.",
+            )
+    service_search = key == "search.web" and options.get("backend") in SEARCH_PROVIDER_TYPES
+    if spec.kind == "engine" and not service_search:
+        if req.provider_id:
+            raise HTTPException(status_code=422, detail="engine bindings do not take a provider")
+        if req.model:
+            raise HTTPException(status_code=422, detail="engine bindings do not take a model")
+    else:
+        if not req.provider_id:
+            raise HTTPException(status_code=422, detail="a provider is required for this tool")
+        provider = await db.get(Provider, req.provider_id)
+        if provider is None:
+            raise HTTPException(status_code=422, detail="provider not found")
+        if spec.service_types:
+            if provider.type not in spec.service_types:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Select a provider compatible with this tool.",
+                )
+        elif service_search and provider.type != options["backend"]:
+            raise HTTPException(
+                status_code=422, detail="Select a connection matching the search backend."
+            )
+        elif not service_search and provider.type in SERVICE_PROVIDER_TYPES:
+            raise HTTPException(
+                status_code=422, detail="Select a model provider, not a tool service."
+            )
+        if service_search and req.model:
+            raise HTTPException(status_code=422, detail="Search APIs do not take a model.")
+        if not service_search and (req.model is None or not req.model.strip()):
+            raise HTTPException(status_code=422, detail="a model name is required")
+
+    binding = await db.scalar(select(ToolBinding).where(ToolBinding.key == key))
+    if binding is not None:
+        if req.expected_revision is not None and req.expected_revision != binding.revision:
+            raise HTTPException(
+                status_code=409,
+                detail=f"binding changed since you loaded it "
+                f"(revision {binding.revision}) — reload and retry",
+            )
+        binding.provider_id = provider.id if provider else None
+        binding.model = req.model.strip() if req.model else ""
+        binding.options = json.dumps(options)
+        binding.revision += 1
+    else:
+        binding = ToolBinding(
+            id=str(uuid.uuid4()),
+            key=key,
+            provider_id=provider.id if provider else None,
+            model=req.model.strip() if req.model else "",
+            options=json.dumps(options),
+            revision=1,
+        )
+        db.add(binding)
+
+    db.add(
+        OperatorAuditLog(
+            id=str(uuid.uuid4()),
+            operator_id=operator.id,
+            action="tool_binding.update",
+            target=f"{key} rev {binding.revision}",
+        )
+    )
+    await db.commit()
+    return await _binding_out(db, spec)
+
+
+@router.delete("/tools/{key}")
+async def reset_tool_binding(
+    key: str,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    spec = spec_for(key)
+    if spec is None:
+        raise HTTPException(status_code=404, detail=f"unknown tool binding: {key}")
+    binding = await db.scalar(select(ToolBinding).where(ToolBinding.key == key))
+    if binding is not None:
+        await db.delete(binding)
+        db.add(
+            OperatorAuditLog(
+                id=str(uuid.uuid4()),
+                operator_id=operator.id,
+                action="tool_binding.reset",
+                target=key,
+            )
+        )
+        await db.commit()
+    return await _binding_out(db, spec)

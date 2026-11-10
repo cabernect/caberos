@@ -431,7 +431,7 @@ async def test_explicit_resume_reopens_closed_session(db, monkeypatch, tmp_path)
 
     ws_dir = tmp_path / "ws"
     ws_dir.mkdir(exist_ok=True)
-    monkeypatch.setattr(WorkspaceManager, "create_workspace", lambda self, aid: ws_dir)
+    monkeypatch.setattr(WorkspaceManager, "get_workspace_path", lambda self, aid: ws_dir)
     from agentos.config import settings
 
     monkeypatch.setattr(settings, "agent_home_root", tmp_path / "agents")
@@ -472,7 +472,7 @@ async def test_normal_run_does_not_trigger_extraction(db, monkeypatch, tmp_path)
     await db.commit()
     ws_dir = tmp_path / "ws"
     ws_dir.mkdir(exist_ok=True)
-    monkeypatch.setattr(WorkspaceManager, "create_workspace", lambda self, aid: ws_dir)
+    monkeypatch.setattr(WorkspaceManager, "get_workspace_path", lambda self, aid: ws_dir)
     from agentos.config import settings
 
     monkeypatch.setattr(settings, "agent_home_root", tmp_path / "agents")
@@ -890,7 +890,7 @@ async def test_lazy_close_failure_does_not_starve_or_break_run(
     monkeypatch.setattr(settings, "agent_home_root", tmp_path / "agents")
     from agentos.sandbox.workspace import WorkspaceManager
 
-    monkeypatch.setattr(WorkspaceManager, "create_workspace", lambda self, aid: tmp_path / "ws")
+    monkeypatch.setattr(WorkspaceManager, "get_workspace_path", lambda self, aid: tmp_path / "ws")
     (tmp_path / "ws").mkdir(exist_ok=True)
 
     # Lazy closes spawn background tasks — the in-memory test engine shares

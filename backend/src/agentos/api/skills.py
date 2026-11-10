@@ -332,12 +332,21 @@ async def _dashboard_session(
         )
         db.add(contact)
         await db.flush()
+    # Same pin as any other session — builder sessions work in the agent's
+    # current default workspace.
+    from ..agent_service import get_active_config
+    from ..sandbox.workspace import WorkspaceManager
+
+    cfg = await get_active_config(db, agent_id)
     session = Session(
         id=str(uuid.uuid4()),
         contact_id=contact.id,
         agent_id=agent_id,
         status="active",
         title=title,
+        workspace_path=str(
+            WorkspaceManager().resolve_agent_root(agent_id, cfg.workspace if cfg else "")
+        ),
     )
     db.add(session)
     await db.flush()

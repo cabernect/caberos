@@ -34,6 +34,9 @@ class Run(Base, IdMixin):
     compacted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     context_breakdown: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
     loaded_capabilities: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    # Execution provenance — the workspace root this run actually used
+    # (copied from the session pin at start). NULL on legacy rows.
+    workspace_path: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class Message(Base, IdMixin):

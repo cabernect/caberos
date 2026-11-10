@@ -45,12 +45,16 @@ import type {
   SkillInfo,
   EffectiveSkill,
   SpendSummary,
+  KnowledgeChunksPage,
   KnowledgeDocument,
   KnowledgeEmbeddingResource,
   KnowledgeGeneration,
   KnowledgeIndexOverview,
   KnowledgeResult,
+  KnowledgeRowsPage,
   KnowledgeScope,
+  KnowledgeSheet,
+  ToolBindingInfo,
   WorkspaceEntry,
   InstallJob,
   InstallPlan,
@@ -65,6 +69,8 @@ export interface PreviewSource {
   revisionId?: string;
   /** Skill revision number (skill preview endpoints only). */
   revision?: number;
+  /** Session pin — the workspace root this file lives under. */
+  sessionId?: string;
 }
 
 /** Operator's IANA zone — endpoints that bucket by calendar day want local days. */
@@ -77,6 +83,7 @@ function sourceQuery(opts: PreviewSource): string {
   if (opts.artifactId) params.set("artifact_id", opts.artifactId);
   if (opts.revisionId) params.set("revision_id", opts.revisionId);
   if (opts.revision != null) params.set("revision", String(opts.revision));
+  if (opts.sessionId) params.set("session_id", opts.sessionId);
   return params.toString();
 }
 
@@ -457,6 +464,7 @@ export const api = {
     soul?: string;
     persona?: string;
     task?: string;
+    workspace?: string;
   }) =>
     request<{ id: string; name: string; enabled: boolean }>("/api/agents", {
       method: "POST",
@@ -475,6 +483,7 @@ export const api = {
       task?: string;
       sandbox_mode?: "strict" | "open";
       yolo_mode?: boolean;
+      workspace?: string;
       capabilities?: CapabilityGrant[] | null;
       limits?: Limits;
       heartbeat?: HeartbeatConfig;
@@ -598,7 +607,7 @@ export const api = {
     request<{ ok: boolean }>(`/api/agents/${id}/skills/${skillName}`, {
       method: "DELETE",
     }),
-  listWorkspace: (id: string, path?: string) =>
+  listWorkspace: (id: string, path?: string, sessionId?: string) =>
     request<{
       type: "dir" | "file";
       path: string;
@@ -606,11 +615,11 @@ export const api = {
       content?: string;
       size?: number;
     }>(
-      `/api/agents/${id}/workspace${path ? `?path=${encodeURIComponent(path)}` : ""}`,
+      `/api/agents/${id}/workspace?${sourceQuery({ path, sessionId })}`,
     ),
-  deleteWorkspaceEntry: (id: string, path: string) =>
+  deleteWorkspaceEntry: (id: string, path: string, sessionId?: string) =>
     request<{ deleted: boolean; path: string }>(
-      `/api/agents/${id}/workspace?path=${encodeURIComponent(path)}`,
+      `/api/agents/${id}/workspace?${sourceQuery({ path, sessionId })}`,
       { method: "DELETE" },
     ),
 
@@ -668,10 +677,13 @@ export const api = {
       identical: boolean;
     }>(`/api/agents/${id}/artifacts/${artifactId}/compare?${qs.toString()}`);
   },
-  adoptWorkspaceFile: (id: string, path: string) =>
+  adoptWorkspaceFile: (id: string, path: string, sessionId?: string) =>
     request<{ artifact_id: string; revision_id: string; path: string }>(
       `/api/agents/${id}/artifacts/adopt`,
-      { method: "POST", body: JSON.stringify({ path }) },
+      {
+        method: "POST",
+        body: JSON.stringify({ path, session_id: sessionId }),
+      },
     ),
   // Composer attachment previews (W3c) — ephemeral, nothing persisted.
   previewAttachment: async (
@@ -760,6 +772,55 @@ export const api = {
   deleteKnowledgeScope: (scope: string, documentId: string) =>
     request<void>(`/api/knowledge/scopes/${scope}/documents/${documentId}`, {
       method: "DELETE",
+    }),
+  listDocumentChunks: (
+    scope: string,
+    documentId: string,
+    opts: { parentId?: string; cursor?: string; limit?: number } = {},
+  ) => {
+    const params = new URLSearchParams();
+    if (opts.parentId) params.set("parent_id", opts.parentId);
+    if (opts.cursor) params.set("cursor", opts.cursor);
+    if (opts.limit) params.set("limit", String(opts.limit));
+    const suffix = params.size ? `?${params}` : "";
+    return request<KnowledgeChunksPage>(
+      `/api/knowledge/scopes/${scope}/documents/${documentId}/chunks${suffix}`,
+    );
+  },
+  listDocumentSheets: (scope: string, documentId: string) =>
+    request<{ corpus_version: string; sheets: KnowledgeSheet[] }>(
+      `/api/knowledge/scopes/${scope}/documents/${documentId}/sheets`,
+    ),
+  listDocumentRows: (
+    scope: string,
+    documentId: string,
+    opts: { sheet?: string; cursor?: string; limit?: number } = {},
+  ) => {
+    const params = new URLSearchParams();
+    if (opts.sheet) params.set("sheet", opts.sheet);
+    if (opts.cursor) params.set("cursor", opts.cursor);
+    if (opts.limit) params.set("limit", String(opts.limit));
+    const suffix = params.size ? `?${params}` : "";
+    return request<KnowledgeRowsPage>(
+      `/api/knowledge/scopes/${scope}/documents/${documentId}/rows${suffix}`,
+    );
+  },
+
+  // Local filesystem browsing for folder pickers (directory names only)
+  listDirectories: (path?: string, hidden = false) => {
+    const params = new URLSearchParams();
+    if (path) params.set("path", path);
+    if (hidden) params.set("hidden", "true");
+    return request<{
+      path: string;
+      parent: string | null;
+      directories: { name: string; path: string }[];
+      truncated: boolean;
+    }>(`/api/fs/directories${params.size ? `?${params}` : ""}`);
+  },
+  pickDirectory: () =>
+    request<{ path: string | null }>("/api/fs/pick-directory", {
+      method: "POST",
     }),
 
   // Knowledge index (RAG v2 — semantic index lifecycle)
@@ -923,7 +984,7 @@ export const api = {
   listSessions: (agentId: string) =>
     request<SessionInfo[]>(`/api/chat/${agentId}/sessions`),
   createSession: (agentId: string, title?: string) =>
-    request<{ id: string; title: string; status: string }>(
+    request<{ id: string; title: string; status: string; workspace_path?: string | null }>(
       `/api/chat/${agentId}/sessions`,
       { method: "POST", body: JSON.stringify({ title }) },
     ),
@@ -952,6 +1013,7 @@ export const api = {
       middle_count: number;
       tail_count: number;
       summary: string | null;
+      error: string | null;
     }>(`/api/chat/${agentId}/compact`, {
       method: "POST",
       body: JSON.stringify({ session_id: sessionId }),
@@ -1089,7 +1151,8 @@ export const api = {
     ),
 
   // Providers
-  listProviders: () => request<Provider[]>("/api/providers"),
+  listProviders: (scope?: "model" | "search" | "speech" | "all") =>
+    request<Provider[]>(`/api/providers${scope ? `?scope=${scope}` : ""}`),
   createProvider: (
     data: Partial<Provider> & {
       api_key?: string;
@@ -1104,6 +1167,7 @@ export const api = {
     id: string,
     data: Partial<Provider> & {
       api_key?: string;
+      remove_api_key?: boolean;
       credentials?: Record<string, string>;
     },
   ) =>
@@ -1113,6 +1177,11 @@ export const api = {
     }),
   deleteProvider: (id: string) =>
     request<{ status: string }>(`/api/providers/${id}`, { method: "DELETE" }),
+  testSearchProvider: (id: string) =>
+    request<{ ok: boolean; error: string | null }>(`/api/providers/${id}/test-search`, {
+      method: "POST",
+      body: JSON.stringify({ consent: true }),
+    }),
   /** Real 1-token probe against the provider (D40) — validates the
    * credential + model routing; every probe lands on the model-call ledger. */
   validateProviderModel: (id: string, modelName?: string) =>
@@ -1151,6 +1220,7 @@ export const api = {
         context_window_tokens: number | null;
         supports_thinking?: boolean | null;
         supports_vision?: boolean | null;
+        output_modalities?: string[] | null;
       }[];
     }>(
       `/api/providers/${id}/catalog-models${catalogProvider ? `?catalog_provider=${encodeURIComponent(catalogProvider)}` : ""}`,
@@ -1404,9 +1474,11 @@ export const api = {
     command?: string;
     args?: string[];
     url?: string;
+    headers?: Record<string, string>;
     env_template?: Record<string, string>;
     tool_filter?: string[];
     enabled?: boolean;
+    auth?: "none" | "api_key" | "oauth";
   }) =>
     request<{ id: string; name: string; connected: boolean }>(
       "/api/mcp/servers",
@@ -1443,6 +1515,7 @@ export const api = {
       require_approval?: boolean;
       enabled?: boolean;
       tool_filter?: string[] | null;
+      auth?: "none" | "api_key" | "oauth";
     },
   ) =>
     request<{
@@ -1506,7 +1579,7 @@ export const api = {
   },
   listMcpCatalogCategories: () =>
     request<{ name: string; count: number }[]>("/api/mcp/catalog/categories"),
-  installFromCatalog: (name: string) =>
+  installFromCatalog: (name: string, options?: { api_key?: string }) =>
     request<{
       id: string;
       name: string;
@@ -1515,7 +1588,7 @@ export const api = {
       message: string | null;
     }>("/api/mcp/catalog/install", {
       method: "POST",
-      body: JSON.stringify({ name, enabled: true }),
+      body: JSON.stringify({ name, enabled: true, ...options }),
     }),
 
   // Channels (external messaging — Telegram, Discord, Zalo, ...)
@@ -1645,6 +1718,25 @@ export const api = {
   // Global settings
   getYoloMode: () => request<{ yolo_mode: boolean }>("/api/settings/yolo"),
 
+  // --- Global tool bindings (W5) ---
+  listToolBindings: () =>
+    request<{ tools: ToolBindingInfo[] }>("/api/settings/tools"),
+  updateToolBinding: (
+    key: string,
+    body: {
+      provider_id?: string | null;
+      model?: string | null;
+      options?: Record<string, unknown>;
+      expected_revision?: number | null;
+    },
+  ) =>
+    request<ToolBindingInfo>(`/api/settings/tools/${key}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  resetToolBinding: (key: string) =>
+    request<ToolBindingInfo>(`/api/settings/tools/${key}`, { method: "DELETE" }),
+
   // --- Browser (W4) ---
   getBrowserSettings: () =>
     request<{
@@ -1665,6 +1757,15 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ binary_override: binaryOverride }),
     }),
+  getNetworkSettings: () =>
+    request<{ web_private_allowlist: string[]; pinned: boolean }>(
+      "/api/settings/network",
+    ),
+  updateNetworkSettings: (allowlist: string[]) =>
+    request<{ web_private_allowlist: string[]; pinned: boolean }>(
+      "/api/settings/network",
+      { method: "PUT", body: JSON.stringify({ web_private_allowlist: allowlist }) },
+    ),
   installBrowserRuntime: () =>
     request<{
       status: string;
@@ -1741,11 +1842,15 @@ export const api = {
 };
 
 /** PreviewBackend implementations — one per content root. */
-export function workspaceBackend(agentId: string): PreviewBackend {
+export function workspaceBackend(
+  agentId: string,
+  sessionId?: string,
+): PreviewBackend {
+  const pin = (s: PreviewSource): PreviewSource => ({ sessionId, ...s });
   return {
-    preview: (source) => api.previewFile(agentId, source),
-    blob: (source) => api.fetchFileBlob(agentId, source),
-    pdfPage: (page, source) => api.fetchPdfPage(agentId, page, source),
+    preview: (source) => api.previewFile(agentId, pin(source)),
+    blob: (source) => api.fetchFileBlob(agentId, pin(source)),
+    pdfPage: (page, source) => api.fetchPdfPage(agentId, page, pin(source)),
   };
 }
 
@@ -1760,4 +1865,68 @@ export function skillBackend(
     pdfPage: (page, source) =>
       api.fetchSkillPdfPage(skillId, page, { ...source, revision }),
   };
+}
+
+// --- speech (W10 operator actions) ---
+
+export interface SpeechOpStatus {
+  ready: boolean;
+  configured: boolean;
+  adapter: boolean;
+  provider: string | null;
+  provider_type: string | null;
+  model: string;
+  reason: string;
+}
+
+export interface SpeechStatus {
+  stt: SpeechOpStatus;
+  tts: SpeechOpStatus;
+}
+
+let _speechStatus: Promise<SpeechStatus> | null = null;
+
+/** Cached per page-view — status changes when the operator edits Tools. */
+export function getSpeechStatus(): Promise<SpeechStatus> {
+  if (!_speechStatus) {
+    _speechStatus = request<SpeechStatus>("/api/speech/status");
+    _speechStatus.catch(() => {
+      _speechStatus = null;
+    });
+  }
+  return _speechStatus;
+}
+
+/** Read-aloud synthesis for a persisted assistant message → audio bytes. */
+export async function synthesizeSpeech(messageId: string): Promise<Blob> {
+  const base = await baseReady;
+  const resp = await fetch(`${base}/api/speech/synthesize`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ message_id: messageId }),
+  });
+  if (!resp.ok) throw await apiError(resp);
+  return resp.blob();
+}
+
+/** Dictation transcription — recorded blob → transcript. */
+export async function transcribeAudio(file: Blob, filename = "recording.webm"): Promise<{
+  request_id: string;
+  transcript: string;
+  provider: string | null;
+  model: string;
+  audio_seconds: number | null;
+}> {
+  const base = await baseReady;
+  const form = new FormData();
+  form.append("file", file, filename);
+  const resp = await fetch(`${base}/api/speech/transcribe`, {
+    method: "POST",
+    credentials: "include",
+    headers: authHeaders(),
+    body: form,
+  });
+  if (!resp.ok) throw await apiError(resp);
+  return resp.json();
 }

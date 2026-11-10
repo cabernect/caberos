@@ -10,6 +10,7 @@ import asyncio
 import functools
 import http.server
 import json
+import socket
 import sys
 import threading
 from pathlib import Path
@@ -46,9 +47,42 @@ def _serve(tmp_path: Path) -> tuple[http.server.HTTPServer, str]:
     tmp_path.mkdir(parents=True, exist_ok=True)
     (tmp_path / "index.html").write_text(PAGE_HTML)
     handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(tmp_path))
-    httpd = http.server.HTTPServer(("127.0.0.1", 0), handler)
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     return httpd, f"http://127.0.0.1:{httpd.server_port}/index.html"
+
+
+def test_fixture_server_serves_page_with_an_idle_connection(tmp_path, monkeypatch):
+    httpd, _ = _serve(tmp_path)
+    accepted = threading.Event()
+    get_request = httpd.get_request
+
+    def record_accept():
+        connection = get_request()
+        accepted.set()
+        return connection
+
+    monkeypatch.setattr(httpd, "get_request", record_accept)
+    idle = socket.create_connection(httpd.server_address, timeout=1)
+    try:
+        assert accepted.wait(timeout=1)
+        # Chromium can preconnect without sending a request on that connection.
+        with socket.create_connection(httpd.server_address, timeout=1) as active:
+            active.sendall(b"GET /index.html HTTP/1.0\r\nHost: localhost\r\n\r\n")
+            assert b"200 OK" in active.recv(4096)
+    finally:
+        idle.close()
+        httpd.shutdown()
+        httpd.server_close()
+
+
+@pytest.fixture(autouse=True)
+def _allow_loopback_fixtures(monkeypatch):
+    """Local test pages live on 127.0.0.1 — grant the same private-network
+    exception an operator would, so navigate policy admits the fixtures."""
+    from agentos import netpolicy
+
+    monkeypatch.setattr(netpolicy, "private_allowlist", lambda: ["127.0.0.1", "localhost"])
 
 
 # --- unit: observation machinery -------------------------------------------

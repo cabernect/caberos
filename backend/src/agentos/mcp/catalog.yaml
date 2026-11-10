@@ -21,8 +21,13 @@ servers:
     category: search
     description: "AI-powered web search, code search, and company research with semantic understanding."
     transport: http
-    url: https://mcp.exa.ai/mcp
-    auth_type: api_key
+    # ?login is the endpoint that issues the OAuth Bearer challenge —
+    # plain /mcp accepts unauthenticated initialize, so OAuth can't
+    # engage there. API-key users can add the server manually with an
+    # x-api-key header template instead.
+    url: https://mcp.exa.ai/mcp?login
+    auth_type: oauth
+    oauth_scope: "mcp:tools"
     vendor: Exa
     homepage: https://exa.ai/mcp
 
@@ -32,6 +37,8 @@ servers:
     transport: http
     url: https://mcp.tavily.com/mcp/
     auth_type: api_key
+    headers:
+      Authorization: "Bearer {{credential_value}}"
     vendor: Tavily
     homepage: https://tavily.com
 
@@ -269,6 +276,8 @@ servers:
     transport: http
     url: https://mcp.context7.com/mcp
     auth_type: api_key
+    headers:
+      CONTEXT7_API_KEY: "{{credential_value}}"
     vendor: Upstash
     homepage: https://context7.com
 
@@ -368,8 +377,8 @@ servers:
     transport: http
     url: https://api.perplexity.ai/mcp
     auth_type: api_key
-    env_template:
-      PERPLEXITY_API_KEY: "{{credential_value}}"
+    headers:
+      Authorization: "Bearer {{credential_value}}"
     vendor: Perplexity
     homepage: https://github.com/perplexityai/modelcontextprotocol
 

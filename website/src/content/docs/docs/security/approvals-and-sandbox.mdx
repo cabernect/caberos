@@ -138,7 +138,10 @@ File-tool containment applies to CaberOS native file tools. It does not automati
 
 ### Strict mode
 
-The terminal capability selects an OS-specific sandbox backend and requests network-disabled execution.
+The terminal capability selects the local backend configured in
+**Settings → Tools → Terminal** and requests network-disabled execution.
+Auto remains OS-native; an unavailable explicit backend does not fall back to
+open execution. Existing background terminals retain their admitted backend.
 
 ### Open mode
 
@@ -152,14 +155,23 @@ Strict terminal calls use `/usr/bin/sandbox-exec` with a generated profile.
 
 | Resource | Current policy |
 | --- | --- |
-| File reads | Broadly allowed, including host paths |
-| File writes | Denied globally except workspace, `/private/tmp`, `/dev/null`, and `/dev/dtracehelper` |
+| File reads | Runtime reads allowed, then private trees under `/Users`, `/private/var/folders`, and `/private/tmp` denied; the workspace is re-allowed |
+| File writes | Denied outside the workspace, except `/dev/null` |
 | Process execution | Allowed so system and installed tools can run |
 | Process fork | Allowed |
 | Network | Denied for strict terminal calls |
-| Environment | Reduced to a small `PATH`, workspace `HOME`, and temporary directory |
+| Environment | Reduced `PATH`; `HOME`, `TMPDIR`, `TMP`, and `TEMP` point to the workspace |
 
-The important limitation is that macOS strict shell is **not read-isolated to the workspace**. A command can read many host files even though it cannot normally write outside allowed locations or open network connections.
+The profile preserves reads needed by system runtimes; it is not a claim that
+every readable byte is inside the workspace. Private-tree denies narrow host
+access, and availability includes a synthetic workspace/sibling confinement
+self-check. A failed self-check makes strict execution unavailable rather than
+enabling a permissive profile.
+
+The dedicated live Seatbelt test cases require an isolated macOS runner and
+`CABEROS_TEST_SEATBELT_LIVE=1`. Skipping those cases is not proof of enforcement
+on every host. Keep credentials out of the workspace and use a separate
+OS-account/container/VM boundary for higher-risk workloads.
 
 Native `read_file` remains workspace-contained; the broader read behavior applies to commands executed by `terminal`.
 
@@ -290,7 +302,9 @@ Credentials in workspace: none
 YOLO: off
 ```
 
-On macOS, remember that an approved terminal command can read outside the workspace even in strict mode.
+On macOS, strict execution still permits runtime reads outside the workspace,
+but denies the configured private trees. Approval does not grant a read-isolation
+guarantee beyond the installed backend's actual policy.
 
 ## Troubleshooting security decisions
 
@@ -300,7 +314,10 @@ Open the run trace and inspect the denial reason. Check grant, loaded schema, pa
 
 ### A terminal command can read a host file on macOS
 
-This is a documented Seatbelt-profile limitation. Disable terminal for agents that must not read host files, or run CaberOS in a stronger VM/container/OS-account boundary.
+First distinguish public runtime files from protected private-tree files and
+confirm the run used strict mode. Unexpected access to a protected private path
+should be investigated, not dismissed as normal. Disable terminal while
+investigating, or use a stronger VM/container/OS-account boundary.
 
 ### Strict command cannot access the network
 

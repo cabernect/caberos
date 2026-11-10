@@ -353,12 +353,32 @@ async def test_web_search_returns_results(monkeypatch):
     assert urlparse(result["results"][0]["url"]).hostname == "example.com"
 
 
+def _stub_policy_fetch(monkeypatch, web_module, html: str):
+    """Stub the destination-policy fetch seam (network enforcement has its
+    own coverage in test_netpolicy.py — these tests exercise extraction)."""
+
+    class FakeResponse:
+        headers = {"content-type": "text/html"}
+
+        def raise_for_status(self):
+            pass
+
+    async def fake_fetch(url, **kwargs):
+        import httpx
+
+        return httpx.URL(url), FakeResponse(), html.encode()
+
+    monkeypatch.setattr(web_module.netpolicy, "policy_fetch", fake_fetch)
+
+
 @pytest.mark.asyncio
 async def test_web_fetch_extracts_text(monkeypatch):
     from agentos.capabilities.tools import web as web_module
 
-    class FakeResponse:
-        text = """
+    _stub_policy_fetch(
+        monkeypatch,
+        web_module,
+        """
         <html>
         <head><script>bad code</script><style>body { color: red; }</style></head>
         <body>
@@ -367,26 +387,8 @@ async def test_web_fetch_extracts_text(monkeypatch):
         <nav>Navigation</nav>
         </body>
         </html>
-        """
-        headers = {"content-type": "text/html"}
-
-        def raise_for_status(self):
-            pass
-
-    class FakeClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args):
-            pass
-
-        async def get(self, *args, **kwargs):
-            return FakeResponse()
-
-    monkeypatch.setattr(web_module.httpx, "AsyncClient", FakeClient)
+        """,
+    )
 
     result = await web_module.web_fetch({"url": "https://example.com"})
     assert "content" in result
@@ -404,28 +406,7 @@ async def test_web_fetch_pagination(monkeypatch):
     # Build a page with more than max_chars of text
     long_text = "A" * 20_000
     html = f"<html><body><p>{long_text}</p></body></html>"
-
-    class FakeResponse:
-        text = html
-        headers = {"content-type": "text/html"}
-
-        def raise_for_status(self):
-            pass
-
-    class FakeClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args):
-            pass
-
-        async def get(self, *args, **kwargs):
-            return FakeResponse()
-
-    monkeypatch.setattr(web_module.httpx, "AsyncClient", FakeClient)
+    _stub_policy_fetch(monkeypatch, web_module, html)
 
     # First page
     result = await web_module.web_fetch({"url": "https://example.com", "max_chars": 8000})
@@ -455,27 +436,7 @@ async def test_web_fetch_hard_ceiling(monkeypatch):
     """web_fetch caps max_chars at the hard ceiling."""
     from agentos.capabilities.tools import web as web_module
 
-    class FakeResponse:
-        text = "<html><body><p>x</p></body></html>"
-        headers = {"content-type": "text/html"}
-
-        def raise_for_status(self):
-            pass
-
-    class FakeClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args):
-            pass
-
-        async def get(self, *args, **kwargs):
-            return FakeResponse()
-
-    monkeypatch.setattr(web_module.httpx, "AsyncClient", FakeClient)
+    _stub_policy_fetch(monkeypatch, web_module, "<html><body><p>x</p></body></html>")
 
     # Requesting more than the hard ceiling should be capped
     result = await web_module.web_fetch({"url": "https://example.com", "max_chars": 999_999})

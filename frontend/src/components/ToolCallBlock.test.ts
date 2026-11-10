@@ -89,6 +89,29 @@ describe("collectFileRefs", () => {
     ]);
   });
 
+  it("image_generate results chip with the image flag → inline render", () => {
+    const refs = collectFileRefs([
+      call({
+        capability: "image_generate",
+        args: { prompt: "a cat" },
+        result: {
+          artifact_id: "A9",
+          revision_id: "R9",
+          path: "artifacts/media/image-abc.png",
+          mime: "image/png",
+        },
+      }),
+    ]);
+    expect(refs).toEqual([
+      {
+        source: { artifactId: "A9", revisionId: "R9" },
+        name: "image-abc.png",
+        produced: true,
+        image: true,
+      },
+    ]);
+  });
+
   it("skips failed, errored, and non-file calls", () => {
     const refs = collectFileRefs([
       call({ capability: "write_file", args: { path: "a.md" }, status: "failed" }),

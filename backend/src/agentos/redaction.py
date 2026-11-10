@@ -315,7 +315,9 @@ _ARG_ALLOWLISTS = {
     # Removed capability — keep the allowlist entry so historical records
     # carrying its arguments still redact consistently.
     "artifact_export_pdf": {"artifact_id"},
-    "capabilities_search": {"query", "limit"},
+    # kind/server are no longer schema params but historical calls carry
+    # them — keep them visible so traces show what the model actually sent.
+    "capabilities_search": {"query", "limit", "kind", "server"},
     "capabilities_load": {"names"},
     "memory_recall": {"query", "limit"},
     "memory_store": {"snippet"},

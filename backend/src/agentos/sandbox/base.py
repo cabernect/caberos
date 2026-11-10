@@ -1,9 +1,8 @@
 """Sandbox backend abstraction (D28 — process-level sandboxing).
 
-get_backend() never raises. Each platform has an ordered list of candidate
-backends; the first one whose is_available() returns true wins. Where no
-candidate is available, the terminal capability is refused with a reason
-naming every candidate that was tried — never a crash mid-run.
+get_backend() never raises. Each platform uses its OS-native backend. If that
+backend is unavailable, the terminal capability is refused with a reason;
+Docker is reserved for future explicit opt-in setup, never automatic fallback.
 """
 
 import asyncio
@@ -31,6 +30,17 @@ class ShellResult:
     stderr: str
     exit_code: int
     duration_ms: int
+    truncated: bool = False
+
+
+@dataclass
+class SandboxLaunch:
+    """Controller-owned launch identity; never reconstructed from model arguments."""
+
+    argv: list[str]
+    env: dict[str, str] | None
+    resource_id: str | None = None
+    setup_argv: list[str] | None = None
 
 
 @dataclass
@@ -67,7 +77,11 @@ async def kill_process_group(proc: asyncio.subprocess.Process, grace: float = 3.
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
             )
-            await killer.wait()
+            try:
+                await asyncio.wait_for(killer.wait(), timeout=grace)
+            except TimeoutError:
+                killer.kill()
+                await asyncio.wait_for(killer.wait(), timeout=grace)
         with contextlib.suppress(ProcessLookupError):
             proc.kill()
         with contextlib.suppress(Exception):
@@ -77,8 +91,9 @@ async def kill_process_group(proc: asyncio.subprocess.Process, grace: float = 3.
         pgid = os.getpgid(proc.pid)
     except (ProcessLookupError, PermissionError):
         pgid = None
-    if pgid is not None and pgid <= 1:
-        # Never signal init's group (everything) - fall back to the single process.
+    if pgid is not None and (pgid <= 1 or pgid != proc.pid):
+        # Only a child launched in its own session owns its group. Never
+        # signal the gateway's or another inherited process group.
         pgid = None
 
     def _kill(sig: int) -> None:
@@ -92,21 +107,20 @@ async def kill_process_group(proc: asyncio.subprocess.Process, grace: float = 3.
 
     _kill(signal.SIGTERM)
     try:
-        await asyncio.wait_for(asyncio.shield(proc.wait()), timeout=grace)
+        await asyncio.wait_for(proc.wait(), timeout=grace)
         return
     except TimeoutError:
         pass
     _kill(signal.SIGKILL)
     with contextlib.suppress(Exception):
-        await proc.wait()
+        await asyncio.wait_for(proc.wait(), timeout=grace)
 
 
 class SandboxBackend(ABC):
     """Abstract sandbox backend.
 
-    Implementations: Seatbelt (macOS), bwrap (Linux), Docker (macOS/Linux
-    fallback), MXC (Windows, experimental), and Unavailable (no candidate on
-    this machine works).
+    Default implementations: Seatbelt (macOS), bwrap (Linux), MXC (Windows,
+    experimental), and Unavailable. The Docker prototype is not auto-selected.
     """
 
     # Short identifier surfaced through the health endpoint.
@@ -136,6 +150,31 @@ class SandboxBackend(ABC):
     def spawn_env(self, workspace_path: str) -> dict[str, str] | None:
         """Env for a spawned sandbox process; None = inherit parent env."""
         return None
+
+    def plan_launch(self, workspace_path: str, command: str) -> SandboxLaunch:
+        """Choose an owned identity without creating processes or external resources."""
+        return SandboxLaunch(
+            argv=self.spawn_argv(workspace_path, command),
+            env=self.spawn_env(workspace_path),
+        )
+
+    async def activate_launch(self, launch: SandboxLaunch) -> None:
+        """Create a resource only after the controller has persisted its identity."""
+
+    async def prepare_launch(self, workspace_path: str, command: str) -> SandboxLaunch:
+        """Convenience for callers that do not need durable admission."""
+        launch = self.plan_launch(workspace_path, command)
+        await self.activate_launch(launch)
+        return launch
+
+    async def cleanup_launch(
+        self, launch: SandboxLaunch, proc: asyncio.subprocess.Process | None
+    ) -> bool:
+        """Stop an owned launch; False means termination could not be confirmed."""
+        if proc is None:
+            return True
+        await kill_process_group(proc)
+        return proc.returncode is not None
 
     @abstractmethod
     def is_available(self) -> bool:
@@ -197,8 +236,115 @@ class UnavailableBackend(SandboxBackend):
         )
 
 
+# Explicit terminal-backend picks the operator can make in Settings → Tools →
+# Terminal ("auto" resolves through get_backend instead). Each value names the
+# OS the backend is native to — a foreign pick refuses rather than falling
+# back. Remote transports (SSH/Daytona/Modal) join this map with their drivers.
+LOCAL_BACKEND_OSES: dict[str, str] = {
+    "seatbelt": "macOS",
+    "bwrap": "Linux",
+    "mxc": "Windows",
+}
+
+
+def _local_makers() -> dict[str, Callable[[], SandboxBackend]]:
+    """Local backends constructible on this platform, keyed by pick name."""
+    if sys.platform == "win32":
+        from .mxc import MxcBackend
+
+        return {"mxc": MxcBackend}
+    if sys.platform == "darwin":
+        from .seatbelt import SeatbeltBackend
+
+        return {"seatbelt": SeatbeltBackend}
+    if sys.platform.startswith("linux"):
+        from .bwrap import BwrapBackend
+
+        return {"bwrap": BwrapBackend}
+    return {}
+
+
+def backend_named(name: str) -> SandboxBackend:
+    """Instantiate an explicitly selected local backend — never falls back.
+
+    An unknown name, a backend foreign to this OS, or a missing tool returns
+    an UnavailableBackend so the refusal reads exactly like an unavailable
+    auto backend instead of crashing differently.
+    """
+    if name not in LOCAL_BACKEND_OSES:
+        return UnavailableBackend(reason=f"Unknown terminal backend {name!r}.")
+    make = _local_makers().get(name)
+    if make is None:
+        return UnavailableBackend(
+            reason=f"The {name} backend is native to {LOCAL_BACKEND_OSES[name]} — "
+            f"this machine runs {sys.platform}."
+        )
+    backend = make()
+    if backend.is_available():
+        return backend
+    return UnavailableBackend(
+        reason=f"{name}: {backend.unavailable_reason() or 'not available'}",
+        setup_required=backend.needs_host_setup(),
+    )
+
+
+@dataclass
+class BackendStatus:
+    """One row of the Terminal card's per-backend readiness table."""
+
+    name: str
+    os_requirement: str
+    supported_here: bool
+    available: bool
+    experimental: bool
+    auto: bool  # what Auto resolves to on this machine
+    reason: str | None = None
+
+
+def backend_catalog() -> list[BackendStatus]:
+    """Readiness for every local backend pick — OS support, availability,
+    isolation strength (experimental), and what Auto resolves to.
+
+    Probing instantiates each backend and may spawn a subprocess; callers run
+    it off the event loop (asyncio.to_thread) and only on operator-facing
+    reads, never on mediation.
+    """
+    auto_kind = get_backend().kind
+    makers = _local_makers()
+    rows: list[BackendStatus] = []
+    for name, requirement in LOCAL_BACKEND_OSES.items():
+        make = makers.get(name)
+        if make is None:
+            rows.append(
+                BackendStatus(
+                    name=name,
+                    os_requirement=requirement,
+                    supported_here=False,
+                    available=False,
+                    experimental=False,
+                    auto=False,
+                    reason=f"requires {requirement}",
+                )
+            )
+            continue
+        backend = make()
+        available = backend.is_available()
+        rows.append(
+            BackendStatus(
+                name=name,
+                os_requirement=requirement,
+                supported_here=True,
+                available=available,
+                experimental=available and not backend.trusted,
+                auto=auto_kind == backend.kind,
+                reason=None if available else backend.unavailable_reason(),
+            )
+        )
+    return rows
+
+
 def _candidates_for(platform: str) -> list[Callable[[], SandboxBackend]]:
-    """Ordered constructors to try for this platform, native backend first."""
+    """Only the OS-native backend; Docker setup is future, explicit opt-in."""
     if platform == "win32":
         # Windows has no trusted native sandbox, and the desktop app must not
         # ask a user to install Docker Desktop or WSL for shell to work. MXC
@@ -207,8 +353,6 @@ def _candidates_for(platform: str) -> list[Callable[[], SandboxBackend]]:
         from .mxc import MxcBackend
 
         return [MxcBackend]
-
-    from .docker import DockerBackend
 
     candidates: list[Callable[[], SandboxBackend]] = []
     if platform == "darwin":
@@ -219,7 +363,6 @@ def _candidates_for(platform: str) -> list[Callable[[], SandboxBackend]]:
         from .bwrap import BwrapBackend
 
         candidates.append(BwrapBackend)
-    candidates.append(DockerBackend)
     return candidates
 
 
@@ -231,12 +374,11 @@ _backend_cache: dict[str, SandboxBackend] = {}
 
 
 def get_backend(refresh: bool = False) -> SandboxBackend:
-    """Return the best available backend for the current platform.
+    """Return the OS-native backend for the current platform.
 
-    Never raises. Tries each platform candidate in priority order (native
-    sandbox first, Docker as a cross-platform fallback) and returns the first
-    one whose is_available() is true. Where none work, returns an
-    UnavailableBackend whose reason names every candidate that was tried.
+    Never raises. If the native backend is unavailable, returns an
+    UnavailableBackend naming the reason. Docker is never probed or selected
+    automatically, even if its daemon and sandbox image are already available.
 
     Cached: every strict-mode shell call goes through this function, and
     constructing a fresh backend each time re-runs its availability probe
@@ -265,11 +407,8 @@ def get_backend(refresh: bool = False) -> SandboxBackend:
             reason = "No sandbox available. " + " / ".join(tried_reasons)
         else:
             reason = f"No sandbox implementation for platform {platform!r}."
-        # Deliberately not cached: the most common fix (e.g. starting Docker
-        # Desktop) happens after the gateway is already running, and the
-        # operator has no way to force a recheck short of restarting the
-        # whole app. Re-probing on every call while broken is cheap next to
-        # staying stuck refusing shell commands for the rest of the process.
+        # Native setup may finish while the gateway is running. Recheck
+        # failures instead of requiring a restart to notice recovery.
         return UnavailableBackend(reason=reason, setup_required=setup_required)
 
     _backend_cache[platform] = backend

@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { ArrowDown, PanelLeft, PanelRight, Plus, Search, Globe, FileText, CalendarClock, Sparkles, AlertCircle, BookOpen, ChevronDown, Paperclip, Loader2, MessageSquare } from "lucide-react";
+import { ArrowDown, PanelLeft, PanelRight, Plus, Search, Globe, FileText, CalendarClock, Sparkles, AlertCircle, BookOpen, ChevronDown, Paperclip, Loader2, MessageSquare, CheckCircle, X } from "lucide-react";
 import { api, workspaceBackend, type PreviewSource } from "@/lib/api";
 import type { Agent, Citation, Message, Provider, SessionInfo } from "@/lib/types";
 import { WorkspacePanel } from "@/components/WorkspacePanel";
@@ -9,6 +9,7 @@ import { useObjectUrl } from "@/components/previews/useObjectUrl";
 import { AttachmentCard } from "@/components/AttachmentCard";
 import { ToolCallBlock, FileChips, collectFileRefs, type ToolCallData, type SubAgentStreamData, type FileRef } from "@/components/ToolCallBlock";
 import { Markdown } from "@/components/Markdown";
+import { MessageActions } from "@/components/MessageActions";
 import { ThinkingBlock } from "@/components/ThinkingBlock";
 import { ProcessSteps } from "@/components/ProcessSteps";
 import { ChatSidebar } from "@/components/ChatSidebar";
@@ -133,6 +134,80 @@ function createStreamingResponse(): StreamingResponse {
   };
 }
 
+// Per-session /compact outcome — a request always applies its result to the
+// session that started it, never whichever session happens to be on screen.
+interface CompactStatus {
+  state: "pending" | "succeeded" | "unchanged" | "failed";
+  originalTokens?: number;
+  compactedTokens?: number;
+  maxContextTokens?: number;
+  message?: string;
+}
+
+// Pinned above the composer so progress/outcome stays visible regardless of
+// where the message list is scrolled. aria-live announces state changes.
+function CompactStatusBar({
+  status,
+  onRetry,
+  onDismiss,
+}: {
+  status: CompactStatus;
+  onRetry: () => void;
+  onDismiss: () => void;
+}) {
+  const isError = status.state === "failed";
+  return (
+    <div
+      role={isError ? "alert" : "status"}
+      aria-live="polite"
+      className="mb-2 flex items-center gap-2 rounded-lg px-3 py-2 text-[13px]"
+      style={{
+        background: "var(--surface)",
+        border: `1px solid ${isError ? "var(--warning)" : "var(--border)"}`,
+        color: "var(--ink-2)",
+      }}
+    >
+      {status.state === "pending" && (
+        <Loader2 className="h-4 w-4 shrink-0 animate-spin" style={{ color: "var(--accent)" }} />
+      )}
+      {status.state === "succeeded" && (
+        <CheckCircle className="h-4 w-4 shrink-0" style={{ color: "var(--accent)" }} />
+      )}
+      {(status.state === "failed" || status.state === "unchanged") && (
+        <AlertCircle className="h-4 w-4 shrink-0" style={{ color: isError ? "var(--warning)" : "var(--ink-3)" }} />
+      )}
+      <span className="min-w-0 flex-1">
+        {status.state === "pending" && "Compacting conversation…"}
+        {status.state === "succeeded" &&
+          `Context compacted — ${status.originalTokens?.toLocaleString() ?? "?"} → ${status.compactedTokens?.toLocaleString() ?? "?"} estimated tokens`}
+        {status.state === "unchanged" &&
+          "Nothing to compact — the conversation already fits in context."}
+        {status.state === "failed" &&
+          `Compaction failed — ${status.message ?? "unknown error"}`}
+      </span>
+      {status.state === "failed" && (
+        <button
+          onClick={onRetry}
+          className="shrink-0 rounded px-2 py-0.5 text-[12px] font-medium"
+          style={{ background: "var(--accent)", color: "var(--white)" }}
+        >
+          Retry
+        </button>
+      )}
+      {status.state !== "pending" && (
+        <button
+          onClick={onDismiss}
+          aria-label="Dismiss compaction status"
+          className="shrink-0 rounded p-0.5"
+          style={{ color: "var(--ink-3)" }}
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function Conversation() {
   const { id: agentId } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -154,7 +229,10 @@ export function Conversation() {
   const [cachedTokens, setCachedTokens] = useState<number | undefined>(undefined);
   const [maxContextTokens, setMaxContextTokens] = useState<number | undefined>(undefined);
   const [compacted, setCompacted] = useState(false);
-  const [compacting, setCompacting] = useState(false);
+  // /compact outcomes are keyed by session — results land on the session
+  // that started the request even after the user switches conversations.
+  const [compactStatus, setCompactStatus] = useState<Record<string, CompactStatus>>({});
+  const compacting = compactStatus[activeSessionId ?? ""]?.state === "pending";
   const [hasMoreHistory, setHasMoreHistory] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [yoloMode, setYoloMode] = useState(false);
@@ -181,6 +259,8 @@ export function Conversation() {
   // viewport pinned to the same spot while they land.
   const oldestFetchedIdRef = useRef<string | null>(null);
   const loadingOlderRef = useRef(false);
+  // Synchronous duplicate-submit guard — setState can't stop a double Enter.
+  const compactInFlightRef = useRef<Set<string>>(new Set());
   const anchorRef = useRef<{ height: number; top: number } | null>(null);
 
   // Support multiple concurrent runs — one per session.
@@ -319,6 +399,11 @@ export function Conversation() {
       oldestFetchedIdRef.current = null;
       return;
     }
+    // Opening a session always lands pinned at the latest message —
+    // autoScrollRef persists across switches, so a mid-scroll position in
+    // the previous session would leave this one unpinned + Jump pill on.
+    autoScrollRef.current = true;
+    setShowJumpToLatest(false);
     api
       .getSessionMessages(agentId, activeSessionId)
       .then((res) => {
@@ -1027,11 +1112,28 @@ export function Conversation() {
 
   useEffect(() => {
     if (autoScrollRef.current) {
-      messagesEndRef.current?.scrollIntoView({
-        behavior: prefersReducedMotion.current ? "instant" : "smooth",
-      });
+      // Instant, not smooth — a smooth auto-scroll races the scroll
+      // handler: mid-flight nearBottom=false flips autoScrollRef off and
+      // the pin (and the scroll) dies before reaching the bottom.
+      messagesEndRef.current?.scrollIntoView({ behavior: "instant" });
     }
   }, [messages, streaming, isStreaming]);
+
+  // Async content (inline images resolving, streamed chunks, preview
+  // cards) grows the scroll height after render — keep the bottom pinned
+  // through those resizes while the user hasn't scrolled away.
+  useEffect(() => {
+    const scroller = scrollContainerRef.current;
+    const content = scroller?.firstElementChild;
+    if (!content) return;
+    const ro = new ResizeObserver(() => {
+      if (autoScrollRef.current) {
+        messagesEndRef.current?.scrollIntoView({ behavior: "instant" });
+      }
+    });
+    ro.observe(content);
+    return () => ro.disconnect();
+  }, [activeSessionId]);
 
   const handleJumpToLatest = () => {
     autoScrollRef.current = true;
@@ -1160,6 +1262,11 @@ export function Conversation() {
         setRunningSessionIds(new Set(runEntriesRef.current.keys()));
       }
       await api.deleteSession(agentId, id);
+      setCompactStatus((m) => {
+        const next = { ...m };
+        delete next[id];
+        return next;
+      });
       if (activeSessionId === id) {
         setActiveSessionId(null);
         setMessages([]);
@@ -1219,7 +1326,13 @@ export function Conversation() {
 
   // --- File preview (W3) — shared right-side panel ---
   const openPreview = useCallback((source: PreviewSource) => {
-    setPreviewSource(source);
+    // Attachments/FileChips carry no session pin — they belong to the
+    // active conversation's pinned workspace. A source that already knows
+    // its session (workspace tree) keeps it.
+    setPreviewSource({
+      sessionId: activeSessionRef.current ?? undefined,
+      ...source,
+    });
     setWorkspaceOpen(true);
   }, []);
 
@@ -1453,18 +1566,66 @@ export function Conversation() {
     onError: () => setInputWarnings(["The dropped file could not be read."]),
   });
 
+  // Re-apply a recorded result when returning to a session that finished
+  // compacting while another conversation was on screen.
+  useEffect(() => {
+    if (!activeSessionId) return;
+    const s = compactStatus[activeSessionId];
+    if (s?.state === "succeeded" && s.compactedTokens != null) {
+      setContextTokens(s.compactedTokens);
+      if (s.maxContextTokens != null) setMaxContextTokens(s.maxContextTokens);
+      setCompacted(true);
+    }
+    // compactStatus entries are only applied on entry to the session — a
+    // live completion writes through handleCompact's active check instead.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSessionId]);
+
   const handleCompact = async () => {
-    if (!agentId || !activeSessionId) return;
-    setCompacting(true);
+    const sessionId = activeSessionRef.current ?? activeSessionId;
+    if (!agentId || !sessionId || compactInFlightRef.current.has(sessionId)) return;
+    compactInFlightRef.current.add(sessionId);
+    setCompactStatus((m) => ({ ...m, [sessionId]: { state: "pending" } }));
     try {
-      const result = await api.compactSession(agentId, activeSessionId);
-      setContextTokens(result.compacted_tokens);
-      setMaxContextTokens(result.max_context_tokens);
-      setCompacted(result.compacted);
+      const result = await api.compactSession(agentId, sessionId);
+      // The endpoint reports summarization failures inside a successful
+      // HTTP response — a nonempty `error` is a failure, not success.
+      if (result.error) {
+        setCompactStatus((m) => ({
+          ...m,
+          [sessionId]: { state: "failed", message: result.error ?? "unknown error" },
+        }));
+        return;
+      }
+      setCompactStatus((m) => ({
+        ...m,
+        [sessionId]: result.compacted
+          ? {
+              state: "succeeded",
+              originalTokens: result.original_tokens,
+              compactedTokens: result.compacted_tokens,
+              maxContextTokens: result.max_context_tokens,
+            }
+          : { state: "unchanged" },
+      }));
+      // The meter belongs to the on-screen session — apply directly only
+      // while that session is still active (the status map re-applies it
+      // if the user switches back afterward).
+      if (activeSessionRef.current === sessionId) {
+        setContextTokens(result.compacted_tokens);
+        setMaxContextTokens(result.max_context_tokens);
+        setCompacted(result.compacted);
+      }
     } catch (e) {
-      console.error("Compact failed:", e);
+      setCompactStatus((m) => ({
+        ...m,
+        [sessionId]: {
+          state: "failed",
+          message: e instanceof Error ? e.message : "Compaction request failed",
+        },
+      }));
     } finally {
-      setCompacting(false);
+      compactInFlightRef.current.delete(sessionId);
     }
   };
 
@@ -1709,6 +1870,8 @@ export function Conversation() {
                     key={`files-${runId}`}
                     refs={refs}
                     onPreview={openPreview}
+                    agentId={agentId}
+                    sessionId={activeSessionId}
                   />
                 );
               };
@@ -1794,6 +1957,7 @@ export function Conversation() {
                       subagentMessages={subagentMessages}
                       onPreview={openPreview}
                       agentId={agentId}
+                      sessionId={activeSessionId}
                       runFileRefs={msg.role === "assistant" ? runRefs : undefined}
                     />
                   );
@@ -1804,6 +1968,8 @@ export function Conversation() {
                         key={`files-${msg.run_id}`}
                         refs={runRefs}
                         onPreview={openPreview}
+                        agentId={agentId}
+                        sessionId={activeSessionId}
                       />
                     );
                   }
@@ -1826,20 +1992,12 @@ export function Conversation() {
             )}
 
             {isStreaming && streaming && (
-              <StreamingMessage streaming={streaming} onPreview={openPreview} />
+              <StreamingMessage streaming={streaming} onPreview={openPreview} agentId={agentId} sessionId={activeSessionId} />
             )}
             {isStreaming && !streaming && <TypingIndicator />}
             {/* Completed streaming block — keeps thinking/tool calls/costs visible after run ends */}
             {!isStreaming && streaming && streaming.completed && (
-              <StreamingMessage streaming={streaming} onPreview={openPreview} />
-            )}
-
-            {/* Compacting indicator */}
-            {compacting && (
-              <div className="flex items-center justify-center gap-2 py-4">
-                <Loader2 className="h-4 w-4 animate-spin" style={{ color: "var(--accent)" }} />
-                <span className="text-[13px] text-[var(--ink-2)]">Compacting conversation…</span>
-              </div>
+              <StreamingMessage streaming={streaming} onPreview={openPreview} agentId={agentId} sessionId={activeSessionId} />
             )}
 
             <div ref={messagesEndRef} />
@@ -1931,6 +2089,21 @@ export function Conversation() {
             sessions render a read-only notice in the same slot. */}
         <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 bg-[linear-gradient(to_bottom,transparent_0px,var(--ground)_48px)]">
           <div className="pointer-events-auto relative mt-12 px-4 pb-3">
+        {/* /compact outcome — composer-adjacent so it stays visible no
+            matter where the message list is scrolled. */}
+        {activeSessionId && compactStatus[activeSessionId] && (
+          <CompactStatusBar
+            status={compactStatus[activeSessionId]}
+            onRetry={handleCompact}
+            onDismiss={() =>
+              setCompactStatus((m) => {
+                const next = { ...m };
+                delete next[activeSessionId];
+                return next;
+              })
+            }
+          />
+        )}
         {(() => {
           const activeSession = sessions.find((s) => s.id === activeSessionId);
           if (activeSession?.channel) {
@@ -2005,6 +2178,9 @@ export function Conversation() {
             agentId={agentId || ""}
             agentName={agent?.name ?? agentId ?? ""}
             sessionId={activeSessionId}
+            workspacePath={
+              sessions.find((s) => s.id === activeSessionId)?.workspace_path
+            }
             selected={previewSource}
             onSelect={setPreviewSource}
             changedPaths={changedPaths}
@@ -2058,9 +2234,13 @@ export function Conversation() {
 function StreamingMessage({
   streaming,
   onPreview,
+  agentId,
+  sessionId,
 }: {
   streaming: StreamingResponse;
   onPreview?: (source: PreviewSource) => void;
+  agentId?: string;
+  sessionId?: string | null;
 }) {
   const hasContent = streaming.text || streaming.items.length > 0;
   const endTime = streaming.thinkingEndTime ?? Date.now();
@@ -2091,7 +2271,7 @@ function StreamingMessage({
         if (item.type === "text") {
           return (
             <div key={item.id} className="markdown-body text-[14px] leading-[1.65] text-[var(--ink)]">
-              <Markdown>{item.data.content}</Markdown>
+              <Markdown onWorkspaceLink={(p) => onPreview?.({ path: p })}>{item.data.content}</Markdown>
             </div>
           );
         }
@@ -2123,7 +2303,7 @@ function StreamingMessage({
 
       {streaming.text && (
         <div className="markdown-body text-[14px] leading-[1.65] text-[var(--ink)]">
-          <Markdown>{streaming.text}</Markdown>
+          <Markdown onWorkspaceLink={(p) => onPreview?.({ path: p })}>{streaming.text}</Markdown>
           {!streaming.completed && <span className="streaming-cursor" />}
         </div>
       )}
@@ -2135,7 +2315,7 @@ function StreamingMessage({
 
       {/* Output files the run produced — at the end of the run, not buried
           inside collapsed tool-call steps. */}
-      {fileRefs.length > 0 && <FileChips refs={fileRefs} onPreview={onPreview} />}
+      {fileRefs.length > 0 && <FileChips refs={fileRefs} onPreview={onPreview} agentId={agentId} sessionId={sessionId} />}
 
       {streaming.guardrailWarnings.length > 0 && (
         <div
@@ -2174,6 +2354,7 @@ function MessageRow({
   subagentMessages,
   onPreview,
   agentId,
+  sessionId,
   runFileRefs,
 }: {
   message: ChatMessage;
@@ -2181,6 +2362,7 @@ function MessageRow({
   subagentMessages?: ChatMessage[];
   onPreview?: (source: PreviewSource) => void;
   agentId?: string;
+  sessionId?: string | null;
   /** Output files this run produced — rendered at the end of the run. */
   runFileRefs?: FileRef[];
 }) {
@@ -2203,7 +2385,7 @@ function MessageRow({
         {attachmentFiles.length > 0 && (
           <div className="flex flex-wrap justify-end gap-1.5">
             {attachmentFiles.map((f, i) => (
-              <MessageAttachmentCard key={i} file={f} agentId={agentId} onPreview={onPreview} />
+              <MessageAttachmentCard key={i} file={f} agentId={agentId} sessionId={sessionId} onPreview={onPreview} />
             ))}
           </div>
         )}
@@ -2212,6 +2394,7 @@ function MessageRow({
         >
           {message.content}
         </div>
+        <MessageActions content={message.content} />
       </div>
     );
   }
@@ -2280,7 +2463,10 @@ function MessageRow({
           className="markdown-body border-l-[3px] pl-4 text-[14px] leading-[1.65]"
           style={{ borderColor: "#7C3AED" }}
         >
-          <Markdown>{message.content}</Markdown>
+          <Markdown onWorkspaceLink={(p) => onPreview?.({ path: p })}>{message.content}</Markdown>
+        </div>
+        <div className="mt-1.5 flex items-center gap-3">
+          <MessageActions content={message.content} messageId={message.id} />
         </div>
       </div>
     );
@@ -2300,18 +2486,21 @@ function MessageRow({
   return (
     <div className="mb-6">
       <div className="markdown-body text-[14px] leading-[1.65] text-[var(--ink)]">
-        <Markdown>{message.content}</Markdown>
+        <Markdown onWorkspaceLink={(p) => onPreview?.({ path: p })}>{message.content}</Markdown>
       </div>
       {/* Output files the run produced — end of the run, above sources. */}
       {runFileRefs && runFileRefs.length > 0 && (
-        <FileChips refs={runFileRefs} onPreview={onPreview} />
+        <FileChips refs={runFileRefs} onPreview={onPreview} agentId={agentId} sessionId={sessionId} />
       )}
       {message.citations && message.citations.length > 0 && <CitationList citations={message.citations} />}
-      {hasCost && (
-        <div className="mt-1.5 font-mono text-[11px]" style={{ color: "var(--ink-3)" }}>
-          {message.tokens_out || 0} tokens · ${(message.cost || 0).toFixed(3)}
-        </div>
-      )}
+      <div className="mt-1.5 flex items-center gap-1.5">
+        <MessageActions content={message.content} messageId={message.id} />
+        {hasCost && (
+          <div className="shrink-0 font-mono text-[11px]" style={{ color: "var(--ink-3)" }}>
+            {message.tokens_out || 0} tokens · ${(message.cost || 0).toFixed(3)}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -2410,10 +2599,12 @@ function TypingIndicator() {
 function MessageAttachmentCard({
   file,
   agentId,
+  sessionId,
   onPreview,
 }: {
   file: { type: string; mime_type: string; filename: string; url?: string; path?: string; size?: number; preview_url?: string };
   agentId?: string;
+  sessionId?: string | null;
   onPreview?: (source: PreviewSource) => void;
 }) {
   const isUrl = file.type === "url" || file.type === "image_url";
@@ -2422,10 +2613,27 @@ function MessageAttachmentCard({
   // ephemeral data URL covering the window before persistence lands.
   const { url: blobUrl } = useObjectUrl(
     isImage && file.path && agentId
-      ? () => workspaceBackend(agentId).blob({ path: file.path! })
+      ? () => workspaceBackend(agentId, sessionId ?? undefined).blob({ path: file.path! })
       : null,
-    [file.path, agentId]
+    [file.path, agentId, sessionId]
   );
+
+  // Images render inline at view size — bare <img>, click opens preview.
+  // preview_url covers the pre-persist window.
+  const imageSrc = blobUrl ?? file.preview_url;
+  if (isImage && imageSrc) {
+    return (
+      <img
+        src={imageSrc}
+        alt={file.filename}
+        title={`Preview ${file.filename}`}
+        onClick={file.path && onPreview ? () => onPreview({ path: file.path! }) : undefined}
+        className={`max-h-72 w-auto max-w-full rounded-[10px] object-contain transition-opacity ${
+          file.path && onPreview ? "cursor-pointer hover:opacity-90" : ""
+        }`}
+      />
+    );
+  }
 
   return (
     <AttachmentCard

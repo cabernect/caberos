@@ -11,7 +11,7 @@ from .channel_config import ChannelConfig
 from .contact import Contact
 from .conversation_summary import ConversationSummary
 from .core import CoreRevision
-from .document import Document, DocumentChunk
+from .document import Document, DocumentChunk, DocumentRow, DocumentSheet
 from .elicitation import ElicitationRequest
 from .execution_manifest import ExecutionManifest
 from .knowledge_index import (
@@ -37,8 +37,10 @@ from .skill import Skill, SkillAssignment, SkillRevision
 from .skill_reflection import SkillReflection
 from .skill_usage import SkillActivation
 from .source import RunSource
+from .speech_audio import SpeechAudioCache
 from .sub_agent import SubAgent
 from .terminal import TerminalSession
+from .tool_binding import ToolBinding
 from .web_source import WebSource
 
 __all__ = [
@@ -54,6 +56,7 @@ __all__ = [
     "AgentCapability",
     "SubAgent",
     "TerminalSession",
+    "ToolBinding",
     "McpServer",
     "McpServerCredential",
     "ContactMcpBinding",
@@ -65,6 +68,8 @@ __all__ = [
     "CoreRevision",
     "Document",
     "DocumentChunk",
+    "DocumentRow",
+    "DocumentSheet",
     "EmbeddingResource",
     "RetrievalProfile",
     "IndexGeneration",
@@ -76,6 +81,7 @@ __all__ = [
     "RevisionedEntityMixin",
     "RevisionMixin",
     "Session",
+    "SpeechAudioCache",
     "Skill",
     "SkillAssignment",
     "SkillRevision",

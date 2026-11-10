@@ -76,6 +76,15 @@ A cost limit depends on the provider returning usable pricing or cost informatio
 
 Every agent has a workspace for attachments and working files.
 
+Choose a managed directory or attach an existing folder at agent creation or in
+Settings. Sessions pin their workspace location: changing the default applies to
+new conversations, not existing sessions. An unavailable or ambiguous historical
+root fails explicitly instead of silently switching directories. Selecting a
+folder does not copy files or move identity and `MEMORY.md` into it.
+
+See [Workspaces, Tools, and speech](/docs/guides/workspaces-and-tools/) for
+host-path, Docker mount, folder-picker, and local terminal setup.
+
 - **Strict — workspace only** confines file paths and shell operations to the agent workspace. This is the recommended default.
 - **Open — full filesystem access** allows broader host paths. Use it only for an agent whose task genuinely requires them and whose capability grants you trust.
 

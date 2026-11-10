@@ -9,11 +9,11 @@ import { useNavigate, useParams } from "react-router-dom";
 import { DashboardSidebar, NAV_ROUTES, type NavKey } from "@/components/DashboardSidebar";
 import { PageIntro } from "@/components/guidance/PageIntro";
 import { INTRO_BY_KEY } from "@/components/guidance/tourStops";
+import { ChunkInspector } from "@/components/knowledge/ChunkInspector";
 import { PageHeader } from "@/components/ui/page-header";
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusWord } from "@/components/ui/status-word";
 import { WarningBanner } from "@/components/ui/warning-banner";
-import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/lib/confirmHook";
 import { api } from "@/lib/api";
 import type {
@@ -227,15 +227,7 @@ function KnowledgeOverview() {
           </div>
         ) : (
           <div className="mt-4 grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
-              <SectionCard
-                title="Shared knowledge"
-                action={
-                  <Button variant="outline" size="sm" onClick={() => fileInput.current?.click()}>
-                    <Upload className="h-3.5 w-3.5" />
-                    {uploading ? "Indexing…" : "Upload"}
-                  </Button>
-                }
-              >
+              <SectionCard title="Shared knowledge">
                 <p className="-mt-1 mb-3 text-[13px] text-ink-muted">
                   Inherited by every agent · {shared?.document_count ?? 0} document
                   {shared?.document_count === 1 ? "" : "s"} ·{" "}
@@ -253,22 +245,31 @@ function KnowledgeOverview() {
                     if (!uploading && e.dataTransfer.files.length) void uploadShared(e.dataTransfer.files);
                   }}
                   disabled={uploading}
-                  className={`flex w-full cursor-pointer flex-col items-center rounded-md border border-dashed px-5 py-7 text-[13px] transition-colors disabled:opacity-50 ${
+                  className={`flex w-full cursor-pointer flex-col items-center rounded-md border border-dashed px-5 py-7 text-[13px] transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
                     dragActive ? "border-accent bg-accent-tint/40" : "border-line hover:bg-sunken/50"
                   }`}
                 >
                   <Upload className="h-5 w-5 text-accent" />
                   <span className="mt-2 text-ink-muted">
-                    <span className="font-medium text-ink">Drop files here</span> to index them
+                    {uploading ? (
+                      <span className="font-medium text-ink">Indexing…</span>
+                    ) : (
+                      <>
+                        <span className="font-medium text-ink">Choose files</span>
+                        {" or drop them here to index"}
+                      </>
+                    )}
                   </span>
-                  <span className="mt-0.5 text-[11px] text-ink-faint">MD, TXT, PDF, DOCX</span>
+                  <span className="mt-0.5 text-[11px] text-ink-faint">
+                    MD, TXT, PDF, DOCX, CSV, XLSX
+                  </span>
                 </button>
                 <input
                   ref={fileInput}
                   type="file"
                   multiple
-                  accept=".md,.markdown,.txt,.pdf,.docx"
-                  className="hidden"
+                  accept=".md,.markdown,.txt,.pdf,.docx,.csv,.xlsx"
+                  className="sr-only"
                   onChange={(e) => {
                     if (e.target.files) void uploadShared(e.target.files);
                     e.target.value = "";
@@ -386,6 +387,7 @@ function KnowledgeScopeDetail({ scope }: { scope: string }) {
   const [working, setWorking] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [reindexing, setReindexing] = useState<string | null>(null);
+  const [inspecting, setInspecting] = useState<KnowledgeDocument | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const [error, setError] = useState("");
   const isShared = scope === "shared";
@@ -504,7 +506,7 @@ function KnowledgeScopeDetail({ scope }: { scope: string }) {
             )}
           </div>
           <p className="mt-1 text-xs text-[var(--ink-faint)]">
-            MD, TXT, PDF, DOCX · up to 250 MB per file
+            MD, TXT, PDF, DOCX, CSV, XLSX · up to 250 MB per file
           </p>
           <button
             type="button"
@@ -539,8 +541,8 @@ function KnowledgeScopeDetail({ scope }: { scope: string }) {
             ref={fileInput}
             type="file"
             multiple
-            accept=".md,.markdown,.txt,.pdf,.docx"
-            className="hidden"
+            accept=".md,.markdown,.txt,.pdf,.docx,.csv,.xlsx"
+            className="sr-only"
             onChange={(event) => {
               if (event.target.files) void uploadFiles(event.target.files);
               event.target.value = "";
@@ -629,6 +631,18 @@ function KnowledgeScopeDetail({ scope }: { scope: string }) {
                         <div className="flex justify-end gap-3">
                           <button
                             type="button"
+                            onClick={() =>
+                              setInspecting((current) =>
+                                current?.id === document.id ? null : document,
+                              )
+                            }
+                            aria-expanded={inspecting?.id === document.id}
+                            className="cursor-pointer text-xs text-[var(--ink-muted)] hover:text-[var(--accent)]"
+                          >
+                            Inspect
+                          </button>
+                          <button
+                            type="button"
                             onClick={() => void reindex(document)}
                             disabled={working || reindexing === document.id}
                             className="cursor-pointer text-xs text-[var(--ink-muted)] hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
@@ -654,6 +668,13 @@ function KnowledgeScopeDetail({ scope }: { scope: string }) {
             </table>
           )}
         </section>
+        {inspecting && (
+          <ChunkInspector
+            scope={scope}
+            document={inspecting}
+            onClose={() => setInspecting(null)}
+          />
+        )}
         <section
           className="rounded-xl"
           style={{

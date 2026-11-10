@@ -91,6 +91,7 @@ class CreateAgentRequest(BaseModel):
     soul: str = ""
     persona: str = ""
     task: str = ""
+    workspace: str = ""
 
 
 class UpdateAgentRequest(BaseModel):
@@ -109,6 +110,7 @@ class UpdateAgentRequest(BaseModel):
     heartbeat: dict[str, Any] | None = None
     sandbox_mode: str | None = None
     yolo_mode: bool | None = None
+    workspace: str | None = None
 
 
 class DuplicateAgentRequest(BaseModel):
@@ -252,6 +254,10 @@ async def get_agent_route(
     if config is None:
         raise HTTPException(status_code=404, detail="Agent not found")
     agent = await get_agent(db, agent_id)
+    from ..sandbox.workspace import WorkspaceManager
+
+    wm = WorkspaceManager()
+    resolved_ws = wm.resolve_agent_root(agent_id, config.workspace)
     return {
         "id": agent_id,
         "name": config.name,
@@ -269,6 +275,8 @@ async def get_agent_route(
         "limits": config.limits.model_dump(),
         "heartbeat": config.heartbeat.model_dump(),
         "workspace": config.workspace,
+        "workspace_path": str(resolved_ws),
+        "workspace_is_managed": wm.is_managed_root(agent_id, resolved_ws),
         "sandbox_mode": config.sandbox_mode,
         "yolo_mode": config.yolo_mode,
     }
@@ -282,6 +290,14 @@ async def create_agent_route(
 ) -> dict:
     """Create a new agent with default config."""
     agent_id = str(uuid.uuid4())[:8]
+    workspace = req.workspace.strip()
+    if workspace:
+        from ..sandbox.workspace import WorkspaceManager
+
+        try:
+            workspace = WorkspaceManager().validate_external_root(workspace)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
     config = AgentConfig(
         id=agent_id,
         name=req.name,
@@ -292,6 +308,7 @@ async def create_agent_route(
         soul=req.soul,
         persona=req.persona,
         task=req.task,
+        workspace=workspace,
     )
     agent = await create_agent(db, config)
     return {"id": agent.id, "name": agent.name, "enabled": agent.enabled}
@@ -347,6 +364,35 @@ async def update_agent_route(
         from ..config_schema import HeartbeatConfig
 
         config.heartbeat = HeartbeatConfig(**req.heartbeat)
+    if req.workspace is not None:
+        from ..models.run import Run
+        from ..sandbox.workspace import WorkspaceManager
+
+        wm = WorkspaceManager()
+        new_workspace = req.workspace.strip()
+        if new_workspace:
+            try:
+                new_workspace = wm.validate_external_root(new_workspace)
+            except ValueError as e:
+                raise HTTPException(status_code=422, detail=str(e)) from e
+        if new_workspace != (config.workspace or "").strip():
+            # Never change the default under an active run — a pending step
+            # could silently resolve against the wrong root.
+            active = await db.scalar(
+                select(func.count(Run.id)).where(
+                    Run.agent_id == agent_id,
+                    Run.status.in_(("pending", "running", "awaiting_approval")),
+                )
+            )
+            if active:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Workspace cannot change while a run is active — "
+                        "wait for it to finish or stop it first."
+                    ),
+                )
+        config.workspace = new_workspace
 
     version = await save_agent(db, config)
     return {

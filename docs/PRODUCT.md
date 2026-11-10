@@ -36,7 +36,7 @@ First run starts with sign-in using the seeded credentials, followed by optional
 
 Settings → General → Sign-in manages credentials. General → Product tour replays the tour; General → Appearance restores page hints. You still bring a provider API key or connect a local model endpoint. Ollama's onboarding link is guidance, not an installation check. Multi-user administration remains a roadmap item.
 
-## What it does (v0.2.0)
+## What it does (Agent Workbench foundation)
 
 - **Agents as configuration** — personality, model, tools, and limits are versioned config you can inspect, diff, roll back, and share. Multiple agents, concurrent sessions.
 - **An operator home** — Today surfaces what needs you (approvals, elicitations), recent activity, and a direct ask-your-agent entry; notifications deep-link into the right trace.
@@ -68,7 +68,7 @@ Personal agents are a new attack surface — they hold credentials, act autonomo
 
 **What CaberOS does by construction:**
 - **Egress capabilities cross an approval boundary.** Web fetch, browser navigation, shell commands, and remote embeddings ask before acting — per the capability's declared effects. "Never ask again" is a remembered scope the operator owns — not a default.
-- **Sandboxed execution** — OS-level isolation (seatbelt/bwrap/MXC, Docker fallback), workspace-scoped file access with canonical path containment.
+- **Sandboxed execution** — OS-native isolation (seatbelt/bwrap/MXC), workspace-scoped file access with canonical path containment. Native failures are reported without automatic backend switching; Docker setup is future opt-in work.
 - **Encrypted credential custody** — provider keys and connector tokens are encrypted at rest, injected at execution time, never into prompts; guardrails redact secrets on output, and audit/log payloads are redacted and bounded (not a tamper-proof guarantee).
 - **Blast radius is bounded** — capability ceilings are config, and nothing below the model (memory writes, elicitation, reflection) can widen them.
 - **Receipts for everything** — the audit log and call ledger record what crossed the boundary, so actions leave inspectable records.
@@ -91,9 +91,22 @@ Personal agents are a new attack surface — they hold credentials, act autonomo
 |---|---|---|
 | v0.1.x (shipped) | Prove the OS | Chat, tools, approvals, memory, skills, MCP, channels, scheduler, observability, desktop. |
 | **v0.2.0** (integrated, release prep) | **Agent Workbench** | Artifacts + previews, browser automation, governed evolving skills, Vault RAG, durable schedules, ledgered observability. |
-| v0.2.1 | Connected Knowledge | Cloud-drive sources, read-only OAuth, pluggable retrieval backends, structured/tabular data done right. |
-| v0.2.2 | Tasks & Events | Durable tasks with dependencies and evidence; event triggers; approvals inside the chat channel. |
+| **v0.2.1** (implemented on release branch) | **Honest Vault, Workspace & Tools** | Existing-folder workspaces, pinned sessions, chunk inspection, exact CSV/XLSX queries, global Tools bindings, search services, image generation/editing, batch dictation, Read Aloud, and local terminal selection. |
+| v0.2.2 and later (planned) | Connected Knowledge, Tasks & Richer Preview | Cloud-drive ingestion, external retrieval, durable tasks/events, channel approvals, and richer rendered previews; not shipped in v0.2.1. |
 | Later | Missions & marketplace | Multi-agent missions, plugin SDK, more platforms — shipped only when verified. |
+
+## v0.2.1 boundary
+
+The implementation extends the Agent Workbench, not its authority model.
+Tools configuration never grants an agent new permissions. Selecting an existing
+workspace attaches it in place; changing its default affects new sessions only.
+Speech is explicitly requested by the operator, not an autonomous agent tool.
+Unknown prices stay unknown, and search receipts do not invent model-token usage.
+
+Remote SSH/Daytona/Modal execution, streaming dictation, realtime two-way voice,
+video generation, and agent-authored apps remain deferred. Postgres integration,
+packaged desktop verification, and native sandbox enforcement require their own
+evidence; a passing local unit suite is not proof of all deployment modes.
 
 ## Success looks like
 

@@ -1,6 +1,9 @@
 # CaberOS — Technical Reference
 
-Deep reference for the v0.2.0 architecture. For conventions and workflow see `../AGENTS.md`; for product framing see `docs/PRODUCT.md`; for rationale see `docs/spec-v0.1.md` (D1–D40) and `docs/plans/`.
+Deep reference for the v0.2.1 code line. For conventions and workflow see
+`../AGENTS.md`; for product framing see `PRODUCT.md`; for rationale see
+`spec-v0.1.md` (D1–D40) and `plans/`. Implementation is distinct from release
+publication and platform-specific verification.
 
 ---
 
@@ -52,17 +55,19 @@ All entry points converge on `run_agent()` → `Pipeline.handle_inbound()` → `
 | `secret_store.py` / `ssl_utils.py` | Fernet key custody; shared CA bundle (corporate firewalls) |
 | `api/` | routers — see §5 |
 | `capabilities/` | Registry, catalog metadata, effects, `builtin.py` registration, `tools/` impls |
+| `capabilities/bindings.py` | Global tool-binding specs, readiness resolution, provider/model/options validation |
 | `syscall/` | `mediator.py` (the boundary), `protocol.py`, per-session lock, approval/elicitation registries |
 | `harness/` | `loop.py` (reason→act→observe), `context.py` (assembly + multimodal), `conversation.py` (reads + compaction budgeting), `base_prompt.py`, `litellm_adapter.py`, `scripted_model.py`, `guardrails.py` |
 | `memory/` | `core.py` (MEMORY.md publication), `episodic.py` (close_session, idle scan), `auto_extract.py`, `triples.py`, `recall.py`, `history_queries.py`, `notebook.py` (legacy) |
 | `skills/` | `resolution.py` (effective set), `reconcile.py` (built-in seed/retire), `service.py` (Studio ops), `usage.py` + `usage_queries.py` (activations), `importer.py` (ZIP/repo hardening), `validate.py`, `builtins.py` (`BUILTIN_SKILLS`) |
-| `knowledge/` | `ingest.py`, `extractors.py`, `chunker.py` (parent/child), `retrieval.py` (FTS + RRF), `embeddings.py`, `vectors.py`, `indexing.py` (generations) |
+| `knowledge/` | `ingest.py`, `extractors.py`, `chunker.py` (parent/child), `tabular.py` (CSV/XLSX rows and exact queries), `retrieval.py` (FTS + RRF), `embeddings.py`, `vectors.py`, `indexing.py` (generations) |
+| `speech/` | Operator STT/TTS service, operation-specific provider adapters, deterministic Markdown-to-speech rendering |
 | `artifacts/` | Format handlers — docx/xlsx/pptx spec→bytes, pdf build+inspect |
 | `browser/` | Managed Chrome-for-Testing runtime, CDP session control, profiles, domain leash |
 | `mcp/` | `client.py` (stdio/HTTP), `registry.py`, `credentials.py`, `oauth.py` |
 | `channels/` | `base.py` (Channel ABC), `registry.py`, telegram/discord/zalo_oa/zalo_bot |
 | `sandbox/` | `seatbelt.py` (macOS), `bwrap.py` (Linux), `docker.py`, MXC (Windows), `workspace.py` (`resolve_within`) |
-| `terminal/` | Background terminal sessions — incremental output, ownership, process-group cleanup |
+| `terminal/` | Background sessions, ownership and cleanup; `resolution.py` (local backend binding), `transport.py` (`SpawnedProcess`, `TerminalTransport`, `LocalTransport`) |
 | `models/` | SQLAlchemy tables — see §4 |
 | `services/` | `model_ledger.py`, `observability_timeline.py`, `observability_spend.py`, `observability_filters.py`, `call_accounting.py`, `accounting_projection.py`, `cost_assessment.py`, `usage_receipts.py`, `context_capture.py` (+queries), `data_lifecycle.py`, `backups.py`, `migration.py`, `tool_status.py` |
 
@@ -71,6 +76,12 @@ All entry points converge on `run_agent()` → `Pipeline.handle_inbound()` → `
 **Loop invariant** — reason → act → observe → repeat, one reasoning step at a time. Same-turn tool calls may run concurrently; separate steps never do. Parallel schedule occurrences spawn separate sessions.
 
 **Durable runs** — status persists on every transition: `running`, `awaiting_approval`, `completed`, `failed`, `stopped`, `interrupted`. Startup reconciles orphaned `running` → `interrupted`. `get_run_status` falls back to DB after the in-memory `RunContext` window (~60s).
+
+**Admission and early events** — resolve the session workspace before creating
+the current `Run`, so it cannot count itself as unknown historical evidence.
+Failed workspace admission persists a failed run and emits `run_started` to
+satisfy the startup contract. The run manager buffers and replays events emitted
+before `RunContext` registration, preserving terminal status for instant failures.
 
 **Run triggers** — `chat`, `heartbeat`, `schedule`, `channel`, `reflection`, `test`.
 
@@ -90,8 +101,9 @@ Tables, grouped:
 - **Observability:** `ModelCall` (unified ledger: chat/embedding/probe/extract/title; thinking reported-only), `ModelRequestCapture` (redacted bodies, retention-governed)
 - **Memory:** `MemoryTriple`, `ConversationSummary` (immutable), `CoreRevision` (MEMORY.md evidence/pins)
 - **Skills:** `Skill`, `SkillRevision`, `SkillAssignment`, `SkillActivation` (activations), `SkillReflection` (pass records + fingerprints)
-- **Knowledge:** `Document`, `DocumentChunk`, `EmbeddingResource`, `RetrievalProfile`, `IndexGeneration` (one `active`), `ChunkEmbedding`
+- **Knowledge:** `Document`, `DocumentChunk`, `DocumentSheet`, `DocumentRow`, `EmbeddingResource`, `RetrievalProfile`, `IndexGeneration` (one `active`), `ChunkEmbedding`
 - **Artifacts:** `Artifact`, `ArtifactRevision`
+- **Tool configuration and speech:** `ToolBinding`, `SpeechAudioCache`; dedicated search/speech services reuse encrypted `Provider` storage
 - **Scheduling:** `Schedule`, `ScheduleRevision`, `ScheduleOccurrence` (`retry_of` chains, `next_fire_at` truth)
 - **Comms/ops:** `ChannelConfig`, `Notification` (dedupe key type+entity+unread), `Operator`/`OperatorSession`, `BrowserProfile`, `WebSource` (references), `Contact`
 
@@ -104,6 +116,11 @@ Routers under `/api` (route counts in `api/*.py`):
 Notable reads: `GET /api/home` → aggregated Today payload (agents + live-run state, needs-you items, recent activity); `GET /api/runs/{id}` → projected `timeline`; `GET /api/spend?scope=platform` → ledger totals (`priced_calls`/`unpriced_calls`/`thinking_reported_calls`); `GET /api/model-calls/{id}/context` → re-projected capture.
 
 Runtime endpoints: `GET /api/dependencies` + `POST /api/dependencies/recheck` probe Node.js, uv, Git, and Chromium — Ollama is a convenience link, not a probe. Sandbox health is a separate surface under `GET /api/health`; the managed browser runtime has its own settings API under `api/browser`.
+
+v0.2.1 also adds operator speech endpoints (`api/speech.py`), home-confined
+directory browsing and native picking (`api/fs.py`), tool bindings under
+settings, and persisted chunk/row inspection under knowledge. See route
+definitions for request schemas; these APIs do not widen agent capability grants.
 
 Auth (`/api/auth`): `login`, `logout`, `me`, `change-password`, `setup-credentials`. Session cookie or bearer. Webhook endpoints verify per-channel signatures (HMAC / secret-token headers).
 
@@ -123,7 +140,20 @@ Per model turn: platform instructions → bounded session-pinned `MEMORY.md` →
 
 ## 8. Knowledge Vault pipeline
 
-`ingest` → `extractors` (structured blocks per format) → `chunker` (parent/child per block type) → `indexing` (blue-green generations; `reconcile_stale_builds` at startup) → `retrieval` (FTS5 always; hybrid adds embeddings + RRF + bounded parent expansion) → citations + retrieval trace. Embedding egress: remote providers require audited opt-in; locality test = local provider type or loopback/`*.local` base_url. Ledger records every embed call (operation, tokens, cost, latency). **Tabular sources refused** pending row-record layer.
+`ingest` → `extractors` (structured blocks per format) → `chunker` (parent/child per block type) → `indexing` (blue-green generations; `reconcile_stale_builds` at startup) → `retrieval` (FTS5 always; hybrid adds embeddings + RRF + bounded parent expansion) → citations + retrieval trace. Embedding egress: remote providers require audited opt-in; locality test = local provider type or loopback/`*.local` base_url. Ledger records every embed call (operation, tokens, cost, latency).
+
+CSV/XLSX additionally persist `DocumentSheet`/`DocumentRow` records. Discovery
+text is not an exact-query substitute: mediated `doc_query_rows` receives DB,
+agent, and run context and computes count/aggregates over the entire filtered
+set; cursors limit returned items only. Canonical finite CSV numbers are typed;
+IDs such as `007` and non-finite numeric-looking text such as `1e309` remain
+strings. Formulas are never executed. Legacy `.xls` is unsupported.
+
+Parse limits: 32 sheets, 50,000 data rows per sheet, 200 columns, 2,000 characters
+per cell (with truncation warning), and 256 MiB XLSX decompressed content.
+Row-query pages contain at most 200 rows. The chunk-inspection API pages actual
+persisted parent/child corpus records, not reconstructed prompts or historical
+chunk snapshots per embedding generation.
 
 ## 9. Scheduler engine
 
@@ -137,15 +167,175 @@ Chrome-for-Testing runtime — managed install gated on explicit consent. CDP se
 
 `WebSource` rows = URLs the agent **visited** (web_fetch / browser_open landed / browser_act transitions). `web_search` results are trace-only — inspectable in the tool-call record, never citable references. Base prompt instructs: open a page before citing it.
 
+### Outbound network policy (v0.2.1 worktree)
+
+`netpolicy.py` is the destination classifier for agent-driven HTTP: global
+unicast allowed; loopback/RFC1918/ULA only via the operator's exact-host
+allowlist (`web_private_allowlist`, Settings → "Private-network access" or
+`AGENTOS_WEB_PRIVATE_ALLOWLIST`); link-local/CGNAT/multicast/reserved/cloud
+metadata never admitted. `policy_fetch` resolves once, requires every DNS
+answer to be permitted, dials the validated IP with original Host/SNI, and
+re-validates at each redirect hop (≤5, 5 MB body cap, `trust_env=False`).
+`web_fetch` enforces it fully; browser `navigate` applies the same URL+host
+check before `Page.navigate` (subresources/rebinding residual documented in
+the W7 review record). MCP HTTP applies destination policy through its
+transport: explicit local origins authorize that origin, while other private
+hosts require the allowlist; metadata/link-local destinations stay blocked.
+Self-hosted Firecrawl keeps its own `allow_private_network` consent and shares
+the classifier.
+
+### Search service configuration (v0.2.1 worktree)
+
+Settings -> Tools -> Web Search configures DDGS (free default), Tavily, Exa,
+Brave Search, Firecrawl Cloud, or Firecrawl self-hosted. Service connections
+reuse `Provider` rows and Fernet key custody; there is no separate connection
+table. `search.web` binds a Provider ID without a model. Old DDGS options still
+resolve with their saved engine order, region, and SafeSearch. Changing backend
+never implicitly selects another paid service. Self-hosted Firecrawl requires
+an explicit server URL and `allow_private_network` consent for LAN/loopback
+destinations, validated and pinned at connect time.
+
+`GET /api/providers` defaults to model connections; `scope=search` exposes search
+connections to Tools and `scope=all` exposes both. Scope derives from service
+type. Search connections cannot enter model discovery, catalog mapping, model
+validation, or model dispatch. Blank/omitted key updates preserve the key;
+`remove_api_key=true` explicitly removes it. Reads return `has_key`, never keys.
+
+Opening Tools and saving are local-only. `POST /api/providers/{id}/test-search`
+requires explicit consent and sends one synthetic query (potentially billable).
+Agent searches still pass grants/approval/audit mediation. Binding/provider
+identity is snapshotted before approval and checked again before dispatch.
+Tavily uses a fixed HTTPS destination, no redirects or automatic retries,
+bounded requests/responses, and no provider-generated answers or URL visits.
+Tool results carry request/credit receipts; unavailable prices stay unknown.
+They do not create model-call ledger rows or enter model-token spend totals.
+Exa, Brave Search, and Firecrawl adapters are implemented; the existing backend
+fixture suite covers Tavily, Exa, Brave Search, and Firecrawl. Live-provider
+verification for every service, probe rate limiting, and service-usage
+accounting remain separate follow-ups.
+
+### Global Tools, speech, and media
+
+`ToolBinding` selects an implementation, not agent authority. Settings validates
+provider/service type, model and allowlisted options with optimistic revision
+checks. Secrets remain in the encrypted provider store. Readiness determines
+whether a configured operation is usable; saving does not test a paid service.
+`image_generate`/`image_edit` remain mediated egress capabilities and record
+provider attempts in `model_calls`; validated bytes are contained before staging
+under `artifacts/`. Direct OpenRouter image transport supports its image API.
+
+STT/TTS instead enter through authenticated operator endpoints. Adapters register
+per operation for OpenAI/Groq, OpenRouter, ElevenLabs, and Gemini. Dictation is
+batch input to an editable draft, never an automatic send. Read Aloud uses
+`speech/renderer.py`; display/copy preserve the original Markdown. `SpeechAudioCache`
+keys include rendered text, renderer version, and the frozen binding snapshot.
+Frontend request-generation guards prevent stale synthesis from starting playback.
+Available speech usage units are recorded without invented dollar estimates.
+
+### Workspace and artifact provenance
+
+`WorkspaceManager` resolves managed or explicitly selected external roots.
+Session pins and run `workspace_path` receipts preserve location, not file
+snapshots. For an unpinned legacy session, every historical run must prove the
+same canonical root; unknown or conflicting evidence refuses admission. Only
+sessions with no historical runs may use today's default.
+
+Artifacts record their workspace root. Legacy ownership can be established via
+`ArtifactRevision.source_run_id` → `Run.workspace_path` → session pin. Live bytes
+require a proven root; managed revision bytes remain readable independently.
+Unresolved path previews expose tracking state, and unresolved live artifact-ID
+previews return 409. The web folder browser separately confines directory
+listing to canonical home using `realpath` and `relative_to` before listing.
+
+### Local terminal binding
+
+`exec.terminal` selects Auto or an explicit supported local backend. Auto remains
+OS-native; unavailable explicit choices refuse rather than falling back.
+Strict-mode background sessions retain their admitted backend and binding
+revision. `SpawnedProcess`/`TerminalTransport` isolate process spawning;
+`LocalTransport` preserves local execution. SSH/Daytona/Modal drivers, workspace
+transfer, and remote compute lifecycle remain deferred.
+
 ## 12. Sandbox matrix
+
+Background terminals retain their admitted backend and a controller-owned launch
+identity. Docker uses create-then-attach, with the planned identity committed
+before activation, rather than treating a `docker run` CLI PID as the container.
+Close, run cancellation, natural CLI exit, and gateway shutdown invoke backend
+cleanup. Removal requires the exact generated resource name and matching CaberOS
+ownership label. SQLite/Postgres patches retain `backend_kind`/`resource_id`;
+startup retries known external resources. Failed cleanup reports `orphaned` and
+remains retryable; a disconnected daemon or failed inspect is not proof of
+termination. Legacy local `interrupted` records do not prove descendant cleanup.
+This lifecycle slice has static checks only so far; isolated runtime, migration,
+and daemon-failure tests are still required.
+
+Docker command plans also request a non-root host-mapped UID/GID (65534 when the
+controller runs as root), dropped capabilities, no-new-privileges, a read-only
+image, 64 PIDs, one CPU, 256 MiB memory/no extra swap, 256 file descriptors,
+64 MiB per-file limits, and a 32 MiB private noexec `/tmp`. These are requested
+limits, not yet verified daemon guarantees; aggregate workspace disk quota,
+background lifetime bounds, and equivalent native backend limits remain open.
+
+Generic `policy_fetch` applies one total deadline across DNS/redirects/streaming,
+clears cookies between hops, and accepts only public content request headers.
+It requests identity encoding and rejects encoded responses before decoding,
+rather than claiming the decoded body cap prevents decompression bombs.
+Wildcard/oversized/empty private-host grants now fail validation instead of
+being silently rewritten or dropped. These grants are still host-wide.
+
+Cached MCP OAuth metadata is rechecked against the configured resource, selected
+issuer, and SDK client-credential binding before refresh. Initialization remains
+incomplete after a failed check, and errors do not echo metadata or credentials.
+The MCP HTTP adapter now applies shared destination policy below the SDK:
+logical URLs remain intact for OAuth/cookies while connections dial checked IPs
+with the original Host and TLS SNI. Discovery, registration, exchange, refresh,
+and redirects use the same transport. Its pool disables keep-alive and ambient
+proxy environment use. The owning MCP session closes the supplied HTTP client;
+the SDK deliberately does not close caller-supplied clients.
+
+Literal local/localhost server configuration authorizes that exact origin.
+Other private hostnames require the existing private-host allowlist. A public
+server name does not implicitly gain private access through DNS rebinding.
+Metadata/link-local/reserved destinations stay blocked even for configured
+local services. This tightens previously unrestricted MCP HTTP behavior;
+isolated transport/SDK regression execution is still pending. Local MCP process
+isolation is not established. CaberOS's OAuth flow logs server IDs rather than
+authorization or initial-request URLs.
+
+Seatbelt (macOS) uses layered denies: broad runtime read/exec, then
+deny file-read on private trees (/Users, per-user temp/caches, launchd
+sockets) and deny file-write outside the workspace and /dev/null —
+subpath-only grants abort processes in dyld, verified live on macOS.
+
+`sandbox/process.py` owns sync completion, deadline, cancellation cleanup
+requests, output decoding, and bounded retention. Its `drain_output` is also
+used by background terminal spooling. Both retain at most 4 MiB per stream and
+continue draining beyond the cap or after spool-write failure. Sync results
+report `truncated` when output was lost. Background finalization waits up to
+one second for buffered output before cancelling pumps and flagging truncation.
+OS adapters retain launch/env decisions and backend-specific cleanup; existing
+strict/open settings and syscall authorization are unchanged. This is not a
+CPU/RAM limit or proof of escaped-descendant cleanup.
+
+Address classification explicitly denies reserved/site-local IPv6 and
+unsupported NAT64, Teredo, and 6to4 ranges rather than assuming `is_global`
+means ordinarily routable. This also applies to self-hosted search through the
+shared classifier. IPv4-mapped addresses are still classified by their IPv4
+destination; explicit loopback grants remain supported.
 
 | Platform | Backend | Notes |
 |---|---|---|
 | macOS | `seatbelt` (sandbox-exec) | Tier 1 |
 | Linux | `bwrap` | needs `SYS_ADMIN` in containers |
 | Windows | MXC (bundled `wxc-exec.exe`) | one-time consent setup |
-| Any (fallback) | Docker container | docker.py |
-| Docker deploy | bwrap if cap else Docker-isolation | compose sets `cap_add` |
+| Future explicit opt-in | Docker prototype | Not auto-selected; setup is deferred |
+| Docker deploy | Native Linux `bwrap` if available | No nested Docker fallback |
+
+OS-native execution is the default. Native unavailability or command failure
+is reported directly, without selecting Docker, another backend, or open mode.
+Existing per-agent strict/open settings are unchanged. Installing or starting
+Docker does not enable a terminal fallback.
 
 `workspace.py::resolve_within` = canonical containment check (realpath + prefix). All file ops route through it.
 

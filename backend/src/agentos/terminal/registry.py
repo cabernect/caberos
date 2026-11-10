@@ -9,16 +9,14 @@ Design (v0.2 workstream 01):
   the cursor and pass it back for the next read.
 - Ownership is scoped to (agent_id, session_id, run_id) — another run cannot
   read or close a terminal it did not start.
-- On gateway startup, persisted `running` rows are reconciled to
-  `interrupted`: the process never survives a restart, and we never claim
-  it did.
+- On gateway startup, known external resources are reconciled. An interrupted
+  local record does not prove that all descendants stopped.
 """
 
 from __future__ import annotations
 
 import asyncio
 import os
-import subprocess
 import sys
 import time
 import uuid
@@ -27,18 +25,21 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..capabilities.tools.terminal import open_mode_shell
 from ..config import settings
 from ..models.terminal import TerminalSession
 from ..sandbox import get_backend
-from ..sandbox.base import kill_process_group
+from ..sandbox.base import SandboxBackend, SandboxLaunch, kill_process_group
+from ..sandbox.process import OUTPUT_CAP_BYTES, drain_output
+from .resolution import resolve_terminal_backend
+from .transport import LOCAL_TRANSPORT, SpawnedProcess, TerminalTransport
 
 # Output spool cap per stream — beyond this we keep draining (so the child
 # never blocks on a full pipe) but stop persisting, and flag truncation.
-SPOOL_CAP_BYTES = 4 * 1024 * 1024
+SPOOL_CAP_BYTES = OUTPUT_CAP_BYTES
 # How often the long-poll checks for new output.
 POLL_INTERVAL_SECONDS = 0.1
 
@@ -51,8 +52,8 @@ class _ManagedTerminal:
     agent_id: str
     session_id: str | None
     run_id: str
-    proc: asyncio.subprocess.Process
-    pgid: int
+    proc: SpawnedProcess
+    pgid: int | None
     stdout_path: Path
     stderr_path: Path
     stdout_bytes: int = 0
@@ -62,6 +63,9 @@ class _ManagedTerminal:
     exit_code: int | None = None
     pump_tasks: list[asyncio.Task] = field(default_factory=list)
     monitor_task: asyncio.Task | None = None
+    backend: SandboxBackend | None = None
+    launch: SandboxLaunch | None = None
+    stop_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 def _terminals_dir() -> Path:
@@ -89,6 +93,7 @@ class TerminalRegistry:
         call_id: str | None = None,
         sub_agent_id: str | None = None,
         db_lock: asyncio.Lock | None = None,
+        transport: TerminalTransport = LOCAL_TRANSPORT,
     ) -> dict[str, Any]:
         """Spawn a background process and return its terminal handle."""
         terminal_id = uuid.uuid4().hex
@@ -98,27 +103,51 @@ class TerminalRegistry:
         stdout_path.touch()
         stderr_path.touch()
 
+        backend = None
+        launch = None
+        binding_revision = None
         if sandbox_mode == "open":
             argv = open_mode_shell(command)
             env = None
         else:
-            backend = get_backend()
-            argv = backend.spawn_argv(workspace_path=workspace_path, command=command)
-            env = backend.spawn_env(workspace_path)
+            backend, binding_revision = await resolve_terminal_backend(db, native=get_backend)
+            launch = backend.plan_launch(workspace_path, command)
+            argv, env = launch.argv, launch.env
+
+        row = TerminalSession(
+            id=terminal_id,
+            agent_id=agent_id,
+            session_id=session_id,
+            run_id=run_id,
+            call_id=call_id,
+            sub_agent_id=sub_agent_id,
+            workspace_path=workspace_path,
+            backend_kind=backend.kind if backend is not None else "open",
+            resource_id=launch.resource_id if launch is not None else None,
+            binding_revision=binding_revision,
+            status="starting",
+            command=command[:2048],
+            stdout_path=str(stdout_path),
+            stderr_path=str(stderr_path),
+        )
+        # The shared write lock commits on clean exit. Persist the resource
+        # identity before any external create request can reach the daemon.
+        await self._save_start(db, row, db_lock)
 
         # Host-side cwd matters for seatbelt; bwrap overrides with --chdir.
-        # The packaged gateway has no console (CREATE_NO_WINDOW in the shell),
-        # so console-subsystem children (cmd.exe, wxc-exec.exe) would each
-        # allocate a visible window without the flag.
-        proc = await asyncio.create_subprocess_exec(
-            *argv,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=workspace_path,
-            env=env,
-            start_new_session=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
+        # Remote transports interpret argv/env/cwd on their own substrate —
+        # the local spawn flags live inside LocalTransport, not here.
+        try:
+            if backend is not None and launch is not None:
+                await backend.activate_launch(launch)
+            proc = await transport.spawn(argv, env=env, cwd=workspace_path)
+        except BaseException:
+            if backend is not None and launch is not None:
+                await backend.cleanup_launch(launch, None)
+            # A disconnected create call may still have reached the daemon.
+            row.status = "orphaned" if launch is not None and launch.resource_id else "failed"
+            await asyncio.shield(self._save_start(db, row, db_lock))
+            raise
         try:
             # Windows has no process groups; the pid stands in and
             # kill_process_group walks the tree with taskkill instead.
@@ -135,35 +164,24 @@ class TerminalRegistry:
             pgid=pgid,
             stdout_path=stdout_path,
             stderr_path=stderr_path,
+            backend=backend,
+            launch=launch,
         )
         t.pump_tasks = [
             asyncio.create_task(self._pump(t, proc.stdout, stdout_path, "stdout")),
             asyncio.create_task(self._pump(t, proc.stderr, stderr_path, "stderr")),
         ]
-        t.monitor_task = asyncio.create_task(self._monitor(t))
         self._terminals[terminal_id] = t
 
-        row = TerminalSession(
-            id=terminal_id,
-            agent_id=agent_id,
-            session_id=session_id,
-            run_id=run_id,
-            call_id=call_id,
-            sub_agent_id=sub_agent_id,
-            workspace_path=workspace_path,
-            process_group_id=pgid,
-            status="running",
-            command=command[:2048],
-            stdout_path=str(stdout_path),
-            stderr_path=str(stderr_path),
-        )
-        if db_lock is not None:
-            async with db_lock:
-                db.add(row)
-                await db.flush()
-        else:
-            db.add(row)
-            await db.commit()
+        row.process_group_id = pgid
+        row.status = "running"
+        try:
+            await self._save_start(db, row, db_lock)
+        except BaseException:
+            await self._stop(t)
+            raise
+        # A fast command must not finalize before its durable row exists.
+        t.monitor_task = asyncio.create_task(self._monitor(t))
 
         return {"terminal_id": terminal_id, "status": "running", "pid": proc.pid}
 
@@ -214,12 +232,8 @@ class TerminalRegistry:
     ) -> dict[str, Any]:
         """Terminate the process group if running; idempotent."""
         t = self._get_owned(terminal_id, agent_id, session_id, run_id)
-        if t.status == "running":
-            await kill_process_group(t.proc)
-            t.status = "closed"
-            t.exit_code = t.proc.returncode if t.proc.returncode is not None else -15
-            await self._finalize(t)
-            await self._persist(t)
+        if t.status in {"running", "closing", "orphaned"}:
+            await self._stop(t)
         # Always return whatever output remains unread — bounded tail.
         stdout, _ = self._tail(t.stdout_path, 8192)
         stderr, _ = self._tail(t.stderr_path, 4096)
@@ -230,6 +244,9 @@ class TerminalRegistry:
             "stdout_tail": stdout,
             "stderr_tail": stderr,
             "truncated": t.truncated,
+            "error": "Termination could not be confirmed; cleanup must be retried."
+            if t.status == "orphaned"
+            else None,
         }
 
     async def active_for_run(self, run_id: str) -> list[str]:
@@ -237,7 +254,7 @@ class TerminalRegistry:
         return [
             tid
             for tid, t in self._terminals.items()
-            if t.run_id == run_id and t.status == "running"
+            if t.run_id == run_id and t.status in {"running", "closing", "orphaned"}
         ]
 
     async def close_for_run(self, run_id: str) -> int:
@@ -245,34 +262,80 @@ class TerminalRegistry:
         cancelled so it never orphans process groups."""
         closed = 0
         for t in list(self._terminals.values()):
-            if t.run_id == run_id and t.status == "running":
-                await kill_process_group(t.proc)
-                t.status = "closed"
-                t.exit_code = t.proc.returncode if t.proc.returncode is not None else -15
-                await self._finalize(t)
-                await self._persist(t)
-                closed += 1
+            if t.run_id == run_id and t.status in {"running", "closing", "orphaned"}:
+                closed += int(await self._stop(t))
         return closed
 
     async def reconcile_startup(self, db: AsyncSession) -> int:
-        """Mark persisted `running` rows as interrupted — processes never
-        survive a gateway restart."""
+        """Reconcile known external resources; interrupted does not prove termination."""
+        from ..sandbox.docker import DockerBackend
+
+        resources = (
+            await db.scalars(
+                select(TerminalSession).where(
+                    TerminalSession.backend_kind == "docker",
+                    TerminalSession.status.in_(["starting", "running", "orphaned"]),
+                )
+            )
+        ).all()
+        for row in resources:
+            confirmed = await DockerBackend().cleanup_launch(
+                SandboxLaunch(argv=[], env=None, resource_id=row.resource_id), None
+            )
+            row.status = "interrupted" if confirmed else "orphaned"
+            row.completed_at = datetime.now(UTC)
+        await db.flush()
         result = await db.execute(
             update(TerminalSession)
-            .where(TerminalSession.status == "running")
+            .where(TerminalSession.status.in_(["starting", "running"]))
             .values(status="interrupted", completed_at=datetime.now(UTC))
         )
-        return result.rowcount or 0
+        return len(resources) + (result.rowcount or 0)
 
     async def shutdown_all(self) -> None:
         """Kill every running process group — called on gateway shutdown."""
         for t in self._terminals.values():
-            if t.status == "running":
-                await kill_process_group(t.proc, grace=1.0)
-                t.status = "closed"
-                await self._persist(t)
+            if t.status in {"running", "closing", "orphaned"}:
+                await self._stop(t)
 
     # --- internals -------------------------------------------------------
+
+    @staticmethod
+    async def _save_start(db: AsyncSession, row: TerminalSession, db_lock: Any) -> None:
+        if db_lock is not None:
+            async with db_lock:
+                db.add(row)
+                await db.flush()
+        else:
+            db.add(row)
+            await db.commit()
+
+    async def _stop(self, t: _ManagedTerminal) -> bool:
+        async with t.stop_lock:
+            if t.status in {"closed", "completed", "failed"}:
+                return True
+            t.status = "closing"
+            try:
+                confirmed = await self._cleanup(t)
+            except BaseException:
+                t.status = "orphaned"
+                await asyncio.shield(self._persist(t))
+                raise
+            t.status = "closed" if confirmed else "orphaned"
+            t.exit_code = t.proc.returncode
+            await self._finalize(t)
+            await self._persist(t)
+            return confirmed
+
+    @staticmethod
+    async def _cleanup(t: _ManagedTerminal) -> bool:
+        try:
+            if t.backend is not None and t.launch is not None:
+                return await t.backend.cleanup_launch(t.launch, t.proc)
+            await kill_process_group(t.proc)
+            return t.proc.returncode is not None
+        except Exception:
+            return False
 
     def _get_owned(
         self, terminal_id: str, agent_id: str, session_id: str | None, run_id: str
@@ -287,52 +350,54 @@ class TerminalRegistry:
     ) -> None:
         """Drain the pipe to the spool file; keep draining past the cap so
         the child never blocks, but stop persisting."""
-        if stream is None:
-            return
-        written = 0
+
+        def progress(count: int, truncated: bool) -> None:
+            if which == "stdout":
+                t.stdout_bytes += count
+            else:
+                t.stderr_bytes += count
+            t.truncated = t.truncated or truncated
+
         try:
             with open(path, "ab") as f:
-                while True:
-                    chunk = await stream.read(65536)
-                    if not chunk:
-                        return
-                    if which == "stdout":
-                        t.stdout_bytes += len(chunk)
-                    else:
-                        t.stderr_bytes += len(chunk)
-                    if written < SPOOL_CAP_BYTES:
-                        keep = chunk[: SPOOL_CAP_BYTES - written]
-                        f.write(keep)
-                        f.flush()
-                        written += len(keep)
-                        if written >= SPOOL_CAP_BYTES:
-                            t.truncated = True
-                    else:
-                        t.truncated = True
+
+                def write(chunk: bytes) -> None:
+                    if f.write(chunk) != len(chunk):
+                        raise OSError("Terminal output could not be fully retained.")
+                    f.flush()
+
+                await drain_output(stream, write, limit=SPOOL_CAP_BYTES, progress=progress)
         except (OSError, ValueError):
-            pass
+            t.truncated = True
+            await drain_output(stream, None, limit=0, progress=progress)
 
     async def _monitor(self, t: _ManagedTerminal) -> None:
         try:
             code = await t.proc.wait()
-            t.exit_code = code
-            if t.status == "running":
-                t.status = "completed" if code == 0 else "failed"
-            await self._finalize(t)
-            await self._persist(t)
+            async with t.stop_lock:
+                if t.status != "running":
+                    return
+                t.exit_code = code
+                confirmed = await self._cleanup(t)
+                t.status = ("completed" if code == 0 else "failed") if confirmed else "orphaned"
+                await self._finalize(t)
+                await self._persist(t)
         except asyncio.CancelledError:
             pass
         except Exception:
             if t.status == "running":
-                t.status = "failed"
-                await self._persist(t)
+                await self._stop(t)
 
     async def _finalize(self, t: _ManagedTerminal) -> None:
-        """Let pumps flush remaining output to the spool files."""
-        for task in t.pump_tasks:
+        """Allow buffered output to drain, but do not wait forever on inherited pipes."""
+        if not t.pump_tasks:
+            return
+        _, pending = await asyncio.wait(t.pump_tasks, timeout=1.0)
+        if pending:
+            t.truncated = True
+        for task in pending:
             task.cancel()
-        if t.pump_tasks:
-            await asyncio.gather(*t.pump_tasks, return_exceptions=True)
+        await asyncio.gather(*t.pump_tasks, return_exceptions=True)
 
     @staticmethod
     async def _persist(t: _ManagedTerminal) -> None:

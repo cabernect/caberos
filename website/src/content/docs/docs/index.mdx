@@ -8,6 +8,15 @@ CaberOS is an open-source, local-first operating system for personal AI agents. 
 
 The model proposes actions. CaberOS decides what can execute and records the result.
 
+## v0.2.1 workflows
+
+The v0.2.1 code line adds existing-folder workspaces, session pinning, stored
+chunk inspection, exact CSV/XLSX row queries, global Tools configuration,
+search services, image generation/editing, batch dictation, Read Aloud, and
+local terminal backend selection.
+
+[Configure workspaces, Tools, and speech →](/docs/guides/workspaces-and-tools/)
+
 ## First-use path
 
 1. [Install CaberOS](/docs/getting-started/installation/) — desktop app, Docker, or local development.
@@ -56,7 +65,10 @@ Combine current session context, an agent-wide `MEMORY.md`, contact-scoped recal
 
 ### Knowledge Vault
 
-Upload Markdown, text, PDF, and DOCX files into Shared Knowledge or an agent-private scope. Retrieval is local FTS5 lexical search by default, with hybrid embeddings as an opt-in that requires explicit egress consent; agents receive only the retrieved excerpts or inspected visual content. Tabular files such as `.xlsx` and `.csv` are refused at ingest pending a row-query layer.
+Upload Markdown, text, PDF, DOCX, CSV, and XLSX into Shared Knowledge or an
+agent-private scope. Inspect persisted chunks and query tabular rows with
+complete-set counts and aggregates. Retrieval is local FTS5 lexical search by
+default; remote hybrid embeddings require explicit egress consent.
 
 [Use the Knowledge Vault →](/docs/guides/knowledge-vault/)
 

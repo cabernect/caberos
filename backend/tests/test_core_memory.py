@@ -72,7 +72,7 @@ def _patch_env(monkeypatch, tmp_path):
 
     ws_dir = tmp_path / "ws"
     ws_dir.mkdir(exist_ok=True)
-    monkeypatch.setattr(WorkspaceManager, "create_workspace", lambda self, aid: ws_dir)
+    monkeypatch.setattr(WorkspaceManager, "get_workspace_path", lambda self, aid: ws_dir)
     monkeypatch.setattr(settings, "agent_home_root", tmp_path / "agents")
 
 

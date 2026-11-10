@@ -122,6 +122,9 @@ class PostgresBackend(DatabaseBackend):
             ("elicitation_requests", "sub_agent_id", "VARCHAR(36)"),
             ("terminal_sessions", "call_id", "VARCHAR(255)"),
             ("terminal_sessions", "sub_agent_id", "VARCHAR(36)"),
+            ("terminal_sessions", "backend_kind", "TEXT"),
+            ("terminal_sessions", "resource_id", "TEXT"),
+            ("terminal_sessions", "binding_revision", "INTEGER"),
             ("artifact_revisions", "call_id", "VARCHAR(255)"),
             ("artifact_revisions", "sub_agent_id", "VARCHAR(36)"),
             ("run_sources", "call_id", "VARCHAR(255)"),
@@ -129,6 +132,10 @@ class PostgresBackend(DatabaseBackend):
             ("audit_records", "call_id", "VARCHAR(255)"),
             ("audit_records", "created_at", "TIMESTAMPTZ"),
             ("audit_records", "effects", "JSONB"),
+            # v0.2.1 workspace pinning — NULL = legacy dynamic resolution.
+            ("sessions", "workspace_path", "TEXT"),
+            ("runs", "workspace_path", "TEXT"),
+            ("artifacts", "workspace_path", "TEXT"),
         ]
         for table, column, col_type in patches:
             if not await self.column_exists(conn, table, column):

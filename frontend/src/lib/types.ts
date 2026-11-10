@@ -10,6 +10,7 @@ export interface Provider {
   id: string;
   name: string;
   type: string;
+  scope?: "model" | "search";
   has_key: boolean;
   base_url: string | null;
   org_id: string | null;
@@ -59,6 +60,9 @@ export interface ModelInfo {
   catalog_provider_id?: string | null;
   catalog_model_id?: string | null;
   catalog_mapping_explicit?: boolean;
+  /** "chat" | "media" — consumer gate; discovery reports all model types. */
+  model_kind?: "chat" | "media" | string | null;
+  output_modalities?: string[] | null;
 }
 
 /** GET /api/providers/{id}/models response — additive fields optional so
@@ -102,6 +106,9 @@ export interface Agent {
   heartbeat?: HeartbeatConfig;
   compaction?: CompactionConfig;
   workspace?: string;
+  /** Resolved absolute root — managed default or the configured external dir. */
+  workspace_path?: string;
+  workspace_is_managed?: boolean;
   sandbox_mode?: "strict" | "open";
   yolo_mode?: boolean;
 }
@@ -383,6 +390,61 @@ export interface KnowledgeDocument {
   structure?: KnowledgeStructure;
 }
 
+export interface KnowledgeChunk {
+  id: string;
+  kind: "parent" | "child" | "chunk";
+  parent_id: string | null;
+  seq: number;
+  heading_path: string[];
+  page_number: number | null;
+  source_location: string | null;
+  block_type: string | null;
+  token_count: number | null;
+  has_children: boolean;
+  preview: string;
+  preview_truncated: boolean;
+}
+
+export interface KnowledgeChunksPage {
+  document_id: string;
+  corpus_version: string;
+  status: KnowledgeDocument["status"];
+  chunk_count: number;
+  preview_chars: number;
+  items: KnowledgeChunk[];
+  next_cursor: string | null;
+}
+
+export interface KnowledgeSheetColumn {
+  id: string;
+  label: string;
+  kind: string;
+}
+
+export interface KnowledgeSheet {
+  id: string;
+  name: string;
+  sheet_index: number;
+  row_count: number;
+  columns: KnowledgeSheetColumn[];
+  warnings: string[];
+}
+
+export interface KnowledgeRow {
+  row_number: number;
+  coord: string;
+  cells: Record<string, unknown>;
+}
+
+export interface KnowledgeRowsPage {
+  document_id: string;
+  corpus_version: string;
+  sheet: string;
+  columns: KnowledgeSheetColumn[];
+  items: KnowledgeRow[];
+  next_cursor: string | null;
+}
+
 export interface KnowledgeResult {
   chunk_id: string;
   document_id: string;
@@ -495,6 +557,8 @@ export interface SessionInfo {
   external_user_id?: string | null;
   active_run_id?: string | null;
   active_run_status?: string | null;
+  /** Canonical root pinned at session creation — where this chat's files live. */
+  workspace_path?: string | null;
   learning?: boolean;
 }
 
@@ -693,6 +757,7 @@ export interface McpServerInfo {
   tool_filter: string[] | null;
   require_approval: boolean;
   env_template: Record<string, string> | null;
+  headers_template: Record<string, string> | null;
   oauth_config: { scope?: string; redirect_uri?: string } | null;
   auth_type: "api_key" | "oauth" | "none";
   has_credentials: boolean;
@@ -720,6 +785,7 @@ export interface McpCatalogEntry {
   url: string | null;
   auth_type: string; // "none", "api_key", "oauth"
   env_template: Record<string, string> | null;
+  headers: Record<string, string> | null;
   vendor: string;
   homepage: string;
   installable?: boolean;
@@ -1110,4 +1176,53 @@ export interface InstallJob {
   completed_at?: string;
   dependencies: InstallJobDep[];
   log?: { at: string; text: string }[];
+}
+
+// --- Global tool bindings (W5) ---
+
+export interface ToolBindingOptionField {
+  name: string;
+  kind: "string" | "number" | "boolean" | "select" | "engine_order";
+  label: string;
+  default: unknown;
+  choices: string[];
+  required: boolean;
+  /** When set, this option only applies to these backend values. */
+  backends?: string[];
+}
+
+export interface ToolBindingInfo {
+  key: string;
+  title: string;
+  description: string;
+  kind: "engine" | "model";
+  implemented: boolean;
+  planned_note: string | null;
+  capability_names: string[];
+  service_types?: string[] | null;
+  state: "unconfigured" | "ready" | "invalid" | "unimplemented";
+  ready: boolean;
+  reason: string;
+  options: Record<string, unknown>;
+  options_schema: ToolBindingOptionField[];
+  // exec.terminal only: per-backend readiness (OS support, isolation
+  // strength, what Auto resolves to) — separate from binding state.
+  backends?: {
+    name: string;
+    os_requirement: string;
+    supported_here: boolean;
+    available: boolean;
+    experimental: boolean;
+    auto: boolean;
+    reason: string | null;
+  }[] | null;
+  model_modalities: string[] | null;
+  binding: {
+    provider_id: string | null;
+    provider_name: string | null;
+    provider_type: string | null;
+    model: string;
+    revision: number;
+    updated_at: string | null;
+  } | null;
 }

@@ -20,10 +20,11 @@ Endpoints:
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, SecretStr
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -45,16 +46,74 @@ router = APIRouter(prefix="/api/mcp", tags=["mcp"])
 # --- Request models ---
 
 
+_AUTH_KINDS = ("none", "api_key", "oauth")
+
+# Header/env names that carry secrets. A literal value in one of these is a
+# pasted credential, not static config.
+_SECRET_FIELD_RE = re.compile(
+    r"api[-_.]?key|token|secret|password|authorization|credential", re.IGNORECASE
+)
+# Values that are obviously placeholders rather than real secrets.
+_PLACEHOLDER_VALUE_RE = re.compile(
+    r"^(your[-_ .:]|replace[-_ .:]|enter[-_ .:]|insert[-_ .:]|paste[-_ .:]"
+    r"|<.*>$|\$\{.*\}$|xxx+$|changeme|placeholder|todo\b)",
+    re.IGNORECASE,
+)
+
+
+def _extract_literal_credentials(
+    values: dict[str, str] | None,
+) -> tuple[dict[str, str] | None, str | None]:
+    """Template secret-bearing fields; return any literal credential found.
+
+    Standard MCP configs put raw keys in headers/env ("x-api-key": "abc").
+    CaberOS never stores credentials in plaintext config — literal values in
+    secret-named fields move to encrypted credential storage and the field
+    becomes a {{credential_value}} template. Placeholder text ("YOUR_API_KEY")
+    templates without storing anything, so the server still offers key entry.
+    Multiple distinct literals share the single credential slot (first wins).
+    """
+    if not values:
+        return values, None
+    out: dict[str, str] = {}
+    credential: str | None = None
+    for field, value in values.items():
+        if "{{credential" in value or not _SECRET_FIELD_RE.search(field):
+            out[field] = value
+            continue
+        out[field] = "{{credential_value}}"
+        literal = value.strip()
+        if literal and credential is None and not _PLACEHOLDER_VALUE_RE.search(literal):
+            credential = literal
+    return out, credential
+
+
+def _default_oauth_config() -> dict[str, str]:
+    return {
+        "scope": "",
+        "redirect_uri": f"http://localhost:{settings.control_plane_port}/api/mcp/oauth/callback",
+    }
+
+
 class CreateServerRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
     name: str
     transport: str = "stdio"  # "stdio" or "http"
     command: str | None = None
     args: list[str] | None = None
     url: str | None = None
     headers: dict[str, str] | None = None
-    env_template: dict[str, str] | None = None
+    # Standard MCP configs use "env"; CaberOS accepts either spelling.
+    env_template: dict[str, str] | None = Field(
+        default=None, validation_alias=AliasChoices("env_template", "env")
+    )
     tool_filter: list[str] | None = None
     enabled: bool = True
+    # Declared auth intent for pasted/standard configs. "oauth" marks the
+    # server OAuth-capable immediately (no failed-connect probe needed);
+    # "api_key"/"none" are informational — credential templates drive those.
+    auth: str | None = None
 
 
 class StoreCredentialRequest(BaseModel):
@@ -72,6 +131,7 @@ class CreateBindingRequest(BaseModel):
 class InstallFromCatalogRequest(BaseModel):
     name: str  # catalog entry name
     enabled: bool = True
+    api_key: SecretStr | None = None
 
 
 # --- Server CRUD ---
@@ -90,12 +150,20 @@ async def list_servers(
     for s in servers:
         tools = await mcp_registry.get_server_tools(db, s.id)
         env_template = json.loads(s.env_template) if s.env_template else None
+        headers_template = (
+            json.loads(s.headers)
+            if s.headers
+            else mcp_catalog.api_key_headers(s.name, s.transport, s.url)
+        )
         oauth_config = json.loads(s.oauth_config) if s.oauth_config else None
         creds = await mcp_creds.list_credentials(db, s.id)
         # Determine auth type for the frontend
         if oauth_config:
             auth_type = "oauth"
-        elif env_template and any("{{credential_value}}" in v for v in env_template.values()):
+        elif any(
+            "{{credential_value}}" in value or "{{credential." in value
+            for value in [*(env_template or {}).values(), *headers_template.values()]
+        ):
             auth_type = "api_key"
         else:
             auth_type = "none"
@@ -114,6 +182,7 @@ async def list_servers(
                 "tool_filter": json.loads(s.tool_filter) if s.tool_filter else None,
                 "require_approval": s.require_approval,
                 "env_template": env_template,
+                "headers_template": headers_template or None,
                 "oauth_config": oauth_config,
                 "auth_type": auth_type,
                 "has_credentials": len(creds) > 0,
@@ -134,6 +203,25 @@ async def create_server(
         raise HTTPException(status_code=400, detail="stdio transport requires a command")
     if req.transport == "http" and not req.url:
         raise HTTPException(status_code=400, detail="http transport requires a url")
+    if req.auth is not None and req.auth not in _AUTH_KINDS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"auth must be one of: {', '.join(_AUTH_KINDS)}",
+        )
+    oauth_config_json = None
+    if req.auth == "oauth":
+        if req.transport != "http" or not req.url:
+            raise HTTPException(
+                status_code=422,
+                detail="auth='oauth' requires an http transport with a url",
+            )
+        oauth_config_json = json.dumps(_default_oauth_config())
+
+    # Move literal secrets in secret-named header/env fields to encrypted
+    # credential storage — plaintext keys must never sit in the config columns.
+    env_template, env_cred = _extract_literal_credentials(req.env_template)
+    headers, header_cred = _extract_literal_credentials(req.headers)
+    pasted_credential = env_cred or header_cred
 
     server = McpServer(
         name=req.name,
@@ -141,12 +229,16 @@ async def create_server(
         command=req.command,
         args=json.dumps(req.args) if req.args else None,
         url=req.url,
-        headers=json.dumps(req.headers) if req.headers else None,
-        env_template=json.dumps(req.env_template) if req.env_template else None,
+        headers=json.dumps(headers) if headers else None,
+        env_template=json.dumps(env_template) if env_template else None,
         tool_filter=json.dumps(req.tool_filter) if req.tool_filter is not None else None,
+        oauth_config=oauth_config_json,
         enabled=req.enabled,
     )
     db.add(server)
+    await db.flush()
+    if pasted_credential is not None:
+        await mcp_creds.store_credential(db, server.id, "api_key", pasted_credential)
     await db.commit()
     await db.refresh(server)
 
@@ -192,9 +284,15 @@ async def delete_server(
 
 
 class UpdateServerRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     require_approval: bool | None = None
     enabled: bool | None = None
     tool_filter: list[str] | None = None
+    # "oauth" declares OAuth capability; "none"/"api_key" clear it.
+    auth: str | None = None
+    # Endpoint moves (e.g. Exa /mcp → /mcp?login for OAuth) are valid edits.
+    url: str | None = None
 
 
 @router.patch("/servers/{server_id}")
@@ -222,6 +320,35 @@ async def update_server(
     if req.enabled is not None and req.enabled != server.enabled:
         server.enabled = req.enabled
         reconnect_needed = True
+
+    if req.auth is not None:
+        if req.auth not in _AUTH_KINDS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"auth must be one of: {', '.join(_AUTH_KINDS)}",
+            )
+        if req.auth == "oauth":
+            if server.transport != "http" or not server.url:
+                raise HTTPException(
+                    status_code=422,
+                    detail="auth='oauth' requires an http transport with a url",
+                )
+            if not server.oauth_config:
+                server.oauth_config = json.dumps(_default_oauth_config())
+                reconnect_needed = server.enabled
+        elif server.oauth_config:
+            server.oauth_config = None
+            reconnect_needed = server.enabled
+
+    if req.url is not None:
+        new_url = req.url.strip()
+        if server.transport != "http":
+            raise HTTPException(status_code=422, detail="url only applies to http transport")
+        if not new_url:
+            raise HTTPException(status_code=422, detail="url must be non-empty")
+        if new_url != server.url:
+            server.url = new_url
+            reconnect_needed = server.enabled
 
     # tool_filter uses model_fields_set to distinguish three states:
     # omitted = no change, explicit null = clear filter (all tools on),
@@ -352,6 +479,12 @@ async def store_server_credential(
     if server is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
 
+    # Older HTTP catalog installs omitted the credential header entirely.
+    # Repair only on explicit key save and only for the exact curated endpoint.
+    if req.credential_type == "api_key" and not server.headers:
+        headers = mcp_catalog.api_key_headers(server.name, server.transport, server.url)
+        if headers:
+            server.headers = json.dumps(headers)
     cred = await mcp_creds.store_credential(
         db, server_id, req.credential_type, req.value, req.label
     )
@@ -614,6 +747,18 @@ async def install_from_catalog(
             status_code=400,
             detail=f"{req.name} requires external setup before it can be added to CaberOS",
         )
+    api_key = req.api_key.get_secret_value().strip() if req.api_key is not None else None
+    if api_key is not None:
+        if not api_key or "\n" in api_key or "\r" in api_key:
+            raise HTTPException(status_code=422, detail="Enter a non-empty, single-line API key.")
+        key_templates = {
+            **(entry.get("env_template") or {}),
+            **(entry.get("headers") or {}),
+        }
+        if not any("{{credential" in v for v in key_templates.values()):
+            raise HTTPException(
+                status_code=422, detail="This catalog server does not accept an API key."
+            )
 
     # Check if a server with this name already exists
     result = await db.execute(select(McpServer).where(McpServer.name == req.name))
@@ -640,21 +785,39 @@ async def install_from_catalog(
         command=entry.get("command"),
         args=args_json,
         url=entry.get("url"),
+        headers=json.dumps(entry["headers"]) if entry.get("headers") else None,
         env_template=env_json,
         oauth_config=oauth_config_json,
         enabled=req.enabled,
     )
     db.add(server)
+    if api_key is not None:
+        await db.flush()
+        await mcp_creds.store_credential(db, server.id, "api_key", api_key)
     await db.commit()
     await db.refresh(server)
 
     # Attempt to connect (will fail gracefully if credentials are needed but not set)
     connect_msg = None
     if req.enabled:
-        if entry.get("auth_type") == "api_key":
+        if api_key is not None:
+            await mcp_registry.connect_server(server)
+            connect_msg = (
+                "Connected successfully."
+                if mcp_registry.is_server_connected(server.id)
+                else "Server added but connection failed — check the API key."
+            )
+        elif entry.get("auth_type") == "api_key":
             connect_msg = "Server added. Configure API key to connect."
         elif entry.get("auth_type") == "oauth":
-            connect_msg = "Server added. Click 'Connect with OAuth' to authorize."
+            key_templates = {
+                **(entry.get("env_template") or {}),
+                **(entry.get("headers") or {}),
+            }
+            if any("{{credential" in v for v in key_templates.values()):
+                connect_msg = "Server added. Connect with OAuth or add an API key."
+            else:
+                connect_msg = "Server added. Click 'Connect OAuth' to authorize."
         else:
             await mcp_registry.connect_server(server)
             if mcp_registry.is_server_connected(server.id):

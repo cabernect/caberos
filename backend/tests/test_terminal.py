@@ -457,14 +457,14 @@ class TestSyncPath:
 
 
 class TestSandboxModes:
-    async def test_strict_mode_via_backend(self, db, terminals):
+    async def test_strict_mode_via_backend(self, db, terminals, workspace):
         backend = get_backend()
         if not backend.is_available():
             pytest.skip("Sandbox backend not available")
         result = await terminals.start(
             db,
             command="echo strict-ok",
-            workspace_path="/tmp",
+            workspace_path=workspace,
             sandbox_mode="strict",
             **OWNER,
         )

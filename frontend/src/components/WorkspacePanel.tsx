@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   ArrowRight,
@@ -10,7 +10,7 @@ import {
   Search,
   X,
 } from "lucide-react";
-import { api, type PreviewSource } from "@/lib/api";
+import { api, workspaceBackend, type PreviewSource } from "@/lib/api";
 import type { Citation, RunSummary, WorkspaceEntry } from "@/lib/types";
 import { formatRelative } from "@/lib/time";
 import { PreviewPanel } from "@/components/previews/PreviewPanel";
@@ -23,6 +23,8 @@ interface WorkspacePanelProps {
   agentId: string;
   agentName: string;
   sessionId: string | null;
+  /** Canonical root the session is pinned to — shown as the panel's origin. */
+  workspacePath?: string | null;
   selected: PreviewSource | null;
   onSelect: (source: PreviewSource | null) => void;
   /** Workspace paths this session's runs created or modified — tree dot. */
@@ -36,6 +38,7 @@ export function WorkspacePanel({
   agentId,
   agentName,
   sessionId,
+  workspacePath,
   selected,
   onSelect,
   changedPaths,
@@ -45,6 +48,12 @@ export function WorkspacePanel({
 }: WorkspacePanelProps) {
   const [tab, setTab] = useState<PanelTab>("workspace");
   const [filter, setFilter] = useState("");
+  // Stable backend object — a fresh one every render would invalidate
+  // PreviewPanel's memoized identity and refetch image/pdf blobs in a loop.
+  const previewBackend = useMemo(
+    () => workspaceBackend(agentId, sessionId ?? undefined),
+    [agentId, sessionId],
+  );
 
   return (
     <div className="flex h-full min-w-0 flex-col border-l border-line bg-surface">
@@ -61,8 +70,11 @@ export function WorkspacePanel({
           active={tab}
           onChange={(v) => setTab(v as PanelTab)}
         />
-        <span className="ml-auto truncate text-[11px] text-ink-faint">
-          {agentName} · persistent folder
+        <span
+          className="ml-auto truncate text-[11px] text-ink-faint"
+          title={workspacePath ?? undefined}
+        >
+          {agentName} · {workspacePath ?? "persistent folder"}
         </span>
         <button
           onClick={onClose}
@@ -92,6 +104,7 @@ export function WorkspacePanel({
             <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
               <WorkspaceTree
                 agentId={agentId}
+                sessionId={sessionId}
                 filter={filter}
                 selectedPath={selected?.path ?? null}
                 changedPaths={changedPaths}
@@ -112,6 +125,7 @@ export function WorkspacePanel({
               <PreviewPanel
                 agentId={agentId}
                 source={selected}
+                backend={previewBackend}
                 onClose={() => onSelect(null)}
                 className="h-full border-0"
               />
@@ -362,12 +376,14 @@ function formatDuration(ms: number): string {
    "Find file" filters the already-loaded nodes client-side. */
 function WorkspaceTree({
   agentId,
+  sessionId,
   filter,
   selectedPath,
   changedPaths,
   onSelect,
 }: {
   agentId: string;
+  sessionId: string | null;
   filter: string;
   selectedPath: string | null;
   changedPaths: Set<string>;
@@ -379,13 +395,17 @@ function WorkspaceTree({
   const load = useCallback(
     async (dirPath: string) => {
       try {
-        const r = await api.listWorkspace(agentId, dirPath || undefined);
+        const r = await api.listWorkspace(
+          agentId,
+          dirPath || undefined,
+          sessionId ?? undefined,
+        );
         setChildren((prev) => ({ ...prev, [dirPath]: r.entries ?? [] }));
       } catch {
         setChildren((prev) => ({ ...prev, [dirPath]: [] }));
       }
     },
-    [agentId],
+    [agentId, sessionId],
   );
 
   useEffect(() => {
@@ -446,7 +466,9 @@ function WorkspaceTree({
       return (
         <button
           key={path}
-          onClick={() => onSelect({ path })}
+          onClick={() =>
+            onSelect({ path, sessionId: sessionId ?? undefined })
+          }
           title={path}
           className={`flex w-full cursor-pointer items-center gap-1 rounded-[6px] px-1.5 py-1 text-left text-[12px] transition-colors ${
             active

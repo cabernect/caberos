@@ -1,21 +1,24 @@
-"""Docker sandbox backend — macOS/Linux fallback.
+"""Docker sandbox prototype — reserved for future explicit opt-in setup.
 
 Runs the sandboxed command inside a throwaway container instead of a native
-OS sandbox. It is the fallback candidate behind Seatbelt on macOS and bwrap on
-Linux. It is deliberately not a Windows candidate: the Windows desktop app must
-not require Docker Desktop (which runs its own WSL2 VM) for shell to work —
-Windows uses MXC instead, see mxc.py and base._candidates_for().
+OS sandbox. It is not a candidate in OS-native backend selection and is never
+used automatically when a native terminal is unavailable or a command fails.
+The implementation is retained for future setup and owned-resource cleanup.
 """
 
 import asyncio
 import logging
+import os
+import re
 import shutil
 import subprocess
 import time
 import uuid
+from functools import partial
 from pathlib import Path
 
-from .base import SandboxBackend, ShellResult
+from .base import SandboxBackend, SandboxLaunch, ShellResult, kill_process_group
+from .process import collect_process
 
 log = logging.getLogger(__name__)
 
@@ -26,11 +29,6 @@ _SANDBOX_IMAGE = "alpine:3.20"
 # How long a killed container may take to actually stop before we give up
 # waiting for it (the kill itself is not best-effort — only the wait is).
 _KILL_GRACE = 5
-
-# A first pull of _SANDBOX_IMAGE can take a while on a fresh machine. This
-# runs during the probe (see _ensure_image_present), not during a real
-# command, specifically so it never eats into a caller's run_command timeout.
-_IMAGE_PULL_TIMEOUT = 120
 
 
 class DockerBackend(SandboxBackend):
@@ -64,36 +62,27 @@ class DockerBackend(SandboxBackend):
             self._reason = "Docker is installed but the daemon is not responding. Is it running?"
             return False
 
-        if self._ensure_image_present():
+        if self._image_present():
             self._probe_cache = True
             return True
 
         self._probe_cache = False
-        self._reason = f"Docker sandbox image {_SANDBOX_IMAGE!r} could not be pulled."
+        self._reason = (
+            f"Docker sandbox image {_SANDBOX_IMAGE!r} is missing or cannot be inspected. "
+            f"After reviewing the image and download, run: docker pull {_SANDBOX_IMAGE}. "
+            "CaberOS does not download sandbox images automatically."
+        )
         return False
 
-    def _ensure_image_present(self) -> bool:
-        """Pull the sandbox image now, during the probe, not the first command.
-
-        Without this, the first sandboxed command on a fresh machine pays for
-        the image pull out of its own run_command timeout — a slow pull looks
-        exactly like a generic "Command timed out", with no hint that the
-        sandbox infrastructure, not the command, was the bottleneck.
-        """
+    def _image_present(self) -> bool:
+        """Inspect the local image only; readiness never authorizes a download."""
         try:
             inspect = subprocess.run(
                 ["docker", "image", "inspect", _SANDBOX_IMAGE],
                 capture_output=True,
                 timeout=5,
             )
-            if inspect.returncode == 0:
-                return True
-            pull = subprocess.run(
-                ["docker", "pull", _SANDBOX_IMAGE],
-                capture_output=True,
-                timeout=_IMAGE_PULL_TIMEOUT,
-            )
-            return pull.returncode == 0
+            return inspect.returncode == 0
         except Exception:
             return False
 
@@ -106,12 +95,33 @@ class DockerBackend(SandboxBackend):
         self, workspace_path: str, command: str, allow_network: bool, container_name: str
     ) -> list[str]:
         workspace = str(Path(workspace_path).resolve())
+        uid = getattr(os, "getuid", lambda: 65534)() or 65534
+        gid = getattr(os, "getgid", lambda: 65534)() or 65534
         args = [
             "docker",
             "run",
+            # Also close the race where the image disappears after probing.
+            "--pull=never",
             "--rm",
             "--name",
             container_name,
+            "--label",
+            f"io.caberos.sandbox={container_name}",
+            "--user",
+            f"{uid}:{gid}",
+            "--cap-drop=ALL",
+            "--security-opt=no-new-privileges",
+            "--read-only",
+            "--pids-limit=64",
+            "--memory=256m",
+            "--memory-swap=256m",
+            "--cpus=1",
+            "--ulimit",
+            "nofile=256:256",
+            "--ulimit",
+            "fsize=67108864:67108864",
+            "--tmpfs",
+            "/tmp:rw,nosuid,nodev,noexec,size=32m,mode=1777",
             "-v",
             f"{workspace}:/workspace",
             "-w",
@@ -129,15 +139,87 @@ class DockerBackend(SandboxBackend):
     def spawn_argv(
         self, workspace_path: str, command: str, allow_network: bool = False
     ) -> list[str]:
-        """Argv for a background terminal.
-
-        The terminal registry kills the local `docker run` client on close, which
-        does not stop the container the daemon is running; `--rm` removes it once
-        its command ends. Prefer a native backend for long-running terminals.
-        """
+        """Legacy argv interface; managed backgrounds use plan/activate/cleanup."""
         return self._docker_argv(
             workspace_path, command, allow_network, f"caberos-sandbox-{uuid.uuid4().hex}"
         )
+
+    async def _control(self, *argv: str) -> bytes:
+        """Bounded controller command; errors never expose daemon response bodies."""
+        proc = await asyncio.create_subprocess_exec(
+            "docker",
+            *argv,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            async with asyncio.timeout(_KILL_GRACE):
+                if proc.stdout is None:
+                    raise RuntimeError("Docker resource output is unavailable.")
+                output = await proc.stdout.read(4097)
+                if len(output) > 4096 or await proc.wait() != 0:
+                    raise RuntimeError("Docker resource operation failed.")
+                return output.strip()
+        finally:
+            if proc.returncode is None:
+                proc.kill()
+                await asyncio.wait_for(proc.wait(), timeout=_KILL_GRACE)
+
+    def plan_launch(self, workspace_path: str, command: str) -> SandboxLaunch:
+        # Create first: stopping an attach client must not race a late container
+        # creation. Once acknowledged, removing this resource also stops a late start.
+        name = f"caberos-sandbox-{uuid.uuid4().hex}"
+        args = self._docker_argv(workspace_path, command, False, name)
+        args[1] = "create"
+        args.remove("--rm")
+        return SandboxLaunch(
+            argv=["docker", "start", "--attach", name],
+            env=None,
+            resource_id=name,
+            setup_argv=args[1:],
+        )
+
+    async def activate_launch(self, launch: SandboxLaunch) -> None:
+        try:
+            if launch.setup_argv is None:
+                raise RuntimeError("Docker resource plan is missing.")
+            resource = await self._control(*launch.setup_argv)
+            if re.fullmatch(rb"[0-9a-f]{64}", resource) is None:
+                raise RuntimeError("Docker did not confirm resource creation.")
+        except BaseException:
+            # The request may have reached the daemon before a disconnect.
+            await self.cleanup_launch(launch, None)
+            raise
+
+    async def cleanup_launch(
+        self, launch: SandboxLaunch, proc: asyncio.subprocess.Process | None
+    ) -> bool:
+        if proc is not None:
+            await kill_process_group(proc)
+        name = launch.resource_id or ""
+        if re.fullmatch(r"caberos-sandbox-[0-9a-f]{32}", name) is None:
+            return False
+        try:
+            try:
+                owner = await self._control(
+                    "inspect",
+                    "--format",
+                    '{{ index .Config.Labels "io.caberos.sandbox" }}',
+                    name,
+                )
+            except (OSError, RuntimeError, TimeoutError):
+                # A failed inspect alone is not evidence that a resource is gone.
+                remaining = await self._control(
+                    "ps", "--all", "--filter", f"name=^/{name}$", "--format", "{{.ID}}"
+                )
+                return remaining == b""
+            if owner != name.encode("ascii"):
+                return False
+            await self._control("rm", "--force", name)
+            return True
+        except (OSError, RuntimeError, TimeoutError):
+            log.warning("Docker launch cleanup could not be confirmed.")
+            return False
 
     async def run_command(
         self, workspace_path: str, command: str, timeout: int = 30, allow_network: bool = False
@@ -151,24 +233,12 @@ class DockerBackend(SandboxBackend):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-            elapsed = int((time.monotonic() - start) * 1000)
-            return ShellResult(
-                stdout=stdout_bytes.decode("utf-8", errors="replace"),
-                stderr=stderr_bytes.decode("utf-8", errors="replace"),
-                exit_code=proc.returncode if proc.returncode is not None else -1,
-                duration_ms=elapsed,
-            )
-        except TimeoutError:
-            await self._kill_container(container_name, proc)
-            elapsed = int((time.monotonic() - start) * 1000)
-            return ShellResult(
-                stdout="",
-                stderr=f"Command timed out after {timeout}s",
-                exit_code=-1,
-                duration_ms=elapsed,
-            )
+        return await collect_process(
+            proc,
+            timeout=timeout,
+            started_at=start,
+            cleanup=partial(self._kill_container, container_name),
+        )
 
     async def _kill_container(self, container_name: str, proc: asyncio.subprocess.Process) -> None:
         """Stop the container itself, not just the local `docker run` client.

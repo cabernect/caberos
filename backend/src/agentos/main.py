@@ -33,6 +33,7 @@ from .api import (  # noqa: E402
     data,
     dependencies,
     elicitation,
+    fs,
     home,
     knowledge,
     mcp,
@@ -43,11 +44,13 @@ from .api import (  # noqa: E402
     schedules,
     settings,
     skills,
+    speech,
 )
 from .auth import router as auth_router  # noqa: E402
 from .capabilities.builtin import register_builtin_capabilities  # noqa: E402
 from .db import init_db, is_database_locked  # noqa: E402
 from .logging_config import configure_logging  # noqa: E402
+from .speech.service import SpeechError  # noqa: E402
 
 configure_logging()
 
@@ -522,12 +525,15 @@ async def lifespan(app: FastAPI):
     from .models.provider import Provider
     from .providers.catalog import start_catalog_worker, stop_catalog_worker
     from .providers.model_catalog import schedule_provider_refresh
+    from .providers.service_types import SERVICE_PROVIDER_TYPES
 
     start_catalog_worker()
 
     async def _discover_providers() -> None:
         async with async_session_factory() as db:
-            result = await db.execute(select(Provider.id))
+            result = await db.execute(
+                select(Provider.id).where(Provider.type.not_in(SERVICE_PROVIDER_TYPES))
+            )
             for (pid,) in result.all():
                 schedule_provider_refresh(pid)
 
@@ -639,6 +645,13 @@ app.include_router(settings.router)
 app.include_router(data.router)
 app.include_router(browser.router)
 app.include_router(dependencies.router)
+app.include_router(fs.router)
+app.include_router(speech.router)
+
+
+@app.exception_handler(SpeechError)
+async def handle_speech_error(_request: Request, error: SpeechError):
+    return JSONResponse(status_code=error.status_code, content={"detail": str(error)})
 
 
 @app.get("/health")

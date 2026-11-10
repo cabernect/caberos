@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from agentos.sandbox.mxc import MxcBackend, _build_config, _sandbox_env, _sandbox_path
+from tests.process_fakes import FakeProcess
 
 
 def _reset_class_state() -> None:
@@ -257,10 +258,7 @@ async def test_run_command_invokes_binary_with_config_file(tmp_path):
         # Read back what was written so we can assert on real JSON content.
         with open(args[1]) as f:
             captured["config"] = json.load(f)
-        proc = AsyncMock()
-        proc.communicate = AsyncMock(return_value=(b"hello\n", b""))
-        proc.returncode = 0
-        return proc
+        return FakeProcess(b"hello\n")
 
     with (
         patch.dict("os.environ", {"CABEROS_MXC_EXE_PATH": str(fake_exe)}),
@@ -283,10 +281,7 @@ async def test_run_command_cleans_up_temp_config_file(tmp_path):
 
     async def fake_create_subprocess_exec(*args, **kwargs):
         written_paths.append(args[1])
-        proc = AsyncMock()
-        proc.communicate = AsyncMock(return_value=(b"", b""))
-        proc.returncode = 0
-        return proc
+        return FakeProcess()
 
     with (
         patch.dict("os.environ", {"CABEROS_MXC_EXE_PATH": str(fake_exe)}),
@@ -306,18 +301,7 @@ async def test_timeout_kills_the_process(tmp_path):
     fake_exe.write_text("")
 
     async def fake_create_subprocess_exec(*args, **kwargs):
-        proc = AsyncMock()
-
-        async def hang():
-            import asyncio as _asyncio
-
-            await _asyncio.sleep(10)
-
-        proc.communicate = hang
-        proc.returncode = None
-        proc.kill = MagicMock()
-        proc.wait = AsyncMock(return_value=0)
-        return proc
+        return FakeProcess(hang=True)
 
     # kill_process_group signals real process groups on POSIX; the fake process
     # must never reach it (an AsyncMock pid converts to 1, i.e. "everything").

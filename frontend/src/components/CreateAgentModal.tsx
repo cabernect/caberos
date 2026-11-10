@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { X, Upload, FileText } from "lucide-react";
 import { api } from "@/lib/api";
 import type { ModelInfo, Provider } from "@/lib/types";
+import { FolderPicker, pickFolderNative } from "@/components/FolderPicker";
 import { ModelSelect } from "@/components/ModelSelect";
 import { Button } from "@/components/ui/button";
 import { FilterPills } from "@/components/ui/filter-pills";
@@ -26,6 +27,8 @@ export function CreateAgentModal({ open, onClose, onCreated, providers, initialM
   const [soul, setSoul] = useState("");
   const [persona, setPersona] = useState("");
   const [task, setTask] = useState("");
+  const [workspace, setWorkspace] = useState("");
+  const [showFolderPicker, setShowFolderPicker] = useState(false);
   const [yamlText, setYamlText] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -59,6 +62,7 @@ export function CreateAgentModal({ open, onClose, onCreated, providers, initialM
     setSoul("");
     setPersona("");
     setTask("");
+    setWorkspace("");
     setYamlText("");
     setError("");
   };
@@ -78,6 +82,7 @@ export function CreateAgentModal({ open, onClose, onCreated, providers, initialM
         soul: soul || undefined,
         persona: persona || undefined,
         task: task || undefined,
+        workspace: workspace.trim() || undefined,
       });
       onCreated(result.id);
       resetForm();
@@ -256,6 +261,42 @@ limits:
                   className={`${inputCls} resize-none`}
                 />
               </Field>
+
+              <Field label="Workspace" hint="Optional — defaults to a managed folder">
+                <div className="flex gap-2">
+                  <input
+                    value={workspace}
+                    onChange={(e) => setWorkspace(e.target.value)}
+                    placeholder="CaberOS-managed folder (default)"
+                    className={`${inputCls} font-mono text-[12px]`}
+                  />
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const picked = await pickFolderNative();
+                      if (picked === "unsupported") setShowFolderPicker(true);
+                      else if (picked) setWorkspace(picked);
+                    }}
+                    className="shrink-0 cursor-pointer rounded-md border border-line bg-ground px-3 text-[12px] text-ink transition hover:bg-sunken"
+                  >
+                    Browse…
+                  </button>
+                </div>
+                <p className="mt-1 text-[11px] text-ink-3">
+                  Attach an existing folder (e.g. a project repo) — nothing is
+                  copied or moved. You can change this later in Settings.
+                </p>
+              </Field>
+              {showFolderPicker && (
+                <FolderPicker
+                  initialPath={workspace.trim() || undefined}
+                  onPick={(p) => {
+                    setWorkspace(p);
+                    setShowFolderPicker(false);
+                  }}
+                  onClose={() => setShowFolderPicker(false)}
+                />
+              )}
             </>
           ) : (
             <>

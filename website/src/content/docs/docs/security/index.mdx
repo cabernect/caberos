@@ -122,7 +122,7 @@ Guardrails occur before and after inference, but the syscall mediator is the exe
 | Subject injection | Model selecting a different contact ID | Depends on correct channel/contact/session mapping |
 | Approvals | Unreviewed configured operations | Can be disabled per grant, remembered, auto-approved by channel policy, or globally skipped by YOLO mode |
 | Strict file path validation | `..` and symlink escape through native file tools | Open mode permits absolute host paths |
-| Shell sandbox | Unauthorized writes and network from strict terminal calls | macOS strict shell allows broad host reads; platform behavior differs |
+| Shell sandbox | Unauthorized writes/network and protected private-tree reads under the selected backend | Runtime-readable files and enforcement differ by platform; separate live verification is required |
 | Input/output redaction | Common credential patterns in messages and replies | Heuristic and incomplete; attachments and arbitrary tool results need separate care |
 | Audit records | Invisible capability effects | Logs are evidence after the decision, not prevention |
 | Cost/turn limits | Runaway model loops | Provider cost metadata can be incomplete |
@@ -185,7 +185,11 @@ Read [Local-first and data boundaries](/docs/security/local-first/) for a data-b
 
 Capability authorization, human approval, and sandbox containment are separate decisions. Strict mode does not grant terminal access, and an approved terminal call does not automatically gain broad write or network access.
 
-Platform sandbox behavior is not identical. In particular, macOS Seatbelt allows broad reads needed for system libraries and executables while restricting writes and network. Read [Approvals and sandboxing](/docs/security/approvals-and-sandbox/) before enabling terminal access.
+Platform sandbox behavior is not identical. macOS Seatbelt retains runtime reads,
+layers private-tree read denies, and restricts writes and network. Availability
+checks and separate live-test evidence matter; read
+[Approvals and sandboxing](/docs/security/approvals-and-sandbox/) before enabling
+terminal access.
 
 ## External integration trust
 

@@ -23,7 +23,7 @@ from .harness.loop import Harness, RunResult
 from .models.contact import Contact
 from .models.run import Message, Run
 from .models.session import Session
-from .sandbox.workspace import WorkspaceManager
+from .sandbox.workspace import WorkspaceAmbiguousError, WorkspaceManager
 from .skills.resolution import resolve_effective_skills, skill_pins
 from .syscall.lock import session_locks
 from .syscall.mediator import SyscallHandler
@@ -347,6 +347,52 @@ class Pipeline:
                 message.bot_id, contact.id, exclude_session_id=session.id
             )
 
+        # Resolve the session's workspace BEFORE the Run row exists. A run
+        # is provenance only once it has actually run somewhere — resolving
+        # first keeps the pending row out of its own evidence check, and
+        # admission failures can't leave NULL-root rows that would read as
+        # unknown historical runs on the next attempt.
+        agent_config = await get_active_config(self.db, message.bot_id)
+        wm = WorkspaceManager()
+        try:
+            workspace_path = await wm.resolve_session_root(
+                self.db,
+                session,
+                message.bot_id,
+                agent_config.workspace if agent_config else None,
+            )
+        except WorkspaceAmbiguousError as e:
+            run = Run(
+                id=str(uuid.uuid4()),
+                session_id=session.id,
+                contact_id=contact.id,
+                agent_id=message.bot_id,
+                status="failed",
+                trigger=trigger,
+                message_id=message.message_id,
+                is_test=is_test or message.is_test,
+                error=str(e),
+            )
+            self.db.add(run)
+            await self.db.commit()
+            # Admission still emits run_started — start_run()'s startup
+            # contract resolves on it; the failed row carries the
+            # workspace-mapping error to the timeline.
+            if event_emitter:
+                result_emit = event_emitter(
+                    "run_started",
+                    {
+                        "run_id": run.id,
+                        "session_id": session.id,
+                        "agent_id": message.bot_id,
+                    },
+                )
+                if hasattr(result_emit, "__await__"):
+                    await result_emit
+            return run
+        if not session.workspace_path:
+            session.workspace_path = str(workspace_path)
+
         # Step 3: Persist and acknowledge — create Run row with valid FKs
         run = Run(
             id=str(uuid.uuid4()),
@@ -431,8 +477,8 @@ class Pipeline:
             await self.db.flush()
 
             try:
-                # Step 7: Assemble context — get agent config
-                agent_config = await get_active_config(self.db, message.bot_id)
+                # Step 7: Assemble context — agent config was already
+                # loaded at admission for workspace resolution.
                 if agent_config is None:
                     raise ValueError(f"Agent {message.bot_id} not found or has no active config")
 
@@ -523,13 +569,23 @@ class Pipeline:
 
                 conversation = await Conversation.load(self.db, session, exclude_run_id=run.id)
 
-                # Set up workspace
-                wm = WorkspaceManager()
-                workspace_path = wm.create_workspace(message.bot_id)
-                if agent_config.workspace:
-                    workspace_path = agent_config.workspace
-                else:
-                    agent_config.workspace = str(workspace_path)
+                # Workspace root was resolved and the session pinned at
+                # admission, before the Run row existed.
+                if wm.is_managed_root(message.bot_id, workspace_path):
+                    wm.create_workspace(message.bot_id)
+                elif not workspace_path.is_dir():
+                    # External roots are attach-only — a missing directory
+                    # fails the run honestly instead of being recreated.
+                    run.status = "failed"
+                    run.error = (
+                        f"Workspace directory is unavailable: {workspace_path}. "
+                        "Re-select an existing folder in agent settings."
+                    )
+                    await self.db.commit()
+                    return run
+                if not agent_config.workspace:
+                    agent_config.workspace = str(wm.get_workspace_path(message.bot_id))
+                run.workspace_path = str(workspace_path)
 
                 # Store uploads in the workspace. Only metadata and relative
                 # paths are passed to the model; tools read content on demand.
@@ -1083,6 +1139,11 @@ class Pipeline:
             if session is not None:
                 return session
 
+        # Pin the workspace at creation — a later change to the agent's
+        # default must never re-anchor this session's files.
+        from .agent_service import get_active_config
+
+        cfg = await get_active_config(self.db, agent_id)
         session = Session(
             id=str(uuid.uuid4()),
             contact_id=contact_id,
@@ -1090,6 +1151,9 @@ class Pipeline:
             status="active",
             channel=channel,
             external_user_id=external_user_id,
+            workspace_path=str(
+                WorkspaceManager().resolve_agent_root(agent_id, cfg.workspace if cfg else "")
+            ),
         )
         self.db.add(session)
         await self.db.flush()

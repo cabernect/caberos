@@ -42,6 +42,7 @@ _MIME_TYPES = {
     ".pdf": "application/pdf",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".csv": "text/csv",
 }
 
 
@@ -61,6 +62,8 @@ def extract_document(path: Path) -> ExtractedDocument:
         blocks = _extract_pdf(path)
     elif suffix == ".docx":
         blocks = _extract_docx(path)
+    elif suffix == ".csv":
+        blocks = _extract_csv(path)
     else:
         blocks = _extract_xlsx(path)
     return ExtractedDocument(
@@ -216,6 +219,26 @@ def _extract_docx(path: Path) -> list[ExtractedBlock]:
             )
         )
     return blocks
+
+
+_CSV_DISCOVERY_CHARS = 200_000
+
+
+def _extract_csv(path: Path) -> list[ExtractedBlock]:
+    """Flatten a CSV into one discovery block — the row layer in
+    ``knowledge/tabular.py`` is the queryable source of truth."""
+    text = path.read_text(encoding="utf-8-sig", errors="replace")
+    truncated = len(text) > _CSV_DISCOVERY_CHARS
+    block = ExtractedBlock(
+        text=text[:_CSV_DISCOVERY_CHARS],
+        heading_path=[],
+        sheet_name="csv",
+        source_location=f"csv!A1 (truncated at {_CSV_DISCOVERY_CHARS} chars)"
+        if truncated
+        else "csv!A1",
+        block_type="sheet",
+    )
+    return [block]
 
 
 def _extract_xlsx(path: Path) -> list[ExtractedBlock]:

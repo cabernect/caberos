@@ -4,6 +4,8 @@ import type { ComponentProps } from "react";
 import { createRef } from "react";
 import { ChatInputBar, type ChatInputBarHandle } from "./ChatInputBar";
 import { ThemeProvider } from "@/lib/theme";
+import { api } from "@/lib/api";
+import type { SkillInfo } from "@/lib/types";
 
 vi.stubGlobal("matchMedia", (q: string) => ({
   matches: false, media: q, addEventListener: () => {}, removeEventListener: () => {},
@@ -166,5 +168,71 @@ describe("ChatInputBar failed reads", () => {
     );
     // the only mention is the error note — no staged card exists
     expect(document.body.textContent!.match(/broken\.txt/g)).toHaveLength(1);
+  });
+});
+
+describe("ChatInputBar slash commands", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
+
+  const typeText = (value: string) =>
+    fireEvent.change(screen.getByRole("textbox"), { target: { value } });
+
+  it("exact '/compact' + Enter submits instead of completing", async () => {
+    const onSend = vi.fn(async () => true);
+    mount({ onSend });
+    typeText("/compact");
+    // The menu shows 'compact' as the selected suggestion — Enter must
+    // still send, not just append a space and wait for a second Enter.
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter", shiftKey: false });
+    await vi.waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+    expect((onSend.mock.calls[0] as unknown as Parameters<NonNullable<OnSend>>)[0]).toBe("/compact");
+  });
+
+  it("partial '/comp' + Enter completes the suggestion without sending", async () => {
+    const onSend = vi.fn(async () => true);
+    mount({ onSend });
+    typeText("/comp");
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter", shiftKey: false });
+    await act(async () => {});
+    expect(onSend).not.toHaveBeenCalled();
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("/compact ");
+  });
+
+  it("exact match wins over a longer skill suggestion", async () => {
+    vi.mocked(api.listAvailableSkills).mockResolvedValueOnce([
+      { name: "compactify", description: "" } as unknown as SkillInfo,
+    ]);
+    const onSend = vi.fn(async () => true);
+    mount({ onSend });
+    await act(async () => {});
+    typeText("/compact");
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter", shiftKey: false });
+    await vi.waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+    expect((onSend.mock.calls[0] as unknown as Parameters<NonNullable<OnSend>>)[0]).toBe("/compact");
+  });
+
+  it("arrowing to a different suggestion makes Enter complete it", async () => {
+    vi.mocked(api.listAvailableSkills).mockResolvedValueOnce([
+      { name: "compactify", description: "" } as unknown as SkillInfo,
+    ]);
+    const onSend = vi.fn(async () => true);
+    mount({ onSend });
+    await act(async () => {});
+    typeText("/compact");
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "ArrowDown" });
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter", shiftKey: false });
+    await act(async () => {});
+    expect(onSend).not.toHaveBeenCalled();
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("/compactify ");
+  });
+
+  it("IME-composition Enter still does not send", async () => {
+    const onSend = vi.fn(async () => true);
+    mount({ onSend });
+    typeText("/compact");
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter", shiftKey: false, keyCode: 229 });
+    await act(async () => {});
+    expect(onSend).not.toHaveBeenCalled();
   });
 });

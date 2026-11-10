@@ -57,7 +57,7 @@ Run flow:
 ```text
 POST message
   → RunManager task
-  → resolve contact/session + persist pending run
+  → resolve contact/session + resolve/pin workspace + persist run
   → input guardrails + attachments + workspace
   → per-session lock
   → context + capability catalog + compaction
@@ -67,6 +67,12 @@ POST message
 ```
 
 Pipeline commit sớm trước model call để SQLite không giữ write lock trong thời gian model chạy. Session lock ngăn hai turn trong cùng conversation interleave; session khác có thể chạy đồng thời.
+
+Workspace được resolve trước khi tạo run hiện tại, tránh tự tính run đó là
+unknown-root evidence. Admission bị từ chối vẫn emit `run_started`; run manager
+replay event tới trước registration để fast failure vẫn là `failed` trên live
+status. Provider cũng lưu dedicated tool-service connection có credential mã
+hóa; các service type không tham gia chat-model discovery.
 
 ## Context và compaction
 

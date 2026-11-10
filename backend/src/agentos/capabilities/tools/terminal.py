@@ -14,6 +14,7 @@ from typing import Any
 
 from ...sandbox import get_backend
 from ...sandbox.base import kill_process_group
+from ...sandbox.process import collect_process
 
 
 def shell_dialect_note() -> str:
@@ -56,7 +57,11 @@ async def terminal_run(
             db_lock=kwargs.get("db_lock"),
         )
     return await _run_sync(
-        args["command"], workspace_path, kwargs.get("sandbox_mode", "strict"), timeout
+        args["command"],
+        workspace_path,
+        kwargs.get("sandbox_mode", "strict"),
+        timeout,
+        db=kwargs.get("db"),
     )
 
 
@@ -86,7 +91,7 @@ async def close_terminal(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
 
 
 async def _run_sync(
-    command: str, workspace_path: str, sandbox_mode: str, timeout: int
+    command: str, workspace_path: str, sandbox_mode: str, timeout: int, db: Any = None
 ) -> dict[str, Any]:
     """Run a command to completion — the terminal capability's sync path."""
     if sandbox_mode == "open":
@@ -101,36 +106,30 @@ async def _run_sync(
             # cmd.exe would allocate a visible window on every call.
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-        try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-            elapsed = int((time.monotonic() - start) * 1000)
-            return {
-                "stdout": stdout_bytes.decode("utf-8", errors="replace"),
-                "stderr": stderr_bytes.decode("utf-8", errors="replace"),
-                "exit_code": proc.returncode if proc.returncode is not None else -1,
-                "duration_ms": elapsed,
-            }
-        except TimeoutError:
-            await kill_process_group(proc)
-            elapsed = int((time.monotonic() - start) * 1000)
-            return {
-                "stdout": "",
-                "stderr": f"Command timed out after {timeout}s",
-                "exit_code": -1,
-                "duration_ms": elapsed,
-            }
+        result = await collect_process(
+            proc, timeout=timeout, started_at=start, cleanup=kill_process_group
+        )
+    else:
+        # Strict mode uses the exec.terminal binding's backend — Auto or an
+        # explicit native pick, never a silent fallback (W11.2).
+        if db is not None:
+            from ...terminal.resolution import resolve_terminal_backend
 
-    # Strict mode — use sandbox backend
-    backend = get_backend()
-    result = await backend.run_command(
-        workspace_path=workspace_path,
-        command=command,
-        timeout=timeout,
-        allow_network=False,
-    )
-    return {
+            backend, _ = await resolve_terminal_backend(db)
+        else:
+            backend = get_backend()
+        result = await backend.run_command(
+            workspace_path=workspace_path,
+            command=command,
+            timeout=timeout,
+            allow_network=False,
+        )
+    output = {
         "stdout": result.stdout,
         "stderr": result.stderr,
         "exit_code": result.exit_code,
         "duration_ms": result.duration_ms,
     }
+    if result.truncated:
+        output["truncated"] = True
+    return output

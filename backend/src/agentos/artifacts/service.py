@@ -6,6 +6,7 @@ managed app data (next to the DB), never in the workspace.
 """
 
 import hashlib
+import os
 from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -78,6 +79,7 @@ async def create(
 
     artifact = Artifact(
         workspace_id=workspace_id,
+        workspace_path=str(workspace_path),
         current_path=rel_path,
         format=_format_of(rel_path),
         tracking_status="tracked",
@@ -292,6 +294,7 @@ async def adopt(
 
     artifact = Artifact(
         workspace_id=workspace_id,
+        workspace_path=str(workspace_path),
         current_path=rel_path,
         format=_format_of(rel_path),
         tracking_status="tracked",
@@ -483,17 +486,73 @@ async def _get(db: AsyncSession, artifact_id: str) -> Artifact:
     return artifact
 
 
-async def get_by_path(db: AsyncSession, workspace_id: str, rel_path: str) -> Artifact | None:
-    """Look up the artifact tracking a workspace path — None for ordinary
-    files. The preview API uses this to split tracked vs untracked actions."""
+async def evidence_root(db: AsyncSession, artifact: Artifact) -> str | None:
+    """Evidence-backed root for a legacy artifact row (no recorded
+    workspace_path): roots its revisions' source runs recorded, or the
+    pinned sessions those runs belonged to.
+
+    Exactly one distinct root = resolved; zero or conflicting roots =
+    nothing proven, the caller exposes the unresolved state."""
+    from sqlalchemy import distinct, select
+
+    from ..models.run import Run
+    from ..models.session import Session
+
+    run_ids = (
+        await db.scalars(
+            select(distinct(ArtifactRevision.source_run_id)).where(
+                ArtifactRevision.artifact_id == artifact.id,
+                ArtifactRevision.source_run_id.is_not(None),
+            )
+        )
+    ).all()
+    roots: set[str] = set()
+    for run_id in run_ids:
+        run = await db.get(Run, run_id)
+        if run is None:
+            continue
+        root = run.workspace_path
+        if not root:
+            session = await db.get(Session, run.session_id)
+            root = session.workspace_path if session else None
+        if root:
+            roots.add(os.path.realpath(root))
+    return next(iter(roots)) if len(roots) == 1 else None
+
+
+async def get_by_path(
+    db: AsyncSession, workspace_id: str, rel_path: str, workspace_path: str | Path
+) -> tuple[Artifact | None, bool]:
+    """Look up the artifact tracking a path under a specific workspace root.
+
+    Returns (artifact, unresolved): the artifact only when evidence proves
+    it lives under this root — the recorded workspace_path, or for legacy
+    rows the root its creating run/session pinned. unresolved=True means a
+    legacy row claims this path but nothing proves where it lives — the
+    caller exposes that state instead of silently calling the file
+    ordinary."""
     from sqlalchemy import select
 
-    return await db.scalar(
-        select(Artifact).where(
-            Artifact.workspace_id == workspace_id,
-            Artifact.current_path == rel_path,
+    candidates = (
+        await db.scalars(
+            select(Artifact).where(
+                Artifact.workspace_id == workspace_id,
+                Artifact.current_path == rel_path,
+            )
         )
-    )
+    ).all()
+    root = os.path.realpath(str(workspace_path))
+    unresolved = False
+    for artifact in candidates:
+        root_str = artifact.workspace_path or await evidence_root(db, artifact)
+        if root_str is None:
+            unresolved = True
+            continue
+        if os.path.realpath(root_str) == root:
+            # A proven match settles tracking — a sibling row's unproven
+            # claim stays noise, not a flag.
+            return artifact, False
+    return None, unresolved
 
 
 async def _store_revision(

@@ -25,6 +25,10 @@ CaberOS can execute runs in different sessions independently. Switching to anoth
 
 Use the stop button to request cancellation of an active run. A run that already completed cannot be stopped.
 
+For microphone dictation and explicit per-message Read Aloud, configure speech
+in [Settings → Tools](/docs/guides/workspaces-and-tools/#dictation-and-read-aloud).
+Dictation produces an editable draft; it does not automatically send a message.
+
 ## Choose a model per message
 
 The input bar starts with the agent’s default provider and model. Use the model selector to override that choice for the next message without editing the agent configuration.
@@ -130,6 +134,12 @@ The input area can show:
 - currently loaded capability schemas.
 
 Use `/compact` before a long task when the session has accumulated irrelevant history. Automatic compaction can also trigger at the agent’s configured threshold while preserving selected head and tail messages.
+
+An exact `/compact` followed by Enter submits once. Status remains visible above
+the composer, including pending, compacted, unchanged, or failed outcomes.
+Before/after context counts are estimates, not billed tokens. Changing sessions
+does not apply the pending operation's feedback to the new conversation.
+Compaction changes model context, not the stored transcript.
 
 ## Citations
 

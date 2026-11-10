@@ -32,6 +32,8 @@ from contextlib import AsyncExitStack
 from typing import Any
 from urllib.parse import urlparse
 
+from .transport import PolicyTransport
+
 log = logging.getLogger("agentos.mcp.client")
 
 # Common runtime install directories for stdio command resolution.
@@ -445,8 +447,12 @@ class McpClient:
                     # close; reusing the pooled connection then raises
                     # RemoteProtocolError during OAuth discovery.
                     limits=httpx2.Limits(max_keepalive_connections=0),
+                    transport=PolicyTransport(self.url),
+                    trust_env=False,
+                    follow_redirects=False,
                     **http_kwargs,
                 )
+                http_client = await self._exit_stack.enter_async_context(http_client)
                 result = await self._exit_stack.enter_async_context(
                     streamable_http_client(self.url, http_client=http_client)
                 )

@@ -126,7 +126,6 @@ async def record_system_call(
             receipt = getattr(response, "cost_receipt", None)
             if receipt:
                 detail = {**(detail or {}), **receipt}
-
         if capture_ref is not None:
             detail = {
                 **(detail or {}),

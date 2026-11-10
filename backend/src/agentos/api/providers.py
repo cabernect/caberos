@@ -9,9 +9,10 @@ import json
 import logging
 import uuid
 from datetime import UTC
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,9 +21,12 @@ from ..auth import require_operator
 from ..db import get_db
 from ..harness.litellm_adapter import LiteLLMAdapter
 from ..models.agent import Agent
-from ..models.operator import Operator
+from ..models.operator import Operator, OperatorAuditLog
 from ..models.provider import Provider
 from ..notifications import create_notification
+from ..providers.search import search_provider
+from ..providers.search_endpoints import SELF_HOSTED, validate_self_hosted
+from ..providers.service_types import SEARCH_PROVIDER_TYPES, SERVICE_PROVIDER_TYPES, provider_scope
 from ..secret_store import decrypt, encrypt
 
 log = logging.getLogger(__name__)
@@ -46,7 +50,7 @@ def classify_provider_error(error: str) -> tuple[str, str]:
 class ProviderCreate(BaseModel):
     name: str
     type: str  # openai, anthropic, google, ollama, azure, ...
-    api_key: str | None = None  # plaintext on input, encrypted at rest
+    api_key: SecretStr | None = None
     base_url: str | None = None
     org_id: str | None = None
     extra_params: dict | None = None
@@ -57,7 +61,8 @@ class ProviderCreate(BaseModel):
 
 class ProviderUpdate(BaseModel):
     name: str | None = None
-    api_key: str | None = None  # if provided, re-encrypt
+    api_key: SecretStr | None = None
+    remove_api_key: bool = False  # blank/omitted input preserves the stored key
     base_url: str | None = None
     org_id: str | None = None
     extra_params: dict | None = None
@@ -69,6 +74,7 @@ class ProviderOut(BaseModel):
     id: str
     name: str
     type: str
+    scope: Literal["model", "search", "speech"] = "model"
     has_key: bool
     base_url: str | None = None
     org_id: str | None = None
@@ -89,6 +95,7 @@ class ProviderOut(BaseModel):
             id=p.id,
             name=p.name,
             type=p.type,
+            scope=provider_scope(p.type),
             has_key=p.encrypted_key is not None,
             base_url=p.base_url,
             org_id=p.org_id,
@@ -96,6 +103,48 @@ class ProviderOut(BaseModel):
             custom_models=json.loads(p.custom_models) if p.custom_models else [],
             credential_fields=credential_fields,
         )
+
+
+class SearchTestIn(BaseModel):
+    consent: bool = False
+
+
+@router.post("/{provider_id}/test-search")
+async def test_search_provider(
+    provider_id: str,
+    data: SearchTestIn,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    if not data.consent:
+        raise HTTPException(
+            status_code=422, detail="Explicit consent is required for a remote test."
+        )
+    provider = await db.get(Provider, provider_id)
+    if provider is None:
+        raise HTTPException(status_code=404, detail="Provider not found")
+    if provider.type not in SEARCH_PROVIDER_TYPES:
+        raise HTTPException(status_code=422, detail="This provider has no search test adapter.")
+    result = await search_provider(provider, "CaberOS connection test", 1)
+    db.add(
+        OperatorAuditLog(
+            operator_id=operator.id,
+            action="provider.search_test",
+            target=json.dumps(
+                {
+                    "provider_id": provider.id,
+                    "ok": "error" not in result,
+                    "service_usage": result.get("service_usage"),
+                }
+            ),
+        )
+    )
+    await db.commit()
+    return {
+        "ok": "error" not in result,
+        "error": result.get("error"),
+        "service_usage": result.get("service_usage"),
+    }
 
 
 class ModelInfo(BaseModel):
@@ -123,15 +172,24 @@ class ModelInfo(BaseModel):
     catalog_provider_id: str | None = None
     catalog_model_id: str | None = None
     catalog_mapping_explicit: bool = False
+    # Consumer gate — "chat" or "media". Discovery reports every model the
+    # provider lists; pickers filter on this instead of id patterns.
+    model_kind: str | None = None
+    output_modalities: list[str] | None = None
 
 
 @router.get("")
 async def list_providers(
+    scope: Literal["model", "search", "speech", "all"] = "model",
     operator: Operator = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ) -> list[ProviderOut]:
     result = await db.execute(select(Provider).order_by(Provider.name))
-    return [ProviderOut.from_model(p) for p in result.scalars().all()]
+    return [
+        ProviderOut.from_model(p)
+        for p in result.scalars().all()
+        if scope == "all" or provider_scope(p.type) == scope
+    ]
 
 
 @router.post("")
@@ -140,23 +198,43 @@ async def create_provider(
     operator: Operator = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ) -> ProviderOut:
+    base_url, extra_params = data.base_url, data.extra_params or {}
+    if data.type in SERVICE_PROVIDER_TYPES:
+        if (
+            data.org_id
+            or data.credentials
+            or (data.type != SELF_HOSTED and (base_url or extra_params))
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="Service providers use fixed endpoints. "
+                "Only self-hosted Firecrawl accepts a server URL.",
+            )
+        if data.type == SELF_HOSTED:
+            try:
+                base_url, extra_params = validate_self_hosted(base_url, extra_params)
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from None
     credentials = {k: v for k, v in (data.credentials or {}).items() if v}
+    api_key = data.api_key.get_secret_value().strip() if data.api_key else ""
     provider = Provider(
         id=str(uuid.uuid4()),
         name=data.name,
         type=data.type,
-        encrypted_key=encrypt(data.api_key) if data.api_key else None,
+        encrypted_key=encrypt(api_key) if api_key else None,
         encrypted_credentials=encrypt(json.dumps(credentials)) if credentials else None,
-        base_url=data.base_url,
+        base_url=base_url,
         org_id=data.org_id,
-        extra_params=json.dumps(data.extra_params or {}),
+        extra_params=json.dumps(extra_params),
     )
     db.add(provider)
+    db.add(OperatorAuditLog(operator_id=operator.id, action="provider.create", target=provider.id))
     await db.commit()
     await db.refresh(provider)
     from ..providers.model_catalog import schedule_provider_refresh
 
-    schedule_provider_refresh(provider.id)
+    if provider_scope(provider.type) == "model":
+        schedule_provider_refresh(provider.id)
     return ProviderOut.from_model(provider)
 
 
@@ -185,16 +263,50 @@ async def update_provider(
     if provider is None:
         raise HTTPException(status_code=404, detail="Provider not found")
 
+    self_hosted_config = None
+    if provider.type in SERVICE_PROVIDER_TYPES:
+        if (
+            data.org_id is not None
+            or data.credentials is not None
+            or (
+                provider.type != SELF_HOSTED
+                and (data.base_url is not None or data.extra_params is not None)
+            )
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="Cloud search connections accept name and key changes only.",
+            )
+        if provider.type == SELF_HOSTED:
+            new_url = data.base_url if data.base_url is not None else provider.base_url
+            changed_url = new_url != provider.base_url
+            options = (
+                data.extra_params
+                if data.extra_params is not None
+                else ({} if changed_url else json.loads(provider.extra_params or "{}"))
+            )
+            try:
+                self_hosted_config = validate_self_hosted(new_url, options)
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from None
+    api_key = data.api_key.get_secret_value().strip() if data.api_key else ""
+    if data.remove_api_key and api_key:
+        raise HTTPException(status_code=422, detail="Replace or remove the key, not both.")
     if data.name is not None:
         provider.name = data.name
-    if data.api_key is not None:
-        provider.encrypted_key = encrypt(data.api_key)
+    if data.remove_api_key:
+        provider.encrypted_key = None
+    elif api_key:
+        provider.encrypted_key = encrypt(api_key)
     if data.base_url is not None:
         provider.base_url = data.base_url
     if data.org_id is not None:
         provider.org_id = data.org_id
     if data.extra_params is not None:
         provider.extra_params = json.dumps(data.extra_params)
+    if self_hosted_config is not None:
+        provider.base_url, options = self_hosted_config
+        provider.extra_params = json.dumps(options)
     if data.credentials is not None:
         # Per-key merge — blank edit fields keep the stored value, an
         # explicit "" deletes the key, absent keys are untouched.
@@ -211,11 +323,13 @@ async def update_provider(
                 creds.pop(k, None)
         provider.encrypted_credentials = encrypt(json.dumps(creds)) if creds else None
 
+    db.add(OperatorAuditLog(operator_id=operator.id, action="provider.update", target=provider.id))
     await db.commit()
     await db.refresh(provider)
     from ..providers.model_catalog import schedule_provider_refresh
 
-    schedule_provider_refresh(provider.id)
+    if provider_scope(provider.type) == "model":
+        schedule_provider_refresh(provider.id)
     return ProviderOut.from_model(provider)
 
 
@@ -247,7 +361,19 @@ async def delete_provider(
     return {"status": "deleted", "affected_agents": affected_agents}
 
 
-@router.get("/{provider_id}/models")
+async def _require_model_connection(
+    provider_id: str,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    provider = await db.get(Provider, provider_id)
+    if provider is None:
+        raise HTTPException(status_code=404, detail="Provider not found")
+    if provider_scope(provider.type) != "model":
+        raise HTTPException(status_code=422, detail="This is a tool service, not a model provider.")
+
+
+@router.get("/{provider_id}/models", dependencies=[Depends(_require_model_connection)])
 async def list_models(
     provider_id: str,
     operator: Operator = Depends(require_operator),
@@ -260,7 +386,11 @@ async def list_models(
     empty list.
     """
     from ..providers.catalog import get_catalog_snapshot
-    from ..providers.model_catalog import list_offerings, provider_refresh_in_progress
+    from ..providers.model_catalog import (
+        list_offerings,
+        model_kind,
+        provider_refresh_in_progress,
+    )
 
     result = await db.execute(select(Provider).where(Provider.id == provider_id))
     provider = result.scalar_one_or_none()
@@ -293,6 +423,12 @@ async def list_models(
     for offering in offerings:
         resolved = json.loads(offering.resolved_json or "{}")
         prov = resolved.pop("provenance", {}) or {}
+        modalities = resolved.get("modalities")
+        outputs = (
+            list(modalities.get("output") or [])
+            if isinstance(modalities, dict) and modalities.get("output")
+            else None
+        )
         models.append(
             ModelInfo(
                 id=offering.model_id,
@@ -322,11 +458,20 @@ async def list_models(
                     offering.catalog_model_id if offering.catalog_mapping_explicit else None
                 ),
                 catalog_mapping_explicit=bool(offering.catalog_mapping_explicit),
+                model_kind=model_kind(offering.model_id, outputs),
+                output_modalities=outputs,
             )
         )
     for name in custom:
         if name not in by_id:
-            models.append(ModelInfo(id=name, name=name, availability="unknown"))
+            models.append(
+                ModelInfo(
+                    id=name,
+                    name=name,
+                    availability="unknown",
+                    model_kind=model_kind(name, None),
+                )
+            )
 
     # Composite revision: snapshot SHA + provider config fingerprint +
     # summed row revisions — a collision on max(row.rev) can't hide a
@@ -351,7 +496,7 @@ async def list_models(
     }
 
 
-@router.get("/{provider_id}/catalog-models")
+@router.get("/{provider_id}/catalog-models", dependencies=[Depends(_require_model_connection)])
 async def list_catalog_models(
     provider_id: str,
     catalog_provider: str | None = None,
@@ -382,6 +527,7 @@ async def list_catalog_models(
     if selected:
         for mid, raw in snapshot.models(selected).items():
             projected = project_model(raw)
+            modalities = projected.get("modalities")
             models.append(
                 {
                     "id": mid,
@@ -389,6 +535,9 @@ async def list_catalog_models(
                     "context_window_tokens": projected.get("context_window_tokens"),
                     "supports_thinking": projected.get("supports_thinking"),
                     "supports_vision": projected.get("supports_vision"),
+                    "output_modalities": (
+                        modalities.get("output") if isinstance(modalities, dict) else None
+                    ),
                 }
             )
         models.sort(key=lambda m: m["id"])
@@ -399,7 +548,7 @@ async def list_catalog_models(
     }
 
 
-@router.post("/{provider_id}/models/refresh")
+@router.post("/{provider_id}/models/refresh", dependencies=[Depends(_require_model_connection)])
 async def refresh_models(
     provider_id: str,
     operator: Operator = Depends(require_operator),
@@ -422,7 +571,10 @@ class ModelMetadataIn(BaseModel):
     clear_catalog_mapping: bool = False
 
 
-@router.put("/{provider_id}/models/{model_name:path}/metadata")
+@router.put(
+    "/{provider_id}/models/{model_name:path}/metadata",
+    dependencies=[Depends(_require_model_connection)],
+)
 async def set_model_metadata(
     provider_id: str,
     model_name: str,
@@ -487,7 +639,7 @@ async def _pick_probe_model(db: AsyncSession, provider_id: str) -> str | None:
     return best[2] if best else first_id
 
 
-@router.post("/{provider_id}/validate")
+@router.post("/{provider_id}/validate", dependencies=[Depends(_require_model_connection)])
 async def validate_model(
     provider_id: str,
     body: dict,
@@ -528,7 +680,7 @@ class CustomModelIn(BaseModel):
     model_name: str
 
 
-@router.post("/{provider_id}/models")
+@router.post("/{provider_id}/models", dependencies=[Depends(_require_model_connection)])
 async def add_custom_model(
     provider_id: str,
     body: CustomModelIn,
@@ -550,7 +702,9 @@ async def add_custom_model(
     return {"custom_models": models}
 
 
-@router.delete("/{provider_id}/models/{model_name:path}")
+@router.delete(
+    "/{provider_id}/models/{model_name:path}", dependencies=[Depends(_require_model_connection)]
+)
 async def remove_custom_model(
     provider_id: str,
     model_name: str,

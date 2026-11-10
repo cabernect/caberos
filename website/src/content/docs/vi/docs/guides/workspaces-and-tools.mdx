@@ -1,0 +1,116 @@
+---
+title: Workspace, Tools và speech
+description: Cấu hình workspace, search, tạo ảnh, dictation, Read Aloud và terminal local trong v0.2.1.
+sidebar:
+  order: 3
+---
+
+Các workflow này đã được triển khai trên nhánh mã v0.2.1, mở rộng Agent
+Workbench. Cloud-drive ingestion, terminal remote, realtime voice và app do
+agent tạo chưa nằm trong phần triển khai này.
+
+## Gắn workspace có sẵn
+
+Khi tạo agent hoặc trong **Agent Settings**, để trống workspace để dùng thư mục
+do CaberOS quản lý, hoặc dùng **Browse** chọn một thư mục có sẵn. Bạn cũng có
+thể nhập absolute path.
+
+- Thư mục được dùng tại chỗ; thao tác chọn không copy hoặc di chuyển file.
+- Path thuộc máy chạy gateway, không nhất thiết là máy đang mở browser.
+  Với Docker, thư mục phải được mount sẵn vào backend container.
+- Directory browser trên web chỉ duyệt trong home của tài khoản chạy gateway.
+  Với path ngoài home, nhập thủ công hoặc dùng native dialog khi có hỗ trợ.
+- Chọn thư mục không cấp tool hay tắt strict sandbox. Identity, credential và
+  `MEMORY.md` vẫn nằm ngoài workspace dùng chung.
+
+Session pin vị trí workspace. Đổi mặc định của agent chỉ ảnh hưởng conversation
+mới; khi agent còn công việc đang chạy thì không thể đổi mặc định. Pin giữ vị
+trí, không tạo snapshot nội dung file.
+
+Nếu lịch sử workspace của session cũ không rõ hoặc mâu thuẫn, CaberOS từ chối
+đoán vị trí. Không trỏ sang một thư mục không liên quan để né lỗi đó. Attachment
+lịch sử và live path của artifact phải được resolve từ provenance đã lưu.
+
+## Cấu hình Tools
+
+Mở global **Settings → Tools** để cấu hình backend của capability độc lập với
+reasoning model của agent. Model Offering là provider và exact model cho một
+operation dùng model; service search/speech chuyên dụng dùng chung cơ chế giữ
+credential mã hóa nhưng không trở thành chat model.
+
+1. Mở tool card và chọn backend hoặc provider.
+2. Chọn model nếu operation yêu cầu.
+3. Nhập credential trong phần connection setup của card khi cần.
+4. Save, xem readiness và chủ động test connection nếu có.
+
+Mở settings hoặc Save không ngầm tạo paid provider call. Test tường minh và sử
+dụng thực tế có thể bị tính phí. Binding không cấp authority cho agent:
+capability grant, approval và audit vẫn áp dụng. Operation chưa cấu hình hoặc
+không khả dụng hiển thị đúng trạng thái.
+
+### Search
+
+Web Search hỗ trợ DDGS, Tavily, Exa, Brave Search API, Firecrawl Cloud và
+Firecrawl self-hosted. DDGS vẫn là mặc định miễn phí; lỗi không tự động chuyển
+sang một paid service khác.
+
+Firecrawl self-hosted cần server URL và consent private-network khi áp dụng.
+Search result là discovery evidence, chưa phải visited reference: agent phải
+fetch hoặc mở trang trước khi trích dẫn như nguồn đã truy cập. Search receipt
+không bịa LLM token usage hoặc model-call cost.
+
+### Tạo hoặc sửa ảnh
+
+Cấu hình image binding, sau đó cấp `image_generate` và/hoặc `image_edit` cho
+agent. Sửa ảnh cần source image có thể truy cập. Yêu cầu trong conversation và
+approve operation theo policy của bạn.
+
+Image byte được kiểm tra, lưu dưới `artifacts/` trong workspace đã pin, track
+thành artifact và hiển thị inline trong chat. Provider attempt được ghi trong
+model-call ledger; giá không có dữ liệu vẫn là unknown. Chưa có video generation.
+
+## Dictation và Read Aloud
+
+Cấu hình speech-to-text và text-to-speech riêng trong **Settings → Tools**.
+Adapter hỗ trợ endpoint OpenAI-compatible của OpenAI/Groq, OpenRouter,
+ElevenLabs và Gemini. Khả năng dùng thực tế tùy operation, model và tài khoản
+provider; có adapter không có nghĩa mọi model đều tương thích.
+
+- **Dictation:** cấp quyền microphone, dùng mic trong composer để ghi âm,
+  rồi xem và sửa transcript trước khi gửi. Đây là record-and-transcribe,
+  không phải streaming partial transcription hoặc tự động gửi.
+- **Read Aloud:** bấm speaker dưới assistant message. Chỉ phát khi bạn yêu
+  cầu; Stop kết thúc playback, chọn message khác thay request cũ. Audio đã
+  tạo có thể được dùng lại mà không gọi synthesis thêm lần nữa.
+- **Giữ nguyên text:** speech renderer bỏ hoặc tóm tắt Markdown không phù hợp
+  như code và table. Copy vẫn giữ toàn bộ message gốc.
+
+Đây là operator action có authentication, không phải tool để agent tự gọi.
+Recording và message text được gửi tới speech provider bạn cấu hình. Receipt
+giữ usage unit có dữ liệu; thiếu pricing vẫn là unknown. Voice Mode realtime
+hai chiều, hands-free vẫn được hoãn.
+
+## Chọn terminal backend local
+
+Vào **Settings → Tools → Terminal** để xem backend local khả dụng. **Auto**
+giữ lựa chọn native theo platform. Backend chỉ định phải được hỗ trợ và cài
+trên máy gateway; không khả dụng thì không âm thầm fallback sang backend khác
+hoặc open execution.
+
+Background terminal strict-mode giữ backend và binding revision lúc admission.
+Đổi settings không migrate terminal đang có. Agent vẫn cần terminal permission
+và command execution vẫn qua mediation.
+
+SSH, Daytona, Modal, remote working-copy transfer và remote compute lifecycle
+được hoãn. Transport abstraction chưa đồng nghĩa có tính năng remote execution.
+
+## Preview và provenance
+
+Live byte của artifact cần workspace root được chứng minh. Artifact cũ không
+resolve được root hiển thị đúng trạng thái; live preview có thể trả conflict
+thay vì đọc file cùng tên trong default workspace hiện tại. Managed revision
+byte độc lập với file live.
+
+Xem [Knowledge Vault](/vi/docs/guides/knowledge-vault/) để inspect chunk và query
+spreadsheet chính xác; xem [Conversation](/vi/docs/guides/conversations/) để biết
+compaction feedback và run status.

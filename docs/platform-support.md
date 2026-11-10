@@ -6,27 +6,30 @@ CaberOS runs shell commands in a sandbox to isolate agents from the host filesys
 
 ## Support tiers
 
-CaberOS tries backends in platform-specific order: the native sandbox first (fastest, zero dependencies), then Docker as a fallback on macOS and Linux, then refusal with a clear reason. **Windows is different:** it uses Microsoft Execution Containers (MXC), which the installer bundles — no Docker and no WSL.
+CaberOS defaults to the OS-native terminal path: Seatbelt on macOS, bubblewrap
+on Linux, and bundled Microsoft Execution Containers (MXC) on Windows.
+If the native backend is unavailable or a command fails, that result is reported
+directly. CaberOS does not probe, start, install, or switch to Docker as recovery.
+Docker sandbox setup is future explicit opt-in work. Per-agent strict/open
+settings are unchanged; a strict-mode failure never enables open execution.
 
 ### macOS (Apple Silicon / Intel)
 
 | Candidate | Name | Status | Notes |
 |---|---|---|---|
 | `seatbelt` | macOS Sandbox (`sandbox-exec`) | ✓ Built-in | Zero install, uses built-in `sandbox-exec`. Fastest option. |
-| `docker` | Docker Desktop / Engine | ✓ Fallback | If Docker is installed and running. Common via Docker Desktop. |
-| — | Shell disabled | ✗ Unavailable | No sandbox found. Install Docker or use Linux. |
+| — | Shell disabled | ✗ Unavailable | Native readiness failed; see the reported reason. |
 
-**Try first:** `seatbelt` (built-in). If you need to run agents on Intel macOS or prefer Docker, the `docker` fallback works.
+**Default:** `seatbelt` (built-in) on both Apple Silicon and Intel. No Docker fallback.
 
 ### Linux (x86-64 / ARM)
 
 | Candidate | Name | Status | Notes |
 |---|---|---|---|
 | `bwrap` | Bubblewrap | ✓ Built-in | Zero install on most distros. Run `sudo apt install bubblewrap` (Debian/Ubuntu) or equivalent. |
-| `docker` | Docker Engine | ✓ Fallback | If Docker daemon is running. |
-| — | Shell disabled | ✗ Unavailable | No sandbox found. Install bubblewrap or Docker Engine. |
+| — | Shell disabled | ✗ Unavailable | Bubblewrap is missing or cannot provide isolation. |
 
-**Try first:** `bwrap` (requires no daemon). If not available, Docker works as a fallback.
+**Default:** `bwrap` (requires no daemon). If unavailable, strict terminal execution is refused.
 
 ### Windows (x86-64, Windows 11 24H2 / build 26100 or newer)
 
@@ -122,14 +125,16 @@ And when MXC is installed but waiting on its one-time setup:
 
 | Field | Value | Meaning |
 |---|---|---|
-| `kind` | `seatbelt`, `bwrap`, `docker`, `mxc`, `none` | The backend CaberOS is using (or would use). |
+| `kind` | `seatbelt`, `bwrap`, `mxc`, `none` | The default OS-native backend, or unavailable. Docker is not auto-selected. |
 | `state` | `available` | Sandbox is ready for shell commands and is a trusted security boundary. |
 | `state` | `experimental` | Commands genuinely run, but the backend's own vendor does not yet call it a security boundary (MXC on Windows). See `reason` for the caveat. |
 | `state` | `unavailable` | Shell commands will be refused. See `reason`. |
 | `reason` | string or null | For `unavailable`: why, listing every candidate tried. For `experimental`: the trust caveat to show the operator. Null only when `state` is `available`. |
 | `setup_required` | boolean | `true` when the only thing missing is a one-time, user-approved host setup the desktop app can run (the **Enable shell sandbox** button). `false` when something must be installed instead. |
 
-An `unavailable` result is **not cached**: it is re-checked on each health poll and each shell call, so fixing the problem (finishing setup, starting Docker on macOS/Linux) takes effect without restarting the app.
+An `unavailable` result is **not cached**: each health poll and shell call
+rechecks native readiness, so finishing native setup can take effect without
+restarting the app. Starting Docker does not affect this result.
 
 ### Full health response
 
@@ -160,8 +165,23 @@ The `/api/health` endpoint also reports provider and agent counts, and the gatew
 - **Platform:** macOS (any version with `sandbox-exec`)
 - **Install:** None — built into macOS
 - **Network:** Disabled by default; agents can request `allow_network=True` per-command
-- **Performance:** Native, ~1ms per sandbox setup
-- **Filesystem access:** Read-only to system; writes limited to agent workspace + `/tmp`
+- **Readiness:** A cached synthetic self-check must prove workspace read/write
+  and sibling-file read/write denial. Failure reports unavailable; CaberOS does
+  not retry the old permissive profile.
+- **Filesystem access:** The W7 worktree uses a default-deny profile. File data
+  and execution are permitted only in the workspace and fixed Apple runtime/
+  developer-tool directories. Only the workspace and `/dev/null` are writable.
+  Global path metadata lookup is allowed, not arbitrary file contents.
+- **Temporary files:** HOME, TMPDIR, TMP, and TEMP point to the selected
+  workspace, not shared host `/tmp`. Agents sharing that workspace also share
+  those files; this is not per-run private storage.
+- **Compatibility:** Filesystem root, the operator home and its ancestors, and
+  system-runtime-overlapping workspaces are refused. Arbitrary applications,
+  Homebrew installations, and user-level runtime directories are not implicitly
+  readable or executable. Tools depending on them may be unavailable.
+- **Verification:** This new profile still needs isolated native macOS regression
+  verification. The startup self-check is a narrow readiness check, not proof
+  of complete host isolation or resource-limit enforcement.
 
 ### bwrap (Linux)
 
@@ -170,7 +190,9 @@ The `/api/health` endpoint also reports provider and agent counts, and the gatew
 - **Network:** Disabled by default; agents can request `allow_network=True` per-command
 - **Performance:** Native namespace-based isolation, ~1ms per sandbox setup
 - **Filesystem access:** Read-only to system; writes limited to agent workspace + shared temp dirs
-- **Container caveat:** bwrap may not work inside containers or GitHub Actions runners (namespace limitations). Docker is a fallback in those environments.
+- **Container caveat:** bwrap may not work inside containers or GitHub Actions
+  runners (namespace limitations). Strict terminal execution then reports
+  unavailable; there is no nested Docker fallback or host-socket recovery.
 
 ### MXC (Windows, experimental)
 
@@ -183,17 +205,35 @@ The `/api/health` endpoint also reports provider and agent counts, and the gatew
 - **Performance:** ~110–530 ms per command; no VM and no daemon.
 - **Timeout behavior:** Best-effort process kill — unlike Docker there is no separate "container kill" verb in this CLI.
 
-### Docker (macOS and Linux fallback)
+### Docker Prototype (Future Explicit Opt-In)
+
+This prototype is not connected to automatic terminal selection. Installing
+Docker does not enable it. The following describes retained implementation
+work, not a requirement for OS-native terminal execution or current setup UI.
 
 - **Platform:** macOS, Linux. Not used on Windows.
 - **Install:** [Docker Desktop](https://www.docker.com/products/docker-desktop) or Docker Engine
 - **Start:** Ensure the Docker daemon is running (`docker ps` should work)
-- **Image:** `alpine:3.20` — pulled once during the first probe (not on the first command, so image pulls don't eat into command timeouts)
+- **Image:** `alpine:3.20` must already be installed locally. Readiness checks
+  inspect it without downloading; execution uses `--pull=never`. A missing or
+  uninspectable image reports unavailable rather than triggering a download.
 - **Network:** Disabled by default (`--network none`); agents can request `allow_network=True` per-command
 - **Container naming:** `caberos-sandbox-<uuid>` — cleaned up automatically after command completion
 - **Performance:** ~100-200ms per sandbox setup (container start + workspace mount). Slower than native backends but more portable.
 - **Filesystem access:** Workspace is bind-mounted to `/workspace` inside the container; container sees only its `/workspace` and system libraries
 - **Timeout behavior:** On timeout, CaberOS runs `docker kill <container>` to stop the actual container (not just the local `docker run` client process)
+- **Background lifecycle (W7 worktree):** The controller records a generated
+  resource name before creating and attaching to a container. Close/cancel/
+  shutdown and restart reconciliation remove only the recorded, ownership-
+  labeled resource. Failed confirmation reports `orphaned`, not `closed`.
+  Native daemon and migration verification remain pending.
+- **Requested resource limits:** 256 MiB memory with no additional swap, one
+  CPU, 64 PIDs, 256 file descriptors, 64 MiB per file, and a private 32 MiB
+  noexec temp mount. The image is read-only and capabilities are dropped.
+  The host-mapped user is non-root; root controllers select UID/GID 65534 and
+  may encounter workspace permission failures. CaberOS does not chmod the
+  workspace or weaken isolation to recover. Total workspace disk quotas and
+  live daemon enforcement remain unverified/open.
 
 ## What happens when no sandbox is available
 
@@ -219,13 +259,8 @@ Only the `terminal` / `shell` capability is refused.
 
 ### macOS
 
-Seatbelt is built-in. To use Docker as a fallback:
-
-```bash
-# Download Docker Desktop from https://www.docker.com/products/docker-desktop
-# Or via Homebrew:
-brew install docker
-```
+Seatbelt is built-in. No Docker installation or daemon is required. If native
+readiness fails, inspect the reported reason; there is no automatic substitute.
 
 ### Linux (Debian/Ubuntu)
 
@@ -237,12 +272,8 @@ sudo apt update && sudo apt install bubblewrap
 which bwrap
 ```
 
-To also support Docker:
-
-```bash
-sudo apt install docker.io
-sudo systemctl start docker
-```
+If bubblewrap cannot run in this environment, strict terminal execution remains
+unavailable. Docker setup is deferred, not an installation recovery step.
 
 ### Windows
 
@@ -264,17 +295,16 @@ curl.exe -H "Authorization: Bearer <session_token>" http://127.0.0.1:51718/api/h
 
 ### "No sandbox available" on macOS
 
-Seatbelt is built-in, so this should not happen. If it does:
+Seatbelt is built-in, but its readiness check can still fail. Inspect the
+reported reason and verify that the OS executable is available:
 
 ```bash
 # Verify sandbox-exec is available:
 which sandbox-exec
-
-# If not found, reinstall Xcode Command Line Tools:
-xcode-select --install
 ```
 
-If you prefer Docker, install Docker Desktop and restart the backend.
+Failure is reported directly; CaberOS does not switch backends or weaken the
+native profile.
 
 ### "bwrap: Bubblewrap is not installed" on Linux
 
@@ -294,25 +324,11 @@ which bwrap
 bwrap --version
 ```
 
-### "Docker is installed but the daemon is not responding" (macOS / Linux)
+### Docker Is Installed But Native Terminal Is Still Unavailable
 
-The Docker daemon is not running. Start it:
-
-- **macOS:** Launch Docker Desktop
-- **Linux:** `sudo systemctl start docker`
-
-The next health poll (within 15 seconds) picks it up; no restart is needed.
-
-### Docker pull times out
-
-If the first health check hangs or times out:
-
-```bash
-# Manually pull the image (gives you progress feedback):
-docker pull alpine:3.20
-```
-
-The probe waits up to 120 seconds for the image pull; if your connection is slow, this is expected.
+This is expected: native terminal health does not probe Docker. Starting its
+daemon or installing an image does not enable a fallback. Explicit Docker
+sandbox setup is future work; it is not needed to use the OS-native terminal.
 
 ### "MXC is present … but not yet set up" (Windows)
 
@@ -334,13 +350,13 @@ The container cannot read your user profile, so per-user installs (Python, Node 
 
 | Setup | Native | Fallback | Status |
 |---|---|---|---|
-| Desktop app (macOS) | seatbelt | docker | Native if Seatbelt works |
+| Desktop app (macOS) | seatbelt | none | Native, or an explained unavailable state |
 | Desktop app (Windows) | mxc (bundled) | none | Experimental; one-time setup; no Docker or WSL |
-| Local dev (macOS) | seatbelt | docker | Native if Seatbelt works |
-| Local dev (Linux) | bwrap | docker | Native if bwrap works |
+| Local dev (macOS) | seatbelt | none | Native, or an explained unavailable state |
+| Local dev (Linux) | bwrap | none | Native, or an explained unavailable state |
 | Local dev (Windows) | mxc | none | Needs `CABEROS_MXC_EXE_PATH` and the one-time setup |
-| Docker (any platform) | none (inside container) | docker (host docker socket) | Requires `--network host` or socket mount to reach host Docker |
-| CI/CD (Linux, GitHub Actions) | bwrap fails (no namespaces) | docker | Docker only |
+| Docker deployment | Linux bwrap when supported | none | No host Docker socket or nested fallback |
+| CI/CD (Linux, GitHub Actions) | bwrap when namespaces are supported | none | Otherwise strict terminal execution is unavailable |
 
 ## See also
 

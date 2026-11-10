@@ -22,6 +22,7 @@ from ..config import settings
 from ..config_schema import ModelConfig
 from ..models.provider import Provider
 from ..providers.litellm_transport import LiteLLMTransport
+from ..providers.service_types import require_model_provider
 from ..secret_store import decrypt
 from ..services.call_accounting import (
     CallRateSnapshot,
@@ -164,6 +165,7 @@ class LiteLLMAdapter:
         provider = result.scalar_one_or_none()
         if provider is None:
             raise ValueError(f"Provider {provider_id} not found")
+        require_model_provider(provider.type)
 
         api_key = ""
         if provider.encrypted_key:

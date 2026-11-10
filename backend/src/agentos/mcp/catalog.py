@@ -57,6 +57,26 @@ def get_catalog_entry(name: str) -> dict[str, Any] | None:
     return None
 
 
+def api_key_headers(name: str, transport: str, url: str | None) -> dict[str, str]:
+    """Recover omitted templates for legacy installs, never for a different endpoint."""
+    entry = get_catalog_entry(name)
+    entry_url = (entry or {}).get("url")
+    # Query markers (e.g. Exa's ?login) select the auth mode, not a different
+    # endpoint — matching on the path keeps template recovery working when a
+    # server was installed against either variant.
+    same_endpoint = (
+        url is not None and entry_url is not None and url.split("?")[0] == entry_url.split("?")[0]
+    )
+    if (
+        entry
+        and transport == entry.get("transport") == "http"
+        and same_endpoint
+        and any("{{credential" in v for v in (entry.get("headers") or {}).values())
+    ):
+        return dict(entry["headers"])
+    return {}
+
+
 def list_categories() -> list[dict[str, int]]:
     """List categories with server counts."""
     entries = _load_catalog()

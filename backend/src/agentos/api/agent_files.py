@@ -3,6 +3,7 @@
 import os
 import re
 from pathlib import Path
+from typing import NamedTuple
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from pydantic import BaseModel
@@ -37,6 +38,15 @@ def _child_path(parent: Path, name: str) -> Path:
     return resolve_within(parent, name)
 
 
+class _ResolvedSource(NamedTuple):
+    data: bytes
+    name: str
+    artifact: object | None
+    file_path: Path | None
+    live_root: Path | None = None
+    unresolved_tracking: bool = False
+
+
 def _agent_home(agent_id: str) -> Path:
     """Get the agent's home directory."""
     agent_id = _safe_component(agent_id, "agent id")
@@ -61,12 +71,35 @@ def _skills_dir(agent_id: str) -> Path:
 
 
 def _workspace_path(agent_id: str) -> Path:
-    """Get the agent's workspace path."""
+    """Get the agent's managed workspace path (skills/agent-owned storage)."""
     from ..sandbox.workspace import WorkspaceManager
 
     wm = WorkspaceManager()
     agent_id = _safe_component(agent_id, "agent id")
     return Path(wm.create_workspace(agent_id))
+
+
+async def _workspace_root(db: AsyncSession, agent_id: str, session_id: str | None = None) -> Path:
+    """Resolve the root for workspace browsing/previews.
+
+    A session's pinned root wins; absent or unpinned, the agent's current
+    default. Managed roots are created on demand; external roots are
+    attach-only and never created here. A foreign session 404s — no
+    silent fallback to another directory.
+    """
+    from ..sandbox.workspace import WorkspaceAmbiguousError, WorkspaceManager
+
+    wm = WorkspaceManager()
+    agent_id = _safe_component(agent_id, "agent id")
+    try:
+        root = await wm.resolve_api_root(db, agent_id, session_id)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail="Session not found") from e
+    except WorkspaceAmbiguousError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    if wm.is_managed_root(agent_id, root):
+        root.mkdir(parents=True, exist_ok=True)
+    return root
 
 
 # --- MEMORY.md ---
@@ -547,11 +580,12 @@ async def list_workspace(
     operator: Operator = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
     path: str = "",
+    session_id: str | None = None,
 ) -> dict:
     """List files in the agent's workspace."""
     from ..sandbox.workspace import WorkspaceManager
 
-    ws = _workspace_path(agent_id)
+    ws = await _workspace_root(db, agent_id, session_id)
     try:
         target = Path(WorkspaceManager().validate_path(str(ws), path or "."))
     except ValueError as error:
@@ -570,9 +604,10 @@ async def list_workspace(
         }
 
     entries = []
-    for entry in sorted(target.iterdir(), key=lambda e: (not e.is_dir(), e.name)):
-        if entry.name.startswith("."):
-            continue
+    # Dotfiles are real workspace content (agents can read them via tools) —
+    # list them, sorted after visible entries within each group.
+    key = lambda e: (not e.is_dir(), e.name.startswith("."), e.name.lower())  # noqa: E731
+    for entry in sorted(target.iterdir(), key=key):
         entries.append(
             {
                 "name": entry.name,
@@ -593,6 +628,7 @@ async def delete_workspace_entry(
     operator: Operator = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
     path: str = "",
+    session_id: str | None = None,
 ) -> dict:
     """Delete a file or directory in the agent's workspace.
 
@@ -612,7 +648,7 @@ async def delete_workspace_entry(
     if not rel:
         raise HTTPException(status_code=400, detail="path is required")
 
-    ws = _workspace_path(agent_id)
+    ws = await _workspace_root(db, agent_id, session_id)
     # Containment applies to the parent directory (fully resolved — '..'
     # and symlinked dirs still can't escape), never to the leaf: a symlink
     # leaf is a workspace entry and must be unlinked without being followed.
@@ -675,12 +711,15 @@ async def _resolve_source(
     path: str,
     artifact_id: str | None,
     revision_id: str | None,
-) -> tuple[bytes, str, object | None, Path | None]:
+) -> _ResolvedSource:
     """Resolve preview bytes + owning artifact.
 
-    Returns (data, name, artifact, file_path). file_path is set only when
-    the bytes are the live workspace file (raw endpoint streams it without
-    a memory copy); revision bytes always load from managed storage.
+    file_path is set only when the bytes are the live workspace file (raw
+    endpoint streams it without a memory copy); revision bytes always load
+    from managed storage. live_root is the root the live file resolves
+    under — the artifact's evidence-backed root, never the request's
+    workspace when they differ. unresolved_tracking means a legacy
+    artifact row claims this path but its root can't be established.
     """
     from ..artifacts import service as artifact_service
     from ..artifacts.service import ArtifactError
@@ -701,6 +740,12 @@ async def _resolve_source(
             raise HTTPException(status_code=404, detail=str(e)) from e
         if artifact.workspace_id != agent_id:
             raise HTTPException(status_code=404, detail="Artifact not found")
+        # The live root comes from evidence — the recorded workspace_path,
+        # or for legacy rows the creating run/session's recorded root —
+        # never the request's workspace, where a same-named file could
+        # masquerade as this artifact.
+        root_str = artifact.workspace_path or await artifact_service.evidence_root(db, artifact)
+        live_root = Path(root_str) if root_str else None
         if revision_id:
             from ..models.artifact import ArtifactRevision
 
@@ -709,11 +754,20 @@ async def _resolve_source(
                 raise HTTPException(status_code=404, detail="Revision not found")
             data = await artifact_service.revision_bytes(db, revision_id)
         else:
-            target = _child_path(ws, artifact.current_path)
+            if live_root is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "This artifact's workspace can't be established — it "
+                        "predates recorded locations. Its tracked revisions "
+                        "remain available."
+                    ),
+                )
+            target = _child_path(live_root, artifact.current_path)
             if not target.exists() or not target.is_file():
                 raise HTTPException(status_code=404, detail="File not found")
             data = target.read_bytes()
-        return data, Path(artifact.current_path).name, artifact, None
+        return _ResolvedSource(data, Path(artifact.current_path).name, artifact, None, live_root)
 
     try:
         target = Path(WorkspaceManager().validate_path(str(ws), path))
@@ -721,8 +775,8 @@ async def _resolve_source(
         raise HTTPException(status_code=403, detail="Path outside workspace") from error
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="File not found")
-    artifact = await artifact_service.get_by_path(db, agent_id, path)
-    return target.read_bytes(), target.name, artifact, target
+    artifact, unresolved = await artifact_service.get_by_path(db, agent_id, path, ws)
+    return _ResolvedSource(target.read_bytes(), target.name, artifact, target, ws, unresolved)
 
 
 async def _artifact_meta(db: AsyncSession, artifact, revision_id: str | None) -> dict:
@@ -774,24 +828,31 @@ async def preview_workspace_file(
     path: str = "",
     artifact_id: str | None = None,
     revision_id: str | None = None,
+    session_id: str | None = None,
 ) -> dict:
     """Bounded preview payload for a workspace file or artifact revision."""
     from .. import previews
 
-    ws = _workspace_path(agent_id)
-    data, name, artifact, _ = await _resolve_source(
-        db, ws, agent_id, path, artifact_id, revision_id
+    ws = await _workspace_root(db, agent_id, session_id)
+    src = await _resolve_source(db, ws, agent_id, path, artifact_id, revision_id)
+    payload = previews.preview_bytes(src.data, src.name)
+    payload["artifact"] = (
+        await _artifact_meta(db, src.artifact, revision_id) if src.artifact else None
     )
-    payload = previews.preview_bytes(data, name)
-    payload["artifact"] = await _artifact_meta(db, artifact, revision_id) if artifact else None
-    if artifact and not artifact_id and not revision_id:
-        payload["path"] = artifact.current_path
+    if src.unresolved_tracking:
+        # A legacy artifact row claims this path but its root can't be
+        # established — expose that instead of calling the file ordinary.
+        payload["tracking"] = "unresolved"
+    if src.artifact and not artifact_id and not revision_id:
+        payload["path"] = src.artifact.current_path
     else:
         payload["path"] = path
     # Operator-only: the desktop shell uses the absolute path for
-    # open/reveal-in-finder. Revision previews point at the live file.
-    live_path = artifact.current_path if artifact else path
-    payload["absolute_path"] = str(ws / live_path)
+    # open/reveal-in-finder. Revision previews point at the live file —
+    # under the artifact's evidence root when it differs from ws; None
+    # when no root can be established at all.
+    live_path = src.artifact.current_path if src.artifact else path
+    payload["absolute_path"] = str(src.live_root / live_path) if src.live_root else None
     return payload
 
 
@@ -803,6 +864,7 @@ async def raw_workspace_file(
     path: str = "",
     artifact_id: str | None = None,
     revision_id: str | None = None,
+    session_id: str | None = None,
 ):
     """Raw bytes with the correct Content-Type — images/media/downloads
     stream through object URLs on the client (Bearer auth blocks <img src>)."""
@@ -810,14 +872,12 @@ async def raw_workspace_file(
 
     from .. import previews
 
-    ws = _workspace_path(agent_id)
-    data, name, _, file_path = await _resolve_source(
-        db, ws, agent_id, path, artifact_id, revision_id
-    )
-    mime = previews.media_type(name)
-    if file_path is not None:
-        return FileResponse(file_path, media_type=mime, filename=name)
-    return Response(content=data, media_type=mime)
+    ws = await _workspace_root(db, agent_id, session_id)
+    src = await _resolve_source(db, ws, agent_id, path, artifact_id, revision_id)
+    mime = previews.media_type(src.name)
+    if src.file_path is not None:
+        return FileResponse(src.file_path, media_type=mime, filename=src.name)
+    return Response(content=src.data, media_type=mime)
 
 
 @router.get("/{agent_id}/workspace/pdf-page")
@@ -829,18 +889,19 @@ async def pdf_page(
     path: str = "",
     artifact_id: str | None = None,
     revision_id: str | None = None,
+    session_id: str | None = None,
 ):
     """One PDF page rendered to PNG — the paginated viewer's image source."""
     from fastapi.responses import Response
 
     from .. import previews
 
-    ws = _workspace_path(agent_id)
-    data, name, _, _ = await _resolve_source(db, ws, agent_id, path, artifact_id, revision_id)
-    if not name.lower().endswith(".pdf"):
+    ws = await _workspace_root(db, agent_id, session_id)
+    src = await _resolve_source(db, ws, agent_id, path, artifact_id, revision_id)
+    if not src.name.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Not a PDF")
     try:
-        png = previews.render_pdf_page(data, page)
+        png = previews.render_pdf_page(src.data, page)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
@@ -892,11 +953,17 @@ async def restore_artifact_revision(
     from ..artifacts import service as artifact_service
     from ..artifacts.service import ArtifactError
 
-    ws = _workspace_path(agent_id)
     try:
         artifact = await artifact_service._get(db, artifact_id)
         if artifact.workspace_id != agent_id:
             raise ArtifactError("Artifact not found")
+        # Restore writes back to the root the artifact was recorded under —
+        # the agent's default may have moved since then.
+        ws = (
+            Path(artifact.workspace_path)
+            if artifact.workspace_path
+            else await _workspace_root(db, agent_id)
+        )
         rev = await artifact_service.restore(
             db,
             artifact_id,
@@ -919,13 +986,14 @@ async def adopt_workspace_file(
     req: AdoptRequest,
     operator: Operator = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
+    session_id: str | None = None,
 ) -> dict:
     """Track history for an ordinary workspace file — its current bytes
     become revision 1."""
     from ..artifacts import service as artifact_service
     from ..artifacts.service import ArtifactError
 
-    ws = _workspace_path(agent_id)
+    ws = await _workspace_root(db, agent_id, session_id)
     try:
         artifact, rev = await artifact_service.adopt(
             db,

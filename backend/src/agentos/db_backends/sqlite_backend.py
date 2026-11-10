@@ -257,6 +257,10 @@ class SQLiteBackend(DatabaseBackend):
             ("elicitation_requests", "sub_agent_id", "VARCHAR(36)"),
             ("terminal_sessions", "call_id", "VARCHAR(255)"),
             ("terminal_sessions", "sub_agent_id", "VARCHAR(36)"),
+            ("terminal_sessions", "backend_kind", "TEXT"),
+            ("terminal_sessions", "resource_id", "TEXT"),
+            # W11 admission pin — NULL on open-mode and legacy rows.
+            ("terminal_sessions", "binding_revision", "INTEGER"),
             ("artifact_revisions", "call_id", "VARCHAR(255)"),
             ("artifact_revisions", "sub_agent_id", "VARCHAR(36)"),
             ("run_sources", "call_id", "VARCHAR(255)"),
@@ -266,6 +270,11 @@ class SQLiteBackend(DatabaseBackend):
             ("audit_records", "created_at", "DATETIME"),
             # Execution-time effects snapshot (capability registry).
             ("audit_records", "effects", "JSON"),
+            # v0.2.1 workspace pinning — sessions/artifacts/runs record the
+            # root their files live under; NULL = legacy dynamic resolution.
+            ("sessions", "workspace_path", "TEXT"),
+            ("runs", "workspace_path", "TEXT"),
+            ("artifacts", "workspace_path", "TEXT"),
         ]
         for table, column, col_type in patches:
             if not await self.column_exists(conn, table, column):

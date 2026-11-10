@@ -23,7 +23,12 @@ class TerminalSession(IdMixin, Base):
     sub_agent_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     workspace_path: Mapped[str] = mapped_column(String(512), nullable=False)
     process_group_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    # running | completed | failed | timeout | closed | interrupted
+    backend_kind: Mapped[str | None] = mapped_column(String, nullable=True)
+    resource_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Admission pin (W11): the exec.terminal binding revision in effect when
+    # this session was admitted. NULL = defaults/open mode/legacy rows.
+    binding_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # starting | running | completed | failed | timeout | closed | interrupted | orphaned
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="running")
     command: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
     stdout_path: Mapped[str] = mapped_column(String(512), nullable=False, default="")

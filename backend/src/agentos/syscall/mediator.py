@@ -27,6 +27,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..capabilities.bindings import binding_key_for_capability, resolve_binding
 from ..capabilities.catalog import _grant_for, is_capability_granted
 from ..capabilities.registry import registry
 from ..config import settings
@@ -193,6 +194,33 @@ class SyscallHandler:
         if not is_capability_granted(agent_config, call.name, server_id=server_id):
             await _arrive(False)
             return await self._deny(run_id, call, agent_config, "not granted", start, sub_agent_id)
+
+        # 2b. Tool binding (W5) — resolved once at admission, before any
+        # approval wait, so the approved destination is the one executed.
+        # An unconfigured model-backed tool fails here rather than
+        # silently falling back; engine tools fail only on invalid
+        # stored options (unconfigured means "use defaults").
+        admitted_binding = None
+        binding_key = binding_key_for_capability(call.name)
+        if binding_key is not None:
+            async with self._db_lock:
+                admitted_binding = await resolve_binding(self.db, binding_key)
+            spec = admitted_binding.spec
+            unready = (
+                not spec.implemented
+                or (spec.kind == "model" and not admitted_binding.ready)
+                or (spec.kind == "engine" and admitted_binding.state == "invalid")
+            )
+            if unready:
+                await _arrive(False)
+                return await self._deny(
+                    run_id,
+                    call,
+                    agent_config,
+                    f"{spec.title} is not ready: {admitted_binding.reason or 'not configured'}",
+                    start,
+                    sub_agent_id,
+                )
 
         # 3. Resolve subject (D10 — for subject-scoped capabilities)
         subject_contact_id: str | None = None
@@ -381,6 +409,7 @@ class SyscallHandler:
             "doc_list",
             "doc_search",
             "doc_inspect",
+            "doc_query_rows",
             "web_search",
             "web_fetch",
         ):
@@ -429,17 +458,41 @@ class SyscallHandler:
             extra_kwargs["session_id"] = getattr(session, "id", None)
 
         # Artifact tools: DB + provenance (run/message linkage on revisions).
-        if call.name.startswith("artifact_"):
+        if call.name.startswith(("artifact_", "media_", "image_")):
             extra_kwargs["db"] = self.db
             extra_kwargs["agent_id"] = agent_config.id
             extra_kwargs["run_id"] = run_id
             extra_kwargs["call_id"] = call.id
+            if call.name.startswith(("media_", "image_")):
+                extra_kwargs["session_id"] = getattr(session, "id", None)
+                extra_kwargs["sub_agent_id"] = sub_agent_id
 
         if call.name in ("capabilities_search", "capabilities_load"):
             extra_kwargs["capability_catalog"] = capability_catalog
 
         if call.name in ("read_file", "doc_search", "doc_inspect", "browser_observe"):
             extra_kwargs["supports_vision"] = self.supports_vision
+
+        # Bound tools: the operator-approved destination is the admission-time
+        # resolution. A mid-approval rebind of a model tool is an incompatible
+        # change — fail honestly instead of executing against a provider the
+        # operator never approved. Frozen options ride into the tool.
+        if admitted_binding is not None:
+            async with self._db_lock:
+                current = await resolve_binding(self.db, binding_key)
+            if not current.ready or current.identity != admitted_binding.identity:
+                await _arrive(False)
+                return await self._deny(
+                    run_id,
+                    call,
+                    agent_config,
+                    f"{admitted_binding.spec.title} binding changed "
+                    "while the call was pending — retry",
+                    start,
+                    sub_agent_id,
+                )
+            extra_kwargs["tool_options"] = admitted_binding.options
+            extra_kwargs["tool_binding"] = admitted_binding
 
         try:
             result = await cap.execute(

@@ -7,16 +7,18 @@ when none work — it never crashes mid-run the way `main` used to
 """
 
 import sys
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 import agentos.sandbox.base as sandbox_base
+from agentos.capabilities.tools.terminal import terminal_run
 from agentos.sandbox import get_backend, probe
-from agentos.sandbox.base import SandboxBackend, UnavailableBackend, _backend_cache
+from agentos.sandbox.base import SandboxBackend, ShellResult, UnavailableBackend, _backend_cache
 from agentos.sandbox.bwrap import BwrapBackend
 from agentos.sandbox.docker import DockerBackend
 from agentos.sandbox.mxc import MxcBackend
+from agentos.sandbox.seatbelt import SeatbeltBackend
 
 
 def _clear_caches() -> None:
@@ -46,28 +48,28 @@ def test_get_backend_never_raises(platform):
         patch.object(sys, "platform", platform),
         patch.object(DockerBackend, "is_available", return_value=False),
         patch.object(MxcBackend, "is_available", return_value=False),
+        patch.object(SeatbeltBackend, "is_available", return_value=False),
+        patch.object(BwrapBackend, "is_available", return_value=False),
     ):
         backend = get_backend()
     assert isinstance(backend, SandboxBackend)
     assert backend.kind
 
 
-def test_unknown_platform_gets_unavailable_backend_naming_every_candidate():
-    """An unrecognised platform degrades rather than failing, and the reason
-    names every backend that was tried (not just the last one)."""
+def test_unknown_platform_is_unavailable_without_probing_docker():
+    """Unsupported hosts do not silently acquire a different execution backend."""
     with (
         patch.object(sys, "platform", "freebsd"),
-        patch.object(DockerBackend, "is_available", return_value=False),
-        patch.object(DockerBackend, "unavailable_reason", return_value="Docker is not installed."),
+        patch("agentos.sandbox.docker.DockerBackend") as docker_ctor,
     ):
         backend = get_backend()
     assert isinstance(backend, UnavailableBackend)
-    assert "docker" in (backend.unavailable_reason() or "")
+    assert "freebsd" in (backend.unavailable_reason() or "")
+    docker_ctor.assert_not_called()
 
 
-def test_unavailable_reason_names_every_tried_candidate_not_just_the_last():
-    """With two failing candidates (native + Docker), the reason must mention
-    both — not just whichever one happened to be tried last."""
+def test_unavailable_reason_names_only_the_native_backend():
+    """A native failure stays a native failure, not a Docker setup prompt."""
     with (
         patch.object(sys, "platform", "linux"),
         patch.object(BwrapBackend, "is_available", return_value=False),
@@ -81,12 +83,11 @@ def test_unavailable_reason_names_every_tried_candidate_not_just_the_last():
 
     reason = backend.unavailable_reason() or ""
     assert "bwrap" in reason
-    assert "docker" in reason
+    assert "docker" not in reason
 
 
 def test_native_backend_preferred_over_docker_when_both_available():
-    """On a platform with a native sandbox, it wins over Docker even if Docker
-    also works — native isolation is stronger and doesn't need a daemon."""
+    """Native execution remains the default even when Docker is installed."""
     with (
         patch.object(sys, "platform", "linux"),
         patch("agentos.sandbox.bwrap.BwrapBackend.is_available", return_value=True),
@@ -96,16 +97,38 @@ def test_native_backend_preferred_over_docker_when_both_available():
     assert backend.kind == "bwrap"
 
 
-def test_docker_used_as_fallback_when_native_unavailable():
-    """When the native backend isn't usable, Docker is tried next instead of
-    immediately giving up."""
+@pytest.mark.parametrize("platform,native", [("darwin", SeatbeltBackend), ("linux", BwrapBackend)])
+def test_native_failure_never_probes_docker_even_if_it_would_work(platform, native):
+    with (
+        patch.object(sys, "platform", platform),
+        patch.object(native, "is_available", return_value=False),
+        patch.object(native, "unavailable_reason", return_value="native backend unavailable"),
+        patch("agentos.sandbox.docker.DockerBackend") as docker_ctor,
+    ):
+        docker_ctor.return_value.is_available.return_value = True
+        backend = get_backend()
+        result = probe()
+    assert isinstance(backend, UnavailableBackend)
+    assert result.state == "unavailable"
+    assert "docker" not in (result.reason or "")
+    docker_ctor.assert_not_called()
+
+
+async def test_native_command_failure_does_not_retry_in_docker():
     with (
         patch.object(sys, "platform", "linux"),
-        patch("agentos.sandbox.bwrap.BwrapBackend.is_available", return_value=False),
-        patch.object(DockerBackend, "is_available", return_value=True),
+        patch.object(BwrapBackend, "is_available", return_value=True),
+        patch.object(
+            BwrapBackend,
+            "run_command",
+            AsyncMock(return_value=ShellResult("", "native command failed", 9, 0)),
+        ),
+        patch("agentos.sandbox.docker.DockerBackend") as docker_ctor,
     ):
-        backend = get_backend()
-    assert backend.kind == "docker"
+        result = await terminal_run({"command": "synthetic"}, "/synthetic", sandbox_mode="strict")
+    assert result["exit_code"] == 9
+    assert result["stderr"] == "native command failed"
+    docker_ctor.assert_not_called()
 
 
 def test_get_backend_is_cached_across_calls():
@@ -129,25 +152,21 @@ def test_get_backend_is_cached_across_calls():
 
 
 def test_get_backend_refresh_forces_a_new_probe():
-    """refresh=True must bypass the registry cache — e.g. after installing
-    Docker. Mocks at the subprocess boundary (not is_available itself) so
-    DockerBackend's own instance-level probe cache behaves as it would in
-    production instead of being bypassed by the mock."""
+    """refresh=True must recheck the native backend instead of using its cache."""
     with (
-        patch.object(sys, "platform", "freebsd"),
-        patch("agentos.sandbox.docker.shutil.which", return_value=None),
+        patch.object(sys, "platform", "linux"),
+        patch.object(BwrapBackend, "is_available", return_value=True) as available,
     ):
         first = get_backend()
         second = get_backend(refresh=True)
 
-    # Different DockerBackend instances prove get_backend() actually
-    # re-resolved instead of returning the cached UnavailableBackend.
     assert first is not second
+    assert available.call_count == 2
 
 
 def test_get_backend_does_not_cache_unavailable_result():
     """An 'unavailable' resolution must not stick — the operator fixes this
-    kind of thing (e.g. starting Docker Desktop) while the app keeps running,
+    kind of thing (e.g. finishing native setup) while the app keeps running,
     and has no way to force a recheck short of restarting it. Regression
     guard for a real bug: get_backend() used to cache UnavailableBackend just
     like any other result, so a dependency that came up after the first
@@ -267,7 +286,10 @@ def test_probe_reports_experimental_for_an_untrusted_working_backend():
 
 def test_probe_reports_state_and_reason():
     """probe() always yields a kind and a valid state."""
-    result = probe(refresh=True)
+    with patch.object(
+        sandbox_base, "get_backend", return_value=UnavailableBackend("native backend unavailable")
+    ):
+        result = probe(refresh=True)
     assert result.kind
     assert result.state in ("available", "experimental", "unavailable")
     if result.state == "available":

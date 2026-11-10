@@ -101,6 +101,12 @@ class Settings(BaseSettings):
     # (AGENTOS_RUNTIME_BINARY_OVERRIDES as a JSON dict of command→path).
     runtime_binary_overrides: dict[str, str] = {}
 
+    # Private-network exceptions for general web fetch — exact hostnames (or
+    # IP literals) the agent's web_fetch may reach on loopback/RFC1918/ULA.
+    # Link-local, metadata, and other non-global ranges stay blocked.
+    # Set via PUT /api/settings/network or AGENTOS_WEB_PRIVATE_ALLOWLIST (JSON).
+    web_private_allowlist: list[str] = []
+
     @property
     def db_url(self) -> str:
         """Active database URL — custom backend if set, SQLite default otherwise."""
@@ -171,11 +177,17 @@ def _apply_persisted_overrides() -> None:
         "browser_binary",
         "yolo_mode",
         "model_catalog_auto_refresh",
+        "web_private_allowlist",
         *capture_keys,
     ):
         if key not in saved or env_pinned(key):
             continue
         value = saved[key]
+        if key == "web_private_allowlist" and not (
+            isinstance(value, list) and all(isinstance(v, str) for v in value)
+        ):
+            # Malformed persisted policy is ignored, not applied.
+            continue
         if key in capture_keys and not (
             isinstance(value, int) and not isinstance(value, bool) and value > 0
         ):

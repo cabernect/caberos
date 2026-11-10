@@ -83,6 +83,94 @@ async def test_overview_search_covers_all_scopes_while_scope_search_isolates(cli
 
 
 @pytest.mark.asyncio
+async def test_document_chunks_inspection_paging_and_scope(client, db):
+    """Chunk inspection returns bounded items, honors parent branches and
+    cursors, and never leaks across scopes."""
+    from agentos.models.agent import Agent
+
+    db.add(Agent(id="agent-1", name="Caber", enabled=True))
+    await db.commit()
+
+    up = await client.post(
+        "/api/knowledge/scopes/shared/documents/upload",
+        files={
+            "file": (
+                "guide.md",
+                b"# A\n\nFirst section text.\n\n# B\n\nSecond section text.",
+                "text/markdown",
+            )
+        },
+    )
+    assert up.status_code == 200
+    doc = up.json()
+
+    resp = await client.get(f"/api/knowledge/scopes/shared/documents/{doc['id']}/chunks")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["document_id"] == doc["id"]
+    assert body["status"] == "indexed"
+    assert body["chunk_count"] == len(body["items"])
+    assert all(len(i["preview"]) <= body["preview_chars"] for i in body["items"])
+    # Child rows with no parent legitimately surface at the top level —
+    # only children *with* a parent are hidden inside branches.
+    assert {i["kind"] for i in body["items"]} <= {"parent", "chunk", "child"}
+    assert all(i["parent_id"] is None for i in body["items"])
+
+    # Lazy branch: parents expand to children; foreign parents 404.
+    parent = next((i for i in body["items"] if i["has_children"]), None)
+    if parent:
+        branch = await client.get(
+            f"/api/knowledge/scopes/shared/documents/{doc['id']}/chunks",
+            params={"parent_id": parent["id"]},
+        )
+        assert branch.status_code == 200
+        children = branch.json()["items"]
+        assert children and all(c["parent_id"] == parent["id"] for c in children)
+
+        missing = await client.get(
+            f"/api/knowledge/scopes/shared/documents/{doc['id']}/chunks",
+            params={"parent_id": "not-a-chunk"},
+        )
+        assert missing.status_code == 404
+
+    # Paging: limit=1 walks the corpus without gaps or dupes.
+    seen, cursor = [], None
+    while True:
+        params = {"limit": 1}
+        if cursor:
+            params["cursor"] = cursor
+        page = await client.get(
+            f"/api/knowledge/scopes/shared/documents/{doc['id']}/chunks",
+            params=params,
+        )
+        assert page.status_code == 200
+        data = page.json()
+        seen.extend(i["id"] for i in data["items"])
+        cursor = data["next_cursor"]
+        if not cursor:
+            break
+    assert len(seen) == len(set(seen)) == body["chunk_count"]
+
+    # Stale cursor after corpus mutation → 409, never mixed corpora.
+    await client.post(f"/api/knowledge/scopes/shared/documents/{doc['id']}/reindex")
+    stale = await client.get(
+        f"/api/knowledge/scopes/shared/documents/{doc['id']}/chunks",
+        params={"cursor": "bogus-version:0"},
+    )
+    assert stale.status_code == 409
+
+    # Private docs are invisible from the shared scope.
+    private = await client.post(
+        "/api/knowledge/scopes/agent-1/documents/upload",
+        files={"file": ("notes.md", b"private corpus text", "text/markdown")},
+    )
+    cross = await client.get(
+        f"/api/knowledge/scopes/shared/documents/{private.json()['id']}/chunks"
+    )
+    assert cross.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_knowledge_api_rejects_unknown_scope(client):
     response = await client.get("/api/knowledge/scopes/not-an-agent/documents")
 

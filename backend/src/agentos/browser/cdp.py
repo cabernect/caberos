@@ -292,6 +292,20 @@ class BrowserSession:
         return await self.observe()
 
     async def navigate(self, url: str) -> None:
+        # Destination check at every agent-driven navigation: http(s) only
+        # (file:, javascript:, data: URLs never reach Chrome) and the host
+        # must resolve to permitted addresses. about:blank is a browser-
+        # internal page, not egress — other about:/chrome: pages stay blocked
+        # (about:crash, chrome://version, ...). Chrome performs its own DNS,
+        # so this closes scheme abuse and obvious private destinations — not
+        # a hard guarantee against rebinding inside the browser.
+        from .. import netpolicy
+
+        if url.strip().lower() != "about:blank":
+            try:
+                await netpolicy.resolve_destination(url, allowlist=netpolicy.private_allowlist())
+            except netpolicy.DestinationError as e:
+                raise BrowserError(f"navigation blocked: {e}") from e
         await self._send("Page.navigate", {"url": url})
         await self._wait_load()
 

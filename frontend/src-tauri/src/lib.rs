@@ -165,6 +165,7 @@ async fn notification_os_request() -> &'static str {
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
@@ -182,6 +183,16 @@ pub fn run() {
                 .start(app.handle())
                 .map_err(std::io::Error::other)?;
             Ok(())
+        })
+        // Microphone is operator-initiated dictation only; macOS still shows
+        // the one-time TCC prompt for the app itself (Info.plist carries the
+        // usage string). Everything else keeps the webview's own prompt flow.
+        .on_permission_request(|_webview, kind| {
+            use tauri::webview::{PermissionKind, PermissionResponse};
+            match kind {
+                PermissionKind::Microphone => PermissionResponse::Allow,
+                _ => PermissionResponse::Default,
+            }
         })
         .invoke_handler(tauri::generate_handler![
             quit_app,

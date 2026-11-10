@@ -31,9 +31,20 @@ An operating system's job is identity, permissions, resource accounting, mediate
 
 Adding a new integration (Notion, GitHub, Slack) is a new capability, not a new subsystem. The design doesn't change.
 
-## What's new in v0.2.0 — *Agent Workbench*
+## What's new in v0.2.1 — *Honest Vault, Workspace & Tools*
 
-*The current development line, integrated on `feat/v0.2.0` and in release preparation — see the [v0.2.0 release plan](docs/plans/v0.2-release-plan.md).*
+*Implemented on `feat/v0.2.1`; release publication is a separate step. See the
+[usage guide](website/src/content/docs/docs/guides/workspaces-and-tools.mdx)
+and [v0.2.1 release plan](docs/plans/v0.2.1-release-plan.md).*
+
+- **Existing-folder workspaces** — attach a project in place; sessions pin their root, and ambiguous legacy history fails honestly rather than switching to today's default.
+- **Inspectable Vault** — browse stored chunk trees and query CSV/XLSX rows with typed filters and complete-set counts/aggregates.
+- **Settings → Tools** — persistent backend bindings, dedicated search services, modality-aware model choices, and local terminal selection without widening agent permissions.
+- **Image generation and editing** — mediated `image_generate`/`image_edit`, tracked output, inline images, and model-call accounting.
+- **Speech** — editable batch dictation and explicit per-message Read Aloud; independently configured providers, reusable audio, no unsolicited playback.
+- **Reliability and hardening** — visible `/compact` outcomes, provenance-aware previews, fast-failure lifecycle events, network policy, sandbox confinement, and terminal cleanup.
+
+### Agent Workbench foundation (v0.2.0)
 
 - **Today home** — Needs-you approvals/elicitations, recent activity, and an ask-your-agent entry point on first load.
 - **Guided first run** — login → optional credential step → onboarding with real runtime checks (browser, sandbox, Node.js, uv, Git) instead of static setup lists.
@@ -48,7 +59,7 @@ Adding a new integration (Notion, GitHub, Slack) is a new capability, not a new 
 
 ### Roadmap
 
-- **v0.2.1 — Honest Vault & Media Tools** — tabular row layer for xlsx/csv (query-then-summarize over complete row sets), Vault document inspection, a global **Settings → Tools** tab binding capabilities to Model Offerings (search, speech-to-text, text-to-speech, image & video generation), and the first media capability end-to-end.
+- **v0.2.1 scope boundary** — the features above are implemented; remote SSH/Daytona/Modal execution, streaming STT, realtime Voice Mode, video generation, and agent-authored apps are not included.
 - **v0.2.2 — Connected Knowledge, Tasks & Richer Preview** — OneDrive/Google Drive connectors, Qdrant & external retrieval, durable tasks with triggers and channel approvals, plus rendered HTML preview and true visual renders for Office artifacts.
 
 ## Features
@@ -108,7 +119,8 @@ Three layers (D34):
 - **Retrieval** — FTS5 lexical by default (zero egress); optional hybrid embeddings with RRF fusion and bounded parent expansion — retrieval returns source citations and a retrieval trace
 - **Index generations** — blue-green rebuild/repair/activate/delete; exactly one active generation
 - **Privacy-gated embeddings** — remote embedding providers refuse until egress is explicitly enabled; local endpoints (Ollama etc.) require only a configured embedding model
-- **Honest limits** — tabular uploads (.xlsx/.csv) are refused until the row-query layer lands, rather than indexing a misleading text flattening
+- **Inspection** — paginated persisted chunk trees with source locations, token counts, and bounded text
+- **Tabular rows** — CSV/XLSX ingestion and `doc_query_rows` for typed filters and complete-set counts/aggregates independent of pagination; legacy `.xls` remains unsupported
 
 ### MCP integration
 
@@ -269,7 +281,7 @@ Pushing a `v*.*.*` tag triggers the [release workflow](.github/workflows/release
 | Browser automation | Playwright/CDP over managed Chrome-for-Testing |
 | Frontend | React 19, Vite, TypeScript, Tailwind CSS 4 |
 | Desktop | Tauri 2 (Rust) |
-| Sandbox | seatbelt (macOS), bwrap (Linux), MXC (Windows); Docker fallback on macOS/Linux |
+| Sandbox | OS-native: seatbelt (macOS), bwrap (Linux), MXC (Windows); Docker setup is future opt-in |
 | Packaging | PyInstaller (gateway), Tauri bundler (desktop) |
 
 ### Key design decisions
@@ -422,7 +434,7 @@ The Docker setup runs the full stack: backend (Python + uv) and frontend (nginx 
 
 | Service | Image | Port | Notes |
 |---|---|---|---|
-| `backend` | `python:3.12-slim` + uv | 8081 (internal) | Agents can use bwrap (if `SYS_ADMIN` cap present) or Docker isolation |
+| `backend` | `python:3.12-slim` + uv | 8081 (internal) | Agents use native Linux bwrap when available; no nested Docker fallback |
 | `frontend` | `nginx:alpine` | 80 → `:8080` (host) | Reverse-proxies `/api`, `/health` to backend |
 
 Data persists in the `caberos-data` named volume (SQLite DB, secret key, workspaces, agent homes). To use Postgres instead, uncomment the `db` service and `AGENTOS_DATABASE_URL` in `docker-compose.yml`.
@@ -567,7 +579,16 @@ Use the Playwright MCP server for real-browser testing. See `AGENTS.md` for deta
 
 See the detailed [`v0.2.0 release plan`](docs/plans/v0.2-release-plan.md).
 
-### v0.2.1 — Connected Knowledge (planned)
+### v0.2.1 — Honest Vault, Workspace & Tools (implemented on release branch)
+
+- [x] Visible, session-scoped `/compact` outcomes
+- [x] Existing-folder selection, session workspace pins, and provenance-aware previews
+- [x] Vault chunk inspection and queryable CSV/XLSX rows
+- [x] Global tool bindings, dedicated search services, and image generation/editing
+- [x] Batch dictation and explicit Read Aloud
+- [x] Local terminal backend selection and execution lifecycle hardening
+
+### v0.2.2 and later — Connected Knowledge, Tasks & Richer Preview (planned)
 
 - [ ] OneDrive and SharePoint file/folder Knowledge Sources
 - [ ] Google Drive and Shared Drive file/folder Knowledge Sources
@@ -575,9 +596,10 @@ See the detailed [`v0.2.0 release plan`](docs/plans/v0.2-release-plan.md).
 - [ ] Google Docs/Sheets/Slides export for local indexing
 - [ ] Qdrant and configurable Retrieval Resources/Profiles
 - [ ] Remote embedding privacy, cost, health, reconnect, and purge controls
-- [ ] Structured sources: row-record layer for tabular data (xlsx/csv now, SQL later)
+- [ ] SQL and additional structured sources beyond the implemented CSV/XLSX layer
 
-### v0.2.2 — Tasks and Event Automation (planned)
+Cloud-drive ingestion, external retrieval, and durable task/event work remain
+planned rather than delivered by v0.2.1.
 
 - [ ] Durable Tasks, assignment, dependencies, due dates, and completion evidence
 - [ ] Task → Plan → Run → Artifact relationships
@@ -620,12 +642,10 @@ The desktop app uses bearer-token auth (not cookies). If login fails:
 
 ### Docker: bwrap fails
 
-Bubblewrap needs `SYS_ADMIN` capability. The compose file sets `cap_add: SYS_ADMIN`. If your Docker setup blocks this:
-
-```yaml
-# In docker-compose.yml, replace cap_add with:
-privileged: true
-```
+The compose file requests `cap_add: SYS_ADMIN` for bubblewrap. If the environment
+still blocks its required namespaces, strict terminal execution reports
+unavailable. CaberOS does not switch to another backend or recommend enabling
+`privileged: true` to recover. Other capabilities remain available.
 
 ### Backend: SSL certificate errors
 
