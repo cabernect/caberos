@@ -26,8 +26,10 @@ Mỗi card báo document count và indexed-chunk count. Chọn scope để uploa
 | Text (`.txt`) | Plain-text paragraph. |
 | PDF (`.pdf`) | Text theo page và PDF outline nếu có. |
 | Word (`.docx`) | Paragraph, heading, table và embedded-image reference. |
+| CSV (`.csv`) | Lưu typed row và column metadata cho query chính xác, kèm text để discovery. |
+| Excel (`.xlsx`) | Lưu sheet, row, cell và source location; không thực thi formula. |
 
-File tabular (`.xlsx`, `.xls`, `.csv`) bị **từ chối** — flatten row sang text làm mất khả năng query, nên chúng chờ row-query ingest layer.
+Excel cũ `.xls` chưa được hỗ trợ; hãy chuyển sang `.xlsx` hoặc `.csv`.
 
 Giới hạn upload **250 MB/document**. Image-only OCR chưa được hỗ trợ; scanned PDF có thể index ít text hoặc không có useful text nếu thiếu text layer.
 
@@ -58,9 +60,35 @@ Query tốt dùng term user thật sẽ hỏi. Nếu excerpt mong đợi không 
 
 Search nhận tối đa 1.000 query character và 20 excerpt; agent tool mặc định ít hơn để giữ context nhỏ.
 
+## Inspect chunk đã lưu
+
+Mở chunk inspector của document để xem parent/child tree, chunk kind, source
+location nếu có, token count và text có giới hạn. Child được load theo nhu cầu
+qua paginated API. Đây là corpus đã lưu, không phải model prompt được dựng lại
+hay snapshot lịch sử của mọi index generation.
+
+## Query spreadsheet và CSV
+
+Cấp `doc_query_rows` tại **Agent Settings → Capabilities**. Dùng `doc_list` hoặc
+`doc_search` tìm document, rồi query row cho câu hỏi count, filter hoặc sum.
+Top-k excerpt không đủ chứng minh tổng của toàn spreadsheet.
+
+Query dùng filter/aggregate trong allowlist và trả tối đa 200 row/page. Count
+và aggregate tính trên toàn bộ matching set, không thay đổi theo pagination.
+Result giữ sheet/row provenance; không nhận raw SQL hoặc thực thi formula.
+
+CSV chuyển canonical numeric value thành number; ID như `007` và text có dạng
+số không hữu hạn như `1e309` vẫn là text. Column có thể là mixed.
+
+Giới hạn parse: 32 sheet, 50.000 data row/sheet và 200 column. Cell text giới hạn
+2.000 ký tự kèm warning; XLSX decompressed content tối đa 256 MiB. File vượt
+structural limit bị từ chối, không âm thầm coi bảng đã cắt là đầy đủ.
+
 ## Cấp quyền cho agent
 
 Agent cần `doc_list`, `doc_search` và `doc_inspect` cho PDF page hoặc DOCX image với vision model. Cấu hình trong **Agent Settings → Capabilities**; dùng **Always** khi retrieval là trung tâm, **On demand** khi thỉnh thoảng.
+
+Thêm `doc_query_rows` để filter, count hoặc aggregate row CSV/XLSX đã lưu.
 
 `doc_search` kết hợp Shared Knowledge với private scope của agent hiện tại, không search private scope agent khác.
 
@@ -91,4 +119,4 @@ Storage/index đều local. Nếu agent dùng hosted model, excerpt từ `doc_se
 
 ## Troubleshooting
 
-Unsupported format: convert sang Markdown, text, PDF có text layer, hoặc DOCX — file tabular (`.xlsx`, `.xls`, `.csv`) bị từ chối chờ row-query layer. Upload rejected: kiểm tra filename, extension và 250 MB limit. PDF empty: có thể là image scan không có text layer. Agent không thấy document: kiểm tra indexed, `doc_search` grant và retrieval preview. Private document của agent khác không thấy được vì scope isolation.
+Unsupported format: convert sang Markdown, text, PDF có text layer, DOCX, CSV hoặc XLSX; `.xls` cũ cần chuyển định dạng. Tabular parse failure: kiểm tra sheet/row/column/decompression limit. Upload rejected: kiểm tra filename, extension và 250 MB limit. PDF empty: có thể là image scan không có text layer. Agent không thấy document: kiểm tra indexed, `doc_search` grant và retrieval preview. Private document của agent khác không thấy được vì scope isolation.

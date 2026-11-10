@@ -23,6 +23,10 @@ Run ở session khác có thể chạy độc lập. Chuyển session không can
 
 Nút stop gửi yêu cầu cancel run đang chạy.
 
+Để dùng microphone dictation và Read Aloud theo message, cấu hình speech trong
+[Settings → Tools](/vi/docs/guides/workspaces-and-tools/). Dictation tạo draft
+có thể sửa, không tự động gửi message.
+
 ## Chọn model theo message
 
 Input bar bắt đầu bằng provider/model mặc định của agent. Model selector override lựa chọn cho message tiếp theo mà không sửa agent config. Metadata có thể gồm vision, thinking, effort, context window và output token; hãy validate workflow quan trọng trực tiếp.
@@ -71,6 +75,11 @@ Agent có `agent_ask_user` có thể hỏi free text, một lựa chọn hoặc 
 Input area có thể hiển thị context token, ceiling, cached token, breakdown của system/conversation/tool, trạng thái compaction và schema đã load. Dùng `/compact` trước task dài; automatic compaction cũng có thể chạy theo threshold.
 
 Compaction thay đổi context tương lai nhưng không xóa message đã lưu.
+
+Gõ chính xác `/compact` rồi Enter để submit một lần. Status nằm phía trên
+composer, phân biệt pending, compacted, unchanged và failed. Context count
+trước/sau là estimate, không phải billed token. Chuyển session không áp
+feedback của operation đang chờ sang conversation mới.
 
 ## Citation
 

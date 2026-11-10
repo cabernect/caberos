@@ -96,7 +96,7 @@ The execution architecture is the same in all three modes; only process supervis
 | Entity | Meaning |
 | --- | --- |
 | Agent | Versioned declarative configuration: identity, model, capabilities, limits, workspace, memory, heartbeat, and sandbox mode |
-| Provider | Shared model connection with encrypted credentials and model discovery metadata |
+| Provider | Encrypted model or dedicated tool-service connection; service types are excluded from chat-model discovery |
 | Contact | Stable caller identity derived from channel, agent/bot, and external user ID |
 | Session | Ordered conversation between one contact and one agent |
 | Run | One inbound message or heartbeat through the full agent loop |
@@ -157,7 +157,7 @@ POST message
 RunManager creates asyncio task
     │
     ▼
-Pipeline resolves contact/session and persists pending run
+Pipeline resolves contact/session, resolves and pins workspace, then persists run
     │
     ▼
 Input guardrails + attachment preparation + workspace
@@ -181,6 +181,10 @@ SSE completion + background title/memory work
 ```
 
 ### 1. Validate and deduplicate
+
+Workspace resolution precedes creation of the current run, avoiding unknown-root
+self-evidence. Refused admission still emits `run_started`; the run manager
+replays pre-registration events so a fast failure remains `failed` in live status.
 
 The API checks that the agent exists and has a configured model unless this is an explicit scripted test. The pipeline rejects a repeated inbound message ID by returning the existing run.
 

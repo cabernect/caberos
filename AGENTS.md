@@ -9,13 +9,15 @@ CaberOS is an open-source, local-first AI Agent Operating System. It hosts perso
 **Repo structure:** Monorepo — `/backend`, `/frontend`, `/website`, `/docs`, `/skills`, `/sandbox`, `/scripts`, `/design-system`
 **Desktop shell:** Tauri 2 (Rust) — `frontend/src-tauri/`
 **Container:** Docker + docker-compose — `backend/Dockerfile`, `frontend/Dockerfile`, `docker-compose.yml`
-**Current line:** v0.2.0 "Agent Workbench" on `feat/v0.2.0` (integrated, release pending); latest tag `v0.1.9`.
+**Current line:** v0.2.1 "Honest Vault, Workspace & Tools" on `feat/v0.2.1`; release publication is separate from branch implementation.
 
 ## Where things are
 
 - `docs/spec-v0.1.md` — the v0.1 specification, 40 decisions (D1–D40).
 - `docs/plans/` — v0.1 plans (00–15); `docs/plans/v0.2/` — v0.2 workstream specs (00–15) with `test_plan/` and `test_result/` records.
 - `docs/plans/v0.2-release-plan.md` — release boundary, invariants, and deferred items.
+- `docs/plans/v0.2.1-release-plan.md` — v0.2.1 scope; workstreams and evidence live under `docs/plans/v0.2.1/`.
+- `website/src/content/docs/` — official English/Vietnamese docs; update both locales when changing user-facing behavior.
 - `docs/TECHNICAL.md` — deep technical reference (module map, data model, API surface, subsystem internals).
 - `docs/PRODUCT.md` — product/business framing (vision, personas, positioning, roadmap narrative).
 - `CONTEXT.md` — shared vocabulary (Model Offering, Reported vs Estimated Cost, etc.). Use this language; don't drift from it.
@@ -90,6 +92,8 @@ Registered in `capabilities/builtin.py` (+ `run_subagent`/`read_subagent` in `to
 | `terminal` | yes | yes | Shell command in sandbox (persistent background session) |
 | `read_terminal` / `close_terminal` | no | no | Read/close a terminal session |
 | `doc_list` / `doc_search` / `doc_inspect` | no | no | Knowledge Vault: list docs, retrieve (FTS5/hybrid), inspect |
+| `doc_query_rows` | no | no | Exact CSV/XLSX row filters, complete-set counts/aggregates, paginated items |
+| `image_generate` / `image_edit` | yes | yes | Bound image provider/model; validated, tracked output in the pinned workspace |
 | `web_search` | yes | yes | DuckDuckGo search — results are trace evidence, NOT references |
 | `web_fetch` | yes | yes | URL → markdown (trafilatura), paginated, 50k ceiling; persists a reference |
 | `browser_open` | yes | yes | Open URL in managed browser; persists landed URL (incl. redirects) |
@@ -117,7 +121,12 @@ Registered in `capabilities/builtin.py` (+ `run_subagent`/`read_subagent` in `to
 DB is the resolution authority: `Skill`/`SkillRevision`/`SkillAssignment`. `resolve_effective_skills()` precedence: agent-local > global > built-in (global respects availability/assignments; disabled/archived agent-local rows suppress the live dir). Runs pin `skill_revision_ids` (`rev:<id>` or `live:<sha256>`) in the manifest — mid-run publishes can't wobble a run. Built-ins seed from `skills/builtins.py` (`BUILTIN_SKILLS`: browser-workflows, doc-coauthoring, evolve, frontend-design, office-documents, skill-creator); removed names are retired at startup. "Create Skill" opens a builder-mode session (`skill-creator` force-loaded, drafts land in `skill-drafts/`, no publish capability by construction). Imports (ZIP/repo URL) go through `skills/importer.py` hardening and land as drafts. Drafts are for *new* skills only: updates to an existing agent-local skill edit the live `skills/<name>/` dir and are pinned as revisions by `snapshot_agent_local_drift` at session close — a same-name `skill-drafts/` dir can never index or publish (unique name per scope+owner) and reconcile logs it as an orphan.
 
 ### Knowledge Vault (RAG)
-Structured extraction → per-block-type parent/child chunking → FTS5 lexical (default) + optional hybrid embeddings → RRF fusion → bounded parent expansion → citations + retrieval trace. Index generations are blue-green (exactly one `active`; concurrent rebuild → 409; stale `building` reconciled to `failed` at startup). Remote embedding providers require explicit egress consent (audited); `fusion=lexical` makes zero provider calls. Every embed call lands in the `model_calls` ledger. **Tabular uploads (.xlsx/.csv) are refused at ingest** pending the deferred row-query layer — a clear refusal beats a misleading index.
+Structured extraction → per-block-type parent/child chunking → FTS5 lexical (default) + optional hybrid embeddings → RRF fusion → bounded parent expansion → citations + retrieval trace. Index generations are blue-green (exactly one `active`; concurrent rebuild → 409; stale `building` reconciled to `failed` at startup). Remote embedding providers require explicit egress consent (audited); `fusion=lexical` makes zero provider calls. Every embed call lands in the `model_calls` ledger. CSV/XLSX additionally persist `DocumentSheet`/`DocumentRow` records; mediated `doc_query_rows` computes counts and aggregates over the full filtered set independently of page cursors. Canonical finite CSV numbers are typed; `007` and `1e309` stay text. Legacy `.xls` is unsupported. Chunk inspection reads the actual persisted corpus.
+
+### Workspaces, Tools, and speech (v0.2.1)
+Sessions pin their workspace root; changing the agent default affects new sessions. Resolve roots before creating the admitted run. Legacy sessions require unambiguous historical run evidence with no unknown roots; never silently use today's default. Artifact live roots come from the recorded root or revision source-run provenance; managed revisions remain independent. The web directory picker is home-confined; manually configured/native-picked external workspaces remain possible.
+
+Global `ToolBinding` configuration selects implementation, never authority. Search service credentials reuse encrypted Provider rows; `scope=search`/`speech` separates services from chat-model discovery. Image generation/editing are mediated capabilities. Speech is authenticated operator STT/TTS, not an agent tool: editable batch dictation and explicit Read Aloud, with cached audio and generation-guarded playback. Missing prices remain unknown. Local terminal backend selection and `TerminalTransport`/`LocalTransport` are implemented; SSH/Daytona/Modal, realtime Voice Mode, video generation, and agent-authored apps remain deferred.
 
 ### Observability
 `model_calls` is the unified ledger (chat/embedding/probe/extract/title; thinking tokens are reported-only). Correlation via `call_id`/`sub_agent_id` on audits/approvals/elicitations/artifacts — exact joins, never temporal. `GET /api/runs/{id}` returns a projected `timeline` (audit roots → tombstone tool_call → pending approval); `/api/spend?scope=platform` reads the ledger while agent scope keeps historic run totals — they are intentionally not algebraically equal. `redaction.py` is the shared read boundary; sensitive payloads fail closed. Traces page: span tree + waterfall + observation inspector.
@@ -191,12 +200,13 @@ cd frontend && npm run desktop:build  # packaged app
 ./scripts/docker.sh up|down|logs|rebuild
 ```
 
-Current test baseline: ~1,300 backend tests (88 files), 27 frontend test files.
+Latest local v0.2.1 backend gate: 1,771 passed, 4 skipped. The four skipped cases require `CABEROS_TEST_SEATBELT_LIVE=1` on an isolated macOS security-test runner; they are not evidence of live enforcement. Previously verified frontend: 271 tests across 37 files. CI and packaged/platform runs are separate evidence.
 
 ## Gotchas
 
 - **Release:** `./scripts/release.sh X.Y.Z` from a clean tree — two-phase (release branch PR → merge → re-run to tag). Version is a literal in all manifests; never hand-edit or tag a stale commit.
-- **CodeQL path-injection:** `Path.resolve()`+`is_relative_to` is not a sanitizer — use `os.path.realpath()`+`startswith()` via `sandbox/workspace.py`'s `resolve_within()`, and check containment before reading.
+- **Path containment vs CodeQL:** canonicalize the root and candidate, then check containment before reading/listing. Use `resolve_within()` for workspace paths; the home-confined picker uses `realpath()` + `relative_to()`. A correct runtime guard is not necessarily modeled by CodeQL. Review the full flow before dismissing; do not promise inline suppression works or rewrite guards merely to chase alerts.
+- **Browser test fixtures:** use `ThreadingHTTPServer` for pages shared by browser sessions; an idle speculative connection blocks a single-threaded `HTTPServer`. The socket regression in `test_browser.py` covers this without launching Chromium.
 - **CodeQL URL-substring:** never `in`/`find` a URL string — use `urlparse(u).hostname == "host"`.
 - **Datetimes:** SQLite drops tzinfo; `models/base.py` stamps UTC on load. Keep tz-aware; never compare with naive `datetime.now()`.
 - **Gateway supervisor (desktop):** PyInstaller gateway on `127.0.0.1:51718`, own process group, logs at `~/Library/Application Support/com.caberos.desktop/logs/gateway.log`. Desktop auth = bearer token (not cookies).

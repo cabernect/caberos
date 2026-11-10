@@ -77,7 +77,24 @@ Strict mode resolve `read_file`, `write_file`, `search_files` trong workspace, r
 
 Strict terminal dùng OS backend và request network-disabled. Open mode chạy `/bin/sh -c` trực tiếp với quyền gateway process; đây là full local-user command authority. Approval chỉ giúp review, không làm arbitrary shell intrinsically safe.
 
-macOS Seatbelt strict hạn chế write/network nhưng cho phép broad host read để system executable chạy. Linux Bubblewrap dùng environment tối thiểu, workspace writable, tmp memory và namespace isolation; cần host support.
+Chọn backend local tại **Settings → Tools → Terminal**. Auto giữ lựa chọn native;
+backend chỉ định không khả dụng thì không fallback sang open execution.
+Background terminal giữ backend lúc admission.
+
+macOS Seatbelt cho runtime read, sau đó deny private tree dưới `/Users`,
+`/private/var/folders`, `/private/tmp` và re-allow workspace. Write bị deny ngoài
+workspace, trừ `/dev/null`; `HOME` và các biến temp trỏ vào workspace. Availability
+check dùng workspace/sibling tổng hợp; fail thì strict execution không khả dụng,
+không dùng profile permissive.
+
+Đây không phải cam kết mọi readable byte đều nằm trong workspace. Live Seatbelt
+test cần isolated macOS runner và `CABEROS_TEST_SEATBELT_LIVE=1`; skip không chứng
+minh enforcement trên mọi host. Access bất ngờ tới protected private path cần
+điều tra, không coi là bình thường. Giữ credential ngoài workspace; dùng
+OS-account/container/VM boundary cho workload rủi ro cao.
+
+Linux Bubblewrap dùng environment tối thiểu, workspace writable, tmp memory và
+namespace isolation; cần host support.
 
 ## Network boundary
 

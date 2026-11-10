@@ -56,7 +56,18 @@ Kết hợp context của session hiện tại, `MEMORY.md` cho cả agent, reca
 
 ### Knowledge Vault
 
-Upload file Markdown, text, PDF và DOCX vào Shared Knowledge hoặc scope riêng của một agent. Retrieval mặc định là FTS5 lexical search chạy local; hybrid embedding là tùy chọn và cần consent egress tường minh — agent chỉ nhận excerpt được truy xuất hoặc nội dung hình ảnh đã inspect. File dạng bảng như `.xlsx` và `.csv` bị từ chối lúc ingest, chờ lớp truy vấn theo hàng.
+Upload Markdown, text, PDF, DOCX, CSV và XLSX vào Shared Knowledge hoặc scope
+riêng của agent. Inspect chunk đã lưu và query tabular row với count/aggregate
+trên toàn matching set. Retrieval mặc định là FTS5 lexical local; remote hybrid
+embedding cần consent egress tường minh.
+
+### Workflow v0.2.1
+
+Nhánh mã v0.2.1 thêm workspace từ thư mục có sẵn, session pinning, chunk
+inspection, CSV/XLSX row query, global Tools configuration, search service,
+tạo/sửa ảnh, batch dictation, Read Aloud và chọn terminal backend local.
+
+[Cấu hình workspace, Tools và speech →](/vi/docs/guides/workspaces-and-tools/)
 
 [Dùng Knowledge Vault →](/vi/docs/guides/knowledge-vault/)
 

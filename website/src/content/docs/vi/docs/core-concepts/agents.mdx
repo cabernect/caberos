@@ -72,6 +72,14 @@ Cost limit là guardrail runtime, không phải hóa đơn tuyệt đối. Kiể
 
 Mỗi agent có workspace cho attachment và file làm việc:
 
+Chọn thư mục managed hoặc gắn folder có sẵn khi tạo agent hay trong Settings.
+Session pin vị trí workspace; đổi mặc định chỉ áp dụng cho conversation mới.
+Root lịch sử không khả dụng hoặc mâu thuẫn sẽ báo lỗi, không âm thầm đổi thư mục.
+Chọn folder không copy file hoặc chuyển identity và `MEMORY.md` vào đó.
+
+Xem [Workspace, Tools và speech](/vi/docs/guides/workspaces-and-tools/) để biết
+host path, Docker mount, folder picker và terminal local.
+
 - **Strict — workspace only** giới hạn file path và shell trong workspace; đây là mặc định khuyến nghị.
 - **Open — full filesystem access** cho phép host path rộng hơn; chỉ dùng khi task thực sự cần và grant đáng tin cậy.
 

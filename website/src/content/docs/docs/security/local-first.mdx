@@ -174,7 +174,10 @@ Native file tools operate on local paths. In strict mode, path resolution for `r
 Terminal behavior differs by platform:
 
 - Linux Bubblewrap strict mode hides most host data, binds the workspace, and unshares networking.
-- macOS Seatbelt strict mode denies network and restricts writes, but permits broad host reads so system executables and libraries can function.
+- macOS Seatbelt strict mode denies network, confines writes to the workspace
+  (plus `/dev/null`), and layers private-tree read denies over the runtime reads
+  needed by system executables. This is not a claim that every host file is hidden;
+  see [the current profile and verification limits](/docs/security/approvals-and-sandbox/#macos-seatbelt-behavior).
 - Open mode runs shell commands without the platform sandbox wrapper and allows native file tools to resolve absolute host paths.
 
 A command can copy local information into its output, which may then be sent to a hosted model as a tool result. Approval helps the operator inspect the command but is not automatic data-loss prevention.

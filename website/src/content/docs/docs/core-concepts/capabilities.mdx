@@ -89,10 +89,22 @@ Each load request accepts at most 10 new capability schemas, and a run can hold 
 | `doc_list` | List metadata for shared and agent-private Knowledge Vault documents. | No | No |
 | `doc_search` | Retrieve relevant local document excerpts with source metadata. | No | No |
 | `doc_inspect` | Inspect a PDF page or an embedded DOCX image with a vision-capable model. | No | No |
-| `web_search` | Search the public web through DuckDuckGo. | Yes | Yes |
+| `doc_query_rows` | Filter, count, and aggregate persisted CSV/XLSX rows. | No | No |
+| `web_search` | Search using the configured DDGS or dedicated search service backend. | Yes | Yes |
 | `web_fetch` | Fetch a URL and extract readable text from the response. | Yes | Yes |
 
 Knowledge retrieval stays local until retrieved excerpts are included in a cloud model request. Web operations contact external services and are marked as egress.
+
+## Global Tools bindings and media
+
+Global **Settings → Tools** selects implementation backends independently of
+agent grants. A binding never grants a capability or bypasses approval.
+`image_generate` and `image_edit` are egress capabilities requiring approval by
+default; generated output is tracked under the pinned workspace's `artifacts/`.
+Dictation and Read Aloud are operator actions, not agent-callable capabilities.
+
+See [Workspaces, Tools, and speech](/docs/guides/workspaces-and-tools/) for
+search services, image setup, speech controls, and local terminal selection.
 
 ## Memory tools
 

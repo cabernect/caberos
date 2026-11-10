@@ -80,7 +80,12 @@ Telegram, Discord, Zalo OA và Zalo Bot có policy lưu/retention riêng. Inboun
 
 ## Shell và filesystem
 
-Native file tool Strict giới hạn workspace. Linux Bubblewrap strict ẩn phần lớn host data và unshare network; macOS Seatbelt strict deny network/restrict write nhưng broad read; Open mode bỏ sandbox wrapper và cho absolute host path.
+Native file tool Strict giới hạn workspace. Linux Bubblewrap strict ẩn phần lớn
+host data và unshare network. macOS Seatbelt strict deny network, giới hạn write
+trong workspace (và `/dev/null`), đồng thời deny private-tree read trên nền runtime
+read cần cho executable. Không có cam kết ẩn mọi host file; xem
+[profile và giới hạn verification](/vi/docs/security/approvals-and-sandbox/).
+Open mode bỏ sandbox wrapper và cho absolute host path.
 
 Command có thể copy local data vào output rồi output được gửi hosted model. Approval là review point, không phải data-loss prevention tuyệt đối.
 

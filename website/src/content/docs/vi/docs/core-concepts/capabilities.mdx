@@ -51,6 +51,20 @@ Loading capability không thể:
 - bỏ qua MCP tool filter;
 - lưu schema đã load sang run khác.
 
+## Tools binding và media
+
+Global **Settings → Tools** chọn backend triển khai độc lập với agent grant.
+Binding không cấp capability hoặc bỏ qua approval. `doc_query_rows` filter,
+count và aggregate CSV/XLSX row đã lưu. `web_search` dùng DDGS hoặc dedicated
+search service đã cấu hình.
+
+`image_generate` và `image_edit` là egress capability, mặc định cần approval;
+output được track dưới `artifacts/` của workspace đã pin. Dictation và Read
+Aloud là operator action, không phải capability để agent gọi.
+
+Xem [Workspace, Tools và speech](/vi/docs/guides/workspaces-and-tools/) để cấu
+hình search, image, speech và terminal local.
+
 ## Chọn capability set
 
 1. Bắt đầu từ task, không bắt đầu từ danh sách tool.

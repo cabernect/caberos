@@ -1,0 +1,119 @@
+---
+title: Workspaces, Tools, and speech
+description: Configure v0.2.1 workspaces, search, image generation, dictation, read-aloud, and local terminal backends.
+sidebar:
+  order: 3
+---
+
+These workflows are implemented in the v0.2.1 code line. They extend the
+Agent Workbench; they do not include cloud-drive ingestion, remote terminal
+execution, realtime voice, or agent-authored apps.
+
+## Attach an existing workspace
+
+At agent creation or in **Agent Settings**, leave the workspace blank for a
+CaberOS-managed directory, or select an existing directory with **Browse**.
+You can also enter its absolute path.
+
+- Selection attaches the directory in place; it does not copy or move its files.
+- The path belongs to the gateway host, not necessarily the browser's computer.
+  In Docker, the directory must already be mounted into the backend container.
+- The web directory browser is limited to the gateway operator's home directory.
+  Enter an outside-home path manually or use the native dialog where available.
+- Selecting a directory does not grant tools or disable strict sandboxing.
+  Identity, credentials, and `MEMORY.md` remain outside the shared workspace.
+
+A session pins its workspace location. Changing the agent default affects new
+conversations, not existing ones; active work prevents changing that default.
+The pin preserves a location, not a snapshot of its contents.
+
+If a legacy session has ambiguous or unknown workspace history, CaberOS refuses
+to guess a location. Do not work around that refusal by pointing it at an
+unrelated directory. Historical attachments and artifact live paths must resolve
+from their recorded provenance.
+
+## Configure Tools
+
+Open global **Settings → Tools** to configure capability backends separately
+from the agent's reasoning model. A Model Offering is the provider and exact
+model selected for a model-backed operation; a dedicated search or speech
+service shares encrypted credential custody without becoming a chat model.
+
+1. Open the relevant tool card and choose a backend or provider.
+2. Select a model where that operation requires one.
+3. Supply service credentials in the card's connection setup when needed.
+4. Save, review readiness, and explicitly test the connection if offered.
+
+Opening settings or saving a binding does not implicitly make a paid provider
+call. Explicit tests and actual use may be billable. A configured binding does
+not grant an agent authority: agent capability grants, approvals, and audits
+still apply. Unconfigured or unavailable operations report their actual state.
+
+### Search
+
+The Web Search card supports DDGS, Tavily, Exa, Brave Search API, Firecrawl
+Cloud, and self-hosted Firecrawl. DDGS remains the free default; a failure does
+not silently switch to a different paid service.
+
+Self-hosted Firecrawl needs an explicit server URL and private-network consent
+where applicable. Search results are discovery evidence, not visited references:
+the agent must fetch or open a page before citing it as a visited source.
+Search receipts do not invent LLM token usage or model-call costs.
+
+### Generate or edit images
+
+Configure the image binding, then grant the agent `image_generate` and/or
+`image_edit`. Image editing also needs an accessible source image. Ask for the
+desired image in conversation and approve the operation under your policy.
+
+Validated image bytes are saved under the session workspace's `artifacts/`
+directory, tracked as artifacts, and shown inline in chat. Provider attempts
+are recorded in the model-call ledger; unavailable prices remain unknown.
+Video generation is not implemented.
+
+## Dictation and Read Aloud
+
+Configure speech-to-text and text-to-speech independently in **Settings → Tools**.
+The adapters cover OpenAI-compatible OpenAI/Groq endpoints, OpenRouter,
+ElevenLabs, and Gemini. Support depends on the operation, selected model, and
+provider account; an adapter is not a promise of universal model compatibility.
+
+- **Dictation:** allow microphone access, record with the composer microphone,
+  then review and edit the returned transcript before sending it. This is
+  record-and-transcribe, not streaming partial transcription or automatic send.
+- **Read Aloud:** use the speaker control beneath an assistant message.
+  Playback starts only on request; Stop ends it, and selecting another message
+  supersedes the earlier request. Generated audio can be reused without another
+  synthesis request.
+- **Text fidelity:** speech rendering omits or summarizes unsuitable Markdown
+  such as code and tables. Copy still preserves the full original message.
+
+These are authenticated operator actions, not tools an agent can invoke.
+Recordings and message text go to the speech provider you configure. Speech
+receipts retain available usage units; missing pricing stays unknown.
+Hands-free, realtime two-way Voice Mode is deferred.
+
+## Select a local terminal backend
+
+Use **Settings → Tools → Terminal** to review local backend availability.
+**Auto** keeps platform-native selection. An explicit backend must be supported
+and installed on the gateway host; unavailable selections do not silently fall
+back to a different backend or open execution.
+
+Strict-mode background terminals retain their admitted backend and binding
+revision. Changing settings does not migrate an existing terminal. The agent
+still needs terminal permission, and command execution remains mediated.
+
+SSH, Daytona, Modal, remote working-copy transfer, and remote compute lifecycle
+are deferred. The transport abstraction is not a working remote execution feature.
+
+## Preview and provenance boundaries
+
+Live artifact bytes require a proven workspace root. An unresolved legacy
+artifact is labelled honestly, and its live artifact preview can return a
+conflict instead of reading a same-named file from today's default workspace.
+Managed revision bytes remain separate from live workspace files.
+
+For persisted chunk inspection and exact spreadsheet queries, see
+[Knowledge Vault](/docs/guides/knowledge-vault/). For compaction feedback and run
+status, see [Conversations](/docs/guides/conversations/).
