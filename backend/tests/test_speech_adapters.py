@@ -188,7 +188,7 @@ async def test_openai_stt_verbose_json_400_retries_once_with_json(monkeypatch):
     )
     result = await _openai_stt(_oai_req(model="gpt-transcribe"))
     assert len(seen) == 2
-    assert 'verbose_json' in seen[0].content.decode()
+    assert "verbose_json" in seen[0].content.decode()
     assert 'name="response_format"\r\n\r\njson' in seen[1].content.decode()
     assert result.text == "hi" and result.audio_seconds == 1.0
 
