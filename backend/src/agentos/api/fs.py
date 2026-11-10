@@ -30,22 +30,19 @@ async def list_directories(
     convenience, not a filesystem API. Outside-home workspaces are still
     configured by typing the path into workspace settings.
     """
-    base_str = os.path.realpath(Path.home())
+    base = Path(os.path.realpath(Path.home()))
     try:
-        raw = os.path.normpath(os.path.expanduser(path)) if path else base_str
+        candidate = Path(path).expanduser() if path else base
+        resolved = Path(os.path.realpath(candidate))
     except (OSError, RuntimeError, ValueError) as error:
         raise HTTPException(status_code=400, detail="Path cannot be resolved") from error
-    if raw != base_str and not raw.startswith(base_str + os.sep):
-        raise HTTPException(status_code=403, detail="Path is outside allowed root")
     try:
-        resolved = os.path.realpath(raw)
-    except (OSError, RuntimeError, ValueError) as error:
-        raise HTTPException(status_code=400, detail="Path cannot be resolved") from error
-    if resolved != base_str and not resolved.startswith(base_str + os.sep):
-        raise HTTPException(status_code=403, detail="Path is outside allowed root")
-    if not os.path.exists(resolved):
+        resolved.relative_to(base)
+    except ValueError as error:
+        raise HTTPException(status_code=403, detail="Path is outside allowed root") from error
+    if not resolved.exists():
         raise HTTPException(status_code=404, detail="Folder does not exist")
-    if not os.path.isdir(resolved):
+    if not resolved.is_dir():
         raise HTTPException(status_code=400, detail="Path is not a folder")
     try:
         entries = []
@@ -59,19 +56,15 @@ async def list_directories(
                     continue
                 try:
                     if entry.is_dir(follow_symlinks=True):
-                        entries.append(
-                            {"name": entry.name, "path": os.path.join(resolved, entry.name)}
-                        )
+                        entries.append({"name": entry.name, "path": str(resolved / entry.name)})
                 except OSError:
                     continue
     except PermissionError as error:
         raise HTTPException(status_code=403, detail="Folder is not readable") from error
     entries.sort(key=lambda e: e["name"].lower())
-    parent = os.path.dirname(resolved)
-    if parent == resolved:
-        parent = None
+    parent = str(resolved.parent) if resolved.parent != resolved else None
     return {
-        "path": resolved,
+        "path": str(resolved),
         "parent": parent,
         "directories": entries,
         "truncated": truncated,
