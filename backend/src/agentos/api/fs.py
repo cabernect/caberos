@@ -24,15 +24,28 @@ async def list_directories(
     path: str | None = None,
     hidden: bool = Query(default=False),
 ) -> dict:
-    """List subdirectories of ``path`` (default: home), canonicalized."""
+    """List subdirectories of ``path`` (default: home), canonicalized.
+
+    Browse scope is jailed to the operator's home directory — the picker is a
+    convenience, not a filesystem API. Outside-home workspaces are still
+    configured by typing the path into workspace settings.
+    """
+    base_str = os.path.realpath(Path.home())
     try:
-        root = Path(path).expanduser() if path else Path.home()
-        resolved = Path(os.path.realpath(root))
-    except OSError as error:
+        raw = os.path.normpath(os.path.expanduser(path)) if path else base_str
+    except (OSError, RuntimeError, ValueError) as error:
         raise HTTPException(status_code=400, detail="Path cannot be resolved") from error
-    if not resolved.exists():
+    if raw != base_str and not raw.startswith(base_str + os.sep):
+        raise HTTPException(status_code=403, detail="Path is outside allowed root")
+    try:
+        resolved = os.path.realpath(raw)
+    except (OSError, RuntimeError, ValueError) as error:
+        raise HTTPException(status_code=400, detail="Path cannot be resolved") from error
+    if resolved != base_str and not resolved.startswith(base_str + os.sep):
+        raise HTTPException(status_code=403, detail="Path is outside allowed root")
+    if not os.path.exists(resolved):
         raise HTTPException(status_code=404, detail="Folder does not exist")
-    if not resolved.is_dir():
+    if not os.path.isdir(resolved):
         raise HTTPException(status_code=400, detail="Path is not a folder")
     try:
         entries = []
@@ -46,15 +59,19 @@ async def list_directories(
                     continue
                 try:
                     if entry.is_dir(follow_symlinks=True):
-                        entries.append({"name": entry.name, "path": str(resolved / entry.name)})
+                        entries.append(
+                            {"name": entry.name, "path": os.path.join(resolved, entry.name)}
+                        )
                 except OSError:
                     continue
     except PermissionError as error:
         raise HTTPException(status_code=403, detail="Folder is not readable") from error
     entries.sort(key=lambda e: e["name"].lower())
-    parent = str(resolved.parent) if resolved.parent != resolved else None
+    parent = os.path.dirname(resolved)
+    if parent == resolved:
+        parent = None
     return {
-        "path": str(resolved),
+        "path": resolved,
         "parent": parent,
         "directories": entries,
         "truncated": truncated,
