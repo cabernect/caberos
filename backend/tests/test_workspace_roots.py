@@ -474,7 +474,7 @@ async def test_ambiguous_session_surfaces_through_start_run(db, tmp_path):
     from agentos.models.contact import Contact
     from agentos.models.run import Run
     from agentos.models.session import Session
-    from agentos.run_manager import start_run
+    from agentos.run_manager import get_run, start_run
 
     agent = await _agent(db)
     for name in ("repo a", "repo b"):
@@ -524,3 +524,10 @@ async def test_ambiguous_session_surfaces_through_start_run(db, tmp_path):
         assert run is not None
         assert run.status == "failed"
         assert "multiple workspaces" in (run.error or "")
+
+    # The live RunContext agrees — the terminal message_complete raced
+    # registration, and replay must land status=failed rather than the
+    # _on_done default of "completed".
+    ctx = get_run(result["run_id"])
+    assert ctx is not None
+    assert ctx.status == "failed"

@@ -145,6 +145,12 @@ class RunContext:
 # Process-global registry of active runs
 _active_runs: dict[str, RunContext] = {}
 
+# Events that arrived before their RunContext registered — an instantly
+# refused or failed run can reach message_complete while start_run() is
+# still suspended on the startup future. Replayed at registration so the
+# terminal event, status, and notification aren't dropped.
+_pending_events: dict[str, list[tuple[str, dict]]] = {}
+
 
 def get_run(run_id: str) -> RunContext | None:
     """Get an active run context by run_id."""
@@ -179,6 +185,53 @@ async def start_run(
     run_id_future: asyncio.Future[str] = asyncio.get_event_loop().create_future()
     session_id_future: asyncio.Future[str] = asyncio.get_event_loop().create_future()
 
+    def _deliver(rid: str, event_type: str, payload: dict) -> None:
+        ctx = _active_runs[rid]
+        if event_type == "tool_call" and payload.get("status") == "pending_approval":
+            ctx.status = "awaiting_approval"
+            asyncio.create_task(_update_run_status(rid, "awaiting_approval"))
+            asyncio.create_task(
+                _notify_run_event(
+                    notification_type="approval_required",
+                    severity="warning",
+                    title="Approval required",
+                    message=f"Waiting to run {call_brief(payload)}.",
+                    run_id=rid,
+                    agent_id=ctx.agent_id,
+                    session_id=ctx.session_id,
+                )
+            )
+        elif event_type == "message_complete":
+            status = payload.get("status", "completed")
+            ctx.status = status
+            asyncio.create_task(_update_run_status(rid, status))
+            if status == "failed":
+                asyncio.create_task(
+                    _notify_run_event(
+                        notification_type="run_failed",
+                        severity="error",
+                        title="Run failed",
+                        message=one_line(payload.get("error") or "An agent run failed.", 240),
+                        run_id=rid,
+                        agent_id=ctx.agent_id,
+                        session_id=ctx.session_id,
+                    )
+                )
+            elif status == "completed":
+                asyncio.create_task(
+                    _notify_run_event(
+                        notification_type="run_completed",
+                        severity="info",
+                        title="Run completed",
+                        message="A background run finished successfully.",
+                        run_id=rid,
+                        agent_id=ctx.agent_id,
+                        session_id=ctx.session_id,
+                        excerpt_reply=True,
+                    )
+                )
+        ctx.append_event(event_type, payload)
+
     async def event_callback(event_type: str, payload: dict) -> None:
         # Capture run_id and session_id from run_started (fires before other events)
         if event_type == "run_started":
@@ -188,54 +241,15 @@ async def start_run(
                 run_id_future.set_result(rid)
             if sid and not session_id_future.done():
                 session_id_future.set_result(sid)
-        # Buffer events into the RunContext (if registered)
+        # Deliver events into the RunContext once registered; before that
+        # hold them — an instantly refused/failed run reaches its terminal
+        # event while start_run() is still suspended on the startup future.
         rid = payload.get("run_id") or (run_id_future.result() if run_id_future.done() else None)
-        if rid and rid in _active_runs:
-            ctx = _active_runs[rid]
-            if event_type == "tool_call" and payload.get("status") == "pending_approval":
-                ctx.status = "awaiting_approval"
-                asyncio.create_task(_update_run_status(rid, "awaiting_approval"))
-                asyncio.create_task(
-                    _notify_run_event(
-                        notification_type="approval_required",
-                        severity="warning",
-                        title="Approval required",
-                        message=f"Waiting to run {call_brief(payload)}.",
-                        run_id=rid,
-                        agent_id=ctx.agent_id,
-                        session_id=ctx.session_id,
-                    )
-                )
-            elif event_type == "message_complete":
-                status = payload.get("status", "completed")
-                ctx.status = status
-                asyncio.create_task(_update_run_status(rid, status))
-                if status == "failed":
-                    asyncio.create_task(
-                        _notify_run_event(
-                            notification_type="run_failed",
-                            severity="error",
-                            title="Run failed",
-                            message=one_line(payload.get("error") or "An agent run failed.", 240),
-                            run_id=rid,
-                            agent_id=ctx.agent_id,
-                            session_id=ctx.session_id,
-                        )
-                    )
-                elif status == "completed":
-                    asyncio.create_task(
-                        _notify_run_event(
-                            notification_type="run_completed",
-                            severity="info",
-                            title="Run completed",
-                            message="A background run finished successfully.",
-                            run_id=rid,
-                            agent_id=ctx.agent_id,
-                            session_id=ctx.session_id,
-                            excerpt_reply=True,
-                        )
-                    )
-            ctx.append_event(event_type, payload)
+        if rid:
+            if rid in _active_runs:
+                _deliver(rid, event_type, payload)
+            elif event_type != "run_started" and len(_pending_events) < 1024:
+                _pending_events.setdefault(rid, []).append((event_type, payload))
 
     async def _execute() -> None:
         """The run executor — runs in a managed task."""
@@ -327,6 +341,11 @@ async def start_run(
         task=task,
     )
     _active_runs[run_id] = ctx
+
+    # Replay events that fired before registration (a run refused or
+    # failed at admission reaches message_complete first).
+    for et, pl in _pending_events.pop(run_id, []):
+        _deliver(run_id, et, pl)
 
     # Auto-cleanup when the task finishes — keep context for 60s for late
     # reconnects and status polling, then remove from memory.
