@@ -9,6 +9,88 @@ Each GitHub release attaches the same desktop artifacts: a macOS Apple Silicon
 and `latest.json` — the manifest the in-app updater polls to discover new
 versions.
 
+## [0.2.1] — 2026-11-10 "Honest Vault, Workspace & Tools"
+
+### Added
+
+- **Existing-folder workspaces**: select any project directory at agent
+  creation or in Settings — via native dialog on the desktop app or the
+  home-confined folder picker on the web. Sessions pin their workspace
+  location, so changing the agent default affects new conversations only.
+- **Workspace provenance for legacy sessions**: historical roots resolve
+  from recorded run evidence. Sessions with unknown or conflicting history
+  fail with a clear reason instead of silently switching to today's
+  default; artifact previews follow the same provenance rules.
+- **Vault chunk inspection**: browse the persisted parent/child chunk tree
+  of any document — structure, source locations, token counts, and bounded
+  text through a lazy, paginated inspector.
+- **Tabular Vault sources**: CSV and XLSX uploads now persist typed sheets,
+  rows, and cells. Agents get `doc_query_rows` for allowlisted filters,
+  counts, and aggregates computed over the complete matching set — counts
+  and aggregates stay exact regardless of page size. Legacy `.xls` remains
+  unsupported.
+- **Settings → Tools**: global tool bindings configure *how* capabilities
+  execute — provider, model, and options per operation — with readiness
+  reporting and modality-filtered model suggestions. Bindings never widen
+  agent permissions; capability grants still decide *who* may call what.
+- **Configurable search services**: `web_search` can run on Tavily, Exa,
+  Brave Search, or Firecrawl (Cloud or self-hosted) alongside the free
+  DDGS default, with dedicated provider credentials in the same encrypted
+  store. Search results remain trace evidence, never auto-cited references.
+- **Image generation and editing**: mediated `image_generate` and
+  `image_edit` capabilities produce validated output staged as tracked
+  artifacts, displayed inline, with every provider attempt recorded in the
+  model-call ledger.
+- **Speech**: batch dictation into an editable composer draft and explicit
+  per-message Read Aloud — no unsolicited playback. Speech-to-text and
+  text-to-speech bind independently to OpenAI-compatible, OpenRouter,
+  ElevenLabs, or Gemini services; generated audio is cached for replay.
+- **Local terminal backend selection**: strict-mode background terminals
+  keep their admitted backend; Auto preserves OS-native selection while
+  explicit choices fail honestly when unavailable. A transport seam
+  prepares for remote drivers without shipping them.
+- **Conversation compaction feedback**: `/compact` shows visible
+  session-scoped submission, progress, and outcome — compacted, unchanged,
+  or failed — instead of completing silently.
+- **MCP improvements**: query-based capability discovery and simpler
+  server setup flows.
+
+### Changed
+
+- **pypdf** upgraded to `>=6.21.4,<7.0.0`, clearing seven Dependabot
+  high-severity advisories without a major-version jump.
+
+### Fixed
+
+- **Web folder browser confinement**: directory browsing resolves and
+  verifies paths inside the operator's home before listing; traversal and
+  symlink escapes are refused. External workspaces remain configurable by
+  path or native dialog.
+- **Run lifecycle edge cases**: refused admissions persist a failed run and
+  emit their startup event; events fired before run-context registration
+  replay instead of leaving runs stuck or misreported.
+- **Speech reliability**: stale synthesis results can no longer start
+  playback for a superseded request, and message navigation cancels
+  pending audio.
+- **Image staging validation**: write destinations are verified before
+  bytes land.
+- **Network policy hardening**: `web_fetch` destination classification,
+  browser navigation checks, MCP HTTP transport policy, and cached OAuth
+  binding revalidation.
+- **Terminal and sandbox hardening**: process-group cleanup, bounded
+  output, cancellation paths, requested Docker resource/privilege limits,
+  and layered Seatbelt confinement.
+
+### Platform notes
+
+- Remote terminal execution (SSH, Daytona, Modal), realtime two-way Voice
+  Mode, video generation, and agent-authored apps are **not** in this
+  release.
+- Native sandbox enforcement beyond the macOS dev host — and the four
+  opt-in live Seatbelt tests — still require dedicated runner evidence.
+- One low-severity `deepmerge` advisory remains open; it arrives
+  transitively via the shadcn CLI and has no patched release to upgrade to.
+
 ## [0.2.0] — 2026-10-30 "Agent Workbench"
 
 ### Added
@@ -181,7 +263,9 @@ versions.
   mediation, approvals, audit trail, chat UI, channels, and Tauri desktop app
   for macOS.
 
-[Unreleased]: https://github.com/cabernect/caberos/compare/v0.1.9...HEAD
+[Unreleased]: https://github.com/cabernect/caberos/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/cabernect/caberos/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/cabernect/caberos/compare/v0.1.9...v0.2.0
 [0.1.9]: https://github.com/cabernect/caberos/compare/v0.1.8...v0.1.9
 [0.1.8]: https://github.com/cabernect/caberos/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/cabernect/caberos/compare/v0.1.6...v0.1.7
