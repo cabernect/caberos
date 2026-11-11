@@ -51,7 +51,7 @@ jobs:
       matrix:
         include:
           - name: macOS ARM64
-            runner: macos-14
+            runner: macos-15
             platform_key: darwin-aarch64
             bundle_script: desktop:build
           - name: Windows x64
