@@ -59,9 +59,26 @@ Use `artifact_create` with `format: "pdf"`, a `.pdf` path, and the same `title` 
 ```
 
 - `rows` are appended in order starting at row 1.
-- `cells` maps a cell reference to a value (`5`, `"text"`) or an object with `value` or `formula`, plus optional `number_format`, `bold`, `italic`, `color` (hex like `"FF0000"`).
-- `formats` maps a range to the same style keys.
+- `cells` maps a cell reference to a value (`5`, `"text"`) or an object with `value` or `formula`, plus the style keys below.
+- `formats` maps a cell or range reference (e.g. `"B2"`, `"B2:D4"`) to the same style keys.
+- `merges` lists range references to merge (e.g. `["A1:C1"]`).
+- `auto_filter` is a range reference (e.g. `"A1:D20"`) or `true` for the used range.
+- `row_heights` maps a 1-based row number to a height in points.
 - Sheets are set to landscape and fit-to-width for printing in a spreadsheet application.
+
+**Style keys** (cells, `formats`, and `style_range.style`):
+
+| Key | Values |
+|---|---|
+| `bold`, `italic` | `true`/`false` |
+| `color` | font color hex, `"RRGGBB"` or `"#RRGGBB"` |
+| `font_size` | points, e.g. `12` |
+| `fill` | solid background hex |
+| `number_format` | Excel format string, e.g. `"#,##0.00"`, `"0.0%"` |
+| `align` | `"left"`, `"center"`, `"right"`, `"justify"`, `"general"` |
+| `valign` | `"top"`, `"center"`, `"bottom"` |
+| `wrap_text` | `true`/`false` |
+| `border` | `"thin"`, `"medium"`, `"thick"`, `"dashed"`, `"dotted"`, or `"double"`; or `{ "style": "thin", "color": "#RRGGBB" }` — applies to all four sides |
 
 **Revise ops**
 
@@ -71,11 +88,19 @@ Use `artifact_create` with `format: "pdf"`, a `.pdf` path, and the same `title` 
   {"op": "set_cell", "sheet": "Budget", "cell": "D5", "formula": "=AVERAGE(D2:D3)"},
   {"op": "append_rows", "sheet": "Budget", "rows": [["Support", 40, 45, "=B5+C5"]]},
   {"op": "add_sheet", "name": "Notes", "rows": [["Assumptions"]]},
-  {"op": "remove_sheet", "sheet": "Old"}
+  {"op": "remove_sheet", "sheet": "Old"},
+  {"op": "style_range", "sheet": "Budget", "range": "A1:D1",
+   "style": {"bold": true, "fill": "#1F4E79", "color": "FFFFFF", "border": "thin"}},
+  {"op": "merge_cells", "sheet": "Budget", "range": "A1:C1"},
+  {"op": "set_column_width", "sheet": "Budget", "col": "A", "width": 28},
+  {"op": "set_row_height", "sheet": "Budget", "row": 1, "height": 24},
+  {"op": "set_auto_filter", "sheet": "Budget", "ref": "A1:D20"},
+  {"op": "set_freeze", "sheet": "Budget", "ref": "A2"}
 ]
 ```
 
-`add_sheet` accepts the same keys as a sheet in the create spec.
+`add_sheet` accepts the same keys as a sheet in the create spec. `set_auto_filter`
+and `set_freeze` accept `null` to clear.
 
 ## PowerPoint (`.pptx`)
 

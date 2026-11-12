@@ -717,6 +717,110 @@ def test_xlsx_build_sets_print_defaults():
     assert ws.page_margins.left == 0.5
 
 
+def test_xlsx_build_rich_styles_merges_and_filter():
+    """Rich cell/sheet styling survives a build → reopen round trip."""
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    from agentos.artifacts.formats import xlsx as xlsx_fmt
+
+    data = xlsx_fmt.build(
+        {
+            "sheets": [
+                {
+                    "name": "Budget",
+                    "rows": [["Item", "Q1"], ["Hosting", 120]],
+                    "cells": {
+                        "A1": {
+                            "value": "Item",
+                            "bold": True,
+                            "fill": "#1F4E79",
+                            "color": "FFFFFF",
+                            "align": "center",
+                            "border": {"style": "thin", "color": "#CCCCCC"},
+                        }
+                    },
+                    "formats": {"B2": {"number_format": "#,##0.00", "align": "right"}},
+                    "merges": ["D1:E1"],
+                    "auto_filter": "A1:B2",
+                    "row_heights": {"1": 28},
+                    "column_widths": {"A": 24},
+                    "freeze": "A2",
+                }
+            ]
+        },
+        ".",
+    )
+    wb = load_workbook(BytesIO(data))
+    ws = wb["Budget"]
+    a1 = ws["A1"]
+    assert a1.font.bold is True
+    assert a1.font.color.rgb == "00FFFFFF"
+    assert a1.fill.fgColor.rgb == "001F4E79"
+    assert a1.alignment.horizontal == "center"
+    assert a1.border.left.style == "thin"
+    assert ws["B2"].number_format == "#,##0.00"
+    assert ws["B2"].alignment.horizontal == "right"
+    assert "D1:E1" in [str(r) for r in ws.merged_cells.ranges]
+    assert ws.auto_filter.ref == "A1:B2"
+    assert ws.row_dimensions[1].height == 28
+    assert ws.column_dimensions["A"].width == 24
+    assert ws.freeze_panes == "A2"
+
+
+def test_xlsx_revise_style_and_layout_ops():
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    from agentos.artifacts.formats import xlsx as xlsx_fmt
+
+    data = xlsx_fmt.build({"sheets": [{"name": "S", "rows": [["h", "v"], [1, 2]]}]}, ".")
+    out = xlsx_fmt.revise(
+        data,
+        [
+            {
+                "op": "style_range",
+                "sheet": "S",
+                "range": "A1:B1",
+                "style": {"bold": True, "fill": "#EEEEEE", "border": "thin"},
+            },
+            {"op": "merge_cells", "sheet": "S", "range": "C1:D1"},
+            {"op": "set_column_width", "sheet": "S", "col": "A", "width": 30},
+            {"op": "set_row_height", "sheet": "S", "row": 3, "height": 22},
+            {"op": "set_auto_filter", "sheet": "S", "ref": "A1:B2"},
+            {"op": "set_freeze", "sheet": "S", "ref": "A2"},
+        ],
+        ".",
+    )
+    ws = load_workbook(BytesIO(out))["S"]
+    assert ws["A1"].font.bold is True
+    assert ws["B1"].fill.fgColor.rgb == "00EEEEEE"
+    assert ws["B1"].border.top.style == "thin"
+    assert "C1:D1" in [str(r) for r in ws.merged_cells.ranges]
+    assert ws.column_dimensions["A"].width == 30
+    assert ws.row_dimensions[3].height == 22
+    assert ws.auto_filter.ref == "A1:B2"
+    assert ws.freeze_panes == "A2"
+
+
+def test_xlsx_rejects_invalid_style_values():
+    from agentos.artifacts.formats import xlsx as xlsx_fmt
+
+    data = xlsx_fmt.build({"sheets": [{"name": "S", "rows": [["x"]]}]}, ".")
+    for bad in (
+        {"op": "style_range", "sheet": "S", "range": "A1:A1", "style": {"align": "diagonal"}},
+        {"op": "style_range", "sheet": "S", "range": "A1:A1", "style": {"border": "wavy"}},
+        {"op": "style_range", "sheet": "S", "range": "A1:A1", "style": {"fill": "not-a-color"}},
+    ):
+        try:
+            xlsx_fmt.revise(data, [bad], ".")
+        except ValueError:
+            continue
+        raise AssertionError(f"expected ValueError for {bad}")
+
+
 async def test_create_structured_lands_under_artifacts_dir(db, workspace, artifact_storage):
     """artifact_create paths are rooted at artifacts/ — the deliverables dir,
     mirroring attachments/ for inputs."""
