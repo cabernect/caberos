@@ -331,6 +331,17 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, cla
         )}
       </div>
 
+      {/* Moved-file notice — the requested path no longer exists; the
+          panel resolved a unique basename match and says so. */}
+      {payload?.moved_from && (
+        <div className="flex items-center gap-2 border-b border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-[11px] text-[var(--ink-2)]">
+          <FileClock className="h-3.5 w-3.5 shrink-0" />
+          <span className="flex-1">
+            This file was moved or renamed — showing <span className="font-mono">{payload.path}</span>.
+          </span>
+        </div>
+      )}
+
       {/* Revision banner — never silently swaps content, just flags. */}
       {artifact?.newer_exists && (
         <div className="flex items-center gap-2 border-b border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-[11px] text-[var(--ink-2)]">

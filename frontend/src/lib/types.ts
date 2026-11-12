@@ -319,6 +319,9 @@ export interface PreviewPayload {
    *  open/reveal-in-finder. Always the live file, even for revision views. */
   absolute_path?: string;
   artifact: ArtifactMeta | null;
+  /** Set when a stale path resolved to a uniquely-named file elsewhere in
+   *  the workspace (the agent renamed/moved it after producing it). */
+  moved_from?: string;
   content?: string;
   truncated?: boolean;
   language?: string;

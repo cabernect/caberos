@@ -2313,9 +2313,10 @@ function StreamingMessage({
           call reads as dead air. */}
       {streaming.awaitingModel && !streaming.completed && <TypingIndicator />}
 
-      {/* Output files the run produced — at the end of the run, not buried
-          inside collapsed tool-call steps. */}
-      {fileRefs.length > 0 && <FileChips refs={fileRefs} onPreview={onPreview} agentId={agentId} sessionId={sessionId} />}
+      {/* Output files the run produced — only once the run completes:
+          mid-run the agent may still rename/move/edit them, so early
+          chips would point at paths that are about to go stale. */}
+      {streaming.completed && fileRefs.length > 0 && <FileChips refs={fileRefs} onPreview={onPreview} agentId={agentId} sessionId={sessionId} />}
 
       {streaming.guardrailWarnings.length > 0 && (
         <div

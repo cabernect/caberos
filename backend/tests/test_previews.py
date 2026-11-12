@@ -301,6 +301,34 @@ async def test_preview_workspace_text_file(client, workspace_root, artifact_stor
     assert data["artifact"] is None
 
 
+async def test_preview_resolves_renamed_file_with_moved_from(
+    client, workspace_root, artifact_storage
+):
+    """Stale paths (agent renamed the file after producing it) resolve to a
+    unique basename match and flag `moved_from` instead of 404ing."""
+    ws = _agent_workspace(workspace_root)
+    (ws / "sub").mkdir()
+    (ws / "sub" / "report.md").write_text("# moved")
+
+    resp = await client.get("/api/agents/agent-1/workspace/preview?path=report.md")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["path"] == "sub/report.md"
+    assert data["moved_from"] == "report.md"
+    assert "moved" in data["content"]
+
+
+async def test_preview_moved_ambiguous_names_still_404(client, workspace_root, artifact_storage):
+    ws = _agent_workspace(workspace_root)
+    (ws / "a").mkdir()
+    (ws / "b").mkdir()
+    (ws / "a" / "dup.md").write_text("one")
+    (ws / "b" / "dup.md").write_text("two")
+
+    resp = await client.get("/api/agents/agent-1/workspace/preview?path=dup.md")
+    assert resp.status_code == 404
+
+
 async def test_preview_containment_blocks_escape(client, workspace_root, artifact_storage):
     _agent_workspace(workspace_root)
     resp = await client.get("/api/agents/agent-1/workspace/preview?path=../secret.txt")

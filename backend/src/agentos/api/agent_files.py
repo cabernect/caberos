@@ -45,6 +45,29 @@ class _ResolvedSource(NamedTuple):
     file_path: Path | None
     live_root: Path | None = None
     unresolved_tracking: bool = False
+    moved_from: str | None = None
+
+
+def _find_moved_file(ws: Path, missing_name: str) -> Path | None:
+    """Locate `missing_name` elsewhere in the workspace after a rename/move.
+
+    Bounded walk; resolves only on exactly one basename match so ambiguous
+    names never silently pick a file. Returns the absolute path or None.
+    """
+    wanted = missing_name.lower()
+    matches: list[Path] = []
+    scanned = 0
+    for root, dirs, files in os.walk(ws):
+        dirs[:] = [d for d in dirs if not d.startswith(".")]
+        for fname in files:
+            scanned += 1
+            if scanned > 20000:
+                return None
+            if fname.lower() == wanted:
+                matches.append(Path(root) / fname)
+                if len(matches) > 1:
+                    return None
+    return matches[0] if matches else None
 
 
 def _agent_home(agent_id: str) -> Path:
@@ -773,10 +796,27 @@ async def _resolve_source(
         target = Path(WorkspaceManager().validate_path(str(ws), path))
     except ValueError as error:
         raise HTTPException(status_code=403, detail="Path outside workspace") from error
+    moved_from: str | None = None
     if not target.exists() or not target.is_file():
-        raise HTTPException(status_code=404, detail="File not found")
-    artifact, unresolved = await artifact_service.get_by_path(db, agent_id, path, ws)
-    return _ResolvedSource(target.read_bytes(), target.name, artifact, target, ws, unresolved)
+        # Stale links happen when the agent renames/moves a file after
+        # producing it (file chips snapshot the write-time path). Resolve a
+        # unique basename match and flag it — never guess among duplicates.
+        found = _find_moved_file(ws, target.name)
+        if found is None:
+            raise HTTPException(status_code=404, detail="File not found")
+        moved_from = path
+        target = found
+    rel = str(target.relative_to(ws))
+    artifact, unresolved = await artifact_service.get_by_path(db, agent_id, rel, ws)
+    return _ResolvedSource(
+        target.read_bytes(),
+        target.name,
+        artifact,
+        target,
+        ws,
+        unresolved,
+        moved_from,
+    )
 
 
 async def _artifact_meta(db: AsyncSession, artifact, revision_id: str | None) -> dict:
@@ -847,11 +887,16 @@ async def preview_workspace_file(
         payload["path"] = src.artifact.current_path
     else:
         payload["path"] = path
+    if src.moved_from and src.file_path is not None and src.live_root is not None:
+        # Stale path resolved to a renamed/moved file — surface the real
+        # location and flag it so the panel can say so honestly.
+        payload["path"] = str(src.file_path.relative_to(src.live_root))
+        payload["moved_from"] = src.moved_from
     # Operator-only: the desktop shell uses the absolute path for
     # open/reveal-in-finder. Revision previews point at the live file —
     # under the artifact's evidence root when it differs from ws; None
     # when no root can be established at all.
-    live_path = src.artifact.current_path if src.artifact else path
+    live_path = src.artifact.current_path if src.artifact else payload["path"]
     payload["absolute_path"] = str(src.live_root / live_path) if src.live_root else None
     return payload
 
