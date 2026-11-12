@@ -31,7 +31,6 @@ from .skills.service import SkillConflict, SkillEditSession
 from .syscall.mediator import SyscallHandler
 from .syscall.protocol import ExecutionRestrictions
 
-MAX_TURNS = 8
 MAX_OUTPUT_TOKENS = 4096
 MAX_INITIAL_ROWS = 12
 MAX_INITIAL_CHARS = 12000
@@ -256,7 +255,9 @@ async def reflect_session(db, agent_config, session, contact_id, source_run_ids)
                 )
         run_config = agent_config.model_copy(deep=True)
         run_config.capabilities = [CapabilityGrant(**grant) for grant in allowed]
-        run_config.limits.max_turns_per_run = min(MAX_TURNS, run_config.limits.max_turns_per_run)
+        # Reflection inherits the agent's own turn budget — a hardcoded
+        # ceiling starved legitimate investigations (search + reads) before
+        # they could reach a conclusion.
         run_config.model.max_tokens = min(
             MAX_OUTPUT_TOKENS, run_config.model.max_tokens or MAX_OUTPUT_TOKENS
         )
