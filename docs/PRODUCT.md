@@ -92,7 +92,8 @@ Personal agents are a new attack surface — they hold credentials, act autonomo
 | v0.1.x (shipped) | Prove the OS | Chat, tools, approvals, memory, skills, MCP, channels, scheduler, observability, desktop. |
 | **v0.2.0** (integrated, release prep) | **Agent Workbench** | Artifacts + previews, browser automation, governed evolving skills, Vault RAG, durable schedules, ledgered observability. |
 | **v0.2.1** (implemented on release branch) | **Honest Vault, Workspace & Tools** | Existing-folder workspaces, pinned sessions, chunk inspection, exact CSV/XLSX queries, global Tools bindings, search services, image generation/editing, batch dictation, Read Aloud, and local terminal selection. |
-| v0.2.2 and later (planned) | Connected Knowledge, Tasks & Richer Preview | Cloud-drive ingestion, external retrieval, durable tasks/events, channel approvals, and richer rendered previews; not shipped in v0.2.1. |
+| **v0.2.2** (proposed) | **Artifact Craft & Preview** | Enhanced PPTX/DOCX/XLSX creation/editing, real Excel formulas, HTML presentations, scoped Office templates, revision-bound previews, and agent visual inspection/revision; see [release plan](plans/v0.2.2-release-plan.md). |
+| Later (uncommitted) | Connected Knowledge & Automation | Cloud-drive ingestion, external retrieval, durable tasks/events, and channel approvals; not committed to v0.2.2. |
 | Later | Missions & marketplace | Multi-agent missions, plugin SDK, more platforms — shipped only when verified. |
 
 ## v0.2.1 boundary

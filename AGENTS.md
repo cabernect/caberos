@@ -11,6 +11,16 @@ CaberOS is an open-source, local-first AI Agent Operating System. It hosts perso
 **Container:** Docker + docker-compose — `backend/Dockerfile`, `frontend/Dockerfile`, `docker-compose.yml`
 **Current line:** v0.2.1 "Honest Vault, Workspace & Tools" on `feat/v0.2.1`; release publication is separate from branch implementation.
 
+**Next release planning:** v0.2.2 "Artifact Craft & Preview" on `feat/v0.2.2`.
+See `docs/plans/v0.2.2-release-plan.md` and `docs/plans/v0.2.2/README.md`.
+PPTX/DOCX/XLSX creation/editing, HTML presentations, revision-bound rendering,
+and visual quality are planned requirements, not shipped capabilities. PPTX
+preview may be static while native effects remain in the exported file; HTML
+playback must be isolated. Formula authoring is included; in-app calculation is
+a separate decision. Renderer/runtime selection and
+preview-only Office conversion need explicit decisions; a Canva-like editor
+and agent-authored apps remain future scope.
+
 ## Where things are
 
 - `docs/spec-v0.1.md` — the v0.1 specification, 40 decisions (D1–D40).
