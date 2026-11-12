@@ -940,6 +940,9 @@ class LiteLLMAdapter:
         full_content = ""
         full_thinking = ""
         tool_calls_map: dict[int, dict[str, Any]] = {}
+        # Throttle arg-progress events — providers stream many small deltas;
+        # emit at ~4KB boundaries so the UI shows life during long writes.
+        progress_marks: dict[int, int] = {}
         tokens_in = 0
         tokens_out = 0
         cached_tokens: int | None = None
@@ -1004,6 +1007,18 @@ class LiteLLMAdapter:
                             tool_calls_map[idx]["name"] = tc_delta.function.name
                         if tc_delta.function.arguments:
                             tool_calls_map[idx]["args"] += tc_delta.function.arguments
+                            args_len = len(tool_calls_map[idx]["args"])
+                            last = progress_marks.get(idx, 0)
+                            if args_len - last >= 4096:
+                                progress_marks[idx] = args_len
+                                yield (
+                                    "tool_call_progress",
+                                    {
+                                        "index": idx,
+                                        "name": tool_calls_map[idx]["name"] or None,
+                                        "args_chars": args_len,
+                                    },
+                                )
 
         # Parse accumulated tool calls
         tool_calls: list[dict[str, Any]] = []

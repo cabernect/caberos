@@ -416,6 +416,32 @@ class Harness:
         )
 
         _failed_auto_fingerprints: set[str] = set()
+        _compaction_runs: list[Any] = []
+
+        async def _mint_compaction_run() -> str | None:
+            """Auto/forced compaction is session maintenance, not parent-run
+            work — give its summary call a standalone compaction Run so
+            traces show it separately. Falls back to the parent run id when
+            no DB session is available (transient/sub-agent conversations)."""
+            from ..models.run import Run
+
+            _db = getattr(syscall_handler, "db", None)
+            sess_id = getattr(session, "id", None)
+            contact_id = getattr(session, "contact_id", None)
+            if _db is None or sess_id is None or not contact_id:
+                return run_id
+            compact_run = Run(
+                session_id=sess_id,
+                agent_id=agent_config.id,
+                contact_id=contact_id,
+                status="running",
+                trigger="compaction",
+            )
+            _db.add(compact_run)
+            await _db.flush()
+            await _db.commit()
+            _compaction_runs.append(compact_run)
+            return compact_run.id
 
         def _conv_fingerprint() -> str:
             h = hashlib.sha256()
@@ -457,11 +483,22 @@ class Harness:
                 resolved_model=resolved_model,
                 accounting=accounting,
                 reserved_tokens=reserved,
-                run_id=run_id,
                 session_id=getattr(session, "id", None),
                 source_ids=list(conversation.source_ids),
                 protected_tail_start=_protected_tail_index(),
+                run_id=None,
+                run_id_resolver=_mint_compaction_run,
             )
+            if _compaction_runs:
+                from datetime import UTC, datetime
+
+                _cdb = getattr(syscall_handler, "db", None)
+                for _cr in _compaction_runs:
+                    _cr.status = "failed" if cr.error else "completed"
+                    _cr.completed_at = datetime.now(UTC)
+                _compaction_runs.clear()
+                if _cdb is not None:
+                    await _cdb.commit()
             # The result always renders the summary exactly once + originals
             history = history[:1] + list(cr.messages)
             if cr.error:
@@ -1044,6 +1081,9 @@ class Harness:
                             "cost": response.cost,
                             "loaded_capabilities": list(result.loaded_capabilities),
                             "context_breakdown": dict(result.context_breakdown),
+                            "context_tokens": result.context_tokens,
+                            "max_context_tokens": result.max_context_tokens,
+                            "compacted": result.compacted,
                         },
                     )
 
@@ -1095,6 +1135,9 @@ class Harness:
                         "cost": response.cost,
                         "loaded_capabilities": list(result.loaded_capabilities),
                         "context_breakdown": dict(result.context_breakdown),
+                        "context_tokens": result.context_tokens,
+                        "max_context_tokens": result.max_context_tokens,
+                        "compacted": result.compacted,
                     },
                 )
 
@@ -1291,6 +1334,8 @@ class Harness:
                 await self._emit(event_emitter, "token", {"content": content})
             elif delta_type == "thinking" and event_emitter:
                 await self._emit(event_emitter, "thinking", {"content": content})
+            elif delta_type == "tool_call_progress" and event_emitter:
+                await self._emit(event_emitter, "tool_call_progress", content)
             elif delta_type == "done":
                 response = content
 

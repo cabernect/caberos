@@ -1014,10 +1014,27 @@ export const api = {
       tail_count: number;
       summary: string | null;
       error: string | null;
+      context_breakdown?: {
+        system_prompt: number;
+        conversation: number;
+        tools: number;
+      } | null;
     }>(`/api/chat/${agentId}/compact`, {
       method: "POST",
       body: JSON.stringify({ session_id: sessionId }),
     }),
+  // Latest measured context usage — the last completed run's snapshot.
+  getSessionContext: (agentId: string, sessionId: string) =>
+    request<{
+      context: {
+        run_id: string;
+        context_tokens: number;
+        max_context_tokens: number;
+        compacted: boolean;
+        breakdown: { system_prompt?: number; conversation?: number; tools?: number };
+        as_of: string;
+      } | null;
+    }>(`/api/chat/${agentId}/sessions/${sessionId}/context`),
 
   // Notifications
   listNotifications: (unreadOnly = false, signal?: AbortSignal) =>

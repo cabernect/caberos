@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { ArrowDown, PanelLeft, PanelRight, Plus, Search, Globe, FileText, CalendarClock, Sparkles, AlertCircle, BookOpen, ChevronDown, Paperclip, Loader2, MessageSquare, CheckCircle, X } from "lucide-react";
+import { ArrowDown, PanelLeft, PanelRight, Plus, Search, Globe, FileText, CalendarClock, Sparkles, AlertCircle, BookOpen, ChevronDown, Paperclip, Loader2, MessageSquare, CheckCircle, X, BarChart3 } from "lucide-react";
 import { api, workspaceBackend, type PreviewSource } from "@/lib/api";
 import type { Agent, Citation, Message, Provider, SessionInfo } from "@/lib/types";
 import { WorkspacePanel } from "@/components/WorkspacePanel";
@@ -102,6 +102,7 @@ interface StreamingResponse {
   thinkingEndTime: number | null;
   turnCosts: TurnCost[];
   guardrailWarnings: string[];
+  toolProgress: { name: string | null; argsChars: number } | null;  // model is streaming a tool call's arguments
   completed: boolean;  // true when run is done — hides cursor, keeps content visible
   subagents: Map<string, SubAgentStream>;  // subagent_id -> nested stream
 }
@@ -129,6 +130,7 @@ function createStreamingResponse(): StreamingResponse {
     thinkingEndTime: null,
     turnCosts: [],
     guardrailWarnings: [],
+    toolProgress: null,
     completed: false,
     subagents: new Map(),
   };
@@ -142,6 +144,84 @@ interface CompactStatus {
   compactedTokens?: number;
   maxContextTokens?: number;
   message?: string;
+}
+
+// /context outcome — the last completed run's recorded snapshot, labeled
+// honestly as "as of last run" rather than a live estimate.
+interface ContextInfo {
+  state: "loading" | "ready" | "empty" | "error";
+  contextTokens?: number;
+  maxContextTokens?: number;
+  compacted?: boolean;
+  breakdown?: { system_prompt?: number; conversation?: number; tools?: number };
+  asOf?: string;
+  message?: string;
+}
+
+function ContextInfoBar({
+  info,
+  onDismiss,
+}: {
+  info: ContextInfo;
+  onDismiss: () => void;
+}) {
+  const pct =
+    info.state === "ready" && info.contextTokens != null && info.maxContextTokens
+      ? Math.round((info.contextTokens / info.maxContextTokens) * 100)
+      : null;
+  const fmt = (n?: number) => (n != null ? n.toLocaleString() : "—");
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="mb-2 rounded-lg px-3 py-2 text-[13px]"
+      style={{
+        background: "var(--surface)",
+        border: "1px solid var(--border)",
+        color: "var(--ink-2)",
+      }}
+    >
+      <div className="flex items-center gap-2">
+        {info.state === "loading" ? (
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin" style={{ color: "var(--accent)" }} />
+        ) : (
+          <BarChart3 className="h-4 w-4 shrink-0" style={{ color: "var(--accent)" }} />
+        )}
+        <span className="min-w-0 flex-1">
+          {info.state === "loading" && "Loading context usage…"}
+          {info.state === "empty" && "No runs yet — context usage appears after the first run."}
+          {info.state === "error" && `Context lookup failed — ${info.message ?? "unknown error"}`}
+          {info.state === "ready" && (
+            <>
+              Context — {fmt(info.contextTokens)} / {fmt(info.maxContextTokens)} tokens
+              {pct != null && ` (${pct}%)`}
+              {info.compacted && (
+                <span className="ml-1.5 rounded px-1 py-px font-mono text-[10px]" style={{ background: "var(--ground)", color: "var(--ink-3)" }}>
+                  compacted
+                </span>
+              )}
+            </>
+          )}
+        </span>
+        {info.state !== "loading" && (
+          <button
+            onClick={onDismiss}
+            aria-label="Dismiss context info"
+            className="shrink-0 rounded p-0.5"
+            style={{ color: "var(--ink-3)" }}
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+      {info.state === "ready" && info.breakdown && (
+        <div className="mt-1 font-mono text-[11px]" style={{ color: "var(--ink-3)" }}>
+          system {fmt(info.breakdown.system_prompt)} · conversation {fmt(info.breakdown.conversation)} · tools {fmt(info.breakdown.tools)}
+          {info.asOf && ` — as of last run ${new Date(info.asOf).toLocaleString()}`}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // Pinned above the composer so progress/outcome stays visible regardless of
@@ -232,6 +312,11 @@ export function Conversation() {
   // /compact outcomes are keyed by session — results land on the session
   // that started the request even after the user switches conversations.
   const [compactStatus, setCompactStatus] = useState<Record<string, CompactStatus>>({});
+  const [contextInfo, setContextInfo] = useState<Record<string, ContextInfo>>({});
+  const compactStatusRef = useRef(compactStatus);
+  useEffect(() => {
+    compactStatusRef.current = compactStatus;
+  }, [compactStatus]);
   const compacting = compactStatus[activeSessionId ?? ""]?.state === "pending";
   const [hasMoreHistory, setHasMoreHistory] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
@@ -692,12 +777,45 @@ export function Conversation() {
           const newItems = exists
             ? items.map(i => i.type === "tool" && i.id === data.id ? { ...i, data: toolData } : i)
             : [...items, { type: "tool" as const, id: data.id, data: toolData }];
-          return { ...prev, toolCalls: newToolCalls, items: newItems, thinking, text, awaitingModel: false };
+          return { ...prev, toolCalls: newToolCalls, items: newItems, thinking, text, awaitingModel: false, toolProgress: null };
         });
+        break;
+
+      case "tool_call_progress":
+        // The model is still generating a tool call's arguments (e.g. a
+        // large file body) — surface progress instead of dead air.
+        updateStreamingForSession(sessionId, (prev) =>
+          prev
+            ? {
+                ...prev,
+                toolProgress: { name: data.name ?? null, argsChars: data.args_chars ?? 0 },
+                awaitingModel: false,
+              }
+            : prev,
+        );
         break;
 
       case "turn_complete":
         setCachedTokens(data.cached_tokens ?? undefined);
+        // The breakdown is measured per dispatch — update the ring every
+        // turn instead of waiting for message_complete at run end.
+        if (data.context_breakdown) {
+          const b = data.context_breakdown;
+          const total =
+            (b.system_prompt ?? 0) + (b.conversation ?? 0) + (b.tools ?? 0);
+          if (total > 0) {
+            setContextTokens(total);
+            setContextBreakdown({
+              system_prompt: b.system_prompt ?? 0,
+              conversation: b.conversation ?? 0,
+              tools: b.tools ?? 0,
+            });
+            if (data.max_context_tokens != null) {
+              setMaxContextTokens(data.max_context_tokens);
+            }
+            if (data.compacted != null) setCompacted(data.compacted);
+          }
+        }
         updateStreamingForSession(sessionId, (prev) => {
           if (!prev) return prev;
           // Push the current turn's thinking into the items list, then reset
@@ -1396,6 +1514,14 @@ export function Conversation() {
       return true;
     }
 
+    // Handle /context slash command — show the last run's context snapshot
+    if (text.trim() === "/context") {
+      if (activeSessionId) {
+        handleContextInfo();
+      }
+      return true;
+    }
+
     // Don't create a session upfront — let the backend auto-resume or create one.
     // The response will contain the session_id, which we set below.
     const sessionId = activeSessionId;
@@ -1581,6 +1707,55 @@ export function Conversation() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSessionId]);
 
+  // Restore the context ring from the last completed run's recorded
+  // snapshot — the meter is measured run state, not derivable from the
+  // loaded message window, so leaving and returning used to lose it.
+  useEffect(() => {
+    if (!agentId || !activeSessionId) {
+      setContextTokens(undefined);
+      setMaxContextTokens(undefined);
+      setCompacted(false);
+      setContextBreakdown(undefined);
+      return;
+    }
+    // A /compact result is fresher than any run row — never let the
+    // snapshot fetch clobber it.
+    if (compactStatusRef.current[activeSessionId]?.state === "succeeded") return;
+    let cancelled = false;
+    api
+      .getSessionContext(agentId, activeSessionId)
+      .then((res) => {
+        if (cancelled) return;
+        const c = res.context;
+        if (!c || !c.context_tokens || !c.max_context_tokens) {
+          setContextTokens(undefined);
+          setMaxContextTokens(undefined);
+          setCompacted(false);
+          setContextBreakdown(undefined);
+          return;
+        }
+        setContextTokens(c.context_tokens);
+        setMaxContextTokens(c.max_context_tokens);
+        setCompacted(c.compacted);
+        setContextBreakdown(
+          c.breakdown
+            ? {
+                system_prompt: c.breakdown.system_prompt ?? 0,
+                conversation: c.breakdown.conversation ?? 0,
+                tools: c.breakdown.tools ?? 0,
+              }
+            : undefined,
+        );
+      })
+      .catch(() => {
+        /* ring stays empty — a lookup failure isn't worth an error state */
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentId, activeSessionId]);
+
   const handleCompact = async () => {
     const sessionId = activeSessionRef.current ?? activeSessionId;
     if (!agentId || !sessionId || compactInFlightRef.current.has(sessionId)) return;
@@ -1615,6 +1790,25 @@ export function Conversation() {
         setContextTokens(result.compacted_tokens);
         setMaxContextTokens(result.max_context_tokens);
         setCompacted(result.compacted);
+        if (result.context_breakdown) {
+          setContextBreakdown(result.context_breakdown);
+        }
+      }
+      // Keep the /context card in sync too — its breakdown would otherwise
+      // show the pre-compact split until the next manual refresh.
+      const newBreakdown = result.context_breakdown;
+      if (newBreakdown) {
+        setContextInfo((m) => ({
+          ...m,
+          [sessionId]: {
+            state: "ready",
+            contextTokens: result.compacted_tokens,
+            maxContextTokens: result.max_context_tokens,
+            compacted: result.compacted,
+            breakdown: newBreakdown,
+            asOf: new Date().toISOString(),
+          },
+        }));
       }
     } catch (e) {
       setCompactStatus((m) => ({
@@ -1626,6 +1820,54 @@ export function Conversation() {
       }));
     } finally {
       compactInFlightRef.current.delete(sessionId);
+    }
+  };
+
+  const handleContextInfo = async () => {
+    const sessionId = activeSessionRef.current ?? activeSessionId;
+    if (!agentId || !sessionId) return;
+    setContextInfo((m) => ({ ...m, [sessionId]: { state: "loading" } }));
+    try {
+      const res = await api.getSessionContext(agentId, sessionId);
+      const c = res.context;
+      if (!c || !c.context_tokens || !c.max_context_tokens) {
+        setContextInfo((m) => ({ ...m, [sessionId]: { state: "empty" } }));
+        return;
+      }
+      setContextInfo((m) => ({
+        ...m,
+        [sessionId]: {
+          state: "ready",
+          contextTokens: c.context_tokens,
+          maxContextTokens: c.max_context_tokens,
+          compacted: c.compacted,
+          breakdown: c.breakdown,
+          asOf: c.as_of,
+        },
+      }));
+      // The snapshot is the freshest measured state — keep the ring in sync.
+      if (activeSessionRef.current === sessionId) {
+        setContextTokens(c.context_tokens);
+        setMaxContextTokens(c.max_context_tokens);
+        setCompacted(c.compacted);
+        setContextBreakdown(
+          c.breakdown
+            ? {
+                system_prompt: c.breakdown.system_prompt ?? 0,
+                conversation: c.breakdown.conversation ?? 0,
+                tools: c.breakdown.tools ?? 0,
+              }
+            : undefined,
+        );
+      }
+    } catch (e) {
+      setContextInfo((m) => ({
+        ...m,
+        [sessionId]: {
+          state: "error",
+          message: e instanceof Error ? e.message : "Context lookup failed",
+        },
+      }));
     }
   };
 
@@ -2104,6 +2346,19 @@ export function Conversation() {
             }
           />
         )}
+        {/* /context snapshot — same composer-adjacent slot. */}
+        {activeSessionId && contextInfo[activeSessionId] && (
+          <ContextInfoBar
+            info={contextInfo[activeSessionId]}
+            onDismiss={() =>
+              setContextInfo((m) => {
+                const next = { ...m };
+                delete next[activeSessionId];
+                return next;
+              })
+            }
+          />
+        )}
         {(() => {
           const activeSession = sessions.find((s) => s.id === activeSessionId);
           if (activeSession?.channel) {
@@ -2305,6 +2560,21 @@ function StreamingMessage({
         <div className="markdown-body text-[14px] leading-[1.65] text-[var(--ink)]">
           <Markdown onWorkspaceLink={(p) => onPreview?.({ path: p })}>{streaming.text}</Markdown>
           {!streaming.completed && <span className="streaming-cursor" />}
+        </div>
+      )}
+
+      {/* Model is streaming a tool call's arguments (large file bodies
+          take minutes) — show live progress instead of dead air. */}
+      {streaming.toolProgress && !streaming.completed && (
+        <div className="mb-4 flex items-center gap-1.5">
+          <span
+            className="pulse inline-block h-1.5 w-1.5 rounded-full"
+            style={{ background: "#FBBF24" }}
+          />
+          <span className="font-mono text-[11px] text-[var(--ink-2)]">
+            {streaming.toolProgress.name ?? "tool call"} — generating arguments…{" "}
+            {(streaming.toolProgress.argsChars / 1000).toFixed(1)}k
+          </span>
         </div>
       )}
 

@@ -190,6 +190,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(fu
   // Built-in slash commands (always available, alongside skills)
   const builtinCommands = [
     { name: "compact", description: "Summarize older messages to free up context", isBuiltin: true },
+    { name: "context", description: "Show context window usage for this session", isBuiltin: true },
   ];
   const filteredBuiltins = skillQueryStr !== null
     ? builtinCommands.filter((c) => c.name.startsWith(skillQueryStr))

@@ -13,6 +13,7 @@ the model's context window budget.
 import json
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -126,6 +127,80 @@ def prune_tool_results(
                 msg = {**msg, "content": "[Old tool output cleared to save context space]"}
         pruned.append(msg)
     return pruned
+
+
+_FORCED_TAIL_PRUNE_OVER = 8000  # chars — only giant payloads are truncated
+_FORCED_TAIL_KEEP = 6000  # chars of head content retained before the marker
+
+_TRUNCATED_TOOL_OUTPUT = (
+    "\n…[truncated by /compact — full output omitted; "
+    "re-run the command or read the file if needed]"
+)
+
+
+def _truncate_args(arguments: str, name: str) -> str:
+    """Truncate oversized string fields inside a tool_call arguments JSON.
+
+    Arguments must stay valid JSON — cutting the raw string would corrupt
+    the history payload. Parse, shrink large string values, re-serialize.
+    Falls back to an explicit stub when the payload isn't parseable.
+    """
+    try:
+        args = json.loads(arguments)
+    except (json.JSONDecodeError, TypeError):
+        args = None
+    if not isinstance(args, dict):
+        return json.dumps(
+            {
+                "_pruned": f"large {name} payload omitted by /compact — content remains in the workspace"
+            }
+        )
+
+    def shrink(value: Any) -> Any:
+        if isinstance(value, str) and len(value) > _FORCED_TAIL_KEEP:
+            return value[:_FORCED_TAIL_KEEP] + _TRUNCATED_TOOL_OUTPUT
+        if isinstance(value, dict):
+            return {k: shrink(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [shrink(v) for v in value]
+        return value
+
+    return json.dumps(shrink(args))
+
+
+def prune_forced_tail(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Truncate oversized payloads inside the protected tail on manual
+    /compact — keeps the head of each payload plus an explicit marker,
+    unlike auto-compaction which keeps the tail fully verbatim. The full
+    bytes remain in the workspace either way.
+    """
+    out = []
+    for msg in messages:
+        role = msg.get("role", "")
+        if role == "tool":
+            content = msg.get("content", "")
+            if isinstance(content, str) and len(content) > _FORCED_TAIL_PRUNE_OVER:
+                msg = {**msg, "content": content[:_FORCED_TAIL_KEEP] + _TRUNCATED_TOOL_OUTPUT}
+        elif role == "assistant" and msg.get("tool_calls"):
+            new_calls = []
+            changed = False
+            for tc in msg["tool_calls"]:
+                fn = tc.get("function") or {}
+                args = fn.get("arguments")
+                if isinstance(args, str) and len(args) > _FORCED_TAIL_PRUNE_OVER:
+                    tc = {
+                        **tc,
+                        "function": {
+                            **fn,
+                            "arguments": _truncate_args(args, fn.get("name", "tool")),
+                        },
+                    }
+                    changed = True
+                new_calls.append(tc)
+            if changed:
+                msg = {**msg, "tool_calls": new_calls}
+        out.append(msg)
+    return out
 
 
 # --- Phase 2: Determine boundaries ---
@@ -599,6 +674,7 @@ async def compact_context(
     source_ids: list[set[str] | None] | None = None,
     protected_tail_start: int | None = None,
     run_id: str | None = None,
+    run_id_resolver: Callable[[], Awaitable[str | None]] | None = None,
     session_id: str | None = None,
 ) -> CompactionResult:
     """Run the 4-phase compaction pipeline.
@@ -661,9 +737,16 @@ async def compact_context(
         if previous_summary
         else 0
     )
-    tail_allowance = max(0, threshold_tokens - reserved_tokens - prior_summary_tokens)
+    # Manual /compact targets roughly halving the current context: the auto
+    # threshold (70% of the window) can exceed the whole conversation on
+    # large-context models, which would leave an empty middle and report
+    # "nothing to compact" even when forced.
+    effective_threshold = threshold_tokens
+    if force:
+        effective_threshold = min(threshold_tokens, max(original_tokens // 2, 1))
+    tail_allowance = max(0, effective_threshold - reserved_tokens - prior_summary_tokens)
     head_end, tail_start = determine_boundaries(
-        messages, config, threshold_tokens, model_str, tail_token_budget=tail_allowance
+        messages, config, effective_threshold, model_str, tail_token_budget=tail_allowance
     )
 
     # The current turn's protected rows must stay uncovered — clamp the tail
@@ -696,6 +779,12 @@ async def compact_context(
             tail_count=len(tail),
             retained_messages=[*head, *tail],
         )
+
+    # Forced /compact also shrinks the protected tail: giant tool args and
+    # outputs become explicit stubs (the bytes remain in the workspace).
+    # Auto-compaction keeps the tail fully verbatim.
+    if force:
+        tail = prune_forced_tail(tail)
 
     # Phase 1: Prune old tool results in head and middle
     # (tail is protected — no pruning)
@@ -737,7 +826,11 @@ async def compact_context(
 
     # Phase 3: Generate structured summary — a failed or empty summary
     # returns the ORIGINAL history untouched (never a fabricated stub);
-    # cancellation propagates.
+    # cancellation propagates. The resolver mints attribution lazily — it
+    # only runs when a summary call is actually about to be dispatched.
+    resolved_run_id = run_id
+    if resolved_run_id is None and run_id_resolver is not None:
+        resolved_run_id = await run_id_resolver()
     try:
         summary = await generate_summary(
             pruned_middle,
@@ -752,7 +845,7 @@ async def compact_context(
             provider_id=(model_cfg.provider_id if model_cfg else None),
             model_name=(model_cfg.name if model_cfg else None),
             agent_id=agent_config.id,
-            run_id=run_id,
+            run_id=resolved_run_id,
             session_id=session_id,
             source_ids=sorted({sid for group in (source_ids or []) for sid in (group or [])}),
         )
