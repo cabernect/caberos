@@ -13,7 +13,7 @@ import os
 import re
 from typing import Any
 
-from ...previews import classify
+from ...previews import classify, office_fidelity, office_zip_error
 from ...sandbox.workspace import WorkspaceManager
 
 # Hard ceiling on text returned to the model — same budget as web_fetch's
@@ -76,6 +76,9 @@ def _read_office(path: str, rel: str, fmt: str) -> dict[str, Any]:
 
     with open(path, "rb") as f:
         data = f.read()
+    zip_err = office_zip_error(data)
+    if zip_err:
+        return {"error": f"{fmt.upper()} package exceeds safe bounds: {zip_err}", "path": rel}
     try:
         elements = formats.get_handler(fmt).to_elements(data, "")
     except Exception as e:
@@ -86,6 +89,9 @@ def _read_office(path: str, rel: str, fmt: str) -> dict[str, Any]:
         "path": rel,
         "format": fmt,
         "extracted": "text",
+        # Same fidelity contract the operator preview declares — extracted
+        # text is an approximate view, not the file's real layout.
+        **office_fidelity(fmt),
     }
     if len(text) > _READ_MAX_CHARS:
         result["truncated"] = True

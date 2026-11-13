@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
 from ..models.artifact import Artifact, ArtifactRevision
+from ..previews import OFFICE_LIMITATIONS, office_fidelity, office_zip_error
 from ..sandbox.workspace import resolve_within
 from . import formats
 
@@ -400,7 +401,12 @@ async def revise_structured(
     if not target.exists():
         raise ArtifactError(f"file missing: {artifact.current_path}")
 
-    new_data = handler.revise(target.read_bytes(), ops, workspace_path)
+    current = target.read_bytes()
+    if artifact.format in OFFICE_LIMITATIONS:
+        zip_err = office_zip_error(current)
+        if zip_err:
+            raise ArtifactError(f"package exceeds safe bounds: {zip_err}")
+    new_data = handler.revise(current, ops, workspace_path)
     return await revise(
         db,
         artifact_id,
@@ -432,6 +438,15 @@ async def inspect(db: AsyncSession, artifact_id: str, *, workspace_path: str | P
         "tracking_status": artifact.tracking_status,
         "current_revision_id": artifact.current_revision_id,
     }
+    # Fidelity declared for previews of this file — structure below is exact,
+    # the preview block says how approximate extracted/rendered views are.
+    if artifact.format in OFFICE_LIMITATIONS:
+        info["preview"] = office_fidelity(artifact.format)
+        zip_err = office_zip_error(data)
+        if zip_err:
+            # Refuse rather than claim validity we can't safely verify —
+            # a package this size is a resource bound, not corruption.
+            raise ArtifactError(f"package exceeds safe bounds: {zip_err}")
     try:
         handler = formats.get_handler(artifact.format)
     except formats.UnsupportedFormatError:

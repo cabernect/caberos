@@ -16,6 +16,7 @@ import csv
 import io
 import json
 import mimetypes
+import zipfile
 from pathlib import Path
 
 # Bounds — generous for real files, hard enough to keep panels snappy.
@@ -29,6 +30,26 @@ ELEMENTS_MAX = 400
 ELEMENT_IMAGES_MAX = 20
 ELEMENT_IMAGE_MAX_BYTES = 3 * 1024 * 1024
 PDF_PAGE_SCALE = 1.5
+
+# Bump when extraction/render semantics change so caches and consumers can
+# tell which preview implementation produced a payload.
+PREVIEW_VERSION = "2026-11"
+
+# Office packages are ZIPs — the input cap bounds compressed bytes, but a
+# small archive can expand without limit inside the Office parsers. Bound
+# expansion before any docx/pptx/xlsx parse (preview, inspect, revise, and
+# agent read_file all share this guard).
+OFFICE_ZIP_MAX_ENTRIES = 512
+OFFICE_ZIP_MAX_ENTRY_BYTES = 64 * 1024 * 1024
+OFFICE_ZIP_MAX_TOTAL_BYTES = 256 * 1024 * 1024
+
+# Approximate Office previews are extracted-content views — stable limitation
+# codes per the preview contract; the operator-facing copy keys off these.
+OFFICE_LIMITATIONS = {
+    "docx": ["layout", "fonts", "fields", "omitted_features"],
+    "pptx": ["layout", "fonts", "effects", "omitted_features"],
+    "xlsx": ["formatting", "omitted_features", "formula_evaluation"],
+}
 
 _MARKDOWN = {".md", ".markdown", ".mdx"}
 _CODE = {
@@ -130,7 +151,12 @@ def preview_bytes(data: bytes, name: str) -> dict:
     """Bytes → bounded preview payload keyed by kind."""
     kind = classify(name)
     size = len(data)
-    base = {"kind": kind, "size": size, "name": Path(name).name}
+    base = {
+        "kind": kind,
+        "size": size,
+        "name": Path(name).name,
+        "preview_version": PREVIEW_VERSION,
+    }
     if size > PREVIEW_MAX_BYTES:
         return {**base, "kind": "unknown", "too_large": True, "mime": media_type(name)}
 
@@ -160,15 +186,70 @@ def preview_bytes(data: bytes, name: str) -> dict:
         return {**base, "mime": media_type(name), "svg": name.lower().endswith(".svg")}
     if kind == "pdf":
         return {**base, **_preview_pdf(data)}
-    if kind == "document":
-        return {**base, "format": "docx", **_preview_office(data, "docx")}
-    if kind == "slides":
-        return {**base, "format": "pptx", **_preview_slides(data)}
-    if kind == "workbook":
-        return {**base, "format": "xlsx", **_preview_workbook(data)}
+    if kind in ("document", "slides", "workbook"):
+        return _office_preview(base, kind, data)
     if kind == "media":
         return {**base, "media": _media_kind(name), "mime": media_type(name)}
     return {**base, "mime": media_type(name)}
+
+
+def office_fidelity(fmt: str) -> dict:
+    """Office formats share the approximate-fidelity marker + stable codes.
+
+    Same contract on every consumer surface — operator preview payloads and
+    agent-facing extraction/inspection results declare the same mode and
+    limitation codes so neither overstates fidelity.
+    """
+    return {"mode": "approximate", "limitations": OFFICE_LIMITATIONS[fmt]}
+
+
+def office_zip_error(data: bytes) -> str | None:
+    """Bound Office package expansion before the ZIP reaches a parser.
+
+    Returns an error string when the archive exceeds safe bounds; None when
+    it is within limits or is not a ZIP at all — corrupt/non-ZIP input is
+    left for the real parser to report honestly.
+    """
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            infos = zf.infolist()
+    except zipfile.BadZipFile:
+        return None
+    if len(infos) > OFFICE_ZIP_MAX_ENTRIES:
+        return f"package has {len(infos)} entries (limit {OFFICE_ZIP_MAX_ENTRIES})"
+    total = 0
+    for info in infos:
+        if info.file_size > OFFICE_ZIP_MAX_ENTRY_BYTES:
+            return (
+                f"entry {info.filename!r} expands to {info.file_size} bytes "
+                f"(limit {OFFICE_ZIP_MAX_ENTRY_BYTES})"
+            )
+        total += info.file_size
+        if total > OFFICE_ZIP_MAX_TOTAL_BYTES:
+            return f"package expands beyond {OFFICE_ZIP_MAX_TOTAL_BYTES} bytes"
+    return None
+
+
+def _office_preview(base: dict, kind: str, data: bytes) -> dict:
+    """One Office preview seam — expansion guard, then the per-format
+    extractor. Error payloads keep the same shape the extractors use."""
+    fmt = {"document": "docx", "slides": "pptx", "workbook": "xlsx"}[kind]
+    err = office_zip_error(data)
+    if err:
+        return {
+            **base,
+            "format": fmt,
+            "elements": [],
+            "error": f"package exceeds safe bounds: {err}"[:300],
+            **office_fidelity(fmt),
+        }
+    if kind == "document":
+        body = _preview_office(data, "docx")
+    elif kind == "slides":
+        body = _preview_slides(data)
+    else:
+        body = _preview_workbook(data)
+    return {**base, "format": fmt, **office_fidelity(fmt), **body}
 
 
 def _preview_table(data: bytes, name: str) -> dict:

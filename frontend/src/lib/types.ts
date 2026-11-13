@@ -333,6 +333,11 @@ export interface PreviewPayload {
   svg?: boolean;
   page_count?: number;
   format?: string;
+  /** Fidelity class per the preview contract — "approximate" marks an
+   *  extracted-content view, never native Office layout. */
+  mode?: "approximate" | "content" | "native" | "design";
+  /** Stable limitation codes for approximate views (layout, fonts, effects…). */
+  limitations?: string[];
   elements?: PreviewElement[];
   slides?: PreviewSlide[];
   slide_count?: number;
@@ -346,6 +351,16 @@ export interface PreviewPayload {
   /** Ephemeral-upload previews only — first PDF page as base64 PNG. */
   thumb_png?: string;
   error?: string;
+  /** Preview implementation version — bumped when extraction semantics change. */
+  preview_version?: string;
+  /** Identity + hash of the exact bytes rendered: "revision" is pinned
+   *  managed-revision bytes, "live_file" is a fresh workspace-file read. */
+  source?: {
+    kind: "revision" | "live_file";
+    artifact_id: string | null;
+    revision_id: string | null;
+    sha256: string;
+  };
 }
 
 export interface ArtifactRevisionInfo {

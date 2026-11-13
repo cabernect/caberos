@@ -278,6 +278,10 @@ async def test_docx_create_inspect_roundtrip(db, workspace, artifact_storage):
     assert "Summary" in info["structure"]["headings"]
     assert info["structure"]["tables"] == 1
     assert info["structure"]["list_items"] == 2
+    # Agent-facing inspect declares the same preview fidelity the operator
+    # preview payload does — structure is exact, previews are approximate.
+    assert info["preview"]["mode"] == "approximate"
+    assert info["preview"]["limitations"] == ["layout", "fonts", "fields", "omitted_features"]
 
 
 async def test_docx_revise_applies_ops_as_new_revision(db, workspace, artifact_storage):
@@ -357,6 +361,63 @@ async def test_corrupt_file_reports_invalid_not_crash(db, workspace, artifact_st
     info = await service.inspect(db, art.id, workspace_path=workspace)
     assert info["valid"] is False
     assert info["errors"]
+    # Fidelity metadata survives invalid files — same as preview payloads.
+    assert info["preview"]["mode"] == "approximate"
+
+
+async def test_inspect_zip_bomb_refuses_safely(db, workspace, artifact_storage, monkeypatch):
+    """A package exceeding expansion bounds is refused with an explicit
+    error — never misreported as valid or corrupt."""
+    import docx as docx_lib
+
+    from agentos import previews
+    from agentos.artifacts import service
+    from agentos.artifacts.service import ArtifactError
+
+    doc = docx_lib.Document()
+    doc.add_paragraph("hi")
+    doc.save(Path(workspace) / "bomb.docx")
+    art, _ = await service.adopt(
+        db,
+        workspace_id="agent-1",
+        workspace_path=workspace,
+        rel_path="bomb.docx",
+        created_by="agent-1",
+    )
+
+    monkeypatch.setattr(previews, "OFFICE_ZIP_MAX_ENTRY_BYTES", 10)
+    with pytest.raises(ArtifactError, match="exceeds safe bounds"):
+        await service.inspect(db, art.id, workspace_path=workspace)
+
+
+async def test_revise_zip_bomb_refuses_safely(db, workspace, artifact_storage, monkeypatch):
+    """Structured revise hits the same expansion guard before parsing."""
+    import docx as docx_lib
+
+    from agentos import previews
+    from agentos.artifacts import service
+    from agentos.artifacts.service import ArtifactError
+
+    doc = docx_lib.Document()
+    doc.add_paragraph("hi")
+    doc.save(Path(workspace) / "memo.docx")
+    art, rev = await service.adopt(
+        db,
+        workspace_id="agent-1",
+        workspace_path=workspace,
+        rel_path="memo.docx",
+        created_by="agent-1",
+    )
+
+    monkeypatch.setattr(previews, "OFFICE_ZIP_MAX_TOTAL_BYTES", 10)
+    with pytest.raises(ArtifactError, match="exceeds safe bounds"):
+        await service.revise_structured(
+            db,
+            art.id,
+            workspace_path=workspace,
+            base_revision_id=rev.id,
+            ops=[{"op": "append_blocks", "blocks": [{"type": "paragraph", "text": "x"}]}],
+        )
 
 
 # --- W2c: XLSX structured generation ---
@@ -981,3 +1042,115 @@ async def test_mediated_restore_adopt_carry_provenance(db, workspace, artifact_s
     assert revs[rev2].call_id == "call-r" and revs[rev2].sub_agent_id == "sub-p"
     assert revs[rev3].call_id == "call-rest" and revs[rev3].source_run_id == "run-prov"
     assert revs[adopt_rev].call_id == "call-a" and revs[adopt_rev].source_run_id == "run-prov"
+
+
+FIXTURES = Path(__file__).parent / "fixtures" / "artifacts"
+
+
+def _fixture_bytes(name: str) -> bytes:
+    return (FIXTURES / name).read_bytes()
+
+
+def test_fixture_pptx_decks_inspect_cleanly():
+    from agentos.artifacts.formats import pptx
+
+    for name in (
+        "analysis-deck.pptx",
+        "analysis-deck-longtitle.pptx",
+        "deck-vietnamese.pptx",
+        "analysis-deck-external-edit.pptx",
+    ):
+        info = pptx.inspect(_fixture_bytes(name))
+        assert info["structure"]["slides"] > 0, name
+
+
+def test_fixture_docx_reports_inspect_cleanly():
+    from agentos.artifacts.formats import docx
+
+    for name in ("report.docx", "report-vietnamese.docx"):
+        info = docx.inspect(_fixture_bytes(name))
+        assert info["structure"]["headings"], name
+        assert docx.validate(_fixture_bytes(name))["valid"], name
+
+
+def test_fixture_xlsx_inspect_reports_sheets_and_formulas():
+    from agentos.artifacts.formats import xlsx
+
+    info = xlsx.inspect(_fixture_bytes("workbook.xlsx"))
+    assert info["structure"]["sheets"] == ["Summary", "Weekly", "Notes"]
+    assert info["structure"]["formulas"] > 0
+
+
+def test_fixture_manifest_covers_all_files():
+    import json
+
+    manifest = json.loads((FIXTURES / "manifest.json").read_text())
+    on_disk = {p.name for p in FIXTURES.iterdir() if p.is_file() and p.name != "manifest.json"}
+    recorded = {f["file"] for f in manifest["files"]}
+    assert on_disk == recorded | {"generate.py", "fixture_variants.py", "README.md"}
+    for entry in manifest["files"]:
+        data = (FIXTURES / entry["file"]).read_bytes()
+        assert hashlib.sha256(data).hexdigest() == entry["sha256"], entry["file"]
+        assert len(data) == entry["bytes"], entry["file"]
+    asset = manifest["asset"]
+    assert hashlib.sha256((FIXTURES / asset["file"]).read_bytes()).hexdigest() == asset["sha256"]
+
+
+async def test_fixture_external_deck_conflict_preserves_both_byte_versions(
+    db, workspace, artifact_storage
+):
+    from agentos.artifacts import service
+
+    original = _fixture_bytes("analysis-deck.pptx")
+    external = _fixture_bytes("analysis-deck-external-edit.pptx")
+    art, revision = await service.create(
+        db,
+        workspace_id="agent-1",
+        workspace_path=workspace,
+        rel_path="deck.pptx",
+        data=original,
+    )
+    target = Path(workspace) / "deck.pptx"
+    target.write_bytes(external)
+    with pytest.raises(service.ArtifactConflictError):
+        await service.revise_structured(
+            db,
+            art.id,
+            workspace_path=workspace,
+            base_revision_id=revision.id,
+            ops=[{"op": "set_title", "slide": 0, "text": "Agent draft must not overwrite"}],
+        )
+    assert target.read_bytes() == external
+    assert await service.revision_bytes(db, revision.id) == original
+    assert len(await service.history(db, art.id)) == 1
+
+
+async def test_fixture_uploaded_workbook_adoption_retains_exact_original(
+    db, workspace, artifact_storage
+):
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    from agentos.artifacts import service
+
+    original = _fixture_bytes("uploaded-features.xlsx")
+    target = Path(workspace) / "uploaded.xlsx"
+    target.write_bytes(original)
+    art, base = await service.adopt(
+        db, workspace_id="agent-1", workspace_path=workspace, rel_path="uploaded.xlsx"
+    )
+    revised = await service.revise_structured(
+        db,
+        art.id,
+        workspace_path=workspace,
+        base_revision_id=base.id,
+        ops=[{"op": "set_cell", "sheet": "Summary", "cell": "B2", "value": 60}],
+    )
+    assert await service.revision_bytes(db, base.id) == original
+    book = load_workbook(BytesIO(await service.revision_bytes(db, revised.id)))
+    assert book["Summary"]["B2"].value == 60
+    assert book["Notes"]["B3"].value == "=SUM(Summary!B2:C2)"
+    assert "WeeklyMetrics" in book["Weekly"].tables
+    assert len(book["Weekly"].data_validations.dataValidation) == 1
+    assert len(book["Weekly"].conditional_formatting) == 1

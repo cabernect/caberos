@@ -5,6 +5,7 @@ Seam under test: agentos.previews renderers (pure bytes→payload) plus the
 payloads and HTTP responses, never internals.
 """
 
+import hashlib
 import os
 from pathlib import Path
 
@@ -32,6 +33,11 @@ async def client(db):
         yield c
 
     app.dependency_overrides.clear()
+    # Preview cache is module-global — isolate tests from each other's entries.
+    from agentos.api import agent_files
+
+    agent_files._preview_cache.clear()
+    agent_files._preview_locks.clear()
 
 
 @pytest.fixture
@@ -192,6 +198,8 @@ def test_docx_preview_extracts_elements():
     )
     payload = previews.preview_bytes(data, "doc.docx")
     assert payload["kind"] == "document"
+    assert payload["mode"] == "approximate"
+    assert payload["limitations"] == ["layout", "fonts", "fields", "omitted_features"]
     types = [e["type"] for e in payload["elements"]]
     assert "heading" in types and "paragraph" in types and "table" in types
 
@@ -215,6 +223,8 @@ def test_pptx_preview_groups_slides():
     )
     payload = previews.preview_bytes(data, "deck.pptx")
     assert payload["kind"] == "slides"
+    assert payload["mode"] == "approximate"
+    assert payload["limitations"] == ["layout", "fonts", "effects", "omitted_features"]
     assert payload["slide_count"] == 2
     assert payload["slides"][0]["title"] == "One"
     assert payload["slides"][1]["title"] == "Two"
@@ -270,6 +280,8 @@ def test_xlsx_preview_returns_sheet_grids():
     )
     payload = previews.preview_bytes(data, "book.xlsx")
     assert payload["kind"] == "workbook"
+    assert payload["mode"] == "approximate"
+    assert payload["limitations"] == ["formatting", "omitted_features", "formula_evaluation"]
     sheet = payload["sheets"][0]
     assert sheet["name"] == "Rev"
     assert sheet["rows"][0] == ["Region", "Q3"]
@@ -290,6 +302,8 @@ def test_oversized_file_returns_too_large():
 
 
 async def test_preview_workspace_text_file(client, workspace_root, artifact_storage):
+    from agentos import previews
+
     ws = _agent_workspace(workspace_root)
     (ws / "notes.md").write_text("# Hello\n\nworld")
 
@@ -297,8 +311,16 @@ async def test_preview_workspace_text_file(client, workspace_root, artifact_stor
     assert resp.status_code == 200
     data = resp.json()
     assert data["kind"] == "markdown"
+    # Non-Office kinds carry no fidelity marker — they are content views.
+    assert "mode" not in data and "limitations" not in data
     assert "Hello" in data["content"]
     assert data["artifact"] is None
+    # W1 contract: preview implementation version + source identity/hash.
+    assert data["preview_version"] == previews.PREVIEW_VERSION
+    assert data["source"]["kind"] == "live_file"
+    assert data["source"]["artifact_id"] is None
+    assert data["source"]["revision_id"] is None
+    assert data["source"]["sha256"] == hashlib.sha256((ws / "notes.md").read_bytes()).hexdigest()
 
 
 async def test_preview_resolves_renamed_file_with_moved_from(
@@ -386,6 +408,11 @@ async def test_preview_revision_uses_stored_bytes_and_flags_newer(
     assert meta["viewing_revision_number"] == 1
     assert meta["current_revision_number"] == 2
     assert meta["newer_exists"] is True
+    # Revision-pinned source identity + hash of the stored bytes.
+    assert data["source"]["kind"] == "revision"
+    assert data["source"]["artifact_id"] == art.id
+    assert data["source"]["revision_id"] == rev1.id
+    assert data["source"]["sha256"] == hashlib.sha256(b"version-one").hexdigest()
 
     # Current revision shows no banner.
     resp = await client.get(
@@ -1022,3 +1049,148 @@ async def test_workspace_delete_normalizes_dotdot(client, workspace_root):
     resp = await client.delete("/api/agents/agent-1/workspace?path=sub/../target.txt")
     assert resp.status_code == 200
     assert not (ws / "target.txt").exists()
+
+
+# --- W1: expansion guard, source contract, preview cache ---
+
+
+def _zip_bytes(entries: dict[str, bytes]) -> bytes:
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, content in entries.items():
+            zf.writestr(name, content)
+    return buf.getvalue()
+
+
+def test_office_zip_guard_bounds_expansion(monkeypatch):
+    from agentos import previews
+
+    data = _zip_bytes({"word/document.xml": b"x" * 4096})
+    assert previews.office_zip_error(data) is None
+    # Non-ZIP input is left for the real parser to report.
+    assert previews.office_zip_error(b"not a zip at all") is None
+
+    monkeypatch.setattr(previews, "OFFICE_ZIP_MAX_ENTRY_BYTES", 100)
+    err = previews.office_zip_error(data)
+    assert err is not None and "expands to" in err
+
+    # The preview payload refuses honestly and keeps fidelity metadata.
+    payload = previews.preview_bytes(data, "doc.docx")
+    assert payload["mode"] == "approximate"
+    assert payload["limitations"] == ["layout", "fonts", "fields", "omitted_features"]
+    assert "exceeds safe bounds" in payload["error"]
+
+
+def test_office_zip_guard_bounds_entry_count(monkeypatch):
+    from agentos import previews
+
+    data = _zip_bytes({f"f{i}.xml": b"x" for i in range(10)})
+    monkeypatch.setattr(previews, "OFFICE_ZIP_MAX_ENTRIES", 4)
+    err = previews.office_zip_error(data)
+    assert err is not None and "entries" in err
+
+
+async def test_preview_cache_serves_repeat_reads(
+    client, workspace_root, artifact_storage, monkeypatch
+):
+    """Same bytes+name+version → one extraction, served from cache."""
+    from agentos import previews
+    from agentos.api import agent_files
+
+    agent_files._preview_cache.clear()
+    calls: list[str] = []
+    real = previews.preview_bytes
+
+    def spy(data: bytes, name: str) -> dict:
+        calls.append(name)
+        return real(data, name)
+
+    monkeypatch.setattr(previews, "preview_bytes", spy)
+    ws = _agent_workspace(workspace_root)
+    (ws / "a.md").write_text("alpha-body")
+    (ws / "b.md").write_text("beta-body")
+
+    for _ in range(2):
+        resp = await client.get("/api/agents/agent-1/workspace/preview?path=a.md")
+        assert resp.status_code == 200
+    assert calls == ["a.md"]
+
+    resp = await client.get("/api/agents/agent-1/workspace/preview?path=b.md")
+    assert resp.status_code == 200
+    assert calls == ["a.md", "b.md"]
+
+
+async def test_preview_cache_single_flight(client, workspace_root, artifact_storage, monkeypatch):
+    """Concurrent requests for the same key share one extraction."""
+    import asyncio
+    import time
+
+    from agentos import previews
+    from agentos.api import agent_files
+
+    agent_files._preview_cache.clear()
+    ws = _agent_workspace(workspace_root)
+    (ws / "slow.md").write_text("slow body " * 200)
+
+    calls = 0
+    real = previews.preview_bytes
+
+    def slow_spy(data: bytes, name: str) -> dict:
+        nonlocal calls
+        calls += 1
+        time.sleep(0.05)
+        return real(data, name)
+
+    monkeypatch.setattr(previews, "preview_bytes", slow_spy)
+    results = await asyncio.gather(
+        *[client.get("/api/agents/agent-1/workspace/preview?path=slow.md") for _ in range(4)]
+    )
+    assert all(r.status_code == 200 for r in results)
+    assert calls == 1
+
+
+async def test_preview_cache_evicts_oldest(client, workspace_root, artifact_storage, monkeypatch):
+    """Bounded LRU: exceeding the cap evicts the oldest entry, which then
+    recomputes on next read."""
+    from agentos import previews
+    from agentos.api import agent_files
+
+    agent_files._preview_cache.clear()
+    monkeypatch.setattr(agent_files, "_PREVIEW_CACHE_MAX", 2)
+    calls: list[str] = []
+    real = previews.preview_bytes
+
+    def spy(data: bytes, name: str) -> dict:
+        calls.append(name)
+        return real(data, name)
+
+    monkeypatch.setattr(previews, "preview_bytes", spy)
+    ws = _agent_workspace(workspace_root)
+    for name in ("a.md", "b.md", "c.md"):
+        (ws / name).write_text(name)
+
+    for name in ("a.md", "b.md", "c.md", "a.md"):
+        resp = await client.get(f"/api/agents/agent-1/workspace/preview?path={name}")
+        assert resp.status_code == 200
+    # a,b,c fill the cache; c evicts a; the second a read recomputes.
+    assert calls == ["a.md", "b.md", "c.md", "a.md"]
+
+
+async def test_preview_cache_never_bypasses_source_resolution(
+    client, workspace_root, artifact_storage
+):
+    """A cache hit requires the source to resolve first — agent-2 gets a
+    404 for a file it doesn't have even though agent-1's identical bytes
+    are cached."""
+    ws1 = _agent_workspace(workspace_root, "agent-1")
+    (ws1 / "shared.md").write_text("identical body")
+    _agent_workspace(workspace_root, "agent-2")  # exists, but no shared.md
+
+    resp = await client.get("/api/agents/agent-1/workspace/preview?path=shared.md")
+    assert resp.status_code == 200
+
+    resp = await client.get("/api/agents/agent-2/workspace/preview?path=shared.md")
+    assert resp.status_code == 404

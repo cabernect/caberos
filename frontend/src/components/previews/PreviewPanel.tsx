@@ -20,6 +20,7 @@ import { api, workspaceBackend, type PreviewBackend, type PreviewSource } from "
 import { useConfirm } from "@/lib/confirmHook";
 import type { ArtifactRevisionInfo, PreviewPayload } from "@/lib/types";
 import { formatBytes, PreviewBody } from "./renderers";
+import { OfficePreviewNotice } from "./OfficePreviewNotice";
 
 const isDesktopShell =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -436,6 +437,10 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, cla
         <p className="border-b border-[var(--border)] px-3 py-1 text-[11px] text-[var(--ink-2)]">
           {actionMsg}
         </p>
+      )}
+
+      {payload && !compare && !payload.error && (
+        <OfficePreviewNotice kind={payload.kind} mode={payload.mode} />
       )}
 
       {/* Content — compare mode swaps the preview for the diff. In expanded

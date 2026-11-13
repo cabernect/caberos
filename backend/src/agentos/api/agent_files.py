@@ -1,7 +1,10 @@
 """Agent files API — MEMORY.md, skills, workspace browser, memory management (D34, D37)."""
 
+import asyncio
+import hashlib
 import os
 import re
+from collections import OrderedDict
 from pathlib import Path
 from typing import NamedTuple
 
@@ -46,6 +49,7 @@ class _ResolvedSource(NamedTuple):
     live_root: Path | None = None
     unresolved_tracking: bool = False
     moved_from: str | None = None
+    source_hash: str = ""
 
 
 def _find_moved_file(ws: Path, missing_name: str) -> Path | None:
@@ -790,7 +794,14 @@ async def _resolve_source(
             if not target.exists() or not target.is_file():
                 raise HTTPException(status_code=404, detail="File not found")
             data = target.read_bytes()
-        return _ResolvedSource(data, Path(artifact.current_path).name, artifact, None, live_root)
+        return _ResolvedSource(
+            data,
+            Path(artifact.current_path).name,
+            artifact,
+            None,
+            live_root,
+            source_hash=hashlib.sha256(data).hexdigest(),
+        )
 
     try:
         target = Path(WorkspaceManager().validate_path(str(ws), path))
@@ -808,15 +819,60 @@ async def _resolve_source(
         target = found
     rel = str(target.relative_to(ws))
     artifact, unresolved = await artifact_service.get_by_path(db, agent_id, rel, ws)
+    data = target.read_bytes()
     return _ResolvedSource(
-        target.read_bytes(),
+        data,
         target.name,
         artifact,
         target,
         ws,
         unresolved,
         moved_from,
+        source_hash=hashlib.sha256(data).hexdigest(),
     )
+
+
+# Preview cache — bounded LRU of extraction payloads keyed by content hash +
+# name + preview implementation version. It sits AFTER source resolution, so
+# every request — cache hit or miss — re-runs ownership/root checks; the
+# cache never grants access. Entries are immutable payloads; callers get a
+# shallow copy before adding per-request fields.
+_PREVIEW_CACHE_MAX = 64
+_preview_cache: OrderedDict[str, dict] = OrderedDict()
+_preview_locks: dict[str, asyncio.Lock] = {}
+
+
+def _preview_lock(key: str) -> asyncio.Lock:
+    lock = _preview_locks.get(key)
+    if lock is None:
+        if len(_preview_locks) >= _PREVIEW_CACHE_MAX * 4:
+            for stale in [k for k, lk in _preview_locks.items() if not lk.locked()]:
+                _preview_locks.pop(stale, None)
+        lock = _preview_locks[key] = asyncio.Lock()
+    return lock
+
+
+async def _cached_preview(data: bytes, name: str) -> dict:
+    """preview_bytes behind a bounded cache + per-key single-flight.
+
+    Extraction runs in a worker thread so a large parse never stalls the
+    event loop; concurrent requests for the same key share one computation.
+    """
+    from .. import previews
+
+    digest = hashlib.sha256(data).hexdigest()
+    key = f"{digest}:{name}:{previews.PREVIEW_VERSION}"
+    async with _preview_lock(key):
+        hit = _preview_cache.get(key)
+        if hit is not None:
+            _preview_cache.move_to_end(key)
+            return dict(hit)
+        payload = await asyncio.to_thread(previews.preview_bytes, data, name)
+        _preview_cache[key] = payload
+        _preview_cache.move_to_end(key)
+        while len(_preview_cache) > _PREVIEW_CACHE_MAX:
+            _preview_cache.popitem(last=False)
+        return dict(payload)
 
 
 async def _artifact_meta(db: AsyncSession, artifact, revision_id: str | None) -> dict:
@@ -871,14 +927,21 @@ async def preview_workspace_file(
     session_id: str | None = None,
 ) -> dict:
     """Bounded preview payload for a workspace file or artifact revision."""
-    from .. import previews
-
     ws = await _workspace_root(db, agent_id, session_id)
     src = await _resolve_source(db, ws, agent_id, path, artifact_id, revision_id)
-    payload = previews.preview_bytes(src.data, src.name)
+    payload = await _cached_preview(src.data, src.name)
     payload["artifact"] = (
         await _artifact_meta(db, src.artifact, revision_id) if src.artifact else None
     )
+    # Source identity + hash of the exact bytes rendered — revision-pinned
+    # bytes vs live file reads are distinguishable so consumers never
+    # assume a live preview equals the current revision.
+    payload["source"] = {
+        "kind": "revision" if revision_id else "live_file",
+        "artifact_id": src.artifact.id if src.artifact else None,
+        "revision_id": revision_id,
+        "sha256": src.source_hash,
+    }
     if src.unresolved_tracking:
         # A legacy artifact row claims this path but its root can't be
         # established — expose that instead of calling the file ordinary.

@@ -461,6 +461,8 @@ async def test_read_file_docx_extracts_text(workspace):
     assert "Quarterly Report" in result["content"]
     assert "Revenue grew 12%" in result["content"]
     assert "\x00" not in result["content"]
+    assert result["mode"] == "approximate"
+    assert result["limitations"] == ["layout", "fonts", "fields", "omitted_features"]
 
 
 @pytest.mark.asyncio
@@ -477,6 +479,8 @@ async def test_read_file_pptx_extracts_text(workspace):
     assert result["format"] == "pptx"
     assert "Launch Plan" in result["content"]
     assert "Milestone one" in result["content"]
+    assert result["mode"] == "approximate"
+    assert result["limitations"] == ["layout", "fonts", "effects", "omitted_features"]
 
 
 @pytest.mark.asyncio
@@ -495,6 +499,29 @@ async def test_read_file_xlsx_extracts_text(workspace):
     assert "Skills" in result["content"]
     assert "TypeScript" in result["content"]
     assert "5" in result["content"]
+    assert result["mode"] == "approximate"
+    assert result["limitations"] == ["formatting", "omitted_features", "formula_evaluation"]
+
+
+@pytest.mark.asyncio
+async def test_read_file_office_zip_bomb_refused(workspace, monkeypatch):
+    """Agent reads hit the same ZIP-expansion guard as operator previews —
+    a package over bounds is refused, not parsed."""
+    import io
+    import zipfile
+
+    from agentos import previews
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("word/document.xml", b"x" * 5000)
+    with open(os.path.join(workspace, "bomb.docx"), "wb") as f:
+        f.write(buf.getvalue())
+
+    monkeypatch.setattr(previews, "OFFICE_ZIP_MAX_ENTRY_BYTES", 100)
+    result = await read_file({"path": "bomb.docx"}, workspace_path=workspace)
+    assert "error" in result
+    assert "exceeds safe bounds" in result["error"]
 
 
 def _make_pdf(path: str, page_texts: list[str]) -> None:
