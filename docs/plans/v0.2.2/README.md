@@ -1,8 +1,82 @@
 # v0.2.2 Workstreams - Artifact Craft & Preview
 
-Status: proposed; no implementation or verification is claimed.
+Status: planning in progress. The shipped XLSX styling surface is accepted
+retroactively; the rest of W0 is not complete. Initial fixtures and a renderer
+shortlist exist, but fixture coverage, native Office checks, renderer execution,
+isolation tests, and operator decisions remain outstanding. No percentage of
+completion is claimed.
+Current W0 findings: [baseline and recommendations](w0-baseline-and-decisions.md).
+Local fixture/test evidence: [W0 evidence](w0-local-evidence.md).
+LibreOffice is excluded. Uploaded and generated Office files keep best-effort
+previews with visible, non-blocking limitations; no full Office layout engine is
+required. Other supported formats remain previewable. See [preview contract](preview-contract.md).
 Release boundary: [release plan](../v0.2.2-release-plan.md).
 Verification: [acceptance matrix](acceptance-matrix.md).
+
+## How To Read The Workstreams
+
+`W` means workstream, not week. The labels group related work; they do not
+promise a duration or require every stream to run strictly in numeric order.
+The sections below summarize scope; the linked plans give implementation
+slices, failure behavior, test scenarios, and completion checklists.
+
+| Workstream | In plain language | Detailed plan | Current state |
+|---|---|---|---|
+| W0 | Decide supported features, safety rules, and what good output looks like | [Contracts and fixtures](00-contracts-fixtures.md) | In progress; initial drafts are not approval |
+| W1 | Preview exact revisions with honest modes/limitations | [Preview foundation](01-rendering-foundation.md) | Existing Office extraction is baseline; metadata/capture work planned |
+| W2 | Make attractive PPTX files that remain editable in PowerPoint | [Native PPTX](02-native-pptx.md) | Basic handler exists; craft/effects/template work planned |
+| W2H | Make HTML decks with live motion and offline browser playback | [HTML presentations](02h-html-presentations.md) | Planned; fixture is not a shipped feature |
+| W3 | Make styled, editable Word reports and targeted document edits | [DOCX craft](03-docx-craft.md) | Basic handler exists; richer styles/templates planned |
+| W3X | Make styled Excel files and safely edit uploaded workbooks | [XLSX craft and editing](03x-xlsx-craft.md) | First styling/layout slice shipped; remaining scope planned |
+| W4 | Let the operator comfortably view and request changes to deliverables | [Shared preview UX](04-preview-experience.md) | Existing panel is baseline; richer UX planned |
+| W5 | Let the agent see exact output and fix visual problems | [Visual inspection loop](05-visual-inspection.md) | Planned |
+| W6 | Prove the whole workflow, document limitations, and release | [Acceptance and release](06-acceptance-release.md) | Planned; no release approval implied |
+
+### HTML And Office Are Separate Paths
+
+- W2 produces `.pptx`: native editable Office objects with a static, best-effort
+  in-app preview. W1 identifies preview mode/limits; no Office layout engine is required.
+- W2H produces an HTML presentation: live browser playback, supported motion,
+  offline assets, and an isolated runtime. It does not need an Office engine.
+- W3 produces `.docx`; W3X produces `.xlsx`. Neither is an HTML presentation.
+- W4 brings these views into the shared panel; W5 lets agents inspect their
+  revision-bound output. HTML screenshots do not prove motion works, and an
+  HTML deck does not automatically become an editable PPTX.
+
+### Dependency Order
+
+```text
+W0 shared identity / asset / safety contracts
+  +-- Preview modes / limits ---> W1 ---------------------+
+  +-- PPTX contract -----------> W2 ----------------------+
+  +-- HTML isolation/package -> W2H (no Office dependency)+--> W4 --> W5
+  +-- DOCX contract -----------> W3 ----------------------+          |
+  +-- XLSX remaining scope ----> W3X ---------------------+          v
+                                                                  W6
+```
+
+Relevant W0 decisions unblock each lane; limited Office preview fidelity does not
+block HTML contract/authoring work. HTML capture and shared panel integration
+still need W1's source/result conventions. This is a dependency map, not a
+request to skip shared safety gates or approval.
+
+The first vertical milestones are one editable designed PPTX slide, one live
+HTML slide, one styled DOCX page, and one styled formula-bearing sheet. Expand
+each catalog only after its create/inspect/revise/view path works end to end.
+
+### Planning And Evidence Rules
+
+- The release plan is the scope authority. A proposal cannot silently remove
+  included templates, selected PPTX effects, or XLSX tables/charts.
+- [Authoring contract](authoring-contract.md) records shipped versus proposed
+  surface; [preview contract](preview-contract.md) records accepted preview scope.
+  The [historical renderer shortlist](renderer-comparison.md) is not a required
+  engine-selection gate or completed benchmark.
+- API/tool names and numeric limits in the detailed plans are design tasks,
+  not existing interfaces. Set and test concrete limits before implementation
+  is called complete.
+- Completion requires the linked acceptance IDs and environment-specific
+  evidence. A fixture test, parser reopen, or draft document alone is not enough.
 
 File targets below are existing integration points, not instructions to build
 a second artifact framework. New API/tool/schema names must be settled against
@@ -32,11 +106,11 @@ against an unproven renderer.
    Decide whether canonical specs need persistence for CaberOS-authored files;
    if so, version and pin them with the bytes without claiming arbitrary imports
    can be reconstructed losslessly.
-5. Compare candidate local renderers using the fixtures. Record native Office
-   comparisons, font handling, process isolation, network behavior, supported
-   platforms, dependency size, licensing, and redistributability.
-6. Record operator approval of the renderer, preview-only conversion policy,
-   font baseline, optional-runtime behavior, and reference designs before W1.
+5. Test existing best-effort Office preview coverage, omissions, bounds and errors
+   using the fixtures. Document non-blocking format-specific limitation alerts.
+   Native Office checks verify authored files, not the need for an in-app engine.
+6. Record preview mode/limitation semantics, authored font policy, HTML runtime
+   safety and reference designs. No LibreOffice or replacement full-engine gate.
    Add an ADR only for a chosen consequential trade-off.
 
 Also settle a named template/effect support matrix, HTML packaging/playback
@@ -50,47 +124,36 @@ Targets: `backend/src/agentos/artifacts/`, `backend/src/agentos/previews.py`,
 `backend/src/agentos/capabilities/tools/artifact.py`, existing dependency
 management, and `skills/office-documents/references/specs.md`.
 
-Exit: one approved authoring contract, render contract, and review rubric.
+Exit: approved authoring/preview contracts and review rubric.
 No renderer selected or downloaded merely because it appears in this plan.
 
-## W1 - Revision-Bound Rendering Foundation
+## W1 - Revision-Bound Preview Foundation
 
-Outcome: the panel and agent inspect the same derived pages/slides from the
-same immutable source bytes.
+Outcome: panel and agent inspect supported content for the same exact revision,
+with clear mode/limitations, rather than assume perfect Office layout.
 
-1. Put render orchestration behind one narrow interface shared by previews and
-   mediated agent inspection. Input identifies source bytes/revision, requested
-   pages, and bounded render options; output identifies source hash, renderer/
-   version, page count, dimensions, warnings, and bounded image references.
-2. Define explicit readiness and lifecycle results: unavailable, pending,
-   rendering, ready, failed, cancelled, and stale as applicable. Reconcile
-   interrupted work after restart; do not add a generic Tasks platform.
-   Structural validity remains separate from render success.
-3. Render in an isolated worker process with a private temporary directory,
-   no document-triggered egress, no macros, and enforced time/CPU/memory/output
-   limits supported by each platform. Bound ZIP expansion and image decoding,
-   terminate child processes on timeout, and clean up owned temporary data.
-4. Cache by source hash, renderer/version, font environment, and render options.
-   Store derivatives in managed storage. Bound disk use, deduplicate concurrent
-   requests, and prevent stale completions from attaching to another revision.
-   In-flight reads remain safe during cache eviction; evicted output regenerates.
-5. Extend existing authenticated preview APIs for lazy thumbnails/page reads.
-   Validate ownership and source identity on every read, including cached output.
-   Never expose temporary paths, arbitrary file URLs, or renderer control ports.
-6. Integrate readiness with optional dependencies and packaged builds. An absent
-   runtime leaves downloads and labeled content previews available; a broken
-   renderer never deletes the source or invalidates a good Office revision.
+1. Extend existing authenticated previews and mediated agent inspection with
+   exact-source identity, preview mode, limits and bounded content/image references.
+2. Reuse PPTX slide-grouped extraction, DOCX document content and XLSX rows for
+   uploaded and generated files. No LibreOffice/full Office renderer gate.
+3. Distinguish ready/partial/failed/unsupported and any asynchronous capture
+   lifecycle. A limitation notice is not a parse error or proof of corruption.
+4. Bound parsing/decode/capture work; deny macro/script/remote-resource execution.
+   Use isolated workers when needed, not a new mandatory Office-conversion daemon.
+5. Cache/deduplicate by source hash, implementation/version and relevant options;
+   prevent stale or unauthorized output even on cache hits.
+6. Supply W4's persistent, non-blocking format-specific alerts. Preserve existing
+   preview types; optional HTML capture failure must not disable Office extraction.
 
-Keep static Office rendering separate from HTML live playback. HTML capture
-uses W2H's isolated runtime and explicit stable slide states; a static screenshot
-does not prove transitions work. XLSX retains an interactive sheet view with
-style/formula metadata; paginated spreadsheet printing is not required.
+HTML live playback/capture remains W2H's isolated path. A future authored-design
+preview must be pinned/labeled as a design representation, not Office-byte layout.
+XLSX keeps a bounded sheet view/formula metadata; paginated printing is not required.
 
 Targets: `backend/src/agentos/previews.py`, artifact service/model as required,
 existing workspace/skill preview routes, dependency management and packaging.
 
-Exit: deterministic fixture renders and bounded failure tests on supported
-targets. A preview render is not a new exported PDF artifact.
+Exit: exact-source best-effort previews, truthful limits, auth/race/bounds checks
+and supported captures. See [detailed W1](01-rendering-foundation.md).
 
 ## W2 - Native Editable Presentation Craft
 
@@ -303,9 +366,10 @@ Model self-review alone is not proof of design quality.
    PowerPoint/Word/Excel versions, OS, font environment, and meaningful differences.
    Verify XLSX formula results and preservation, selected PPTX effects in native
    playback, scoped templates, and offline/isolated HTML live playback separately.
-3. Verify install/update, absent/present/broken renderer, cache regeneration,
+3. Verify install/update, supported/partial/failed previews, cache regeneration,
    resource cleanup, and the white-backed icon in packaged macOS/Windows.
-   Test Docker runtime and filesystem isolation independently.
+   Test Docker runtime and filesystem isolation independently; no Office engine
+   install is required. Missing HTML capture affects only that view.
 4. Diagnose outstanding packaged-gateway smoke issues before changing release
    logic. Bound gateway/renderer smoke duration and upload useful failure logs.
 5. Update official English/Vietnamese usage and limitations, skill resources,

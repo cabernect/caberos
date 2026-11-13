@@ -3,6 +3,9 @@
 Status: planned scenarios, not passing results.
 Scope: [release plan](../v0.2.2-release-plan.md).
 Sequence: [workstreams](README.md).
+Preview scope: [preview contract](preview-contract.md). Best-effort Office views
+with explicit non-blocking alerts are accepted for uploads and generated files.
+No LibreOffice or full Office-layout renderer is required.
 
 ## Evidence Rules
 
@@ -18,6 +21,25 @@ Sequence: [workstreams](README.md).
 
 ## Required Scenarios
 
+### Workstream Ownership
+
+Use the detailed plans to implement these scenarios; ownership does not imply
+passing evidence. Cross-cutting cases need end-to-end verification in W6.
+
+| Workstream | Primary acceptance coverage |
+|---|---|
+| [W0](00-contracts-fixtures.md) | Defines fixtures, supported subsets and rubric used throughout |
+| [W1](01-rendering-foundation.md) | A06, A10-A13, A17-A22, renderer portions of A27-A29 |
+| [W2](02-native-pptx.md) | A01-A02, A04, A07-A08, PPTX portions of A34-A36 |
+| [W2H](02h-html-presentations.md) | A31-A33 and HTML safety/revision cases |
+| [W3](03-docx-craft.md) | A01, A03, A05, A07, A09, DOCX portion of A34 |
+| [W3X](03x-xlsx-craft.md) | A37-A42 and workbook preservation/conflict cases |
+| [W4](04-preview-experience.md) | A13-A16, A19, A26 and shared revision/race UX |
+| [W5](05-visual-inspection.md) | A23-A25 and exact-revision inspection/fix workflow |
+| [W6](06-acceptance-release.md) | All integrated scenarios, especially A27-A30 and native/platform evidence |
+
+### Scenario Checklist
+
 | ID | Scenario | Acceptance evidence |
 |---|---|---|
 | A01 | Old PPTX/DOCX/XLSX specs and operations | Existing callers retain supported defaults and behavior |
@@ -25,7 +47,7 @@ Sequence: [workstreams](README.md).
 | A03 | Styled report | Four-to-six-page report includes cover, hierarchy, styled table, image/caption, header/footer, page numbers |
 | A04 | Native PPTX editing | In Microsoft PowerPoint edit text, resize/recolor shape, change table cell and chart data, save/reopen |
 | A05 | Native DOCX editing | In Microsoft Word edit body/heading/table, inspect styles and page numbering, save/reopen |
-| A06 | Visual fidelity | Compare CaberOS renders with actual Office; record differences and unsupported features |
+| A06 | Preview fidelity and limitations | Uploaded/generated Office content remains viewable; persistent format-specific alert identifies approximation/omissions. Native Office comparisons document differences, not a required layout engine |
 | A07 | Typography edge cases | Long text, Vietnamese diacritics, missing fonts, large labels: readable or explicit warnings; no silent clipping claims |
 | A08 | Targeted deck revision | Simplify identified slide 4 after reorder; correct target changes, unrelated slides preserved |
 | A09 | Targeted report revision | Replace summary/style without corrupting other sections, tables, sources, or supplied figures |
@@ -33,16 +55,16 @@ Sequence: [workstreams](README.md).
 | A11 | External edit | PowerPoint/Word/Excel changes cause conflict; preserve/capture workflow retains external bytes |
 | A12 | Restore | Restore creates a new revision; original versions and their render associations stay intact |
 | A13 | Preview surfaces | Same renderer contract works from chat, Workspace, and Skill resources with correct available actions |
-| A14 | Navigation | Thumbnails, position, keyboard, zoom/fit, expanded/presentation modes, and close/focus restoration |
+| A14 | Navigation | Supported view modes expose position/keyboard/zoom/expanded controls and focus restoration; thumbnails/pages only where available, no invented Word pagination |
 | A15 | Narrow layout/accessibility | Full-width view, operable controls, labels, content alternative, no clipped essential actions |
 | A16 | Revision-bound revise request | Panel action prefills editable draft with artifact/revision/slide, section or sheet/range; never auto-submits |
 | A17 | Races/cache | Rapid file/revision changes, duplicate requests, changed font environment, eviction: no stale or cross-source output |
 | A18 | Restart/cancel | Interrupted renders reconcile; timeout/cancel kills owned children and cleans temporary data |
-| A19 | Absent/broken renderer | Honest readiness/error/retry and labeled content fallback; source/download remain usable |
+| A19 | Partial/unavailable preview | Honest limitation/error/retry; no Office-runtime install prompt; uploaded Office content stays viewable where parsing is supported; capture failure does not disable it |
 | A20 | Hostile input | Malformed ZIP/XML, expansion bombs, huge images/pages, external links, embedded objects, traversal/symlinks |
 | A21 | Office isolation | No macro/document-script execution, document-driven network requests, or unauthorized host reads/writes |
 | A22 | Authorization | Cross-agent/revision/cache access rejected; unresolved legacy live root never guessed |
-| A23 | Visual quality loop | Exact revision rendered and seen by supported vision model; injected layout problem fixed and rechecked |
+| A23 | Visual quality loop | Exact revision's supported view/capture seen by vision model, issue fixed/rechecked; evidence identifies approximate/design/HTML mode and never claims native layout from extraction |
 | A24 | Unsupported model/limits | Non-vision model, render failure, context/cost/iteration limit stop honestly; no silent model/provider switch |
 | A25 | Review provenance | Review coverage/status binds to revision; changed revisions do not inherit visual approval |
 | A26 | Regression formats | XLSX, direct PDF, Markdown/code, SVG/images, audio/video, ordinary files retain existing behavior |
@@ -106,7 +128,8 @@ be objectively solved by a model's self-assessment.
    effects and Excel formula results, save/reopen, then confirm
    CaberOS detects those external changes before another agent revision.
 7. Restore an older version as a new revision and retrieve the original again.
-8. Repeat preview/failure checks with the optional renderer unavailable.
+8. Verify uploaded/generated Office previews without any Office engine; notices
+   stay visible and PDF/image/text/media previews retain their existing behavior.
 9. Revise uploaded workbook formulas/styles/chart data while retaining original
    bytes and unaffected supported features. Verify cached/unevaluated values are
    not presented as freshly calculated.

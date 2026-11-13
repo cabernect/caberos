@@ -109,6 +109,13 @@ are deferred. The transport abstraction is not a working remote execution featur
 
 ## Preview and provenance boundaries
 
+On the v0.2.2 development line, Office previews show a persistent **Limited
+preview** notice. Uploaded and agent-created files remain viewable without
+LibreOffice: PowerPoint layout/fonts/effects and Word pagination/fields may
+differ or be omitted. Spreadsheet previews do not show every workbook feature
+and do not calculate formulas. This notice does not block inspection or change
+the original file; PDF, image, text and media previews keep their existing behavior.
+
 Live artifact bytes require a proven workspace root. An unresolved legacy
 artifact is labelled honestly, and its live artifact preview can return a
 conflict instead of reading a same-named file from today's default workspace.

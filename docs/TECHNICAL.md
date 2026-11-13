@@ -95,7 +95,7 @@ before `RunContext` registration, preserving terminal status for instant failure
 
 Tables, grouped:
 
-- **Identity/config:** `Agent`/`AgentVersion` (config snapshot rows), `Provider` (Fernet key), `ModelCatalogOffering`/`ModelCatalogRevision` (models.dev snapshot + refresh state)
+- **Identity/config:** `Agent`/`AgentVersion` (config snapshot rows), `Provider` (Fernet key), `ModelCatalogOffering` (models.dev snapshot + refresh state; `revision` is a change marker — `ModelCatalogRevision` is legacy/unused)
 - **Execution:** `Session` (status, last_activity_at, pins), `Run` (status, trigger, cost/tokens), `ExecutionManifest` (pinned skill revisions, schedule/plan refs), `TerminalSession` records, `SubAgent` records. `ScheduleOccurrence` and the manifest correlate a run back to its schedule
 - **Mediation:** `AuditRecord` (every syscall: allow/deny, redacted args, latency, `call_id`/`sub_agent_id` correlation), `ApprovalRequest` (decisions + remembered scopes), `ElicitationRequest`
 - **Observability:** `ModelCall` (unified ledger: chat/embedding/probe/extract/title; thinking reported-only), `ModelRequestCapture` (redacted bodies, retention-governed)

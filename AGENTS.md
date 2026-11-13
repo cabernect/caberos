@@ -17,8 +17,10 @@ PPTX/DOCX/XLSX creation/editing, HTML presentations, revision-bound rendering,
 and visual quality are planned requirements, not shipped capabilities. PPTX
 preview may be static while native effects remain in the exported file; HTML
 playback must be isolated. Formula authoring is included; in-app calculation is
-a separate decision. Renderer/runtime selection and
-preview-only Office conversion need explicit decisions; a Canva-like editor
+a separate decision. LibreOffice is excluded: uploaded/generated Office files
+keep best-effort content previews with visible limitation alerts; no full Office
+layout engine is required. See `docs/plans/v0.2.2/preview-contract.md`.
+HTML capture/runtime policy still needs explicit decisions; a Canva-like editor
 and agent-authored apps remain future scope.
 
 ## Where things are
