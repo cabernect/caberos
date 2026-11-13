@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>DO NOT OPEN: isolation probe</title>
+<body><h1>Opt-in isolated testing only</h1><script>
+// The reserved .invalid domain carries no real endpoint or sensitive data.
+const attempts = [
+  () => parent.document.body.dataset.fixtureProbe = 'attempted',
+  () => localStorage.setItem('fixture-probe', 'attempted'),
+  () => fetch('/api/auth/me'),
+  () => fetch('https://caberos-fixture.invalid/probe'),
+  () => new WebSocket('wss://caberos-fixture.invalid/probe'),
+  () => parent.postMessage({type:'fixture-forged-command', command:'terminal'}, '*'),
+  () => window.__TAURI_INTERNALS__.invoke('fixture_probe'),
+  () => window.open('https://caberos-fixture.invalid/popup', '_blank'),
+];
+for (const attempt of attempts) {
+  try { Promise.resolve(attempt()).catch(() => {}); } catch {}
+}
+</script></body></html>

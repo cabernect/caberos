@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Q3 Platform Review — HTML deck fixture</title>
+<style>
+  body { margin: 0; font-family: -apple-system, "Helvetica Neue", sans-serif; background: #111; color: #eee; }
+  .slide { display: none; min-height: 100vh; padding: 8vh 10vw; box-sizing: border-box; }
+  .slide.active { display: flex; flex-direction: column; justify-content: center; }
+  .slide.active { animation: enter 240ms ease-out; }
+  @keyframes enter { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) { .slide.active { animation: none; } }
+  body[data-capture="stable"] .slide.active { animation: none; }
+  h1 { font-size: 3.4rem; margin: 0 0 .4em; }
+  h2 { font-size: 2.2rem; color: #9ecbff; margin: 0 0 .6em; }
+  ul { font-size: 1.5rem; line-height: 1.7; padding-left: 1.2em; }
+  .nav { position: fixed; bottom: 18px; right: 22px; font-size: .9rem; color: #888; }
+  table { border-collapse: collapse; font-size: 1.3rem; }
+  td, th { border: 1px solid #444; padding: .45em .9em; }
+</style>
+</head>
+<body>
+<section class="slide active" data-slide-id="cover"><h1>Q3 Platform Review</h1><p>HTML deck fixture — keyboard: ←/→ to navigate.</p></section>
+<section class="slide" data-slide-id="summary"><h2>Executive summary</h2><ul><li>P99 latency down 31%</li><li>Two launches shipped</li><li>Spend flat despite 22% growth</li></ul></section>
+<section class="slide" data-slide-id="owners"><h2>Ownership</h2><table><tr><th>Area</th><th>Owner</th></tr><tr><td>API gateway</td><td>Ana</td></tr><tr><td>Worker fleet</td><td>Bo</td></tr></table></section>
+<section class="slide" data-slide-id="next"><h2>Next quarter</h2><ul><li>Ship queue pilot</li><li>Hire two SREs</li></ul></section>
+<div class="nav"><span id="pos">1</span> / 4</div>
+<script>
+const s=[...document.querySelectorAll('.slide')],p=document.getElementById('pos');let i=0;
+function go(n){i=(n+s.length)%s.length;s.forEach((e,j)=>e.classList.toggle('active',j===i));p.textContent=i+1;}
+addEventListener('keydown',e=>{if(e.key==='ArrowRight')go(i+1);if(e.key==='ArrowLeft')go(i-1);});
+// Fixture-only capture hook; not a proposed privileged application bridge.
+window.fixtureShowSlide=id=>{const n=s.findIndex(e=>e.dataset.slideId===id);if(n<0)throw Error('Unknown slide');document.body.dataset.capture='stable';go(n);};
+</script>
+</body>
+</html>
