@@ -1,8 +1,9 @@
-import { useState, type ReactNode } from "react";
-import { ChevronLeft, ChevronRight, FileWarning, Loader2 } from "lucide-react";
+import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { ChevronLeft, ChevronRight, FileWarning, Loader2, ZoomIn, ZoomOut } from "lucide-react";
 import type { PreviewBackend, PreviewSource } from "@/lib/api";
 import type { PreviewElement, PreviewPayload } from "@/lib/types";
 import { Markdown } from "@/components/Markdown";
+import { readView, viewStateKey, writeView } from "./viewState";
 import { useObjectUrl } from "./useObjectUrl";
 
 export function formatBytes(size: number): string {
@@ -17,12 +18,16 @@ export function PreviewBody({
   backend,
   source,
   expanded,
+  onFocus,
 }: {
   payload: PreviewPayload;
   backend: PreviewBackend;
   source: PreviewSource;
   /** Expanded modal mode — visual kinds render larger. */
   expanded?: boolean;
+  /** Reports the operator's current focus inside paged content
+   *  ("slide 3 of 12", sheet name) so the panel can target revise requests. */
+  onFocus?: (label: string | null) => void;
 }) {
   if (payload.error && !payload.elements?.length && !payload.slides?.length) {
     return <Note text={payload.error} />;
@@ -56,9 +61,9 @@ export function PreviewBody({
     case "document":
       return <ElementsView elements={payload.elements || []} />;
     case "slides":
-      return <SlidesView payload={payload} />;
+      return <SlidesView payload={payload} onFocus={onFocus} />;
     case "workbook":
-      return <WorkbookView payload={payload} />;
+      return <WorkbookView payload={payload} onFocus={onFocus} />;
     case "media":
       return (
         <MediaView backend={backend} source={source} media={payload.media || "audio"} expanded={expanded} />
@@ -401,10 +406,52 @@ function renderElement(el: PreviewElement, i: number): ReactNode {
   }
 }
 
-function SlidesView({ payload }: { payload: PreviewPayload }) {
+function SlidesView({
+  payload,
+  onFocus,
+}: {
+  payload: PreviewPayload;
+  onFocus?: (label: string | null) => void;
+}) {
   const slides = payload.slides || [];
-  const [selected, setSelected] = useState(0);
-  const slide = slides[selected];
+  const count = slides.length;
+  // View state is keyed by the rendered bytes' identity — a new revision
+  // or external edit gets fresh position/zoom; same bytes restores them.
+  const viewKey = viewStateKey(payload);
+  const [selected, setSelected] = useState(() => readView(viewKey, "slide", 0));
+  const [zoom, setZoom] = useState(() => readView(viewKey, "zoom", 1));
+  // Clamp at render — a source swap can leave `selected` past the end.
+  const current = Math.min(selected, Math.max(0, count - 1));
+  const slide = slides[current];
+  // Re-key on source-identity change must run before the writers below —
+  // otherwise a stale index/zoom lands under the new key first.
+  useEffect(() => {
+    setSelected(readView(viewKey, "slide", 0));
+    setZoom(readView(viewKey, "zoom", 1));
+  }, [viewKey]);
+  useEffect(() => {
+    onFocus?.(count > 0 ? `slide ${current + 1} of ${count}` : null);
+    writeView(viewKey, "slide", current);
+  }, [current, count, onFocus, viewKey]);
+  useEffect(() => {
+    writeView(viewKey, "zoom", zoom);
+  }, [viewKey, zoom]);
+  // ←/→ step through slides — never while typing in a field.
+  useEffect(() => {
+    if (count < 2) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      const t = e.target;
+      if (t instanceof HTMLElement && t.closest("input, textarea, select, [contenteditable='true']")) return;
+      e.preventDefault();
+      setSelected((s) => {
+        const cur = Math.min(s, count - 1);
+        return Math.min(count - 1, Math.max(0, cur + (e.key === "ArrowRight" ? 1 : -1)));
+      });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [count]);
   // Frame the wireframe at the deck's real aspect — a 4:3 file reads
   // visibly different from a 16:9 one; overflow scrolls inside the frame.
   const aspect =
@@ -420,9 +467,9 @@ function SlidesView({ payload }: { payload: PreviewPayload }) {
             onClick={() => setSelected(i)}
             className="shrink-0 rounded-[4px] border px-2 py-1 text-[11px] transition-colors"
             style={{
-              borderColor: i === selected ? "var(--accent)" : "var(--border)",
-              background: i === selected ? "var(--surface)" : "transparent",
-              color: i === selected ? "var(--ink)" : "var(--ink-2)",
+              borderColor: i === current ? "var(--accent)" : "var(--border)",
+              background: i === current ? "var(--surface)" : "transparent",
+              color: i === current ? "var(--ink)" : "var(--ink-2)",
               cursor: "pointer",
             }}
           >
@@ -430,25 +477,92 @@ function SlidesView({ payload }: { payload: PreviewPayload }) {
           </button>
         ))}
       </div>
-      {slide && (
-        <div
-          className="rounded-[5px] border border-[var(--border)] bg-[var(--surface)]/40 p-3"
-          style={aspect ? { aspectRatio: aspect, overflowY: "auto" } : undefined}
-        >
-          {slide.title && (
-            <div className="mb-2 text-[15px] font-semibold text-[var(--ink)]">{slide.title}</div>
+      {count > 0 && (
+        <div className="mb-2 flex items-center justify-between gap-2 text-[11px] text-[var(--ink-3)]">
+          {count > 1 ? (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setSelected((s) => Math.max(0, Math.min(s, count - 1) - 1))}
+                disabled={current <= 0}
+                className="rounded-[4px] border border-[var(--border)] p-1 transition-colors hover:bg-[var(--surface)] disabled:opacity-40"
+                aria-label="Previous slide"
+              >
+                <ChevronLeft className="h-3.5 w-3.5" />
+              </button>
+              <span className="font-mono">
+                {current + 1} / {count}
+              </span>
+              <button
+                onClick={() => setSelected((s) => Math.min(count - 1, Math.min(s, count - 1) + 1))}
+                disabled={current >= count - 1}
+                className="rounded-[4px] border border-[var(--border)] p-1 transition-colors hover:bg-[var(--surface)] disabled:opacity-40"
+                aria-label="Next slide"
+              >
+                <ChevronRight className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ) : (
+            <span />
           )}
-          <ElementsView elements={slide.elements} />
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setZoom((z) => Math.max(0.5, Math.round((z - 0.25) * 100) / 100))}
+              disabled={zoom <= 0.5}
+              className="rounded-[4px] border border-[var(--border)] p-1 transition-colors hover:bg-[var(--surface)] disabled:opacity-40"
+              aria-label="Zoom out"
+            >
+              <ZoomOut className="h-3.5 w-3.5" />
+            </button>
+            <span className="w-9 text-center font-mono">{Math.round(zoom * 100)}%</span>
+            <button
+              onClick={() => setZoom((z) => Math.min(2, Math.round((z + 0.25) * 100) / 100))}
+              disabled={zoom >= 2}
+              className="rounded-[4px] border border-[var(--border)] p-1 transition-colors hover:bg-[var(--surface)] disabled:opacity-40"
+              aria-label="Zoom in"
+            >
+              <ZoomIn className="h-3.5 w-3.5" />
+            </button>
+            <button
+              onClick={() => setZoom(1)}
+              disabled={zoom === 1}
+              className="rounded-[4px] border border-[var(--border)] px-1.5 py-1 transition-colors hover:bg-[var(--surface)] disabled:opacity-40"
+            >
+              Fit
+            </button>
+          </div>
+        </div>
+      )}
+      {slide && (
+        <div style={{ zoom } as CSSProperties}>
+          <div
+            className="rounded-[5px] border border-[var(--border)] bg-[var(--surface)]/40 p-3"
+            style={aspect ? { aspectRatio: aspect, overflowY: "auto" } : undefined}
+          >
+            {slide.title && (
+              <div className="mb-2 text-[15px] font-semibold text-[var(--ink)]">{slide.title}</div>
+            )}
+            <ElementsView elements={slide.elements} />
+          </div>
         </div>
       )}
     </div>
   );
 }
 
-function WorkbookView({ payload }: { payload: PreviewPayload }) {
+function WorkbookView({
+  payload,
+  onFocus,
+}: {
+  payload: PreviewPayload;
+  onFocus?: (label: string | null) => void;
+}) {
   const sheets = payload.sheets || [];
   const [selected, setSelected] = useState(0);
-  const sheet = sheets[selected];
+  const current = Math.min(selected, Math.max(0, sheets.length - 1));
+  const sheet = sheets[current];
+  useEffect(() => {
+    onFocus?.(sheet ? `sheet "${sheet.name}"` : null);
+  }, [sheet, onFocus]);
   return (
     <div>
       <div className="mb-2 flex gap-1 overflow-x-auto pb-1">
@@ -458,9 +572,9 @@ function WorkbookView({ payload }: { payload: PreviewPayload }) {
             onClick={() => setSelected(i)}
             className="shrink-0 rounded-[4px] border px-2 py-1 text-[11px] transition-colors"
             style={{
-              borderColor: i === selected ? "var(--accent)" : "var(--border)",
-              background: i === selected ? "var(--surface)" : "transparent",
-              color: i === selected ? "var(--ink)" : "var(--ink-2)",
+              borderColor: i === current ? "var(--accent)" : "var(--border)",
+              background: i === current ? "var(--surface)" : "transparent",
+              color: i === current ? "var(--ink)" : "var(--ink-2)",
               cursor: "pointer",
             }}
           >

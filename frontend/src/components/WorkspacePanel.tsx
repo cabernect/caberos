@@ -8,7 +8,6 @@ import {
   Folder,
   FolderOpen,
   Search,
-  X,
 } from "lucide-react";
 import { api, workspaceBackend, type PreviewSource } from "@/lib/api";
 import type { Citation, RunSummary, WorkspaceEntry } from "@/lib/types";
@@ -31,7 +30,8 @@ interface WorkspacePanelProps {
   changedPaths: Set<string>;
   citations: Citation[];
   runStatus: string | null;
-  onClose: () => void;
+  /** PreviewPanel revise drafts — the page prefills the chat composer. */
+  onRevise?: (draft: string) => void;
 }
 
 export function WorkspacePanel({
@@ -44,7 +44,7 @@ export function WorkspacePanel({
   changedPaths,
   citations,
   runStatus,
-  onClose,
+  onRevise,
 }: WorkspacePanelProps) {
   const [tab, setTab] = useState<PanelTab>("workspace");
   const [filter, setFilter] = useState("");
@@ -58,8 +58,10 @@ export function WorkspacePanel({
   return (
     <div className="flex h-full min-w-0 flex-col border-l border-line bg-surface">
       {/* Tab strip — Run | Workspace | Sources, with the folder kind on
-          the right like the mockup's "Caber · persistent folder". */}
-      <div className="flex items-center gap-2 border-b border-line px-3 py-2">
+          the right like the mockup's "Caber · persistent folder".
+          py-3 makes the strip 59px — flush with the chat header's
+          bottom border so the two horizontal lines align. */}
+      <div className="flex items-center gap-2 border-b border-line px-3 py-3">
         <FilterPills
           variant="segmented"
           pills={[
@@ -76,14 +78,8 @@ export function WorkspacePanel({
         >
           {agentName} · {workspacePath ?? "persistent folder"}
         </span>
-        <button
-          onClick={onClose}
-          className="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-[6px] text-ink-muted transition-colors hover:bg-sunken hover:text-ink"
-          title="Close workspace panel"
-          aria-label="Close workspace panel"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
+        {/* No ✕ — the chat header's panel toggle hides/shows this whole
+            panel; a second close here was redundant chrome. */}
       </div>
 
       {tab === "workspace" && (
@@ -127,6 +123,7 @@ export function WorkspacePanel({
                 source={selected}
                 backend={previewBackend}
                 onClose={() => onSelect(null)}
+                onRevise={onRevise}
                 className="h-full border-0"
               />
             ) : (

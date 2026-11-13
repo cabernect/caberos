@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { PreviewBackend } from "@/lib/api";
 import { ConfirmProvider } from "@/lib/confirm";
@@ -103,5 +103,113 @@ describe("Office preview limitations", () => {
     );
     expect(await screen.findByText("Presentation unreadable")).toBeVisible();
     expect(screen.queryByRole("note")).not.toBeInTheDocument();
+  });
+});
+
+describe("W4 preview experience", () => {
+  it("ignores a late failure from a previous source", async () => {
+    let rejectA!: (e: Error) => void;
+    const be = backend(vi.fn((source: { path?: string }) =>
+      source.path === "a.md"
+        ? new Promise<PreviewPayload>((_, rej) => { rejectA = rej; })
+        : Promise.resolve(payload({ kind: "markdown", name: "b.md", path: "b.md", content: "Beta body" })),
+    ));
+    const view = (path: string) => (
+      <ConfirmProvider>
+        <PreviewPanel agentId="" source={{ path }} backend={be} />
+      </ConfirmProvider>
+    );
+    const { rerender } = render(view("a.md"));
+    rerender(view("b.md"));
+    expect(await screen.findByText("Beta body")).toBeVisible();
+    rejectA(new Error("a.md exploded"));
+    await waitFor(() => expect(screen.queryByText("a.md exploded")).not.toBeInTheDocument());
+    expect(screen.getByText("Beta body")).toBeVisible();
+  });
+
+  it("navigates slides with buttons, counter, and arrow keys", async () => {
+    const be = backend(vi.fn().mockResolvedValue(payload({
+      path: "deck-nav.pptx",
+      slides: [
+        { title: "One", elements: [] },
+        { title: "Two", elements: [] },
+        { title: "Three", elements: [] },
+      ],
+      slide_count: 3,
+    })));
+    render(
+      <ConfirmProvider>
+        <PreviewPanel agentId="" source={{ path: "deck-nav.pptx" }} backend={be} />
+      </ConfirmProvider>,
+    );
+    expect(await screen.findByText("1 / 3")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Next slide" }));
+    expect(await screen.findByText("2 / 3")).toBeVisible();
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(await screen.findByText("3 / 3")).toBeVisible();
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+    expect(await screen.findByText("2 / 3")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Previous slide" })).toBeEnabled();
+  });
+
+  it("prefills an editable revise draft with artifact, revision, and focus", async () => {
+    const onRevise = vi.fn();
+    const be = backend(vi.fn().mockResolvedValue(payload({
+      path: "deck-revise.pptx",
+      artifact: {
+        id: "art-1", format: "pptx", tracking_status: "tracked",
+        current_path: "deck.pptx", current_revision_id: "rev-9",
+        current_revision_number: 9, revision_count: 9,
+        viewing_revision_id: null, viewing_revision_number: null,
+        newer_exists: false,
+      },
+      slides: [
+        { title: "One", elements: [] },
+        { title: "Two", elements: [] },
+      ],
+      slide_count: 2,
+    })));
+    render(
+      <ConfirmProvider>
+        <PreviewPanel agentId="" source={{ path: "deck-revise.pptx" }} backend={be} onRevise={onRevise} />
+      </ConfirmProvider>,
+    );
+    await screen.findByRole("button", { name: "Revise" });
+    // Flush the renderer's focus-reporting effect before clicking —
+    // in the app this always lands before the user can click.
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "Revise" }));
+    expect(onRevise).toHaveBeenCalledTimes(1);
+    const draft = onRevise.mock.calls[0][0] as string;
+    expect(draft).toContain("art-1");
+    expect(draft).toContain("rev-9");
+    expect(draft).toContain("slide 1 of 2");
+    expect(draft).toContain("Changes:");
+  });
+
+  it("restores slide position and zoom per source, not globally", async () => {
+    const be = backend(vi.fn().mockResolvedValue(payload({
+      path: "deck-persist.pptx",
+      slides: [
+        { title: "One", elements: [] },
+        { title: "Two", elements: [] },
+        { title: "Three", elements: [] },
+      ],
+      slide_count: 3,
+    })));
+    const view = () => (
+      <ConfirmProvider>
+        <PreviewPanel agentId="" source={{ path: "deck-persist.pptx" }} backend={be} />
+      </ConfirmProvider>
+    );
+    const first = render(view());
+    fireEvent.click(await screen.findByRole("button", { name: "Next slide" }));
+    expect(await screen.findByText("2 / 3")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    expect(await screen.findByText("125%")).toBeVisible();
+    first.unmount();
+    render(view());
+    expect(await screen.findByText("2 / 3")).toBeVisible();
+    expect(screen.getByText("125%")).toBeVisible();
   });
 });

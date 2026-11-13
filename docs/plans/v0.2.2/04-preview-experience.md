@@ -1,6 +1,12 @@
 # W4 - Shared Preview Experience
 
-Status: existing shared panel is baseline; richer preview/navigation planned.
+Status: first slices landed — late-response race guard, slide prev/next +
+arrow-key navigation with position counter, zoom controls (50–200% + Fit)
+with per-source view-state persistence keyed by rendered-bytes identity,
+and revision-bound "Revise" drafts prefilled into the chat composer
+(tracked artifacts only, never auto-submitted). Still open: zoom/fit for
+non-slide kinds, XLSX range/cell selection (needs W3X metadata), HTML
+player embed (needs W2H), browser QA across Chat/Workspace/Skills.
 Dependencies: [W1](01-rendering-foundation.md) for exact-source previews and limits,
 [W2H](02h-html-presentations.md) for HTML playback,
 [W3X](03x-xlsx-craft.md) for workbook metadata.

@@ -11,9 +11,9 @@ import {
   Loader2,
   Maximize2,
   Minimize2,
+  PencilLine,
   RefreshCcw,
   Trash2,
-  X,
 } from "lucide-react";
 import { DiffBlock } from "@/components/DiffBlock";
 import { api, workspaceBackend, type PreviewBackend, type PreviewSource } from "@/lib/api";
@@ -40,6 +40,9 @@ interface PreviewPanelProps {
   /** Workspace surfaces only — enables the Delete action; called after a
    *  successful delete so the parent can refresh its listing. */
   onDeleted?: (path: string) => void;
+  /** Tracked artifacts only — receives an editable revise draft
+   *  (artifact id + base revision + focus context). Never auto-submits. */
+  onRevise?: (draft: string) => void;
   /** Extra classes for the outer container (sizing lives with the caller). */
   className?: string;
 }
@@ -49,7 +52,7 @@ interface PreviewPanelProps {
  * Skills. It owns the fetch lifecycle, artifact banner/actions, and
  * delegates content to the kind renderers.
  */
-export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, className }: PreviewPanelProps) {
+export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, onRevise, className }: PreviewPanelProps) {
   const { confirm } = useConfirm();
   const isWorkspace = !backend;
   // Memoize — a fresh backend object every render would retrigger the
@@ -66,6 +69,14 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, cla
   // Expanded mode — the same panel floats over a backdrop for focused
   // reading; Escape collapses back to the docked panel before closing.
   const [expanded, setExpanded] = useState(false);
+  // Focus context reported by the active renderer ("slide 3 of 12",
+  // sheet name) — feeds the revise draft's target hint.
+  const [focusLabel, setFocusLabel] = useState<string | null>(null);
+  // Monotonic fetch guard — a late response/error for a previous source
+  // must never paint over the source now being viewed.
+  const fetchSeq = useRef(0);
+  const expandBtnRef = useRef<HTMLButtonElement>(null);
+  const wasExpanded = useRef(expanded);
   // Compare mode — a revision-vs-current diff replaces the content area.
   const [compare, setCompare] = useState<{
     loading: boolean;
@@ -95,22 +106,34 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, cla
     setActionMsg(null);
     setCompare(null);
     setExpanded(false);
+    setFocusLabel(null);
   }, [source.path, source.artifactId, source.revisionId]);
 
   const fetchPreview = useCallback(async () => {
+    const seq = ++fetchSeq.current;
     const key = sourceKey(viewing);
     setError(null);
     try {
-      setLoaded({ key, payload: await be.preview(viewing) });
+      const result = await be.preview(viewing);
+      if (seq === fetchSeq.current) setLoaded({ key, payload: result });
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      setLoaded(null);
+      if (seq === fetchSeq.current) {
+        setError(e instanceof Error ? e.message : String(e));
+        setLoaded(null);
+      }
     }
   }, [be, viewing.path, viewing.artifactId, viewing.revisionId]);
 
   useEffect(() => {
     fetchPreview();
   }, [fetchPreview]);
+
+  // Collapsing expanded mode (backdrop click / Escape) would drop focus
+  // to <body> — return it to the toggle that owns the state.
+  useEffect(() => {
+    if (wasExpanded.current && !expanded) expandBtnRef.current?.focus();
+    wasExpanded.current = expanded;
+  }, [expanded]);
 
   // Escape collapses an expanded preview first, then closes the panel.
   useEffect(() => {
@@ -238,6 +261,20 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, cla
     }
   };
 
+  const reviseDraft = () => {
+    if (!artifact || !onRevise) return;
+    // Base = the revision under review (viewing) or current — never a
+    // silently rebased target.
+    const baseRev = artifact.viewing_revision_id ?? artifact.current_revision_id;
+    const lines = [
+      `Please revise artifact ${artifact.id} (format ${artifact.format}) based on revision ${baseRev}.`,
+      `File: ${currentPath}`,
+    ];
+    if (focusLabel) lines.push(`Focus: ${focusLabel}`);
+    lines.push("", "Changes: ");
+    onRevise(lines.join("\n"));
+  };
+
   const trackHistory = async () => {
     if (!currentPath) return;
     try {
@@ -314,6 +351,7 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, cla
           <RefreshCcw className="h-4 w-4" />
         </button>
         <button
+          ref={expandBtnRef}
           onClick={() => setExpanded((v) => !v)}
           className="rounded-[4px] p-1 text-[var(--ink-3)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--ink)]"
           aria-label={expanded ? "Restore panel size" : "Expand preview"}
@@ -321,15 +359,9 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, cla
         >
           {expanded ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
         </button>
-        {onClose && (
-          <button
-            onClick={onClose}
-            className="rounded-[4px] p-1 text-[var(--ink-3)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--ink)]"
-            aria-label="Close preview"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        )}
+        {/* No close button — Workspace's panel ✕ / Skills' "← files"
+            back button / Escape already cover dismissal; one less
+            header control. onClose still drives the Escape path. */}
       </div>
 
       {/* Moved-file notice — the requested path no longer exists; the
@@ -419,6 +451,9 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, cla
             )}
           </div>
         )}
+        {artifact && onRevise && (
+          <ActionButton icon={PencilLine} label="Revise" onClick={reviseDraft} />
+        )}
         <ActionButton icon={Download} label="Download" onClick={download} />
         {isDesktopShell && (
           <>
@@ -505,7 +540,13 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, cla
             )}
           </div>
         ) : payload ? (
-          <PreviewBody payload={payload} backend={be} source={viewing} expanded={expanded} />
+          <PreviewBody
+            payload={payload}
+            backend={be}
+            source={viewing}
+            expanded={expanded}
+            onFocus={setFocusLabel}
+          />
         ) : error ? (
           <div className="rounded-[5px] border border-[var(--border)] bg-[var(--surface)] p-3 text-[12px] text-[var(--ink-2)]">
             {/^404\b/.test(error) ? (

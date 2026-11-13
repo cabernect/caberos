@@ -2444,7 +2444,7 @@ export function Conversation() {
               sessions.find((s) => s.id === activeSessionId)
                 ?.active_run_status ?? (isStreaming ? "running" : null)
             }
-            onClose={closeWorkspace}
+            onRevise={(draft) => inputBarRef.current?.prefill(draft)}
           />
         </div>
       )}
