@@ -25,6 +25,46 @@ existing best-effort uploaded/generated Office previews remain available with
 visible limitation alerts. Native layout fidelity and a new Office engine are not
 requirements for in-app preview. Alert implementation remains W1/W4 work.
 
+## Universal authoring model (operator-ratified 2026-11-13)
+
+Every artifact type follows the same top-level shape:
+
+```
+content spec (JSON) → format renderer → file bytes → verify step
+```
+
+The agent writes **content**, never formatting. Style comes from a
+template, theme tokens, or platform CSS — not per-element instructions in
+the spec. What differs per type is the renderer and where style lives:
+
+| Type | Renderer | Style source | Preview |
+|---|---|---|---|
+| docx | python-docx | reference .docx named styles | extracted content (approximate) |
+| xlsx | openpyxl | named styles + number formats | workbook extraction (approximate) |
+| pptx editable | python-pptx | template master/layouts/theme | extracted slides (approximate) |
+| pptx design-first | HTML/CSS → export | CSS design tokens | the HTML itself |
+| pdf | HTML/CSS → printToPDF (future) | CSS + @page | PDF.js |
+| csv / md | direct write | — | table / markdown renderer |
+| html deck | deck spec → self-contained .html | theme tokens + platform CSS | isolated player (W2H) |
+
+Consequences recorded here:
+
+- **Verify means render-verify where a renderer exists.** Structural
+  `validate()`/`inspect()` is the floor; deck capture (W2H slice 6) and
+  rendered comparisons (A06) are the honest ceiling. A spec that builds
+  cleanly but overflows a slide is a verify failure, not a pass.
+- **pptx has two legitimate modes.** Editable deliverables fill template
+  layouts with native objects; presented deliverables default to the HTML
+  deck path (design-first). Deck → PPTX/PDF export is a defined W2H slice
+  (lossy, documented) — see `02h-html-presentations.md`.
+- **Formulas are written as formulas; preview values are computed.** The
+  agent keeps live formulas where recalculation matters and writes plain
+  values elsewhere. In-app preview must never present a stored/cached
+  value as a verified calculation (see XLSX formula policy + W3X).
+- **HTML deck is the default for presented content.** Uploaded/generated
+  Office files keep best-effort previews with visible limitation alerts;
+  fidelity claims require native evidence.
+
 ## XLSX — ratified (shipped)
 
 ### Create spec

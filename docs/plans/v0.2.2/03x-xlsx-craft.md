@@ -63,6 +63,14 @@ freshness/invalidation, local runtime and safety policy before implementation.
 No external link resolution, macros, network formulas or executable behavior
 may run implicitly during inspect, preview or revision.
 
+Operator guidance (2026-11-13, authoring contract): keep data/calculation
+separate from presentation — formulas only where live recalculation matters,
+plain values elsewhere. Where preview/verification needs numbers for formula
+cells, compute them in Python at preview time and label the provenance
+("computed by <named evaluator>") — never present Excel's absent cached
+value or a stale one as verified. Any such evaluator still needs the bounded
+spec this section requires (supported functions, limits, freshness).
+
 Current openpyxl-based edits do not establish that every unsupported uploaded
 feature is detected or preserved; safe preflight is remaining work, not shipped.
 
