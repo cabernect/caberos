@@ -23,7 +23,7 @@ from .knowledge_index import (
 from .mcp import ContactMcpBinding, McpServer, McpServerCredential, McpTool
 from .memory import MemoryEntry, MemoryTriple
 from .model_call import ModelCall
-from .model_catalog import ModelCatalogOffering, ModelCatalogRevision
+from .model_catalog import ModelCatalogOffering
 from .notification import Notification, NotificationDelivery, NotificationPrefs
 from .operator import Operator, OperatorAuditLog
 from .operator_session import OperatorSession
@@ -77,7 +77,6 @@ __all__ = [
     "ExecutionManifest",
     "ModelCall",
     "ModelCatalogOffering",
-    "ModelCatalogRevision",
     "RevisionedEntityMixin",
     "RevisionMixin",
     "Session",

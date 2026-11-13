@@ -282,6 +282,9 @@ class SQLiteBackend(DatabaseBackend):
 
         # Embedding calls moved into the unified model_calls ledger (W10).
         await conn.execute(text("DROP TABLE IF EXISTS embedding_calls"))
+        # Per-offering resolved-history journaling was removed — revision is
+        # now only a change marker on the offering row.
+        await conn.execute(text("DROP TABLE IF EXISTS model_catalog_revisions"))
 
         # W10 ledger indexes — after the additive patches above.
         for index_sql in (
