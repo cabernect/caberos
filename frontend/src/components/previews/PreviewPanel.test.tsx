@@ -213,3 +213,52 @@ describe("W4 preview experience", () => {
     expect(screen.getByText("125%")).toBeVisible();
   });
 });
+
+describe("isolated deck playback", () => {
+  it("renders an admitted deck in a scripts-only sandboxed iframe", async () => {
+    const be: PreviewBackend = {
+      ...backend(vi.fn().mockResolvedValue(
+        payload({
+          kind: "deck",
+          name: "deck.html",
+          path: "deck.html",
+          deck: { runtime: "deck-rt2", title: "Review", slides: 3 },
+        }),
+      )),
+      deckUrl: vi.fn().mockResolvedValue("/api/agents/a1/workspace/deck?path=deck.html"),
+    };
+    render(
+      <ConfirmProvider>
+        <PreviewPanel agentId="a1" source={{ path: "deck.html" }} backend={be} />
+      </ConfirmProvider>,
+    );
+    const frame = await screen.findByTitle("Review");
+    expect(frame.tagName).toBe("IFRAME");
+    // allow-scripts ONLY — never allow-same-origin: deck JS gets an opaque
+    // origin with no access to app cookies, storage, or DOM.
+    expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(frame.getAttribute("sandbox")).not.toContain("allow-same-origin");
+    expect(frame.getAttribute("src")).toContain("/workspace/deck");
+    // Platform chrome shows position fallback from admission metadata.
+    expect(await screen.findByText("1 / 3")).toBeVisible();
+  });
+
+  it("shows an honest notice when the surface can't play decks", async () => {
+    const be = backend(vi.fn().mockResolvedValue(
+      payload({
+        kind: "deck",
+        name: "deck.html",
+        path: "deck.html",
+        deck: { runtime: "deck-rt2", slides: 2 },
+      }),
+    ));
+    render(
+      <ConfirmProvider>
+        <PreviewPanel agentId="" source={{ path: "deck.html" }} backend={be} />
+      </ConfirmProvider>,
+    );
+    expect(
+      await screen.findByText(/playback isn't available/i),
+    ).toBeVisible();
+  });
+});

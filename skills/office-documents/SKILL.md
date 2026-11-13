@@ -17,8 +17,9 @@ Pick the branch that matches the request.
 ## Create
 
 1. **Plan the structure** — the headings (Word), sheets and columns (Excel), or slide titles (PowerPoint) — and confirm it with the user when the brief leaves it open.
-2. Call `artifact_create` with `path` (relative to `artifacts/`, e.g. `q3-report.docx`), the `spec`, and a `change_summary`. Images come from workspace files — `attachments/…` inputs or files you saved earlier.
-3. Call `artifact_inspect` on the returned id.
+2. **Pick the deck format for presentations.** An HTML deck (`.html`) is the default: it plays live in the preview panel with themes, build reveals, and presenter notes, and the file opens offline in any browser. Choose `.pptx` only when the user needs to edit the deck natively in PowerPoint — its in-app preview is extracted content, not a rendered layout.
+3. Call `artifact_create` with `path` (relative to `artifacts/`, e.g. `q3-report.docx`), the `spec`, and a `change_summary`. Images come from workspace files — `attachments/…` inputs or files you saved earlier.
+4. Call `artifact_inspect` on the returned id.
 
 **Done when** inspect reports the file valid and every planned heading, sheet, or slide appears in its structure. Report the path to the user.
 
@@ -49,4 +50,4 @@ For a document the user attached or names, use `read_file` — Word, Excel, and 
 
 - **Formulas:** write spreadsheet formulas as strings (`"=SUM(B2:B9)"`) so the sheet recalculates when inputs change. CaberOS stores formulas without evaluating them — inspect reports `formulas_recalculated: false` — so state that recalculated values require a spreadsheet application that evaluates formulas.
 - **Unsupported formats:** legacy `.doc`/`.xls`/`.ppt` and macro-enabled `.docm`/`.xlsm`/`.pptm` have no read or edit path. Ask the user to save a `.docx`/`.xlsx`/`.pptx` copy, then continue from it.
-- **Styling:** Word pages are US Letter with 1" margins and decks are 16:9 on the default Office theme. Specs control content and structure; spreadsheet cells also take bold, italic, color, and number formats. When the user asks for a specific font, theme, or template file, tell them the artifact uses the default styling and offer to deliver the content now.
+- **Styling:** HTML decks take a `theme` (background/accent/text colors, `font`: sans/serif/mono) — pick tasteful tokens rather than inventing CSS; `.pptx` files are 16:9 on the default Office theme and Word pages are US Letter with 1" margins. Specs control content and structure; spreadsheet cells also take bold, italic, color, and number formats. When the user asks for a specific font, theme, or template file, tell them the artifact uses the default styling and offer to deliver the content now.

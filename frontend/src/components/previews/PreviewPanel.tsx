@@ -350,15 +350,20 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, onR
         >
           <RefreshCcw className="h-4 w-4" />
         </button>
-        <button
-          ref={expandBtnRef}
-          onClick={() => setExpanded((v) => !v)}
-          className="rounded-[4px] p-1 text-[var(--ink-3)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--ink)]"
-          aria-label={expanded ? "Restore panel size" : "Expand preview"}
-          title={expanded ? "Restore panel size" : "Expand preview"}
-        >
-          {expanded ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-        </button>
+        {/* Decks skip panel-expand: the player has real fullscreen
+            (requestFullscreen on the iframe) — a bigger iframe adds
+            nothing a slide deck needs. */}
+        {payload?.kind !== "deck" && (
+          <button
+            ref={expandBtnRef}
+            onClick={() => setExpanded((v) => !v)}
+            className="rounded-[4px] p-1 text-[var(--ink-3)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--ink)]"
+            aria-label={expanded ? "Restore panel size" : "Expand preview"}
+            title={expanded ? "Restore panel size" : "Expand preview"}
+          >
+            {expanded ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+          </button>
+        )}
         {/* No close button — Workspace's panel ✕ / Skills' "← files"
             back button / Escape already cover dismissal; one less
             header control. onClose still drives the Escape path. */}

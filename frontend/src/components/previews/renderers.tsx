@@ -1,5 +1,5 @@
-import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
-import { ChevronLeft, ChevronRight, FileWarning, Loader2, ZoomIn, ZoomOut } from "lucide-react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { ChevronLeft, ChevronRight, FileWarning, Loader2, Maximize2, Minimize2, ZoomIn, ZoomOut } from "lucide-react";
 import type { PreviewBackend, PreviewSource } from "@/lib/api";
 import type { PreviewElement, PreviewPayload } from "@/lib/types";
 import { Markdown } from "@/components/Markdown";
@@ -64,6 +64,8 @@ export function PreviewBody({
       return <SlidesView payload={payload} onFocus={onFocus} />;
     case "workbook":
       return <WorkbookView payload={payload} onFocus={onFocus} />;
+    case "deck":
+      return <DeckView payload={payload} backend={backend} source={source} onFocus={onFocus} />;
     case "media":
       return (
         <MediaView backend={backend} source={source} media={payload.media || "audio"} expanded={expanded} />
@@ -593,6 +595,184 @@ function WorkbookView({
           Formulas shown as written — not recalculated.
         </p>
       )}
+    </div>
+  );
+}
+
+/** Isolated deck player — sandboxed iframe (allow-scripts, NO
+ *  allow-same-origin) over the admitted /workspace/deck endpoint. Platform
+ *  chrome lives outside the frame; the deck runtime reports state and
+ *  accepts index-only nav messages through a schema-checked bridge. */
+function DeckView({
+  payload,
+  backend,
+  source,
+  onFocus,
+}: {
+  payload: PreviewPayload;
+  backend: PreviewBackend;
+  source: PreviewSource;
+  onFocus?: (label: string | null) => void;
+}) {
+  const frameRef = useRef<HTMLIFrameElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [url, setUrl] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [fs, setFs] = useState(false);
+  const [pos, setPos] = useState<{
+    index: number;
+    count: number;
+    canPrev: boolean;
+    canNext: boolean;
+    pending: number;
+  } | null>(null);
+  const srcKey = `${source.path ?? ""}|${source.artifactId ?? ""}|${source.revisionId ?? ""}|${source.sessionId ?? ""}`;
+
+  useEffect(() => {
+    if (!backend.deckUrl) {
+      setError("Deck playback isn't available on this surface — download the file to view it.");
+      return;
+    }
+    let live = true;
+    setUrl(null);
+    setError(null);
+    setPos(null);
+    backend
+      .deckUrl(source)
+      .then((u) => live && setUrl(u))
+      .catch((e) => live && setError(e instanceof Error ? e.message : String(e)));
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [backend, srcKey]);
+
+  useEffect(() => {
+    const onMsg = (e: MessageEvent) => {
+      const f = frameRef.current;
+      if (!f || e.source !== f.contentWindow) return;
+      const d = e.data as Record<string, unknown> | null;
+      if (
+        d &&
+        d.caberos === "deck" &&
+        d.v === 1 &&
+        d.type === "state" &&
+        Number.isInteger(d.index) &&
+        Number.isInteger(d.count)
+      ) {
+        const idx = d.index as number;
+        const cnt = d.count as number;
+        const next = {
+          index: idx,
+          count: cnt,
+          // rt2 reports canPrev/canNext (reveal-aware); rt1 doesn't — derive.
+          canPrev: typeof d.canPrev === "boolean" ? d.canPrev : idx > 0,
+          canNext: typeof d.canNext === "boolean" ? d.canNext : idx < cnt - 1,
+          pending: Number.isInteger(d.pending) ? (d.pending as number) : 0,
+        };
+        setPos(next);
+        onFocus?.(`slide ${next.index + 1} of ${next.count}`);
+      }
+    };
+    window.addEventListener("message", onMsg);
+    return () => window.removeEventListener("message", onMsg);
+  }, [onFocus]);
+
+  // Fullscreen covers the whole player (chrome included) so an exit
+  // affordance stays reachable — iframe-only fullscreen leaves no way out
+  // but the Escape key.
+  useEffect(() => {
+    const onFs = () => setFs(document.fullscreenElement === wrapRef.current);
+    document.addEventListener("fullscreenchange", onFs);
+    return () => document.removeEventListener("fullscreenchange", onFs);
+  }, []);
+
+  // rt2: step (not absolute nav) — the runtime reveals pending build steps
+  // before changing slides, and reports canPrev/canNext through state.
+  // rt1: only understands absolute nav — send clamped index jumps instead.
+  const step = (dir: 1 | -1) => {
+    const rt1 = payload.deck?.runtime === "deck-rt1";
+    const msg = rt1
+      ? {
+          caberos: "deck",
+          v: 1,
+          type: "nav",
+          index: Math.max(0, Math.min((pos?.count ?? 1) - 1, (pos?.index ?? 0) + dir)),
+        }
+      : { caberos: "deck", v: 1, type: "step", dir };
+    frameRef.current?.contentWindow?.postMessage(msg, "*");
+  };
+
+  if (error) return <Note text={error} />;
+  if (!url) {
+    return (
+      <div className="flex h-full items-center justify-center">
+        <Loader2 className="h-5 w-5 animate-spin text-[var(--ink-3)]" />
+      </div>
+    );
+  }
+  const count = pos?.count ?? payload.deck?.slides ?? 0;
+  const index = pos?.index ?? 0;
+  return (
+    <div
+      ref={wrapRef}
+      className="flex h-full min-h-0 flex-col bg-[var(--surface-1)]"
+      onKeyDown={(e) => {
+        if (e.key === "ArrowRight") step(1);
+        else if (e.key === "ArrowLeft") step(-1);
+      }}
+    >
+      <div className="flex items-center justify-between border-b border-[var(--border)] px-2 py-1">
+        <span className="text-[11px] tabular-nums text-[var(--ink-3)]">
+          {count ? `${index + 1} / ${count}` : "…"}
+        </span>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            aria-label="Previous slide"
+            disabled={pos ? !pos.canPrev : !count}
+            onClick={() => step(-1)}
+            className="rounded p-1 text-[var(--ink-2)] hover:bg-[var(--surface-2)] disabled:opacity-40"
+          >
+            <ChevronLeft className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            aria-label="Next slide"
+            disabled={pos ? !pos.canNext : !count}
+            onClick={() => step(1)}
+            className="rounded p-1 text-[var(--ink-2)] hover:bg-[var(--surface-2)] disabled:opacity-40"
+          >
+            <ChevronRight className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            aria-label={fs ? "Exit fullscreen" : "Fullscreen"}
+            onClick={() =>
+              fs
+                ? document.exitFullscreen()
+                : wrapRef.current?.requestFullscreen?.()
+            }
+            className="rounded p-1 text-[var(--ink-2)] hover:bg-[var(--surface-2)]"
+          >
+            {fs ? (
+              <Minimize2 className="h-3.5 w-3.5" />
+            ) : (
+              <Maximize2 className="h-3.5 w-3.5" />
+            )}
+          </button>
+        </div>
+      </div>
+      <iframe
+        ref={frameRef}
+        src={url}
+        title={payload.deck?.title || payload.name}
+        // allow-scripts ONLY — no allow-same-origin: deck JS runs on an
+        // opaque origin with no access to app cookies/storage/DOM.
+        sandbox="allow-scripts"
+        allowFullScreen
+        className="min-h-0 w-full flex-1 border-0 bg-white"
+      />
     </div>
   );
 }

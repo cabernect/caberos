@@ -1,6 +1,64 @@
 # W2H - HTML Presentation Authoring And Isolated Playback
 
-Status: planned. Existing HTML fixture is a sample, not a shipped artifact format.
+Status: prioritized first per operator decision 2026-11-13 — HTML decks are
+the primary authoring path for presented deliverables (live preview beats
+approximate Office extraction); Office files remain available via the
+existing spec paths and uploaded Office keeps best-effort previews with
+limitation alerts. HTML→PPTX export is NOT promised by this plan. Existing
+HTML fixture is a sample, not a shipped artifact format.
+
+Progress 2026-11-13: slices 1+2+3 landed — `formats/html.py` deck handler
+(spec v1 → self-contained .html, whitelist fragment sanitizer, deck-rt1
+nav runtime + postMessage bridge, slide-id revise addressing), `html`
+registered in handlers/`_FORMATS`/tool schema. Slice 2 (revisioned
+packaging): image blocks + `<img>` in fragments take workspace-relative
+raster srcs (png/jpg/gif/webp by magic bytes, ≤4MB each, ≤25MB/20 assets
+per deck), resolved via `resolve_within` (traversal/symlink-safe), embedded
+as data URIs; asset manifest (path/mime/bytes/sha256) rides in the spec
+JSON so inspect reports inventory and revise re-resolves against current
+workspace bytes. Isolated player: admitted
+decks (marker + valid spec + platform-scripts-only audit) serve via
+`/workspace/deck` with hash-pinned script CSP + `sandbox allow-scripts`
+directive; the panel renders `sandbox="allow-scripts"` (no
+allow-same-origin) iframe + platform chrome. Browser-verified: nav bridge
+1/3→2/3, opaque origin confirmed, zero console errors.
+
+Progress 2026-11-13 (cont.): slices 5+7 partially landed — deck-rt2 runtime
+with stepwise `reveal:true` blocks (platform + in-frame keyboard), `layout:
+"title"` cover slides, `theme.font` (sans/serif/mono), presenter notes (N
+toggle + state flag), progress bar, per-slide footer, directional slide
+transition, polished block/table/image styling. Bridge gained `step`
+(reveal-aware) + `goto` (exact index/reveal — the deterministic state hook
+slice 6 capture needs); state reports index/count/revealed/pending/
+canPrev/canNext/notes. Title-only slides legal; inspect reports
+`reveal_blocks` + asset manifest. Skill docs: office-documents specs.md has
+the full deck spec; SKILL.md teaches html-deck-by-default vs pptx-for-
+editability. Browser-verified on QA stack: reveal consumes Next presses
+(1/4→1/4→2/4 sequence), goto determinism, iframe keyboard, notes overlay,
+zero console errors. Remaining: portable-download offline check (7),
+capture (6), Tauri-shell auth path.
+
+Progress 2026-11-13 (cont. 2): deck-rt3 — slides are a true 16:9 canvas
+letterboxed in the player (container-query units scale type to slide
+width, not viewport shape); runtime shrink-to-fit (`--dfs`) scales type,
+padding and images so dense slides fit instead of scrolling (55% floor,
+styled scrollbar fallback); sparse slides center vertically. Multi-runtime
+admission: every known platform runtime (rt1/rt2/rt3) is byte-exact
+matched and CSP-hash-pinned, so decks built before a runtime upgrade keep
+playing — inspect reports the file's actual runtime. Frontend sends
+`nav` to rt1, `step`/`goto` to rt2/rt3. Caveat: old files keep their
+embedded CSS/JS — the fixes apply to decks built or revised after rt3.
+Browser-verified: rt1 deck plays + navigates, rt3 dense slide fits at
+dfs≈0.62, sparse slide centers at dfs=1, extreme overflow scrolls
+honestly, zero console errors.
+
+Bounded execution is satisfied by the constrained scripting model, not a
+watchdog: admitted decks contain ONLY the platform runtime (hash-pinned
+in CSP) — deck-authored JS is never admitted, so no arbitrary code can
+loop or freeze the main thread. Arbitrary-script .html files get the
+static source view, never playback. Tauri-shell playback still needs its
+own auth/path verification (iframe can't send Bearer; cookie is
+SameSite=Lax same-site only).
 Dependencies: [W0](00-contracts-fixtures.md) HTML identity/package/isolation decisions.
 No LibreOffice or native Office renderer dependency.
 
@@ -53,6 +111,14 @@ safe execution of every uploaded `.html` file.
 7. **Portable download and guidance.** Verify the file/bundle opens offline
    without CaberOS services. Document supported browsers, keyboard behavior,
    script limitations and safe asset choices; update authoring skill resources.
+8. **Deck export (design-first → deliverable).** Per the authoring contract's
+   two-mode pptx model: export a deck revision to PDF via the managed
+   browser's `printToPDF` (printBackground + preferCSSPageSize, fixed
+   1280×720 slide pages), and/or to a lossy native `.pptx` for simple
+   layouts (title/bullets/table) with complex slides rendered as images —
+   never a broken half-mapped pptx. Export is a new revision of a *separate*
+   artifact or an explicit download action; it must not mutate the deck.
+   Lossy-ness is declared in the result metadata.
 
 ## Import And Security Behavior
 

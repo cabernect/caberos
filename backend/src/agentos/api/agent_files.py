@@ -988,6 +988,42 @@ async def raw_workspace_file(
     return Response(content=src.data, media_type=mime)
 
 
+@router.get("/{agent_id}/workspace/deck")
+async def deck_workspace_file(
+    agent_id: str,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+    path: str = "",
+    artifact_id: str | None = None,
+    revision_id: str | None = None,
+    session_id: str | None = None,
+):
+    """Admitted deck playback — the only endpoint that executes deck HTML.
+
+    Admission (generated-deck marker + valid spec + platform-scripts-only)
+    gates *execution*, not access: raw bytes stay available via
+    /workspace/raw for download and source view. The CSP pins the single
+    allowed script by hash and the sandbox directive forces an opaque
+    origin — defense in depth behind the iframe's sandbox attribute.
+    """
+    from fastapi.responses import Response
+
+    from ..artifacts.formats import html as deck_fmt
+
+    ws = await _workspace_root(db, agent_id, session_id)
+    src = await _resolve_source(db, ws, agent_id, path, artifact_id, revision_id)
+    if deck_fmt.admission(src.data) is None:
+        raise HTTPException(status_code=404, detail="not an admitted deck")
+    return Response(
+        content=src.data,
+        media_type="text/html",
+        headers={
+            "Content-Security-Policy": deck_fmt.DECK_CSP,
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 @router.get("/{agent_id}/workspace/pdf-page")
 async def pdf_page(
     agent_id: str,

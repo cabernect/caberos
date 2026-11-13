@@ -1141,7 +1141,13 @@ def register_builtin_capabilities() -> None:
         "Structured document spec — e.g. docx: {title?, blocks:[heading|"
         "paragraph|list|table|image|page_break]}; xlsx: {sheets:[{name,rows,"
         "cells,freeze,column_widths,formats}]}; pptx: {slides:[{layout,title,"
-        "subtitle,blocks:[bullets|table|image|chart|notes|text]}]}"
+        "subtitle,blocks:[bullets|table|image|chart|notes|text]}]}; html deck: "
+        "{title?, theme?{background,accent,text,font:sans|serif|mono}, "
+        "slides:[{id?,layout?:content|title,title?,html?|"
+        "blocks?[heading|paragraph|bullets|table|image|divider],notes?,"
+        "blocks may set reveal:true for stepwise build}]}. image blocks and "
+        "<img> in html fragments take src=workspace-relative raster paths "
+        "(png/jpg/gif/webp, embedded at build; no scripts/external URLs)."
     )
     registry.register(
         CapabilityDef(
@@ -1149,7 +1155,7 @@ def register_builtin_capabilities() -> None:
             effects=frozenset({"workspace_write"}),
             kind="tool",
             description=(
-                "Create a versioned Office deliverable (docx/xlsx/pptx) in the "
+                "Create a versioned deliverable (docx/xlsx/pptx/html deck) in the "
                 "workspace from a structured spec — never raw file bytes. Files "
                 "are saved under artifacts/ (prefix added automatically). " + _doc_spec_hint
             ),
@@ -1162,7 +1168,7 @@ def register_builtin_capabilities() -> None:
                     },
                     "format": {
                         "type": "string",
-                        "enum": ["docx", "xlsx", "pptx"],
+                        "enum": ["docx", "xlsx", "pptx", "html"],
                         "description": "Format; inferred from path extension when omitted",
                     },
                     "spec": {"type": "object", "description": _doc_spec_hint},
@@ -1210,7 +1216,9 @@ def register_builtin_capabilities() -> None:
                 "Requires base_revision_id (from inspect/history); conflicts instead "
                 "of overwriting when the file changed externally. Ops — docx: "
                 "append_blocks|replace_paragraph|set_cell; xlsx: set_cell|append_rows|"
-                "add_sheet|remove_sheet; pptx: add_slide|move_slide|set_title|append_bullets."
+                "add_sheet|remove_sheet; pptx: add_slide|move_slide|set_title|append_bullets; "
+                "html deck: set_title|set_theme|add_slide|remove_slide|set_slide "
+                "(slide refs are 0-based index or slide id)."
             ),
             parameters_schema={
                 "type": "object",

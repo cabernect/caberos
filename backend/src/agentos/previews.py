@@ -160,6 +160,15 @@ def preview_bytes(data: bytes, name: str) -> dict:
     if size > PREVIEW_MAX_BYTES:
         return {**base, "kind": "unknown", "too_large": True, "mime": media_type(name)}
 
+    if name.lower().endswith(".html"):
+        # Admitted CaberOS decks get the isolated player; every other .html
+        # stays a static source view — .html alone is never a trust signal.
+        from .artifacts.formats import html as _deck
+
+        deck_info = _deck.admission(data)
+        if deck_info is not None:
+            return {**base, "kind": "deck", "deck": deck_info}
+
     if kind in ("markdown", "code", "text"):
         text = data.decode("utf-8", errors="replace")
         payload = {**base, "content": text[:TEXT_CHARS], "truncated": len(text) > TEXT_CHARS}

@@ -19,7 +19,7 @@ from . import formats
 
 MAX_ARTIFACT_BYTES = 100 * 1024 * 1024
 
-_FORMATS = {"docx", "pptx", "xlsx", "pdf", "docm", "pptm", "xlsm"}
+_FORMATS = {"docx", "pptx", "xlsx", "pdf", "docm", "pptm", "xlsm", "html"}
 
 
 class ArtifactError(Exception):

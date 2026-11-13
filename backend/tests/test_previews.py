@@ -128,6 +128,38 @@ def test_code_preview_carries_language():
     assert payload["language"] == "python"
 
 
+def test_html_deck_preview_admitted_kind():
+    from agentos import previews
+    from agentos.artifacts.formats import html as deck
+
+    data = deck.build({"title": "T", "slides": [{"blocks": [{"type": "divider"}]}]}, "/tmp")
+    payload = previews.preview_bytes(data, "deck.html")
+    assert payload["kind"] == "deck"
+    assert payload["deck"]["slides"] == 1
+    assert payload["deck"]["runtime"] == "deck-rt3"
+
+
+def test_html_foreign_preview_stays_code():
+    from agentos import previews
+
+    payload = previews.preview_bytes(b"<html><body>hi</body></html>", "page.html")
+    assert payload["kind"] == "code"
+    assert payload["language"] == "html"
+
+
+def test_html_deck_crafted_script_not_admitted():
+    from agentos import previews
+    from agentos.artifacts.formats import html as deck
+
+    data = deck.build(
+        {"title": "T", "slides": [{"blocks": [{"type": "divider"}]}]}, "/tmp"
+    ).decode()
+    crafted = data.replace("</body>", "<script>alert(1)</script></body>").encode()
+    # Refused playback admission → honest static source view instead.
+    payload = previews.preview_bytes(crafted, "deck.html")
+    assert payload["kind"] == "code"
+
+
 def test_csv_preview_bounds_rows_and_reports_total():
     from agentos import previews
 

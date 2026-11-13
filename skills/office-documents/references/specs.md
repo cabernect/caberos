@@ -145,3 +145,52 @@ and `set_freeze` accept `null` to clear.
 ```
 
 Slide indexes are zero-based. `append_bullets` needs a slide with a content placeholder (the `title_content` layout).
+
+## HTML deck (`.html`)
+
+Self-contained slideshow — the default for presented content: it plays live in the preview panel (isolated player) and opens offline in any browser. Choose `.pptx` instead only when the user needs native PowerPoint editing.
+
+**Create spec**
+
+```json
+{
+  "title": "Q3 Review",
+  "theme": {"background": "#FBFAF7", "accent": "#3F6212", "text": "#1C1917", "font": "sans"},
+  "slides": [
+    {"id": "cover", "layout": "title", "title": "Q3 Review",
+     "blocks": [{"type": "paragraph", "text": "What we shipped", "reveal": true}],
+     "notes": "Open with the headline number."},
+    {"id": "body", "title": "Highlights", "blocks": [
+      {"type": "bullets", "items": ["Latency down 30%"], "reveal": true},
+      {"type": "table", "rows": [["Metric", "Q2", "Q3"], ["MRR", "1.2M", "1.4M"]]},
+      {"type": "image", "src": "assets/chart.png", "alt": "Growth chart"},
+      {"type": "divider"}
+    ]},
+    {"id": "custom", "html": "<h3>Any safe markup</h3><p>Fragments allow a small tag set — no scripts, styles, or external URLs.</p>"}
+  ]
+}
+```
+
+- `theme.font`: `sans` (default), `serif`, or `mono`. Colors are `#RRGGBB`.
+- `slide.layout`: `content` (default) or `title` (vertically centered cover/section slide). Title-only slides (no `html`/`blocks`) are legal.
+- `slide.id`: optional stable id (`s1`, `s2`… auto-assigned); duplicate ids rejected. Max 100 slides.
+- Blocks: `heading` (`level` 1–6), `paragraph` (`text`), `bullets` (`items`), `table` (`rows` — first row is the header), `image` (`src` + `alt`), `divider`. A slide takes `html` **or** `blocks`, never both.
+- `reveal: true` on a block makes it appear stepwise — each Next/→ press reveals one block before advancing. `artifact_inspect` reports `reveal_blocks`.
+- `notes`: presenter notes — press `N` during playback to toggle the notes overlay.
+- `image.src` and `<img src>` inside `html` fragments are **workspace-relative raster paths** (png/jpg/gif/webp, ≤4MB each, ≤20 assets/25MB total). Bytes embed into the file at build; inspect lists the asset manifest with sha256. External URLs, SVG, and scripts are rejected.
+- Author **content and structure**, not styling — theme tokens and the platform CSS own the look. For custom visuals use safe `html` fragments or raster images.
+
+**Revise ops**
+
+```json
+[
+  {"op": "set_title", "title": "Q3 Review v2"},
+  {"op": "set_theme", "theme": {"accent": "#B45309"}},
+  {"op": "set_slide", "slide": "body", "title": "Highlights (updated)"},
+  {"op": "add_slide", "slide": {"blocks": [{"type": "divider"}]}, "at": 1},
+  {"op": "remove_slide", "slide": 2}
+]
+```
+
+- `slide` refs are a 0-based index **or** a slide id; missing/ambiguous ids fail. Unaffected slides and their embedded assets are preserved byte-for-byte; image refs re-resolve against the current workspace file.
+- The file is one self-contained `.html` — scripts are platform-owned only, so it plays offline and in the isolated preview player.

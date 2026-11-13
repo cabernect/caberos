@@ -310,6 +310,7 @@ export interface PreviewPayload {
     | "document"
     | "slides"
     | "workbook"
+    | "deck"
     | "media"
     | "unknown";
   size: number;
@@ -348,6 +349,9 @@ export interface PreviewPayload {
   formulas_recalculated?: boolean;
   media?: "audio" | "video";
   too_large?: boolean;
+  /** Deck admission metadata — present only for kind "deck" (generated,
+   *  admitted CaberOS decks eligible for isolated playback). */
+  deck?: { runtime: string; title?: string | null; slides: number };
   /** Ephemeral-upload previews only — first PDF page as base64 PNG. */
   thumb_png?: string;
   error?: string;

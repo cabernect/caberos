@@ -98,6 +98,9 @@ export interface PreviewBackend {
   blob(source: PreviewSource): Promise<string>;
   /** Object URL of a rendered PDF page PNG. */
   pdfPage(page: number, source: PreviewSource): Promise<string>;
+  /** URL serving an admitted deck for isolated iframe playback.
+   *  Absent → the surface can't play decks (static source only). */
+  deckUrl?(source: PreviewSource): Promise<string>;
 }
 
 export class ApiError extends Error {
@@ -644,6 +647,13 @@ export const api = {
     fetchBlob(
       `/api/agents/${id}/workspace/pdf-page?page=${page}&${sourceQuery(opts)}`,
     ),
+
+  // Admitted-deck playback URL — the iframe can't send Bearer headers, so
+  // this rides the session cookie on the same-origin /api path.
+  deckFileUrl: async (id: string, opts: PreviewSource = {}): Promise<string> => {
+    const base = await baseReady;
+    return `${base}/api/agents/${id}/workspace/deck?${sourceQuery(opts)}`;
+  },
 
   listArtifactRevisions: (id: string, artifactId: string) =>
     request<{ revisions: ArtifactRevisionInfo[] }>(
@@ -1868,6 +1878,7 @@ export function workspaceBackend(
     preview: (source) => api.previewFile(agentId, pin(source)),
     blob: (source) => api.fetchFileBlob(agentId, pin(source)),
     pdfPage: (page, source) => api.fetchPdfPage(agentId, page, pin(source)),
+    deckUrl: (source) => api.deckFileUrl(agentId, pin(source)),
   };
 }
 
