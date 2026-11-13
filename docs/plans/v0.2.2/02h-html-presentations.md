@@ -52,6 +52,22 @@ Browser-verified: rt1 deck plays + navigates, rt3 dense slide fits at
 dfs≈0.62, sparse slide centers at dfs=1, extreme overflow scrolls
 honestly, zero console errors.
 
+Progress 2026-11-13 (cont. 3): slice 6 capture landed —
+`artifacts/deck_capture.py` renders admitted revision bytes in managed
+Chrome-for-Testing (headless, fixed 1280×720 = slide canvas, throwaway
+profile, file:// via new `BrowserSession.navigate_local` — netpolicy
+bypass is platform-internal only and the deck CSP already forbids
+egress). Deterministic states via the `goto` bridge; per-slide metrics
+(overflow, --dfs scale, reveal counts, blank/broken-image flags) +
+1280×720 PNGs. API: `GET /artifacts/{id}/deck-captures` (manifest,
+`reveal=final|N`, `slides=` subset) + `/deck-captures/{i}.png`; captures
+are revision-bound (never live bytes), content-addressed on disk
+(`data/artifact-captures/<sha256>/`), manifest+PNG cache verified live
+(8ms cache hit). Tests: admission/param guards + real-browser capture +
+reveal-state determinism (5 tests, skip without runtime). Remaining in
+slice 6: frontend surfacing of captures in the preview panel; agent-side
+verify wiring (artifact_inspect could report capture availability).
+
 Bounded execution is satisfied by the constrained scripting model, not a
 watchdog: admitted decks contain ONLY the platform runtime (hash-pinned
 in CSP) — deck-authored JS is never admitted, so no arbitrary code can

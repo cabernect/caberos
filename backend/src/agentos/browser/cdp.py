@@ -309,6 +309,41 @@ class BrowserSession:
         await self._send("Page.navigate", {"url": url})
         await self._wait_load()
 
+    async def navigate_local(self, path: Path) -> None:
+        """Load a platform-local file:// document — for artifact capture.
+
+        Deliberately bypasses netpolicy: the only callers are platform code
+        rendering CaberOS's own admitted, CSP-isolated artifacts (decks
+        carry connect-src 'none', so the document itself cannot egress).
+        Never expose this to agent-controlled URLs.
+        """
+        await self._send("Page.navigate", {"url": path.resolve().as_uri()})
+        await self._wait_load()
+
+    async def set_viewport(self, width: int, height: int, scale: float = 1.0) -> None:
+        """Fixed device metrics — deterministic capture geometry."""
+        await self._send(
+            "Emulation.setDeviceMetricsOverride",
+            {
+                "width": width,
+                "height": height,
+                "deviceScaleFactor": scale,
+                "mobile": False,
+            },
+        )
+
+    async def evaluate_json(self, expression: str):
+        """Runtime.evaluate returning a JSON-serializable value."""
+        res = await self._send(
+            "Runtime.evaluate",
+            {
+                "expression": expression,
+                "returnByValue": True,
+                "awaitPromise": True,
+            },
+        )
+        return res.get("result", {}).get("value")
+
     async def close(self) -> None:
         for task in (self._intercept_task, self._reader_task):
             if task and not task.done():
