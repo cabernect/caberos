@@ -463,39 +463,96 @@ def _preview_slides(data: bytes) -> dict:
 
 
 def _preview_workbook(data: bytes) -> dict:
-    """XLSX → sheets with bounded row grids. Formula cells surface their
+    """XLSX → sheets as bounded styled grids. Formula cells surface their
     formula string — openpyxl never evaluates, same honesty contract as
-    the artifact inspect handler."""
+    the artifact inspect handler. Styles are a compact subset (bold, italic,
+    font/fill color, alignment, number format) — enough for a faithful cell
+    view, not a claim of Excel layout fidelity."""
     from openpyxl import load_workbook
+    from openpyxl.utils import get_column_letter
 
     try:
-        wb = load_workbook(io.BytesIO(data), read_only=True)
+        wb = load_workbook(io.BytesIO(data))
     except Exception as e:
         return {"sheets": [], "error": f"workbook unreadable: {e}"[:300]}
     sheets = []
     for ws in wb.worksheets:
-        # read_only worksheets may lack a declared dimension — fall back to
-        # the bound (rstrip removes the padding it produces).
-        max_col = min(ws.max_column, XLSX_MAX_COLS) if ws.max_column else XLSX_MAX_COLS
-        rows: list[list] = []
-        for row in ws.iter_rows(max_row=XLSX_MAX_ROWS, max_col=max_col):
-            vals = [_json_safe(c.value) for c in row]
-            while vals and vals[-1] is None:
-                vals.pop()  # rstrip trailing empties — jagged rows, not padding
-            rows.append(vals)
-        while rows and not rows[-1]:
-            rows.pop()  # drop empty tail rows
+        true_rows = ws.max_row or 0
+        true_cols = ws.max_column or 0
+        max_col = min(true_cols, XLSX_MAX_COLS) if true_cols else XLSX_MAX_COLS
+        grid: list[list] = []
+        for row in ws.iter_rows(
+            max_row=min(true_rows, XLSX_MAX_ROWS) or XLSX_MAX_ROWS, max_col=max_col
+        ):
+            cells = []
+            for c in row:
+                if c.value is None:
+                    cells.append(None)
+                    continue
+                entry: dict = {"v": _json_safe(c.value)}
+                style = _cell_style(c)
+                if style:
+                    entry["s"] = style
+                cells.append(entry)
+            # rstrip trailing empties — jagged rows, not padding
+            while cells and cells[-1] is None:
+                cells.pop()
+            grid.append(cells)
+        while grid and not grid[-1]:
+            grid.pop()
+        col_widths = {}
+        for col, dim in ws.column_dimensions.items():
+            if dim.width:
+                col_widths[get_column_letter(col) if isinstance(col, int) else col] = dim.width
+        features = {
+            "tables": sorted(ws.tables.keys()),
+            "charts": len(ws._charts),
+            "data_validations": len(ws.data_validations.dataValidation),
+            "conditional_formats": sum(len(r.rules) for r in ws.conditional_formatting),
+        }
         sheets.append(
             {
                 "name": ws.title,
-                "rows": rows,
-                "row_count": ws.max_row or 0,
-                "truncated": (ws.max_row or 0) > XLSX_MAX_ROWS
-                or (ws.max_column or 0) > XLSX_MAX_COLS,
+                "grid": grid,
+                "row_count": true_rows,
+                "col_count": true_cols,
+                "merges": [str(r) for r in ws.merged_cells.ranges],
+                "freeze": str(ws.freeze_panes) if ws.freeze_panes else None,
+                "col_widths": col_widths,
+                "features": features,
+                "truncated": true_rows > XLSX_MAX_ROWS or true_cols > XLSX_MAX_COLS,
             }
         )
     wb.close()
     return {"sheets": sheets, "formulas_recalculated": False}
+
+
+def _cell_style(cell) -> dict:
+    """Compact style dict for preview cells — only non-default attributes."""
+    s: dict = {}
+    f = cell.font
+    if f.bold:
+        s["b"] = True
+    if f.italic:
+        s["i"] = True
+    if f.sz and f.sz != 11:
+        s["sz"] = f.sz
+    if f.color and f.color.type == "rgb" and f.color.rgb not in (None, "00000000", "FF000000"):
+        rgb = str(f.color.rgb)
+        s["c"] = f"#{rgb[-6:]}"
+    fill = cell.fill
+    if fill and fill.fill_type == "solid" and fill.fgColor and fill.fgColor.type == "rgb":
+        rgb = str(fill.fgColor.rgb)
+        if rgb not in (None, "00000000"):
+            s["f"] = f"#{rgb[-6:]}"
+    if cell.alignment:
+        if cell.alignment.horizontal and cell.alignment.horizontal != "general":
+            s["a"] = cell.alignment.horizontal
+        if cell.alignment.wrap_text:
+            s["w"] = True
+    if cell.number_format and cell.number_format != "General":
+        s["n"] = cell.number_format
+    return s
 
 
 def _json_safe(value):

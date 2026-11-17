@@ -291,10 +291,39 @@ export interface PreviewSlide {
   truncated?: boolean;
 }
 
+export interface PreviewSheetCell {
+  v: unknown;
+  /** Compact style subset: b=bold, i=italic, sz=font size, c=font color,
+   *  f=fill color, a=align, w=wrap, n=number format. */
+  s?: {
+    b?: boolean;
+    i?: boolean;
+    sz?: number;
+    c?: string;
+    f?: string;
+    a?: string;
+    w?: boolean;
+    n?: string;
+  };
+}
+
 export interface PreviewSheet {
   name: string;
-  rows: unknown[][];
+  /** Styled cell grid (null = empty). Rows may be jagged — rstripped. */
+  grid?: (PreviewSheetCell | null)[][];
+  /** Legacy value-only rows — present on older payloads. */
+  rows?: unknown[][];
   row_count: number;
+  col_count?: number;
+  merges?: string[];
+  freeze?: string | null;
+  col_widths?: Record<string, number>;
+  features?: {
+    tables?: string[];
+    charts?: number;
+    data_validations?: number;
+    conditional_formats?: number;
+  };
   truncated: boolean;
 }
 

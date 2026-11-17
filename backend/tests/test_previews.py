@@ -379,10 +379,44 @@ def test_xlsx_preview_returns_sheet_grids():
     assert payload["limitations"] == ["formatting", "omitted_features", "formula_evaluation"]
     sheet = payload["sheets"][0]
     assert sheet["name"] == "Rev"
-    assert sheet["rows"][0] == ["Region", "Q3"]
+    # Styled grid: cell objects carry value + compact style.
+    assert [c["v"] for c in sheet["grid"][0]] == ["Region", "Q3"]
     # Formula surfaces as its string — never silently evaluated.
-    assert sheet["rows"][2][1] == "=SUM(B2:B2)"
+    assert sheet["grid"][2][1]["v"] == "=SUM(B2:B2)"
     assert payload["formulas_recalculated"] is False
+
+
+def test_xlsx_preview_grid_carries_merges_styles_features():
+    from agentos import previews
+    from agentos.artifacts.formats import xlsx
+
+    data = xlsx.build(
+        {
+            "sheets": [
+                {
+                    "name": "S",
+                    "rows": [["H"], [1]],
+                    "cells": {"A1": {"bold": True, "fill": "#1F4E79"}},
+                    "merges": ["B1:C1"],
+                    "freeze": "A2",
+                    "tables": [{"name": "T", "ref": "A1:A2"}],
+                    "charts": [{"type": "bar", "data": "A2:A2", "categories": "A1:A1"}],
+                    "data_validations": [{"range": "A2", "type": "list", "formula1": '"x"'}],
+                    "conditional_formats": [{"range": "A2", "operator": "equal", "formula": ["1"]}],
+                }
+            ]
+        },
+        ".",
+    )
+    sheet = previews.preview_bytes(data, "book.xlsx")["sheets"][0]
+    assert sheet["grid"][0][0]["s"]["b"] is True
+    assert sheet["grid"][0][0]["s"]["f"] == "#1F4E79"
+    assert sheet["merges"] == ["B1:C1"]
+    assert sheet["freeze"] == "A2"
+    assert sheet["features"]["tables"] == ["T"]
+    assert sheet["features"]["charts"] == 1
+    assert sheet["features"]["data_validations"] == 1
+    assert sheet["features"]["conditional_formats"] == 1
 
 
 def test_oversized_file_returns_too_large():

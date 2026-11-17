@@ -98,6 +98,10 @@ Use `artifact_create` with `format: "pdf"`, a `.pdf` path, and the same `title` 
 - `merges` lists range references to merge (e.g. `["A1:C1"]`).
 - `auto_filter` is a range reference (e.g. `"A1:D20"`) or `true` for the used range.
 - `row_heights` maps a 1-based row number to a height in points.
+- `tables` creates real Excel tables: `{"name", "ref", "style"?}`. `name` is unique workbook-wide (`[A-Za-z_][A-Za-z0-9_.]{0,254}`); `style` is a built-in `TableStyleLight|Medium|DarkN` (default `TableStyleMedium2`). `ref` must include the header row.
+- `charts` creates real charts: `{"type", "data", "categories"?, "title"?, "anchor"?}`. `type` is `bar`, `line`, or `pie` only; `data`/`categories` are same-sheet range refs; `anchor` is a cell like `"E2"` (default). Charts reference cell values — never copy them, so they stay editable.
+- `data_validations` adds input rules: `{"range", "type", "formula1", "formula2"?, "allow_blank"?, "error"?, "error_title"?, "prompt"?, "prompt_title"?, "show_error"?}`. `type` is one of `list`, `whole`, `decimal`, `date`, `time`, `textLength`. For `list`, `formula1` is an inline list like `\"a,b,c\"` or a range ref. This is authoring support, not a claim that Excel will accept every operand combination.
+- `conditional_formats` adds cellIs rules: `{"range", "operator", "formula", "fill"?, "bold"?}`. `operator` is `equal`, `notEqual`, `greaterThan`, `greaterThanOrEqual`, `lessThan`, `lessThanOrEqual`, `between`, `notBetween`; `formula` is a 1–2 item list (`between`/`notBetween` need two). `fill` is a `#RRGGBB` hex. Only this bounded subset is supported — no data bars, icon sets, or formula-based rules.
 - Sheets are set to landscape and fit-to-width for printing in a spreadsheet application.
 
 **Style keys** (cells, `formats`, and `style_range.style`):
@@ -128,6 +132,17 @@ Use `artifact_create` with `format: "pdf"`, a `.pdf` path, and the same `title` 
   {"op": "merge_cells", "sheet": "Budget", "range": "A1:C1"},
   {"op": "set_column_width", "sheet": "Budget", "col": "A", "width": 28},
   {"op": "set_row_height", "sheet": "Budget", "row": 1, "height": 24},
+  {"op": "add_table", "sheet": "Budget", "name": "SalesTable",
+   "ref": "A1:D10", "style": "TableStyleMedium9"},
+  {"op": "remove_table", "sheet": "Budget", "name": "SalesTable"},
+  {"op": "add_chart", "sheet": "Budget", "type": "bar", "title": "Revenue",
+   "data": "C2:C10", "categories": "A2:A10", "anchor": "F2"},
+  {"op": "add_data_validation", "sheet": "Budget", "range": "B2:B10",
+   "type": "list", "formula1": "\"Low,Medium,High\""},
+  {"op": "remove_data_validation", "sheet": "Budget", "range": "B2:B10"},
+  {"op": "add_conditional_format", "sheet": "Budget", "range": "C2:C10",
+   "operator": "greaterThan", "formula": ["1000"], "fill": "#FFCCCC"},
+  {"op": "remove_conditional_format", "sheet": "Budget", "range": "C2:C10"},
   {"op": "set_auto_filter", "sheet": "Budget", "ref": "A1:D20"},
   {"op": "set_freeze", "sheet": "Budget", "ref": "A2"}
 ]
@@ -135,6 +150,13 @@ Use `artifact_create` with `format: "pdf"`, a `.pdf` path, and the same `title` 
 
 `add_sheet` accepts the same keys as a sheet in the create spec. `set_auto_filter`
 and `set_freeze` accept `null` to clear.
+
+**Preservation & formulas:**
+
+- `artifact_inspect` reports a `features` inventory (charts, tables, images, external links, macros, data validations, conditional formatting, defined names) plus `edit_safety`.
+- Some workbook parts cannot survive an openpyxl round-trip (pivot tables, slicers, ActiveX, embedded objects, threaded comments, custom XML). If `inspect` reports them in `dropped_without_acknowledgement`, `artifact_revise` refuses — pass `{"op": "accept_feature_loss"}` in the same batch to produce a reduced-feature copy, or leave the file alone.
+- Charts, tables, images, defined names, data validations, and conditional formatting round-trip. External links are kept but never fetched; macro (`vbaProject.bin`) parts are preserved byte-for-byte when present — never executed.
+- Formulas are stored as formulas. CaberOS has no calculation engine: results show as authored formulas, and `formulas_recalculated` is always `false` unless a named engine recalculated the file. A formula cell's cached value (if any) is whatever the producing app last computed — do not treat missing values as zero.
 
 ## PowerPoint (`.pptx`)
 

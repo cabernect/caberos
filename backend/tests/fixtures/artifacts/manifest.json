@@ -250,8 +250,8 @@
     },
     {
       "file": "report.docx",
-      "sha256": "a0630a050a6283b0571760b284ce43f87e75c297225f0058abe54c887976a251",
-      "bytes": 42410,
+      "sha256": "c31151c56d4743c3bdf6116c1f9a019c9f01f324f3196fae6c311a333a76746e",
+      "bytes": 42658,
       "spec": {
         "spec": {
           "title": "Q3 Platform Reliability Report",
@@ -382,8 +382,8 @@
     },
     {
       "file": "report-vietnamese.docx",
-      "sha256": "af91e23b22b1e23092ef2a0f6e150225cafa73122dd8b2c9ee977319779eff7d",
-      "bytes": 37127,
+      "sha256": "063cf5115cd2c611500f03295378596f2440af4ef655effe9bd3b4d90e48d35f",
+      "bytes": 37246,
       "spec": {
         "spec": {
           "title": "Báo cáo độ tin cậy nền tảng quý ba",
@@ -661,8 +661,8 @@
     },
     {
       "file": "report-missing-font.docx",
-      "sha256": "59894d831f5129fec313298485b1d59189b1b7b354958266ec0a29b217dc6130",
-      "bytes": 42529,
+      "sha256": "9959f4a6c0aa1aaadd0d27c09b3dfdce84946573aae3656be27b40fa8ee4d7ed",
+      "bytes": 42775,
       "spec": {
         "note": "Synthetic variant; not authored by the structured spec"
       },

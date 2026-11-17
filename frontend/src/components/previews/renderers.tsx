@@ -650,6 +650,261 @@ function SlidesView({
   );
 }
 
+function colLetter(index: number): string {
+  let n = index + 1;
+  let out = "";
+  while (n > 0) {
+    const r = (n - 1) % 26;
+    out = String.fromCharCode(65 + r) + out;
+    n = Math.floor((n - 1) / 26);
+  }
+  return out;
+}
+
+/** "B2" → {col:1,row:1} (0-based); null on junk. */
+function parseCellRef(ref: string): { col: number; row: number } | null {
+  const m = /^([A-Za-z]{1,3})([0-9]+)$/.exec(ref.trim());
+  if (!m) return null;
+  let col = 0;
+  for (const ch of m[1].toUpperCase()) col = col * 26 + (ch.charCodeAt(0) - 64);
+  return { col: col - 1, row: parseInt(m[2], 10) - 1 };
+}
+
+/** "A1:C3" → bounds; single "B2" → 1x1. */
+function parseRange(ref: string): { c0: number; r0: number; c1: number; r1: number } | null {
+  const parts = ref.split(":");
+  const a = parseCellRef(parts[0]);
+  if (!a) return null;
+  const b = parts[1] ? parseCellRef(parts[1]) : a;
+  if (!b) return null;
+  return {
+    c0: Math.min(a.col, b.col),
+    r0: Math.min(a.row, b.row),
+    c1: Math.max(a.col, b.col),
+    r1: Math.max(a.row, b.row),
+  };
+}
+
+/** Common Excel number formats → display string. Unknown formats show the
+ *  raw value; the format itself is preview metadata, not a claim of Excel
+ *  rendering. */
+function formatCellValue(v: unknown, numFmt?: string): string {
+  if (v == null) return "";
+  if (typeof v === "number" && numFmt) {
+    if (numFmt.includes("%")) {
+      const dec = /0\.(0+)/.exec(numFmt)?.[1].length ?? 0;
+      return `${(v * 100).toFixed(dec)}%`;
+    }
+    if (numFmt.includes(",")) {
+      const dec = /0\.(0+)/.exec(numFmt)?.[1].length ?? 0;
+      return v.toLocaleString(undefined, {
+        minimumFractionDigits: dec,
+        maximumFractionDigits: dec,
+      });
+    }
+  }
+  return String(v);
+}
+
+function WorkbookGrid({ sheet }: { sheet: NonNullable<PreviewPayload["sheets"]>[number] }) {
+  const [sel, setSel] = useState<{ r: number; c: number } | null>(null);
+  const grid = sheet.grid;
+  if (!grid) {
+    // Legacy payload shape — plain value rows.
+    const rows = sheet.rows || [];
+    return (
+      <div className="overflow-auto rounded-[5px] border border-[var(--border)]">
+        <table className="w-full border-collapse text-[12px]">
+          <tbody>
+            {rows.map((row, i) => (
+              <tr key={i} className={i % 2 ? "bg-[var(--surface)]/50" : ""}>
+                {(row as unknown[]).map((cell, j) => (
+                  <td key={j} className="border-b border-[var(--border)] px-2.5 py-1 text-[var(--ink)]">
+                    {cell == null ? "" : String(cell)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
+  const rows = grid.length;
+  const cols = grid.reduce((m, r) => Math.max(m, r.length), 0);
+
+  // Merge map: anchor → span, covered → skip.
+  const spans = new Map<string, { cs: number; rs: number }>();
+  const covered = new Set<string>();
+  for (const ref of sheet.merges || []) {
+    const b = parseRange(ref);
+    if (!b) continue;
+    spans.set(`${b.r0}:${b.c0}`, {
+      cs: b.c1 - b.c0 + 1,
+      rs: b.r1 - b.r0 + 1,
+    });
+    for (let r = b.r0; r <= b.r1; r++)
+      for (let c = b.c0; c <= b.c1; c++)
+        if (r !== b.r0 || c !== b.c0) covered.add(`${r}:${c}`);
+  }
+
+  // Freeze panes: "B2" → row 0 sticky top, col 0 sticky left.
+  const freeze = sheet.freeze ? parseCellRef(sheet.freeze) : null;
+  const freezeRow = freeze ? freeze.row : Infinity;
+  const freezeCol = freeze ? freeze.col : Infinity;
+
+  // Column widths in px (Excel width ≈ chars; ~7px/char + padding).
+  const colPx = (c: number) => {
+    const w = sheet.col_widths?.[colLetter(c)];
+    return w ? Math.round(w * 7 + 10) : undefined;
+  };
+
+  const stickyTop = (r: number) =>
+    r < freezeRow
+      ? { position: "sticky" as const, top: (r + 1) * 26, zIndex: 2 }
+      : {};
+  const stickyLeft = (c: number) => {
+    if (c >= freezeCol) return {};
+    let left = 40; // row-number gutter
+    for (let i = 0; i < c; i++) left += colPx(i) ?? 88;
+    return { position: "sticky" as const, left, zIndex: 3 };
+  };
+
+  const cellAt = (r: number, c: number) => grid[r]?.[c] ?? null;
+  const selCell = sel ? cellAt(sel.r, sel.c) : null;
+  const selRef = sel ? `${colLetter(sel.c)}${sel.r + 1}` : "";
+
+  return (
+    <div>
+      {/* Formula bar — click a cell to inspect its raw content/formula. */}
+      <div className="mb-1 flex items-center gap-2 rounded-[5px] border border-[var(--border)] bg-[var(--surface)] px-2 py-1">
+        <span className="w-14 shrink-0 truncate text-[11px] font-medium text-[var(--ink-3)]">
+          {selRef || "—"}
+        </span>
+        <span className="shrink-0 text-[11px] italic text-[var(--ink-3)]">fx</span>
+        <span className="truncate text-[12px] text-[var(--ink)]">
+          {selCell
+            ? typeof selCell.v === "string" && selCell.v.startsWith("=")
+              ? selCell.v
+              : String(selCell.v ?? "")
+            : sel
+              ? "(empty)"
+              : "Click a cell"}
+        </span>
+      </div>
+      <div className="overflow-auto rounded-[5px] border border-[var(--border)]">
+      <table
+        className="border-collapse text-[12px]"
+        style={{ tableLayout: "fixed" }}
+      >
+        <colgroup>
+          <col style={{ width: 40 }} />
+          {Array.from({ length: cols }, (_, c) => (
+            <col key={c} style={{ width: colPx(c) ?? 96 }} />
+          ))}
+        </colgroup>
+        <thead>
+          <tr>
+            <th
+              className="border-b border-r border-[var(--border)] bg-[var(--surface)] px-1 py-0.5 text-center text-[10px] font-medium text-[var(--ink-3)]"
+              style={{ position: "sticky", top: 0, left: 0, zIndex: 4 }}
+            />
+            {Array.from({ length: cols }, (_, c) => (
+              <th
+                key={c}
+                className="border-b border-[var(--border)] bg-[var(--surface)] px-1.5 py-0.5 text-center text-[10px] font-semibold uppercase tracking-wide text-[var(--ink-3)]"
+                style={{
+                  position: "sticky",
+                  top: 0,
+                  ...(c < freezeCol ? stickyLeft(c) : {}),
+                  zIndex: 4,
+                }}
+              >
+                {colLetter(c)}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {Array.from({ length: rows }, (_, r) => (
+            <tr key={r} className="hover:bg-[var(--surface)]/60">
+              <td
+                className="border-b border-r border-[var(--border)] bg-[var(--surface)] px-1 py-0.5 text-center text-[10px] font-medium text-[var(--ink-3)]"
+                style={{
+                  position: "sticky",
+                  left: 0,
+                  ...(r < freezeRow ? { top: (r + 1) * 26 } : {}),
+                  zIndex: r < freezeRow ? 3 : 1,
+                }}
+              >
+                {r + 1}
+              </td>
+              {Array.from({ length: cols }, (_, c) => {
+                const key = `${r}:${c}`;
+                if (covered.has(key)) return null;
+                const cell = cellAt(r, c);
+                const span = spans.get(key);
+                const st = cell?.s;
+                const isNum = typeof cell?.v === "number";
+                const isSel = sel?.r === r && sel?.c === c;
+                const style: CSSProperties = {
+                  borderRight: "1px solid var(--border)",
+                  ...(st?.f ? { backgroundColor: st.f } : {}),
+                  ...(st?.c ? { color: st.c } : {}),
+                  ...(st?.b ? { fontWeight: 600 } : {}),
+                  ...(st?.i ? { fontStyle: "italic" } : {}),
+                  ...(st?.sz ? { fontSize: st.sz } : {}),
+                  ...(isNum
+                    ? { textAlign: "right", fontVariantNumeric: "tabular-nums" }
+                    : st?.a && st.a !== "general"
+                      ? { textAlign: st.a as CSSProperties["textAlign"] }
+                      : {}),
+                  ...(st?.w ? { whiteSpace: "normal" } : { whiteSpace: "nowrap" }),
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  cursor: "cell",
+                  ...(isSel ? { outline: "2px solid var(--accent)", outlineOffset: -2 } : {}),
+                  ...stickyTop(r),
+                  ...stickyLeft(c),
+                };
+                return (
+                  <td
+                    key={c}
+                    colSpan={span?.cs}
+                    rowSpan={span?.rs}
+                    className="border-b border-[var(--border)] px-1.5 py-0.5 align-middle text-[var(--ink)]"
+                    style={style}
+                    title={
+                      typeof cell?.v === "string" && cell.v.startsWith("=")
+                        ? `formula: ${cell.v}`
+                        : st?.n
+                    }
+                    onClick={() => setSel({ r, c })}
+                  >
+                    {cell ? formatCellValue(cell.v, st?.n) : ""}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      </div>
+      {/* Status bar */}
+      <div className="mt-1 flex items-center justify-between rounded-[5px] border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-[10px] text-[var(--ink-3)]">
+        <span>
+          {sheet.name} · {rows}×{cols}
+          {sheet.row_count > rows || (sheet.col_count ?? 0) > cols
+            ? ` (of ${sheet.row_count}×${sheet.col_count ?? "?"})`
+            : ""}
+        </span>
+        <span>formulas not recalculated</span>
+      </div>
+    </div>
+  );
+}
+
 function WorkbookView({
   payload,
   onFocus,
@@ -664,6 +919,15 @@ function WorkbookView({
   useEffect(() => {
     onFocus?.(sheet ? `sheet "${sheet.name}"` : null);
   }, [sheet, onFocus]);
+  const feat = sheet?.features;
+  const featBits = feat
+    ? [
+        feat.tables?.length ? `${feat.tables.length} table${feat.tables.length > 1 ? "s" : ""}` : null,
+        feat.charts ? `${feat.charts} chart${feat.charts > 1 ? "s" : ""}` : null,
+        feat.data_validations ? `${feat.data_validations} data validation${feat.data_validations > 1 ? "s" : ""}` : null,
+        feat.conditional_formats ? `${feat.conditional_formats} conditional format${feat.conditional_formats > 1 ? "s" : ""}` : null,
+      ].filter(Boolean)
+    : [];
   return (
     <div>
       <div className="mb-2 flex gap-1 overflow-x-auto pb-1">
@@ -685,7 +949,12 @@ function WorkbookView({
       </div>
       {sheet && (
         <>
-          <GridTable header={[]} rows={sheet.rows} />
+          {featBits.length > 0 && (
+            <p className="mb-2 text-[11px] text-[var(--ink-3)]">
+              Contains {featBits.join(", ")} — shown as cell data; objects are not rendered.
+            </p>
+          )}
+          <WorkbookGrid sheet={sheet} />
           {sheet.truncated && <TruncatedFlag />}
         </>
       )}
@@ -697,7 +966,6 @@ function WorkbookView({
     </div>
   );
 }
-
 /** Presentation spec renderer — .deck.json slides drawn directly in React
  *  at a fixed 1280×720 design size, scaled to fit. No iframe, no generated
  *  HTML: the same normalized spec feeds the native PPTX export, so what the

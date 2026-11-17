@@ -216,7 +216,7 @@ def test_approximate_office_fixture_preview_retains_supported_content_not_native
     book = previews.preview_bytes((FIXTURES / "uploaded-features.xlsx").read_bytes(), "upload.xlsx")
     assert book["formulas_recalculated"] is False
     notes = next(sheet for sheet in book["sheets"] if sheet["name"] == "Notes")
-    assert notes["rows"][2][1] == "=SUM(Summary!B2:C2)"
+    assert notes["grid"][2][1]["v"] == "=SUM(Summary!B2:C2)"
 
 
 @pytest.mark.parametrize(
