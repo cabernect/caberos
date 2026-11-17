@@ -65,7 +65,7 @@ export function PreviewBody({
     case "pdf":
       return <PdfView backend={backend} source={source} pageCount={payload.page_count || 0} expanded={expanded} />;
     case "document":
-      return <ElementsView elements={payload.elements || []} />;
+      return <DocumentView payload={payload} />;
     case "slides":
       return <SlidesView payload={payload} onFocus={onFocus} />;
     case "workbook":
@@ -706,8 +706,88 @@ function formatCellValue(v: unknown, numFmt?: string): string {
   return String(v);
 }
 
+function DocumentView({ payload }: { payload: PreviewPayload }) {
+  const viewKey = viewStateKey(payload);
+  const [zoom, setZoom] = useState(() => readView(viewKey, "zoom", 1));
+  useEffect(() => {
+    setZoom(readView(viewKey, "zoom", 1));
+  }, [viewKey]);
+  useEffect(() => {
+    writeView(viewKey, "zoom", zoom);
+  }, [viewKey, zoom]);
+  return (
+    <div>
+      <div className="mb-2 flex justify-end gap-1">
+        <button
+          onClick={() => setZoom((z) => Math.max(0.5, Math.round((z - 0.25) * 100) / 100))}
+          disabled={zoom <= 0.5}
+          className="rounded-[4px] border border-[var(--border)] p-1 transition-colors hover:bg-[var(--surface)] disabled:opacity-40"
+          aria-label="Zoom out"
+        >
+          <ZoomOut className="h-3.5 w-3.5" />
+        </button>
+        <span className="w-9 py-1 text-center font-mono text-[11px] text-[var(--ink-3)]">
+          {Math.round(zoom * 100)}%
+        </span>
+        <button
+          onClick={() => setZoom((z) => Math.min(2, Math.round((z + 0.25) * 100) / 100))}
+          disabled={zoom >= 2}
+          className="rounded-[4px] border border-[var(--border)] p-1 transition-colors hover:bg-[var(--surface)] disabled:opacity-40"
+          aria-label="Zoom in"
+        >
+          <ZoomIn className="h-3.5 w-3.5" />
+        </button>
+        <button
+          onClick={() => setZoom(1)}
+          disabled={zoom === 1}
+          className="rounded-[4px] border border-[var(--border)] px-1.5 py-1 text-[11px] transition-colors hover:bg-[var(--surface)] disabled:opacity-40"
+        >
+          Fit
+        </button>
+      </div>
+      <div className="overflow-x-auto">
+        <div style={{ zoom } as CSSProperties}>
+          <ElementsView elements={payload.elements || []} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+type CellPos = { r: number; c: number };
+type CellRange = { r0: number; c0: number; r1: number; c1: number };
+
+function normRange(a: CellPos, b: CellPos): CellRange {
+  return {
+    r0: Math.min(a.r, b.r),
+    c0: Math.min(a.c, b.c),
+    r1: Math.max(a.r, b.r),
+    c1: Math.max(a.c, b.c),
+  };
+}
+
+function rangeRef(range: CellRange): string {
+  const a = `${colLetter(range.c0)}${range.r0 + 1}`;
+  const b = `${colLetter(range.c1)}${range.r1 + 1}`;
+  return a === b ? a : `${a}:${b}`;
+}
+
+function inRange(range: CellRange, r: number, c: number): boolean {
+  return r >= range.r0 && r <= range.r1 && c >= range.c0 && c <= range.c1;
+}
+
 function WorkbookGrid({ sheet }: { sheet: NonNullable<PreviewPayload["sheets"]>[number] }) {
-  const [sel, setSel] = useState<{ r: number; c: number } | null>(null);
+  // anchor = last clicked cell; range = current selection (null → anchor only)
+  const [anchor, setAnchor] = useState<CellPos | null>(null);
+  const [range, setRange] = useState<CellRange | null>(null);
+  const dragging = useRef(false);
+  useEffect(() => {
+    const up = () => {
+      dragging.current = false;
+    };
+    window.addEventListener("mouseup", up);
+    return () => window.removeEventListener("mouseup", up);
+  }, []);
   const grid = sheet.grid;
   if (!grid) {
     // Legacy payload shape — plain value rows.
@@ -767,19 +847,47 @@ function WorkbookGrid({ sheet }: { sheet: NonNullable<PreviewPayload["sheets"]>[
   const stickyLeft = (c: number) => {
     if (c >= freezeCol) return {};
     let left = 40; // row-number gutter
-    for (let i = 0; i < c; i++) left += colPx(i) ?? 88;
+    for (let i = 0; i < c; i++) left += colPx(i) ?? 96;
     return { position: "sticky" as const, left, zIndex: 3 };
   };
 
   const cellAt = (r: number, c: number) => grid[r]?.[c] ?? null;
-  const selCell = sel ? cellAt(sel.r, sel.c) : null;
-  const selRef = sel ? `${colLetter(sel.c)}${sel.r + 1}` : "";
+  const selRange: CellRange | null = range ?? (anchor ? normRange(anchor, anchor) : null);
+  const selCell = anchor ? cellAt(anchor.r, anchor.c) : null;
+  const selRef = selRange ? rangeRef(selRange) : "";
 
+  // Excel-style status stats over the selection — numeric literals only;
+  // formula cells ("=…") are text here, never silently evaluated.
+  let statCount = 0;
+  let statSum = 0;
+  if (selRange) {
+    for (let r = selRange.r0; r <= selRange.r1; r++)
+      for (let c = selRange.c0; c <= selRange.c1; c++) {
+        const v = cellAt(r, c)?.v;
+        if (typeof v === "number") {
+          statCount++;
+          statSum += v;
+        }
+      }
+  }
+
+  const startDrag = (pos: CellPos, extend: boolean) => {
+    dragging.current = true;
+    if (extend && anchor) {
+      setRange(normRange(anchor, pos));
+    } else {
+      setAnchor(pos);
+      setRange(null);
+    }
+  };
+  const extendDrag = (pos: CellPos) => {
+    if (dragging.current && anchor) setRange(normRange(anchor, pos));
+  };
   return (
     <div>
-      {/* Formula bar — click a cell to inspect its raw content/formula. */}
+      {/* Formula bar — click/drag cells to inspect raw content/formulas. */}
       <div className="mb-1 flex items-center gap-2 rounded-[5px] border border-[var(--border)] bg-[var(--surface)] px-2 py-1">
-        <span className="w-14 shrink-0 truncate text-[11px] font-medium text-[var(--ink-3)]">
+        <span className="w-16 shrink-0 truncate text-[11px] font-medium text-[var(--ink-3)]">
           {selRef || "—"}
         </span>
         <span className="shrink-0 text-[11px] italic text-[var(--ink-3)]">fx</span>
@@ -788,12 +896,19 @@ function WorkbookGrid({ sheet }: { sheet: NonNullable<PreviewPayload["sheets"]>[
             ? typeof selCell.v === "string" && selCell.v.startsWith("=")
               ? selCell.v
               : String(selCell.v ?? "")
-            : sel
-              ? "(empty)"
-              : "Click a cell"}
+            : selRange && selRange.r0 !== selRange.r1 || (selRange && selRange.c0 !== selRange.c1)
+              ? `${rangeRef(selRange)} selected`
+              : anchor
+                ? "(empty)"
+                : "Click or drag cells"}
         </span>
       </div>
-      <div className="overflow-auto rounded-[5px] border border-[var(--border)]">
+      <div
+        className="overflow-auto rounded-[5px] border border-[var(--border)]"
+        onMouseLeave={() => {
+          dragging.current = false;
+        }}
+      >
       <table
         className="border-collapse text-[12px]"
         style={{ tableLayout: "fixed" }}
@@ -847,10 +962,22 @@ function WorkbookGrid({ sheet }: { sheet: NonNullable<PreviewPayload["sheets"]>[
                 const span = spans.get(key);
                 const st = cell?.s;
                 const isNum = typeof cell?.v === "number";
-                const isSel = sel?.r === r && sel?.c === c;
+                const isAnchor = anchor?.r === r && anchor?.c === c;
+                const inSel = selRange ? inRange(selRange, r, c) : false;
+                const isSingle =
+                  selRange &&
+                  selRange.r0 === selRange.r1 &&
+                  selRange.c0 === selRange.c1 &&
+                  inSel;
                 const style: CSSProperties = {
                   borderRight: "1px solid var(--border)",
                   ...(st?.f ? { backgroundColor: st.f } : {}),
+                  ...(inSel && !isSingle
+                    ? {
+                        backgroundImage:
+                          "linear-gradient(rgba(67, 120, 220, 0.10), rgba(67, 120, 220, 0.10))",
+                      }
+                    : {}),
                   ...(st?.c ? { color: st.c } : {}),
                   ...(st?.b ? { fontWeight: 600 } : {}),
                   ...(st?.i ? { fontStyle: "italic" } : {}),
@@ -864,7 +991,9 @@ function WorkbookGrid({ sheet }: { sheet: NonNullable<PreviewPayload["sheets"]>[
                   overflow: "hidden",
                   textOverflow: "ellipsis",
                   cursor: "cell",
-                  ...(isSel ? { outline: "2px solid var(--accent)", outlineOffset: -2 } : {}),
+                  ...(isAnchor || isSingle
+                    ? { outline: "2px solid var(--accent)", outlineOffset: -2 }
+                    : {}),
                   ...stickyTop(r),
                   ...stickyLeft(c),
                 };
@@ -873,14 +1002,18 @@ function WorkbookGrid({ sheet }: { sheet: NonNullable<PreviewPayload["sheets"]>[
                     key={c}
                     colSpan={span?.cs}
                     rowSpan={span?.rs}
-                    className="border-b border-[var(--border)] px-1.5 py-0.5 align-middle text-[var(--ink)]"
+                    className="border-b border-[var(--border)] px-1.5 py-0.5 align-middle text-[var(--ink)] select-none"
                     style={style}
                     title={
                       typeof cell?.v === "string" && cell.v.startsWith("=")
                         ? `formula: ${cell.v}`
                         : st?.n
                     }
-                    onClick={() => setSel({ r, c })}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      startDrag({ r, c }, e.shiftKey);
+                    }}
+                    onMouseEnter={() => extendDrag({ r, c })}
                   >
                     {cell ? formatCellValue(cell.v, st?.n) : ""}
                   </td>
@@ -899,7 +1032,12 @@ function WorkbookGrid({ sheet }: { sheet: NonNullable<PreviewPayload["sheets"]>[
             ? ` (of ${sheet.row_count}×${sheet.col_count ?? "?"})`
             : ""}
         </span>
-        <span>formulas not recalculated</span>
+        <span>
+          {selRange &&
+          (selRange.r0 !== selRange.r1 || selRange.c0 !== selRange.c1)
+            ? `Count: ${statCount}  Sum: ${statSum % 1 === 0 ? statSum : statSum.toFixed(2)}  Avg: ${statCount ? (statSum / statCount).toFixed(2) : "—"}`
+            : "formulas not recalculated"}
+        </span>
       </div>
     </div>
   );
@@ -914,6 +1052,15 @@ function WorkbookView({
 }) {
   const sheets = payload.sheets || [];
   const [selected, setSelected] = useState(0);
+  // Zoom persists per rendered-bytes identity, same contract as slides.
+  const viewKey = viewStateKey(payload);
+  const [zoom, setZoom] = useState(() => readView(viewKey, "zoom", 1));
+  useEffect(() => {
+    setZoom(readView(viewKey, "zoom", 1));
+  }, [viewKey]);
+  useEffect(() => {
+    writeView(viewKey, "zoom", zoom);
+  }, [viewKey, zoom]);
   const current = Math.min(selected, Math.max(0, sheets.length - 1));
   const sheet = sheets[current];
   useEffect(() => {
@@ -930,7 +1077,8 @@ function WorkbookView({
     : [];
   return (
     <div>
-      <div className="mb-2 flex gap-1 overflow-x-auto pb-1">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto pb-1">
         {sheets.map((s, i) => (
           <button
             key={i}
@@ -946,9 +1094,36 @@ function WorkbookView({
             {s.name}
           </button>
         ))}
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            onClick={() => setZoom((z) => Math.max(0.5, Math.round((z - 0.25) * 100) / 100))}
+            disabled={zoom <= 0.5}
+            className="rounded-[4px] border border-[var(--border)] p-1 transition-colors hover:bg-[var(--surface)] disabled:opacity-40"
+            aria-label="Zoom out"
+          >
+            <ZoomOut className="h-3.5 w-3.5" />
+          </button>
+          <span className="w-9 text-center font-mono text-[11px]">{Math.round(zoom * 100)}%</span>
+          <button
+            onClick={() => setZoom((z) => Math.min(2, Math.round((z + 0.25) * 100) / 100))}
+            disabled={zoom >= 2}
+            className="rounded-[4px] border border-[var(--border)] p-1 transition-colors hover:bg-[var(--surface)] disabled:opacity-40"
+            aria-label="Zoom in"
+          >
+            <ZoomIn className="h-3.5 w-3.5" />
+          </button>
+          <button
+            onClick={() => setZoom(1)}
+            disabled={zoom === 1}
+            className="rounded-[4px] border border-[var(--border)] px-1.5 py-1 text-[11px] transition-colors hover:bg-[var(--surface)] disabled:opacity-40"
+          >
+            Fit
+          </button>
+        </div>
       </div>
       {sheet && (
-        <>
+        <div style={{ zoom } as CSSProperties}>
           {featBits.length > 0 && (
             <p className="mb-2 text-[11px] text-[var(--ink-3)]">
               Contains {featBits.join(", ")} — shown as cell data; objects are not rendered.
@@ -956,7 +1131,7 @@ function WorkbookView({
           )}
           <WorkbookGrid sheet={sheet} />
           {sheet.truncated && <TruncatedFlag />}
-        </>
+        </div>
       )}
       {payload.formulas_recalculated === false && (
         <p className="mt-2 text-[11px] text-[var(--ink-3)]">
