@@ -14,26 +14,60 @@ Exact shapes accepted by `artifact_create` (`spec`) and `artifact_revise` (`ops`
     {"type": "paragraph", "text": "Body text."},
     {"type": "list", "items": ["First", "Second"], "style": "bullet"},
     {"type": "table", "header": ["Name", "Owner"], "rows": [["API", "Ana"], ["UI", "Bo"]]},
-    {"type": "image", "path": "attachments/diagram.png", "width_inches": 5},
+    {"type": "image", "path": "attachments/diagram.png", "fit": {"width": 6, "height": 3}},
+    {"type": "caption", "text": "Figure 1: architecture overview"},
     {"type": "page_break"}
-  ]
+  ],
+  "header": {"text": "Internal draft", "align": "center"},
+  "footer": {"page_numbers": true, "total_pages": true, "align": "center"},
+  "page": {"size": "a4", "margins": {"top": 0.8, "bottom": 0.8, "left": 1.0, "right": 1.0}},
+  "styles": {
+    "title": {"font": "Georgia", "size": 28, "color": "#1c1917"},
+    "heading": {"font": "Georgia", "size": 18, "color": "#3f6212", "space_after": 8},
+    "h1": {"size": 24},
+    "body": {"font": "Aptos", "size": 11, "line_spacing": 1.25},
+    "list": {"space_after": 4},
+    "caption": {"size": 9, "color": "#666666", "italic": true},
+    "table": {"size": 9, "color": "#333333"}
+  }
 }
 ```
 
 - `list.style`: `"bullet"` (default) or `"number"`.
-- `image.path` is workspace-relative; `width_inches` defaults to 4.
+- `image.path` is workspace-relative. Sizing takes **at most one** of `width_inches` (default 4), `height_inches`, or `fit: {"width": w, "height": h}` which scales the image to fit the box preserving aspect ratio. Max 20 inches.
+- `caption` is a small figure/table caption line; place it right after the `image` or `table` block it describes.
+- `cover`: `{"type": "cover", "title": "...", "subtitle": "..."}` renders a title page and a following page break. When a cover block exists, the spec-level `title` is rendered on the cover instead of as a heading.
+- `section_break`: `{"type": "section_break", "header": {...}, "footer": {...}, "page": {...}}` starts a new Word section (new page). Sections without overrides inherit the previous section's header/footer/page setup. `header`/`footer`/`page` accept the same shapes as the spec-level keys.
+- `header`/`footer` (spec-level or per section): `text` (plain string), `align` (`left`/`center`/`right`), `page_numbers` and `total_pages` (booleans adding live PAGE/NUMPAGES fields — Word calculates real numbers on open; the stored value is a placeholder).
+- `table` extras: `column_widths` (list of widths in inches, 0.2–10, disables autofit) and `repeat_header: true` (header row repeats on every printed page the table spans).
+- Flow control on `heading`/`paragraph`/`caption`/`list`/`table`/`image`/`cover`: `keep_with_next: true` keeps the block on the same page as the following one; `page_break_before: true` forces a page break. On `list`, keep applies between items and page-break-before applies to the first item.
+- `page` is optional. `size` is `"letter"` (default), `"legal"`, or `"a4"`; `margins` takes `top`/`bottom`/`left`/`right` in inches (0.3–2.5, default 1).
+- `styles` is optional; omitted fields keep the document's built-in defaults. Roles: `title`, `heading` (all levels), `h1`–`h6` (per-level overrides), `body`, `list`, `caption`, `table`. Per style: `font` (name), `size` (points, 6–96), `color` (`#RRGGBB`), `bold`, `italic`, `space_before`/`space_after` (points, 0–72), `line_spacing` (0.8–3). `table` applies font/size/color to cells and always bolds the header row; it does not support spacing keys.
+- Styles edit the document's named Word styles, so the output stays fully editable in Word.
+- `template` (optional): `"memo"`, `"report"`, or `"letter"` — a named preset for page setup and core styles. Explicit `page`/`styles` keys override template values per-key. The template name is recorded in the file's subject property.
+- Every content block accepts an optional `"id"` (1–36 chars, letter then letters/digits/`_`/`-`). Blocks without one get `b0`, `b1`, … in spec order. Ids are stored as Word bookmarks inside the `.docx`, so they survive save/reopen and revisions — use them for targeted edits instead of paragraph indexes.
 
 **Revise ops**
 
 ```json
 [
   {"op": "append_blocks", "blocks": [{"type": "paragraph", "text": "New closing paragraph."}]},
+  {"op": "insert_blocks", "after": "summary", "blocks": [{"type": "paragraph", "text": "Inserted."}]},
+  {"op": "replace_paragraph", "block": "summary", "text": "Replacement text."},
   {"op": "replace_paragraph", "index": 3, "text": "Replacement text."},
+  {"op": "remove_block", "block": "b2"},
+  {"op": "style_block", "block": "summary", "bold": true, "color": "#3f6212"},
+  {"op": "set_cell", "table": "slo", "row": 1, "col": 2, "text": "Done"},
   {"op": "set_cell", "table": 0, "row": 1, "col": 2, "text": "Done"}
 ]
 ```
 
+- `replace_paragraph` and `set_cell` accept either a stable `"block"`/`"table"` id (from `artifact_inspect` → `structure.blocks[].id`) or a zero-based index. Ids survive reorders and unrelated edits; indexes do not.
+- `insert_blocks` positions with `"after": "<id>"`, `"before": "<id>"`, or `"position": "start"|"end"` (default end). `section_break` blocks cannot be inserted mid-document.
+- `remove_block` deletes everything a block spans — a list removes all its items, a table removes the whole table.
+- `style_block` applies run formatting (`bold`, `italic`, `size` 6–96pt, `color` #RRGGBB, `font`) plus `keep_with_next`/`page_break_before` to every paragraph in the block, including table cells.
 - `index`, `table`, `row`, `col` are zero-based. Paragraph indexes count every paragraph, headings included — confirm positions with `artifact_inspect` (or `read_file`) before replacing.
+- `replace_paragraph` replaces the whole paragraph as plain text: run-level formatting inside it is lost (paragraph style and block id are preserved). Use `style_block` afterwards if formatting is needed. `set_cell` likewise replaces cell text.
 
 ## PDF (`.pdf`)
 
