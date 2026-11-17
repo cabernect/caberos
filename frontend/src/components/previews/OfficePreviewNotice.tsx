@@ -3,7 +3,7 @@ import type { PreviewPayload } from "@/lib/types";
 
 const messages: Partial<Record<PreviewPayload["kind"], string>> = {
   slides:
-    "Layout, fonts, animations, and some elements may differ from PowerPoint or be omitted.",
+    "Extracted slide content, not the PowerPoint layout. Design and animations are not rendered; some elements may be omitted.",
   document:
     "Page layout, fonts, fields, and some content may differ from Word or be omitted.",
   workbook:

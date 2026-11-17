@@ -7,7 +7,7 @@
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
     "beforeDevCommand": "bash ../scripts/desktop-dev.sh",
-    "beforeBuildCommand": "node ../scripts/build-gateway.mjs && npm run build"
+    "beforeBuildCommand": "npm run build && node ../scripts/build-gateway.mjs"
   },
   "app": {
     "windows": [

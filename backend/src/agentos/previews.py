@@ -33,7 +33,7 @@ PDF_PAGE_SCALE = 1.5
 
 # Bump when extraction/render semantics change so caches and consumers can
 # tell which preview implementation produced a payload.
-PREVIEW_VERSION = "2026-11"
+PREVIEW_VERSION = "2026-11-deck-motion-v1"
 
 # Office packages are ZIPs — the input cap bounds compressed bytes, but a
 # small archive can expand without limit inside the Office parsers. Bound
@@ -60,6 +60,7 @@ _CODE = {
     ".tsx": "tsx",
     ".css": "css",
     ".html": "html",
+    ".htm": "html",
     ".xml": "xml",
     ".yaml": "yaml",
     ".yml": "yaml",
@@ -108,6 +109,8 @@ _MIME_OVERRIDES = {
 
 def classify(name: str) -> str:
     """Filename → preview kind."""
+    if name.lower().endswith(".deck.json"):
+        return "deck"
     suffix = Path(name).suffix.lower()
     if suffix in _MARKDOWN:
         return "markdown"
@@ -160,14 +163,66 @@ def preview_bytes(data: bytes, name: str) -> dict:
     if size > PREVIEW_MAX_BYTES:
         return {**base, "kind": "unknown", "too_large": True, "mime": media_type(name)}
 
-    if name.lower().endswith(".html"):
-        # Admitted CaberOS decks get the isolated player; every other .html
-        # stays a static source view — .html alone is never a trust signal.
-        from .artifacts.formats import html as _deck
+    if kind == "deck":
+        # Canonical presentation source — the panel renders the spec
+        # directly; there is no generated-HTML admission step anymore.
+        import json as _json
 
-        deck_info = _deck.admission(data)
-        if deck_info is not None:
-            return {**base, "kind": "deck", "deck": deck_info}
+        from .artifacts.deck_spec import normalize as _norm_deck
+
+        text = data.decode("utf-8", errors="replace")
+        try:
+            raw = _json.loads(text)
+            spec = _norm_deck(raw)
+        except (ValueError, TypeError):
+            spec = None
+        if spec is None:
+            return {
+                **base,
+                "kind": "code",
+                "content": text[:TEXT_CHARS],
+                "truncated": len(text) > TEXT_CHARS,
+                "language": "json",
+            }
+        assets = raw.get("assets") or []
+        # Image snapshots are needed to render slides, but a deck can pin
+        # tens of MB — strip the payload past a sane preview budget and
+        # flag it rather than shipping a multi-MB JSON response.
+        encoded = sum(len(str(a.get("data_uri", ""))) for a in assets)
+        if encoded > 8 * 1024 * 1024:
+            assets = [
+                {k: v for k, v in a.items() if k != "data_uri"} | {"data_uri": ""} for a in assets
+            ]
+            spec["assets_truncated"] = True
+        spec["assets"] = assets
+        return {
+            **base,
+            "kind": "deck",
+            "spec": spec,
+            # Raw source for the panel's Source view — like every other
+            # text kind, capped at TEXT_CHARS (embedded image snapshots
+            # can push past it; `truncated` says so honestly).
+            "content": text[:TEXT_CHARS],
+            "truncated": len(text) > TEXT_CHARS,
+            "language": "json",
+        }
+
+    if name.lower().endswith((".html", ".htm")):
+        # Ordinary HTML is a static page preview — scripts, navigation and
+        # external/local asset loading are disabled by sanitizer + CSP.
+        from .html_preview import static_html_document
+
+        text = data.decode("utf-8", errors="replace")
+        truncated = len(text) > TEXT_CHARS
+        return {
+            **base,
+            "kind": "html",
+            "content": text[:TEXT_CHARS],
+            "language": "html",
+            "truncated": truncated,
+            # Never render a cut-off HTML token as if it were a complete page.
+            "html_document": None if truncated else static_html_document(text),
+        }
 
     if kind in ("markdown", "code", "text"):
         text = data.decode("utf-8", errors="replace")

@@ -1,10 +1,14 @@
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { ChevronLeft, ChevronRight, FileWarning, Loader2, Maximize2, Minimize2, ZoomIn, ZoomOut } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { createPortal, flushSync } from "react-dom";
+import { ChevronLeft, ChevronRight, FileWarning, Loader2, Presentation, X, ZoomIn, ZoomOut } from "lucide-react";
 import type { PreviewBackend, PreviewSource } from "@/lib/api";
-import type { PreviewElement, PreviewPayload } from "@/lib/types";
+import type { DeckBlock, DeckEffect, DeckSlide, DeckSpec, PreviewElement, PreviewPayload } from "@/lib/types";
 import { Markdown } from "@/components/Markdown";
 import { readView, viewStateKey, writeView } from "./viewState";
 import { useObjectUrl } from "./useObjectUrl";
+import { DeckChart } from "./DeckChart";
+import { DeckMotion } from "./deckMotion";
+import { revealSteps, useReducedMotion } from "./deckPlayback";
 
 export function formatBytes(size: number): string {
   if (size < 1024) return `${size} B`;
@@ -35,6 +39,8 @@ export function PreviewBody({
   switch (payload.kind) {
     case "markdown":
       return <MarkdownView content={payload.content || ""} truncated={payload.truncated} />;
+    case "html":
+      return <HtmlView key={source.revisionId || source.path} payload={payload} />;
     case "code":
     case "json":
     case "text":
@@ -65,7 +71,7 @@ export function PreviewBody({
     case "workbook":
       return <WorkbookView payload={payload} onFocus={onFocus} />;
     case "deck":
-      return <DeckView payload={payload} backend={backend} source={source} onFocus={onFocus} />;
+      return <DeckView payload={payload} source={source} onFocus={onFocus} />;
     case "media":
       return (
         <MediaView backend={backend} source={source} media={payload.media || "audio"} expanded={expanded} />
@@ -92,28 +98,58 @@ function TruncatedFlag() {
   );
 }
 
-function MarkdownView({ content, truncated }: { content: string; truncated?: boolean }) {
-  const [showSource, setShowSource] = useState(false);
+/** Shared Rendered/Source-style toggle — every kind that offers a source
+ *  view uses this so the control looks and behaves identically. */
+function ModeToggle({
+  value,
+  options,
+  disabledOptions,
+  onChange,
+}: {
+  value: string;
+  options: readonly string[];
+  disabledOptions?: readonly string[];
+  onChange: (mode: string) => void;
+}) {
   return (
-    <div>
-      <div className="mb-2 flex gap-1 text-[11px]">
-        {(["rendered", "source"] as const).map((m) => (
+    <div className="flex shrink-0 gap-1 text-[11px]">
+      {options.map((m) => {
+        const active = m === value;
+        const disabled = disabledOptions?.includes(m) ?? false;
+        return (
           <button
             key={m}
-            onClick={() => setShowSource(m === "source")}
-            className="rounded-[4px] px-2 py-0.5 capitalize transition-colors"
+            onClick={() => onChange(m)}
+            aria-pressed={active}
+            disabled={disabled}
+            className="rounded-[4px] border px-2 py-1 transition-colors disabled:opacity-40"
             style={{
-              background: (m === "source") === showSource ? "var(--accent)" : "var(--surface)",
-              color: (m === "source") === showSource ? "var(--white)" : "var(--ink-2)",
-              border: "1px solid var(--border)",
+              borderColor: "var(--border)",
+              background: active ? "var(--accent)" : "var(--surface)",
+              color: active ? "var(--white)" : "var(--ink-2)",
               cursor: "pointer",
             }}
           >
             {m}
           </button>
-        ))}
+        );
+      })}
+    </div>
+  );
+}
+
+function MarkdownView({ content, truncated }: { content: string; truncated?: boolean }) {
+  const [mode, setMode] = useState("Rendered");
+  return (
+    <div>
+      <div className="mb-2">
+        <ModeToggle
+          value={mode}
+          options={["Rendered", "Source"]}
+          onChange={setMode}
+        />
       </div>
-      {showSource ? (
+      {mode === "Source" ? (
         <pre className="overflow-auto whitespace-pre-wrap font-mono text-[12px] leading-[1.6] text-[var(--ink)]">
           {content}
         </pre>
@@ -123,6 +159,39 @@ function MarkdownView({ content, truncated }: { content: string; truncated?: boo
         </div>
       )}
       {truncated && <TruncatedFlag />}
+    </div>
+  );
+}
+
+function HtmlView({ payload }: { payload: PreviewPayload }) {
+  const [mode, setMode] = useState("Rendered");
+  const rendered = mode === "Rendered" && !!payload.html_document;
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="shrink-0 pb-2">
+        <ModeToggle
+          value={rendered ? "Rendered" : "Source"}
+          options={["Rendered", "Source"]}
+          disabledOptions={payload.html_document ? undefined : ["Rendered"]}
+          onChange={setMode}
+        />
+      </div>
+      <p className="shrink-0 pb-2 text-[11px] text-[var(--ink-3)]">
+        Static HTML preview. Scripts, links, forms, and external/local asset loading are disabled.
+      </p>
+      {rendered ? (
+        <iframe
+          title={`HTML preview: ${payload.name}`}
+          srcDoc={payload.html_document!}
+          sandbox=""
+          referrerPolicy="no-referrer"
+          className="min-h-0 w-full flex-1 border-0 bg-white"
+        />
+      ) : (
+        <div className="min-h-0 flex-1 overflow-auto">
+          <TextView content={payload.content || ""} language="html" truncated={payload.truncated} />
+        </div>
+      )}
     </div>
   );
 }
@@ -425,6 +494,13 @@ function SlidesView({
   // Clamp at render — a source swap can leave `selected` past the end.
   const current = Math.min(selected, Math.max(0, count - 1));
   const slide = slides[current];
+  const content = slide?.elements.filter((el) => el.type !== "notes") ?? [];
+  const notes = slide?.elements.filter((el) => el.type === "notes") ?? [];
+  const aspectRatio =
+    payload.slide_width && payload.slide_width > 0 &&
+    payload.slide_height && payload.slide_height > 0
+      ? `${payload.slide_width} / ${payload.slide_height}`
+      : "16 / 9";
   // Re-key on source-identity change must run before the writers below —
   // otherwise a stale index/zoom lands under the new key first.
   useEffect(() => {
@@ -454,58 +530,45 @@ function SlidesView({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [count]);
-  // Frame the wireframe at the deck's real aspect — a 4:3 file reads
-  // visibly different from a 16:9 one; overflow scrolls inside the frame.
-  const aspect =
-    payload.slide_width && payload.slide_height
-      ? `${payload.slide_width} / ${payload.slide_height}`
-      : undefined;
   return (
-    <div>
-      <div className="mb-2 flex gap-1 overflow-x-auto pb-1">
-        {slides.map((s, i) => (
-          <button
-            key={i}
-            onClick={() => setSelected(i)}
-            className="shrink-0 rounded-[4px] border px-2 py-1 text-[11px] transition-colors"
-            style={{
-              borderColor: i === current ? "var(--accent)" : "var(--border)",
-              background: i === current ? "var(--surface)" : "transparent",
-              color: i === current ? "var(--ink)" : "var(--ink-2)",
-              cursor: "pointer",
-            }}
-          >
-            {i + 1}. {s.title || "Slide"}
-          </button>
-        ))}
-      </div>
+    <div className="min-w-0">
       {count > 0 && (
-        <div className="mb-2 flex items-center justify-between gap-2 text-[11px] text-[var(--ink-3)]">
-          {count > 1 ? (
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setSelected((s) => Math.max(0, Math.min(s, count - 1) - 1))}
-                disabled={current <= 0}
-                className="rounded-[4px] border border-[var(--border)] p-1 transition-colors hover:bg-[var(--surface)] disabled:opacity-40"
-                aria-label="Previous slide"
-              >
-                <ChevronLeft className="h-3.5 w-3.5" />
-              </button>
-              <span className="font-mono">
-                {current + 1} / {count}
-              </span>
-              <button
-                onClick={() => setSelected((s) => Math.min(count - 1, Math.min(s, count - 1) + 1))}
-                disabled={current >= count - 1}
-                className="rounded-[4px] border border-[var(--border)] p-1 transition-colors hover:bg-[var(--surface)] disabled:opacity-40"
-                aria-label="Next slide"
-              >
-                <ChevronRight className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          ) : (
-            <span />
-          )}
+        <select
+          aria-label="Go to slide"
+          value={current}
+          onChange={(e) => setSelected(Number(e.target.value))}
+          className="mb-2 h-8 w-full min-w-0 truncate rounded-[4px] border border-[var(--border)] bg-[var(--surface)] px-2 text-[12px] text-[var(--ink)] focus-visible:outline focus-visible:outline-[var(--accent)]"
+        >
+          {slides.map((s, i) => (
+            <option key={i} value={i}>
+              {i + 1}. {s.title || "Untitled slide"}
+            </option>
+          ))}
+        </select>
+      )}
+      {count > 0 && (
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-[11px] text-[var(--ink-3)]">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setSelected((s) => Math.max(0, Math.min(s, count - 1) - 1))}
+              disabled={current <= 0}
+              className="rounded-[4px] border border-[var(--border)] p-1 transition-colors hover:bg-[var(--surface)] disabled:opacity-40"
+              aria-label="Previous slide"
+            >
+              <ChevronLeft className="h-3.5 w-3.5" />
+            </button>
+            <span aria-live="polite" className="font-mono tabular-nums">
+              {current + 1} / {count}
+            </span>
+            <button
+              onClick={() => setSelected((s) => Math.min(count - 1, Math.min(s, count - 1) + 1))}
+              disabled={current >= count - 1}
+              className="rounded-[4px] border border-[var(--border)] p-1 transition-colors hover:bg-[var(--surface)] disabled:opacity-40"
+              aria-label="Next slide"
+            >
+              <ChevronRight className="h-3.5 w-3.5" />
+            </button>
+          </div>
           <div className="flex items-center gap-1">
             <button
               onClick={() => setZoom((z) => Math.max(0.5, Math.round((z - 0.25) * 100) / 100))}
@@ -535,18 +598,54 @@ function SlidesView({
         </div>
       )}
       {slide && (
-        <div style={{ zoom } as CSSProperties}>
-          <div
-            className="rounded-[5px] border border-[var(--border)] bg-[var(--surface)]/40 p-3"
-            style={aspect ? { aspectRatio: aspect, overflowY: "auto" } : undefined}
+        <>
+          <section
+            aria-label={`Slide ${current + 1} content`}
+            className="relative w-full overflow-hidden rounded-[5px] border border-[var(--border)] bg-[var(--white)]"
+            style={{ aspectRatio }}
           >
-            {slide.title && (
-              <div className="mb-2 text-[15px] font-semibold text-[var(--ink)]">{slide.title}</div>
-            )}
-            <ElementsView elements={slide.elements} />
-          </div>
-        </div>
+            {/* Keep content and zoom from changing the slide frame's size. */}
+            <div
+              key={`${viewKey}:${current}`}
+              tabIndex={0}
+              aria-label="Scrollable slide content"
+              className="absolute inset-0 overflow-auto focus-visible:outline focus-visible:outline-[var(--accent)] focus-visible:-outline-offset-2"
+            >
+              <div className="p-5 sm:p-6" style={{ zoom } as CSSProperties}>
+                <p className="mb-3 text-[10px] font-medium uppercase tracking-widest text-[var(--ink-3)]">
+                  Slide {current + 1} · Extracted content
+                </p>
+                <h2 className="mb-4 break-words text-[20px] font-semibold leading-snug text-[var(--ink)]">
+                  {slide.title || "Untitled slide"}
+                </h2>
+                {content.length ? (
+                  <div className="break-words leading-relaxed">
+                    <ElementsView elements={content} />
+                  </div>
+                ) : (
+                  <p className="text-[12px] text-[var(--ink-3)]">No extractable body content on this slide.</p>
+                )}
+              </div>
+            </div>
+          </section>
+          {notes.length > 0 && (
+            <details
+              key={`${viewKey}:${current}`}
+              className="mt-3 rounded-[5px] border border-[var(--border)] text-[12px] text-[var(--ink-2)]"
+            >
+              <summary className="cursor-pointer rounded-[5px] px-3 py-2 font-medium hover:bg-[var(--surface)]">
+                Speaker notes
+              </summary>
+              <div className="space-y-2 border-t border-[var(--border)] px-3 py-3">
+                {notes.map((note, i) => (
+                  <p key={i} className="whitespace-pre-wrap break-words leading-relaxed">{note.text}</p>
+                ))}
+              </div>
+            </details>
+          )}
+        </>
       )}
+      {!count && <Note text="No slides to preview." />}
     </div>
   );
 }
@@ -599,180 +698,545 @@ function WorkbookView({
   );
 }
 
-/** Isolated deck player — sandboxed iframe (allow-scripts, NO
- *  allow-same-origin) over the admitted /workspace/deck endpoint. Platform
- *  chrome lives outside the frame; the deck runtime reports state and
- *  accepts index-only nav messages through a schema-checked bridge. */
+/** Presentation spec renderer — .deck.json slides drawn directly in React
+ *  at a fixed 1280×720 design size, scaled to fit. No iframe, no generated
+ *  HTML: the same normalized spec feeds the native PPTX export, so what the
+ *  operator sees and what downloads share one source of truth. */
+
+const DECK_W = 1280;
+const DECK_H = 720;
+const DECK_FONTS: Record<string, string> = {
+  sans: 'system-ui, -apple-system, "Segoe UI", sans-serif',
+  serif: 'Georgia, "Times New Roman", serif',
+  mono: 'ui-monospace, "SF Mono", Menlo, monospace',
+};
+
+function DeckBlockView({
+  block,
+  spec,
+  color,
+  visibleItems,
+  effect,
+}: {
+  block: DeckBlock;
+  spec: DeckSpec;
+  color: string;
+  visibleItems?: number;
+  effect?: DeckEffect;
+}) {
+  const base = { color, fontFamily: "inherit" } as const;
+  switch (block.type) {
+    case "chart":
+      return <DeckChart block={block} />;
+    case "heading":
+      return (
+        <div style={{ ...base, fontSize: 26, fontWeight: 700, margin: "10px 0 4px" }}>
+          {String(block.text ?? "")}
+        </div>
+      );
+    case "paragraph":
+      return (
+        <div style={{ ...base, fontSize: 19, lineHeight: 1.5, margin: "8px 0", whiteSpace: "pre-wrap" }}>
+          {String(block.text ?? "")}
+        </div>
+      );
+    case "bullets":
+      return (
+        <ul style={{ ...base, fontSize: 19, lineHeight: 1.55, margin: "8px 0", paddingLeft: 34 }}>
+          {(block.items ?? []).map((item, i) => (
+            <li key={i} style={{ margin: "5px 0", visibility: i < (visibleItems ?? Infinity) ? undefined : "hidden" }}>
+              <DeckMotion visible={i < (visibleItems ?? Infinity)} effect={effect}>
+                {String(item)}
+              </DeckMotion>
+            </li>
+          ))}
+        </ul>
+      );
+    case "table": {
+      const rows = (block.rows ?? []) as unknown[][];
+      if (!rows.length) return null;
+      const cols = Math.max(...rows.map((r) => r.length));
+      return (
+        <table
+          style={{
+            ...base,
+            fontSize: 17,
+            borderCollapse: "collapse",
+            margin: "10px 0",
+            width: "100%",
+          }}
+        >
+          <tbody>
+            {rows.map((row, r) => (
+              <tr key={r}>
+                {Array.from({ length: cols }, (_, c) => (
+                  <td
+                    key={c}
+                    style={{
+                      border: "1px solid rgba(128,128,128,0.35)",
+                      padding: "7px 10px",
+                      background: r === 0 ? "var(--accent, #315c73)" : "transparent",
+                      color: r === 0 ? "#fff" : color,
+                      fontWeight: r === 0 ? 600 : 400,
+                    }}
+                  >
+                    {String(row[c] ?? "")}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      );
+    }
+    case "image": {
+      const src = String(block.src ?? "");
+      const uri =
+        src.startsWith("data:") ? src : spec.assets?.find((a) => a.path === src)?.data_uri;
+      if (!uri) {
+        return (
+          <div
+            style={{
+              ...base,
+              fontSize: 16,
+              border: "1px dashed rgba(128,128,128,0.5)",
+              borderRadius: 8,
+              padding: 18,
+              margin: "10px 0",
+              textAlign: "center",
+              opacity: 0.7,
+            }}
+          >
+            {block.alt ? `${block.alt} — ` : ""}image unavailable in this preview
+          </div>
+        );
+      }
+      return (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={uri}
+          alt={String(block.alt ?? "")}
+          style={{ maxWidth: "100%", maxHeight: 340, objectFit: "contain", margin: "10px 0", display: "block" }}
+        />
+      );
+    }
+    case "divider":
+      return <hr style={{ border: "none", borderTop: `3px solid var(--accent, #315c73)`, width: 120, margin: "18px 0" }} />;
+    default:
+      return (
+        <div style={{ ...base, fontSize: 17, fontStyle: "italic", opacity: 0.7, margin: "8px 0" }}>
+          [{block.type}]
+        </div>
+      );
+  }
+}
+
+export function DeckSlideCanvas({ slide, spec, revealed = Infinity, animate = false }: {
+  slide: DeckSlide; spec: DeckSpec; revealed?: number; animate?: boolean;
+}) {
+  const theme = spec.theme ?? {};
+  const background = theme.background ?? "#ffffff";
+  const accent = theme.accent ?? "#3f6212";
+  const color = theme.text ?? "#1c1917";
+  const font = DECK_FONTS[theme.font ?? "sans"] ?? DECK_FONTS.sans;
+  const layout = slide.layout ?? "content";
+  const centered = layout === "title" || layout === "section";
+  const blocks = slide.blocks ?? [];
+  const cssVars = { "--accent": accent } as CSSProperties;
+  const steps = revealSteps(slide);
+
+  const blockList = (list: typeof blocks) => (
+    <>
+      {list.map((b) => {
+        const step = steps.blocks[blocks.indexOf(b)];
+        const itemwise = b.reveal === "items";
+        const effect = animate ? b.animation ?? spec.motion?.entrance ?? (b.reveal ? { type: "fade" as const } : undefined) : undefined;
+        return (
+          <DeckMotion
+            key={b.id ?? blocks.indexOf(b)}
+            visible={itemwise || !step.count || revealed > step.start}
+            effect={itemwise ? undefined : effect}
+          >
+            <div data-block={b.id}>
+            <DeckBlockView
+              block={b}
+              spec={spec}
+              color={color}
+              visibleItems={itemwise ? Math.max(0, revealed - step.start) : undefined}
+              effect={itemwise ? effect : undefined}
+            />
+            </div>
+          </DeckMotion>
+        );
+      })}
+    </>
+  );
+
+  return (
+    <div
+      className="relative overflow-hidden"
+      style={{
+        width: DECK_W,
+        height: DECK_H,
+        background,
+        color,
+        fontFamily: font,
+        ...cssVars,
+      }}
+    >
+      {centered ? (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            textAlign: "center",
+            padding: "0 120px",
+          }}
+        >
+          {slide.title && (
+            <div style={{ fontSize: layout === "section" ? 52 : 44, fontWeight: 800, lineHeight: 1.15, marginBottom: 28 }}>
+              {slide.title}
+            </div>
+          )}
+          <div style={{ maxWidth: 900 }}>{blockList(blocks)}</div>
+        </div>
+      ) : layout === "two_content" ? (
+        <>
+          {slide.title && (
+            <div style={{ position: "absolute", top: 36, left: 64, right: 64, fontSize: 34, fontWeight: 700 }}>
+              {slide.title}
+            </div>
+          )}
+          <div style={{ position: "absolute", top: slide.title ? 110 : 48, bottom: 48, left: 64, right: 64, display: "flex", gap: 48 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>{blockList(blocks.filter((b) => (b.column ?? 0) !== 1))}</div>
+            <div style={{ flex: 1, minWidth: 0 }}>{blockList(blocks.filter((b) => b.column === 1))}</div>
+          </div>
+        </>
+      ) : (
+        <>
+          {slide.title && (
+            <>
+              <div style={{ position: "absolute", top: 40, left: 64, right: 64, fontSize: 34, fontWeight: 700 }}>
+                {slide.title}
+              </div>
+              <div style={{ position: "absolute", top: 108, left: 64, width: 90, height: 5, background: accent }} />
+            </>
+          )}
+          <div
+            style={{
+              position: "absolute",
+              top: slide.title ? 150 : 56,
+              bottom: 48,
+              left: 64,
+              right: 64,
+              overflow: "hidden",
+            }}
+          >
+            {blockList(blocks)}
+          </div>
+        </>
+      )}
+      <div style={{ position: "absolute", bottom: 14, left: 64, fontSize: 12, opacity: 0.55 }}>
+        {spec.title}
+      </div>
+    </div>
+  );
+}
+
+function DeckStage({ slide, spec, presenting = false, revealed = Infinity, reduced = false, reverse = false, onAdvance }: {
+  slide: DeckSlide;
+  spec: DeckSpec;
+  presenting?: boolean;
+  revealed?: number;
+  reduced?: boolean;
+  reverse?: boolean;
+  onAdvance?: () => void;
+}) {
+  const stageRef = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(0.5);
+
+  useEffect(() => {
+    const el = stageRef.current;
+    if (!el) return;
+    const fit = () => {
+      if (el.clientWidth && el.clientHeight) {
+        setScale(Math.min(el.clientWidth / DECK_W, el.clientHeight / DECK_H));
+      }
+    };
+    fit();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(fit);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  return (
+    <div
+      ref={stageRef}
+      className={`relative flex min-h-0 flex-1 items-center justify-center overflow-hidden ${
+        presenting ? "bg-black" : "rounded-[5px] border border-[var(--border)] bg-[var(--surface-2)]"
+      }`}
+    >
+      <div style={{ width: DECK_W * scale, height: DECK_H * scale, flexShrink: 0 }}>
+        <div style={{ width: DECK_W, height: DECK_H, transform: `scale(${scale})`, transformOrigin: "top left" }}>
+          <DeckMotion
+            key={slide.id}
+            effect={presenting && !reduced ? slide.transition ?? spec.motion?.transition : undefined}
+            reverse={reverse}
+          >
+            <DeckSlideCanvas slide={slide} spec={spec} revealed={revealed} animate={presenting && !reduced} />
+          </DeckMotion>
+        </div>
+      </div>
+      {onAdvance && (
+        <button
+          type="button"
+          aria-label="Advance presentation"
+          className="absolute inset-0 cursor-pointer focus-visible:outline focus-visible:outline-white"
+          onClick={onAdvance}
+        />
+      )}
+    </div>
+  );
+}
+
+function DeckSlideshow({ spec, index: initialIndex, rootRef, onSelect, onExit }: {
+  spec: DeckSpec;
+  index: number;
+  rootRef: RefObject<HTMLDivElement | null>;
+  onSelect: (index: number) => void;
+  onExit: () => void;
+}) {
+  const count = spec.slides.length;
+  const [playback, setPlayback] = useState({ index: initialIndex, step: 0, reverse: false });
+  const index = Math.min(playback.index, count - 1);
+  const { step } = playback;
+  const reduced = useReducedMotion();
+  const total = reduced ? 0 : revealSteps(spec.slides[index]).total;
+  const select = (next: number, completed = false) => {
+    const destination = Math.max(0, Math.min(count - 1, next));
+    setPlayback({
+      index: destination,
+      step: completed ? revealSteps(spec.slides[destination]).total : 0,
+      reverse: destination < index,
+    });
+    onSelect(destination);
+  };
+  const next = () => {
+    if (step < total) setPlayback((p) => ({ ...p, step: Math.min(total, p.step + 1) }));
+    else if (index < count - 1) select(index + 1);
+  };
+  const previous = () => {
+    if (!reduced && step > 0) setPlayback((p) => ({ ...p, step: Math.max(0, p.step - 1) }));
+    else if (index > 0) select(index - 1, true);
+  };
+
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const previousFocus = document.activeElement;
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    root.focus();
+    let enteredFullscreen = false;
+    const onFullscreen = () => {
+      if (document.fullscreenElement === root) enteredFullscreen = true;
+      else if (enteredFullscreen) onExit();
+    };
+    document.addEventListener("fullscreenchange", onFullscreen);
+    return () => {
+      document.removeEventListener("fullscreenchange", onFullscreen);
+      if (document.fullscreenElement === root) void document.exitFullscreen().catch(() => {});
+      document.body.style.overflow = overflow;
+      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
+    };
+  }, [onExit, rootRef]);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        onExit();
+        return;
+      }
+      if (event.key === "Tab") {
+        const buttons = rootRef.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)");
+        if (!buttons?.length) return;
+        const first = buttons[0];
+        const last = buttons[buttons.length - 1];
+        if (event.shiftKey && (document.activeElement === first || document.activeElement === rootRef.current)) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && (document.activeElement === last || document.activeElement === rootRef.current)) {
+          event.preventDefault();
+          first.focus();
+        }
+        return;
+      }
+      if (event.altKey || event.ctrlKey || event.metaKey) return;
+      const target = event.target;
+      if (target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable='true']")) return;
+      if (event.key === " " && target instanceof HTMLElement && target.closest("button")) return;
+      let action: () => void;
+      if (["ArrowRight", "ArrowDown", "PageDown", " "].includes(event.key)) action = next;
+      else if (["ArrowLeft", "ArrowUp", "PageUp"].includes(event.key)) action = previous;
+      else if (event.key === "Home") action = () => select(0);
+      else if (event.key === "End") action = () => select(count - 1, true);
+      else return;
+      event.preventDefault();
+      event.stopPropagation();
+      action();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  });
+
+  const buttonClass = "rounded-[4px] border border-white/25 p-2 hover:bg-white/15 focus-visible:outline focus-visible:outline-white disabled:opacity-40";
+  return createPortal(
+    <div
+      ref={rootRef}
+      data-deck-slideshow=""
+      role="dialog"
+      aria-modal="true"
+      aria-label="Presentation slideshow"
+      tabIndex={-1}
+      className="fixed inset-0 z-[100] flex h-full w-full flex-col bg-black text-white outline-none"
+    >
+      <DeckStage slide={spec.slides[index]} spec={spec} presenting revealed={reduced ? Infinity : step} reduced={reduced} reverse={playback.reverse} onAdvance={next} />
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 bg-neutral-950 px-3 py-2 text-[12px]">
+        <span className="hidden min-w-0 flex-1 truncate sm:block">{spec.title}</span>
+        <div className="flex items-center gap-3">
+          <button className={buttonClass} aria-label="Previous slide" disabled={index === 0 && (reduced || step === 0)} onClick={previous}>
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+          <span aria-live="polite" className="font-mono tabular-nums">{index + 1} / {count}</span>
+          {total > 0 && <span className="text-white/60" aria-live="polite">Reveal {Math.min(step, total)} / {total}</span>}
+          <button className={buttonClass} aria-label="Next slide" disabled={index === count - 1 && step >= total} onClick={next}>
+            <ChevronRight className="h-4 w-4" />
+          </button>
+        </div>
+        <span className="hidden flex-1 text-right text-white/60 md:block">Arrow keys to navigate · Esc to exit</span>
+        <button className={`${buttonClass} flex items-center gap-1.5`} onClick={onExit}>
+          <X className="h-4 w-4" /> Exit slideshow
+        </button>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 function DeckView({
   payload,
-  backend,
   source,
   onFocus,
 }: {
   payload: PreviewPayload;
-  backend: PreviewBackend;
   source: PreviewSource;
   onFocus?: (label: string | null) => void;
 }) {
-  const frameRef = useRef<HTMLIFrameElement>(null);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const [url, setUrl] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [fs, setFs] = useState(false);
-  const [pos, setPos] = useState<{
-    index: number;
-    count: number;
-    canPrev: boolean;
-    canNext: boolean;
-    pending: number;
-  } | null>(null);
-  const srcKey = `${source.path ?? ""}|${source.artifactId ?? ""}|${source.revisionId ?? ""}|${source.sessionId ?? ""}`;
-
-  useEffect(() => {
-    if (!backend.deckUrl) {
-      setError("Deck playback isn't available on this surface — download the file to view it.");
-      return;
-    }
-    let live = true;
-    setUrl(null);
-    setError(null);
-    setPos(null);
-    backend
-      .deckUrl(source)
-      .then((u) => live && setUrl(u))
-      .catch((e) => live && setError(e instanceof Error ? e.message : String(e)));
-    return () => {
-      live = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [backend, srcKey]);
-
-  useEffect(() => {
-    const onMsg = (e: MessageEvent) => {
-      const f = frameRef.current;
-      if (!f || e.source !== f.contentWindow) return;
-      const d = e.data as Record<string, unknown> | null;
-      if (
-        d &&
-        d.caberos === "deck" &&
-        d.v === 1 &&
-        d.type === "state" &&
-        Number.isInteger(d.index) &&
-        Number.isInteger(d.count)
-      ) {
-        const idx = d.index as number;
-        const cnt = d.count as number;
-        const next = {
-          index: idx,
-          count: cnt,
-          // rt2 reports canPrev/canNext (reveal-aware); rt1 doesn't — derive.
-          canPrev: typeof d.canPrev === "boolean" ? d.canPrev : idx > 0,
-          canNext: typeof d.canNext === "boolean" ? d.canNext : idx < cnt - 1,
-          pending: Number.isInteger(d.pending) ? (d.pending as number) : 0,
-        };
-        setPos(next);
-        onFocus?.(`slide ${next.index + 1} of ${next.count}`);
+  const spec = payload.spec;
+  const slides = spec?.slides ?? [];
+  const [index, setIndex] = useState(0);
+  const [mode, setMode] = useState("Slides");
+  const [presenting, setPresenting] = useState(false);
+  const slideshowRef = useRef<HTMLDivElement>(null);
+  const exitSlideshow = useCallback(() => setPresenting(false), []);
+  const startSlideshow = () => {
+    // Mount before requesting fullscreen so the request stays in the user gesture,
+    // rather than an effect that StrictMode may replay.
+    flushSync(() => setPresenting(true));
+    const root = slideshowRef.current;
+    root?.requestFullscreen?.().then(() => {
+      if (!root.isConnected && document.fullscreenElement === root) {
+        void document.exitFullscreen().catch(() => {});
       }
-    };
-    window.addEventListener("message", onMsg);
-    return () => window.removeEventListener("message", onMsg);
-  }, [onFocus]);
-
-  // Fullscreen covers the whole player (chrome included) so an exit
-  // affordance stays reachable — iframe-only fullscreen leaves no way out
-  // but the Escape key.
-  useEffect(() => {
-    const onFs = () => setFs(document.fullscreenElement === wrapRef.current);
-    document.addEventListener("fullscreenchange", onFs);
-    return () => document.removeEventListener("fullscreenchange", onFs);
-  }, []);
-
-  // rt2: step (not absolute nav) — the runtime reveals pending build steps
-  // before changing slides, and reports canPrev/canNext through state.
-  // rt1: only understands absolute nav — send clamped index jumps instead.
-  const step = (dir: 1 | -1) => {
-    const rt1 = payload.deck?.runtime === "deck-rt1";
-    const msg = rt1
-      ? {
-          caberos: "deck",
-          v: 1,
-          type: "nav",
-          index: Math.max(0, Math.min((pos?.count ?? 1) - 1, (pos?.index ?? 0) + dir)),
-        }
-      : { caberos: "deck", v: 1, type: "step", dir };
-    frameRef.current?.contentWindow?.postMessage(msg, "*");
+    }).catch(() => {});
   };
+  const srcKey = `${source.path ?? ""}|${source.artifactId ?? ""}|${source.revisionId ?? ""}|${source.sessionId ?? ""}`;
+  const clamped = Math.min(index, Math.max(0, slides.length - 1));
 
-  if (error) return <Note text={error} />;
-  if (!url) {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <Loader2 className="h-5 w-5 animate-spin text-[var(--ink-3)]" />
-      </div>
+  useEffect(() => {
+    setIndex(0);
+    setMode("Slides");
+    setPresenting(false);
+  }, [srcKey]);
+
+  useEffect(() => {
+    onFocus?.(
+      mode === "Slides" && slides.length ? `slide ${clamped + 1} of ${slides.length}` : null,
     );
+  }, [clamped, slides.length, onFocus, mode]);
+
+  if (!spec || !slides.length) {
+    return <Note text="This deck spec couldn't be rendered — download the file to inspect it." />;
   }
-  const count = pos?.count ?? payload.deck?.slides ?? 0;
-  const index = pos?.index ?? 0;
+
+  const step = (dir: 1 | -1) =>
+    setIndex((i) => Math.max(0, Math.min(slides.length - 1, i + dir)));
+
   return (
     <div
-      ref={wrapRef}
-      className="flex h-full min-h-0 flex-col bg-[var(--surface-1)]"
+      className="flex h-full min-h-0 flex-col"
       onKeyDown={(e) => {
-        if (e.key === "ArrowRight") step(1);
-        else if (e.key === "ArrowLeft") step(-1);
+        if (mode !== "Slides" || presenting) return;
+        if (e.key === "ArrowRight") { e.preventDefault(); step(1); }
+        else if (e.key === "ArrowLeft") { e.preventDefault(); step(-1); }
       }}
     >
-      <div className="flex items-center justify-between border-b border-[var(--border)] px-2 py-1">
-        <span className="text-[11px] tabular-nums text-[var(--ink-3)]">
-          {count ? `${index + 1} / ${count}` : "…"}
-        </span>
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            aria-label="Previous slide"
-            disabled={pos ? !pos.canPrev : !count}
-            onClick={() => step(-1)}
-            className="rounded p-1 text-[var(--ink-2)] hover:bg-[var(--surface-2)] disabled:opacity-40"
-          >
-            <ChevronLeft className="h-3.5 w-3.5" />
-          </button>
-          <button
-            type="button"
-            aria-label="Next slide"
-            disabled={pos ? !pos.canNext : !count}
-            onClick={() => step(1)}
-            className="rounded p-1 text-[var(--ink-2)] hover:bg-[var(--surface-2)] disabled:opacity-40"
-          >
-            <ChevronRight className="h-3.5 w-3.5" />
-          </button>
-          <button
-            type="button"
-            aria-label={fs ? "Exit fullscreen" : "Fullscreen"}
-            onClick={() =>
-              fs
-                ? document.exitFullscreen()
-                : wrapRef.current?.requestFullscreen?.()
-            }
-            className="rounded p-1 text-[var(--ink-2)] hover:bg-[var(--surface-2)]"
-          >
-            {fs ? (
-              <Minimize2 className="h-3.5 w-3.5" />
-            ) : (
-              <Maximize2 className="h-3.5 w-3.5" />
-            )}
-          </button>
-        </div>
+      <div className="flex items-center justify-between gap-2 px-1 pb-2">
+        <ModeToggle
+          value={mode}
+          options={["Slides", "Source"]}
+          onChange={setMode}
+        />
+        {mode === "Slides" && (
+          <div className="flex flex-wrap items-center gap-2 text-[11px] text-[var(--ink-3)]">
+            <button
+              type="button"
+              onClick={startSlideshow}
+              className="flex items-center gap-1 rounded-[4px] border border-[var(--border)] px-2 py-1 text-[var(--ink-2)] transition-colors hover:bg-[var(--surface)]"
+            >
+              <Presentation className="h-3.5 w-3.5" /> Slideshow
+            </button>
+            <span className="font-mono tabular-nums">
+              {slides.length ? `${clamped + 1} / ${slides.length}` : "…"}
+            </span>
+            <button
+              type="button"
+              aria-label="Previous slide"
+              disabled={clamped <= 0}
+              onClick={() => step(-1)}
+              className="rounded-[4px] border border-[var(--border)] p-1 transition-colors hover:bg-[var(--surface)] disabled:opacity-40"
+            >
+              <ChevronLeft className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              aria-label="Next slide"
+              disabled={clamped >= slides.length - 1}
+              onClick={() => step(1)}
+              className="rounded-[4px] border border-[var(--border)] p-1 transition-colors hover:bg-[var(--surface)] disabled:opacity-40"
+            >
+              <ChevronRight className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
       </div>
-      <iframe
-        ref={frameRef}
-        src={url}
-        title={payload.deck?.title || payload.name}
-        // allow-scripts ONLY — no allow-same-origin: deck JS runs on an
-        // opaque origin with no access to app cookies/storage/DOM.
-        sandbox="allow-scripts"
-        allowFullScreen
-        className="min-h-0 w-full flex-1 border-0 bg-white"
-      />
+      {mode === "Source" ? (
+        <div className="min-h-0 flex-1 overflow-auto">
+          <TextView content={payload.content || ""} language="json" truncated={payload.truncated} />
+        </div>
+      ) : (
+        <DeckStage slide={slides[clamped]} spec={spec} />
+      )}
+      {presenting && (
+        <DeckSlideshow spec={spec} index={clamped} rootRef={slideshowRef} onSelect={setIndex} onExit={exitSlideshow} />
+      )}
     </div>
   );
 }

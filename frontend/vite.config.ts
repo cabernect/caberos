@@ -26,6 +26,14 @@ const config = {
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
+  build: {
+    rollupOptions: {
+      input: {
+        app: path.resolve(__dirname, "index.html"),
+        deck: path.resolve(__dirname, "deck-render.html"),
+      },
+    },
+  },
   test: {
     environment: "jsdom",
     setupFiles: "./src/test-setup.ts",

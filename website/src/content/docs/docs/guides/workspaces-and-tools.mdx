@@ -32,6 +32,40 @@ to guess a location. Do not work around that refusal by pointing it at an
 unrelated directory. Historical attachments and artifact live paths must resolve
 from their recorded provenance.
 
+## Decks And HTML Previews (v0.2.2 Development)
+
+Presentations are authored as a `.deck.json` spec — one JSON source that the
+preview panel renders as slides and that exports to native editable PowerPoint.
+Choose **Export PPTX** to download a `.pptx` whose text, tables, and images are
+real editable objects; the file records the source hash and revision in metadata,
+without adding text to your speaker notes. The native layout supports multiline
+titles and bounded text fitting: body text stays at least 16 pt and tables at
+least 12 pt. If content still cannot fit or is unsupported, the export reports
+which slides need image fallback and why. Images replace those slides only after
+explicit approval; other slides stay editable. Broken assets are refused, not
+turned into blank images. Ordinary `.html` files are not decks — see below.
+
+Choose **Slideshow** in the deck's **Slides** view to present from the current
+slide. The player requests fullscreen, with a viewport-filling fallback if the
+browser does not allow it. Use arrow keys, Space, or Page Up/Down to navigate;
+Home/End jump to the first/last slide. Press Escape or **Exit slideshow** to
+return to the preview at the same slide. Spec-driven fade/slide transitions
+and fade/rise block entrances play in Slideshow. Reveal blocks or bullet items
+on click: Next finishes reveals before advancing, and Back reverses them.
+The normal preview shows all content. Reduced-motion preferences disable
+effects and show all reveals immediately. PPTX exports the final static state,
+not these browser animations. Automatic advancement is not implemented.
+
+Ordinary `.html`/`.htm` pages open as a vertically scrollable **Rendered**
+preview, with a **Source** toggle. Inline styles and embedded PNG/JPEG/GIF/WebP
+images are supported. Scripts, links, forms, frames, SVG markup, and
+external/local asset loading are disabled. Pages over the text-preview limit
+show source only with a truncation notice. This is a static preview, not an app
+runtime, and does not change the downloaded source.
+
+Ask explicitly for PPTX when you need a native PowerPoint file — the agent can
+build the same deck spec directly into `.pptx` output.
+
 ## Configure Tools
 
 Open global **Settings → Tools** to configure capability backends separately
@@ -115,6 +149,13 @@ LibreOffice: PowerPoint layout/fonts/effects and Word pagination/fields may
 differ or be omitted. Spreadsheet previews do not show every workbook feature
 and do not calculate formulas. This notice does not block inspection or change
 the original file; PDF, image, text and media previews keep their existing behavior.
+
+PPTX previews use a slide picker and extracted content inside a consistent frame
+matching the file's slide aspect ratio (16:9 if unavailable). Overflow scrolls
+inside the frame rather than shrinking the text or resizing each slide. This
+does not reproduce the original slide layout. Speaker notes are separate and collapsed
+by default. Slide navigation and zoom remain available; the original file is
+unchanged.
 
 Live artifact bytes require a proven workspace root. An unresolved legacy
 artifact is labelled honestly, and its live artifact preview can return a

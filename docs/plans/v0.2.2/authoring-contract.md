@@ -27,6 +27,13 @@ requirements for in-app preview. Alert implementation remains W1/W4 work.
 
 ## Universal authoring model (operator-ratified 2026-11-13)
 
+Presentation direction update 2026-11-16: [Unified W2](02-presentations.md)
+supersedes the independent W2/W2H authoring split. One versioned spec and pinned
+assets feed the HTML and native PPTX renderers, with PDF planned. Agent and
+operator edits target that spec, never generated HTML. Native objects are the
+PPTX default; unsupported slide/region image fallback must be declared. The
+implementation/editing sequence is proposed for review, not claimed complete.
+
 Every artifact type follows the same top-level shape:
 
 ```
@@ -42,7 +49,7 @@ the spec. What differs per type is the renderer and where style lives:
 | docx | python-docx | reference .docx named styles | extracted content (approximate) |
 | xlsx | openpyxl | named styles + number formats | workbook extraction (approximate) |
 | pptx editable | python-pptx | template master/layouts/theme | extracted slides (approximate) |
-| pptx design-first | HTML/CSS → export | CSS design tokens | the HTML itself |
+| presentation PPTX | shared presentation spec → native renderer + declared fallback | pinned native template/theme tokens | HTML companion is not proof of PPTX layout |
 | pdf | HTML/CSS → printToPDF (future) | CSS + @page | PDF.js |
 | csv / md | direct write | — | table / markdown renderer |
 | html deck | deck spec → self-contained .html | theme tokens + platform CSS | isolated player (W2H) |
@@ -53,10 +60,10 @@ Consequences recorded here:
   `validate()`/`inspect()` is the floor; deck capture (W2H slice 6) and
   rendered comparisons (A06) are the honest ceiling. A spec that builds
   cleanly but overflows a slide is a verify failure, not a pass.
-- **pptx has two legitimate modes.** Editable deliverables fill template
-  layouts with native objects; presented deliverables default to the HTML
-  deck path (design-first). Deck → PPTX/PDF export is a defined W2H slice
-  (lossy, documented) — see `02h-html-presentations.md`.
+- **Presentation outputs share source, not layout evidence.** HTML playback
+  and native PPTX derive from the same revision. Supported content stays native;
+  unsupported regions/slides use explicit image fallback. All-image PPTX is an
+  explicit alternative. PDF and edit controls follow the unified W2 plan.
 - **Formulas are written as formulas; preview values are computed.** The
   agent keeps live formulas where recalculation matters and writes plain
   values elsewhere. In-app preview must never present a stored/cached

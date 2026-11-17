@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { PreviewBackend } from "@/lib/api";
 import { ConfirmProvider } from "@/lib/confirm";
@@ -107,6 +107,40 @@ describe("Office preview limitations", () => {
 });
 
 describe("W4 preview experience", () => {
+  it("separates speaker notes from slide content and resets notes when navigating", async () => {
+    const be = backend(vi.fn().mockResolvedValue(payload({
+      path: "notes-preview.pptx",
+      slide_width: 1280,
+      slide_height: 720,
+      slides: [
+        { title: "First slide", elements: [
+          { type: "paragraph", text: "Visible body" },
+          { type: "notes", text: "Private presenter reminder" },
+        ] },
+        { title: "Second slide", elements: [{ type: "notes", text: "Second reminder" }] },
+      ],
+    })));
+    render(
+      <ConfirmProvider>
+        <PreviewPanel agentId="" source={{ path: "notes-preview.pptx" }} backend={be} />
+      </ConfirmProvider>,
+    );
+    const body = await screen.findByRole("region", { name: "Slide 1 content" });
+    expect(body).toHaveStyle({ aspectRatio: "1280 / 720" });
+    expect(body).toHaveTextContent("Visible body");
+    expect(body).not.toHaveTextContent("Private presenter reminder");
+    const notes = screen.getByText("Speaker notes").closest("details")!;
+    expect(notes).not.toHaveAttribute("open");
+    fireEvent.click(screen.getByText("Speaker notes"));
+    expect(notes).toHaveAttribute("open");
+    expect(screen.getByText("Private presenter reminder")).toBeVisible();
+    fireEvent.change(screen.getByRole("combobox", { name: "Go to slide" }), { target: { value: "1" } });
+    expect(screen.getByRole("region", { name: "Slide 2 content" })).toHaveTextContent("No extractable body content");
+    expect(screen.getByRole("region", { name: "Slide 2 content" })).toHaveStyle({ aspectRatio: "1280 / 720" });
+    expect(screen.getByText("Speaker notes").closest("details")).not.toHaveAttribute("open");
+    expect(screen.queryByText("Private presenter reminder")).not.toBeInTheDocument();
+  });
+
   it("ignores a late failure from a previous source", async () => {
     let rejectA!: (e: Error) => void;
     const be = backend(vi.fn((source: { path?: string }) =>
@@ -214,51 +248,257 @@ describe("W4 preview experience", () => {
   });
 });
 
-describe("isolated deck playback", () => {
-  it("renders an admitted deck in a scripts-only sandboxed iframe", async () => {
+describe("static HTML preview", () => {
+  it("renders ordinary HTML in a no-scripts sandbox with a source toggle, not slide controls", async () => {
+    const source = "<h1>Long report</h1>";
+    const be = backend(vi.fn().mockResolvedValue(payload({
+      kind: "html", name: "report.html", path: "report.html",
+      content: source, html_document: source,
+    })));
+    render(
+      <ConfirmProvider>
+        <PreviewPanel agentId="" source={{ path: "report.html" }} backend={be} />
+      </ConfirmProvider>,
+    );
+    const frame = await screen.findByTitle("HTML preview: report.html");
+    expect(frame).toHaveAttribute("sandbox", "");
+    expect(frame).toHaveAttribute("srcdoc", source);
+    expect(screen.queryByRole("button", { name: "Next slide" })).not.toBeInTheDocument();
+    expect(screen.getByText(/Scripts, links, forms/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Source" }));
+    expect(screen.queryByTitle("HTML preview: report.html")).not.toBeInTheDocument();
+    expect(screen.getByText(source)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Rendered" }));
+    expect(screen.getByTitle("HTML preview: report.html")).toHaveAttribute("sandbox", "");
+  });
+
+  it("does not render truncated HTML as a complete document", async () => {
+    const be = backend(vi.fn().mockResolvedValue(payload({
+      kind: "html", name: "huge.html", content: "<p>partial", truncated: true,
+    })));
+    render(
+      <ConfirmProvider>
+        <PreviewPanel agentId="" source={{ path: "huge.html" }} backend={be} />
+      </ConfirmProvider>,
+    );
+    expect(await screen.findByRole("button", { name: "Rendered" })).toBeDisabled();
+    expect(screen.getByText(/Preview truncated/)).toBeVisible();
+    expect(screen.queryByTitle("HTML preview: huge.html")).not.toBeInTheDocument();
+  });
+});
+
+describe("presentation spec decks", () => {
+  const deckPayload = (overrides: Partial<PreviewPayload> = {}) =>
+    payload({
+      kind: "deck",
+      name: "review.deck.json",
+      path: "review.deck.json",
+      spec: {
+        kind: "deck",
+        version: 1,
+        title: "Review",
+        theme: { background: "#ffffff", accent: "#315c73", text: "#202a31", font: "sans" },
+        slides: [
+          { id: "s1", layout: "title", title: "Quarterly Review", blocks: [] },
+          {
+            id: "s2",
+            title: "Highlights",
+            blocks: [
+              { type: "bullets", items: ["Revenue up", "Costs flat"] },
+              { type: "paragraph", text: "Details inside." },
+            ],
+          },
+        ],
+      },
+      source: { kind: "live_file", artifact_id: null, revision_id: null, sha256: "exact-hash" },
+      ...overrides,
+    });
+
+  it("renders spec slides directly with navigation — no iframe", async () => {
+    const be = backend(vi.fn().mockResolvedValue(deckPayload()));
+    render(
+      <ConfirmProvider>
+        <PreviewPanel agentId="" source={{ path: "review.deck.json" }} backend={be} />
+      </ConfirmProvider>,
+    );
+    expect(await screen.findByText("Quarterly Review")).toBeVisible();
+    expect(screen.getByText("1 / 2")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Next slide" }));
+    expect(await screen.findByText("Highlights")).toBeVisible();
+    expect(screen.getByText("Revenue up")).toBeVisible();
+    expect(screen.getByText("2 / 2")).toBeVisible();
+    expect(document.querySelector("iframe")).toBeNull();
+  });
+
+  it("exports native PPTX pinned to the previewed source hash", async () => {
+    const exportDeckPptx = vi.fn().mockResolvedValue(undefined);
+    const source = { path: "review.deck.json" };
     const be: PreviewBackend = {
-      ...backend(vi.fn().mockResolvedValue(
-        payload({
-          kind: "deck",
-          name: "deck.html",
-          path: "deck.html",
-          deck: { runtime: "deck-rt2", title: "Review", slides: 3 },
-        }),
-      )),
-      deckUrl: vi.fn().mockResolvedValue("/api/agents/a1/workspace/deck?path=deck.html"),
+      ...backend(vi.fn().mockResolvedValue(deckPayload())),
+      exportDeckPptx,
     };
     render(
       <ConfirmProvider>
-        <PreviewPanel agentId="a1" source={{ path: "deck.html" }} backend={be} />
+        <PreviewPanel agentId="" source={source} backend={be} />
       </ConfirmProvider>,
     );
-    const frame = await screen.findByTitle("Review");
-    expect(frame.tagName).toBe("IFRAME");
-    // allow-scripts ONLY — never allow-same-origin: deck JS gets an opaque
-    // origin with no access to app cookies, storage, or DOM.
-    expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
-    expect(frame.getAttribute("sandbox")).not.toContain("allow-same-origin");
-    expect(frame.getAttribute("src")).toContain("/workspace/deck");
-    // Platform chrome shows position fallback from admission metadata.
-    expect(await screen.findByText("1 / 3")).toBeVisible();
+    fireEvent.click(await screen.findByRole("button", { name: "Export PPTX" }));
+    await waitFor(() =>
+      expect(exportDeckPptx).toHaveBeenCalledWith(source, "review.pptx", "exact-hash"),
+    );
   });
 
-  it("shows an honest notice when the surface can't play decks", async () => {
+  it("reveals bullets and blocks before advancing and reverses reveals on Back", async () => {
+    const be = backend(vi.fn().mockResolvedValue(deckPayload({
+      spec: { slides: [
+        { id: "a", title: "Reveal slide", blocks: [
+          { type: "bullets", items: ["First point", "Second point"], reveal: "items" },
+          { type: "paragraph", text: "Closing thought", reveal: true },
+        ] },
+        { id: "b", title: "Next page", blocks: [] },
+      ] },
+    })));
+    render(<ConfirmProvider><PreviewPanel agentId="" source={{ path: "motion.deck.json" }} backend={be} /></ConfirmProvider>);
+    expect(await screen.findByText("First point")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Slideshow" }));
+    const player = within(screen.getByRole("dialog"));
+    expect(player.getByText("First point")).not.toBeVisible();
+    fireEvent.click(player.getByRole("button", { name: "Advance presentation" }));
+    expect(player.getByText("First point")).toBeVisible();
+    expect(player.getByText("Second point")).not.toBeVisible();
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(player.getByText("Closing thought")).toBeVisible();
+    expect(player.getByText("1 / 2")).toBeVisible();
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(player.getByText("Next page")).toBeVisible();
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+    expect(player.getByText("Closing thought")).toBeVisible();
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+    expect(player.getByText("Closing thought")).not.toBeVisible();
+  });
+
+  it("shows every reveal immediately with reduced motion", async () => {
+    vi.stubGlobal("matchMedia", () => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
+    try {
+      const be = backend(vi.fn().mockResolvedValue(deckPayload({ spec: { slides: [
+        { id: "a", title: "Reduced", blocks: [{ type: "paragraph", text: "Already visible", reveal: true }] },
+        { id: "b", title: "Destination" },
+      ] } })));
+      render(<ConfirmProvider><PreviewPanel agentId="" source={{ path: "reduced.deck.json" }} backend={be} /></ConfirmProvider>);
+      fireEvent.click(await screen.findByRole("button", { name: "Slideshow" }));
+      const player = within(screen.getByRole("dialog"));
+      expect(player.getByText("Already visible")).toBeVisible();
+      fireEvent.keyDown(window, { key: "ArrowRight" });
+      expect(player.getByText("Destination")).toBeVisible();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("reveals a whole bullet block together without leaking nested visibility", async () => {
+    const be = backend(vi.fn().mockResolvedValue(deckPayload({ spec: { slides: [
+      { id: "group", blocks: [{ type: "bullets", items: ["Grouped one", "Grouped two"], reveal: true }] },
+    ] } })));
+    render(<ConfirmProvider><PreviewPanel agentId="" source={{ path: "group.deck.json" }} backend={be} /></ConfirmProvider>);
+    fireEvent.click(await screen.findByRole("button", { name: "Slideshow" }));
+    const player = within(screen.getByRole("dialog"));
+    expect(getComputedStyle(player.getByText("Grouped one")).visibility).toBe("hidden");
+    expect(getComputedStyle(player.getByText("Grouped two")).visibility).toBe("hidden");
+    fireEvent.click(player.getByRole("button", { name: "Advance presentation" }));
+    expect(player.getByText("Grouped one")).toBeVisible();
+    expect(player.getByText("Grouped two")).toBeVisible();
+    expect(player.getByRole("button", { name: "Next slide" })).toBeDisabled();
+  });
+
+  it("presents from the current slide and exits without closing the preview when fullscreen is unavailable", async () => {
+    const onClose = vi.fn();
+    const be = backend(vi.fn().mockResolvedValue(deckPayload()));
+    render(
+      <ConfirmProvider>
+        <PreviewPanel agentId="" source={{ path: "review.deck.json" }} backend={be} onClose={onClose} />
+      </ConfirmProvider>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Next slide" }));
+    fireEvent.click(screen.getByRole("button", { name: "Expand preview" }));
+    const start = screen.getByRole("button", { name: "Slideshow" });
+    start.focus();
+    fireEvent.click(start);
+    const dialog = screen.getByRole("dialog", { name: "Presentation slideshow" });
+    expect(within(dialog).getByText("Highlights")).toBeVisible();
+    expect(within(dialog).getByRole("button", { name: "Next slide" })).toBeDisabled();
+    expect(dialog).toHaveFocus();
+    fireEvent.keyDown(window, { key: "Home" });
+    expect(within(dialog).getByText("Quarterly Review")).toBeVisible();
+    expect(within(dialog).getByRole("button", { name: "Previous slide" })).toBeDisabled();
+    fireEvent.keyDown(window, { key: " " });
+    expect(within(dialog).getByText("Highlights")).toBeVisible();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Restore panel size" })).toBeVisible();
+    expect(screen.getByText("2 / 2")).toBeVisible();
+    expect(start).toHaveFocus();
+  });
+
+  it("closes the slideshow with its exit button and keeps Source view separate", async () => {
+    const be = backend(vi.fn().mockResolvedValue(deckPayload({ content: '{"kind":"deck"}' })));
+    render(
+      <ConfirmProvider>
+        <PreviewPanel agentId="" source={{ path: "review.deck.json" }} backend={be} />
+      </ConfirmProvider>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Slideshow" }));
+    fireEvent.click(screen.getByRole("button", { name: "Exit slideshow" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Source" }));
+    expect(screen.queryByRole("button", { name: "Slideshow" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Slides" }));
+    expect(screen.getByRole("button", { name: "Slideshow" })).toBeVisible();
+    expect(screen.getByText("Quarterly Review")).toBeVisible();
+  });
+
+  it("surfaces export failures without losing the preview", async () => {
+    const exportDeckPptx = vi.fn().mockRejectedValue(new Error("slide 2 needs image fallback"));
+    const be: PreviewBackend = {
+      ...backend(vi.fn().mockResolvedValue(deckPayload())),
+      exportDeckPptx,
+    };
+    render(
+      <ConfirmProvider>
+        <PreviewPanel agentId="" source={{ path: "review.deck.json" }} backend={be} />
+      </ConfirmProvider>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Export PPTX" }));
+    expect(await screen.findByText(/image fallback/)).toBeVisible();
+    expect(screen.getByText("Quarterly Review")).toBeVisible();
+  });
+
+  it("toggles between rendered slides and the raw spec source", async () => {
+    const specJson = JSON.stringify({ version: 1, title: "Review", slides: [] });
+    const be = backend(vi.fn().mockResolvedValue(deckPayload({ content: specJson })));
+    render(
+      <ConfirmProvider>
+        <PreviewPanel agentId="" source={{ path: "review.deck.json" }} backend={be} />
+      </ConfirmProvider>,
+    );
+    expect(await screen.findByText("Quarterly Review")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Source" }));
+    expect(screen.queryByText("Quarterly Review")).not.toBeInTheDocument();
+    expect(screen.getByText(/"version"/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Slides" }));
+    expect(await screen.findByText("Quarterly Review")).toBeVisible();
+  });
+
+  it("shows an honest notice when the spec is missing", async () => {
     const be = backend(vi.fn().mockResolvedValue(
-      payload({
-        kind: "deck",
-        name: "deck.html",
-        path: "deck.html",
-        deck: { runtime: "deck-rt2", slides: 2 },
-      }),
+      payload({ kind: "deck", name: "broken.deck.json", path: "broken.deck.json" }),
     ));
     render(
       <ConfirmProvider>
-        <PreviewPanel agentId="" source={{ path: "deck.html" }} backend={be} />
+        <PreviewPanel agentId="" source={{ path: "broken.deck.json" }} backend={be} />
       </ConfirmProvider>,
     );
-    expect(
-      await screen.findByText(/playback isn't available/i),
-    ).toBeVisible();
+    expect(await screen.findByText(/couldn't be rendered/i)).toBeVisible();
   });
 });

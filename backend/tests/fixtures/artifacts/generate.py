@@ -32,7 +32,7 @@ from agentos.artifacts.formats import pptx as pptx_fmt
 from agentos.artifacts.formats import xlsx as xlsx_fmt
 
 HERE = Path(__file__).parent
-CORPUS_VERSION = 2
+CORPUS_VERSION = 3
 
 
 def _figure_png(path: Path) -> None:
@@ -563,6 +563,29 @@ def main(output_dir: Path = HERE) -> None:
             manifest,
             execution_policy="isolated-opt-in-only",
             expected={"runtime_isolation_verified": False},
+        )
+
+    # Static authored fixtures — copied verbatim so regeneration stays
+    # byte-stable; they are inputs to the deck/HTML preview tests, not
+    # generator output.
+    for name, note, expected in (
+        (
+            "ordinary-report.html",
+            "Ordinary scrolling HTML document — static sanitized preview, never a deck",
+            {"kind": "html", "scrollable": True},
+        ),
+        (
+            "shared-presentation.json",
+            "Canonical .deck.json spec — shared source for the slide renderer and native PPTX export",
+            {"kind": "deck", "slides": 4},
+        ),
+    ):
+        write(
+            name,
+            (HERE / name).read_bytes(),
+            {"note": note},
+            manifest,
+            expected=expected,
         )
 
     (output_dir / "manifest.json").write_text(

@@ -6,6 +6,7 @@ workspace files, never internals.
 """
 
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -532,25 +533,26 @@ async def test_pptx_create_inspect_roundtrip(db, workspace, artifact_storage):
     assert s["charts"] == 1
 
 
-# --- W2H: HTML deck artifacts ---
+# --- W2: presentation spec (.deck.json) artifacts ---
 
 
 def _deck_spec(**over):
     spec = {
+        "kind": "deck",
         "version": 1,
         "title": "Q3 Review",
         "theme": {"background": "#FAFAF7", "accent": "#3F6212", "text": "#1C1917"},
         "slides": [
             {
                 "id": "intro",
+                "layout": "title",
                 "title": "Welcome",
                 "blocks": [{"type": "paragraph", "text": "Hello team"}],
             },
             {
-                "id": "evil",
-                "html": '<p onclick="alert(1)">safe</p><script>alert(2)</script>'
-                '<img src="https://evil.example/x.png">'
-                '<img src="data:image/png;base64,iVBORw0KGgo=">',
+                "id": "points",
+                "title": "Highlights",
+                "blocks": [{"type": "bullets", "items": ["a", "b"]}],
             },
         ],
     }
@@ -558,254 +560,130 @@ def _deck_spec(**over):
     return spec
 
 
-async def test_html_deck_create_inspect_roundtrip(db, workspace, artifact_storage):
-    from agentos.artifacts import service
-
-    art, _ = await service.create_structured(
-        db,
-        workspace_id="agent-1",
-        workspace_path=workspace,
-        rel_path="deck.html",
-        format="html",
-        spec=_deck_spec(),
-        created_by="agent-1",
-    )
-
-    assert art.format == "html"
-    info = await service.inspect(db, art.id, workspace_path=workspace)
-    assert info["valid"] is True
-    s = info["structure"]
-    assert s["title"] == "Q3 Review"
-    assert s["slides"] == 2
-    assert s["slide_ids"] == ["intro", "evil"]
-    assert s["runtime"] == "deck-rt3"
-    assert s["theme"] == ["accent", "background", "text"]
-    assert s["assets"] == []
-
-    # The stored bytes are self-contained: one runtime script + spec JSON,
-    # sanitized fragments (no onclick/external img), platform nav present.
-    text = (Path(workspace) / art.current_path).read_text()
-    body = text.split('id="deck-spec"')[0]
-    assert "onclick" not in body
-    assert "evil.example" not in body
-    assert "<script>alert" not in text
-    assert "data:image/png;base64" in body
-    assert text.count("<script") == 2  # embedded spec JSON + runtime only
-
-
-async def test_html_deck_revise_by_slide_id_and_index(db, workspace, artifact_storage):
+async def test_deck_create_inspect_roundtrip(db, workspace, artifact_storage):
     from agentos.artifacts import service
 
     art, rev = await service.create_structured(
         db,
         workspace_id="agent-1",
         workspace_path=workspace,
-        rel_path="deck.html",
-        format="html",
+        rel_path="review.deck.json",
+        format="deck",
         spec=_deck_spec(),
-        created_by="agent-1",
     )
+    assert art.format == "deck"
+    data = await service.revision_bytes(db, rev.id)
+    parsed = json.loads(data)
+    assert parsed["kind"] == "deck"
+    assert parsed["title"] == "Q3 Review"
+    assert [s["id"] for s in parsed["slides"]] == ["intro", "points"]
 
-    await service.revise_structured(
+
+async def test_deck_revise_by_slide_id_and_index(db, workspace, artifact_storage):
+    from agentos.artifacts import service
+
+    art, rev = await service.create_structured(
+        db,
+        workspace_id="agent-1",
+        workspace_path=workspace,
+        rel_path="review.deck.json",
+        format="deck",
+        spec=_deck_spec(),
+    )
+    new_rev = await service.revise_structured(
         db,
         art.id,
         workspace_path=workspace,
         base_revision_id=rev.id,
         ops=[
-            {"op": "set_title", "title": "Q3 Review v2"},
-            {"op": "set_slide", "slide": "evil", "title": "Numbers"},
             {
-                "op": "add_slide",
-                "slide": {"blocks": [{"type": "divider"}]},
-                "at": 1,
+                "op": "set_slide",
+                "slide": "points",
+                "value": {
+                    "id": "points",
+                    "title": "New title",
+                    "blocks": [{"type": "paragraph", "text": "rewritten"}],
+                },
             },
+            {"op": "move_slide", "from": 0, "to": 1},
         ],
-        created_by="agent-1",
     )
-
-    info = await service.inspect(db, art.id, workspace_path=workspace)
-    s = info["structure"]
-    assert s["title"] == "Q3 Review v2"
-    assert s["slide_ids"] == ["intro", "s3", "evil"]
-    assert s["slides"] == 3
-
-    # Unaffected slide content survives verbatim; ids are stable.
-    text = (Path(workspace) / art.current_path).read_text()
-    assert "Hello team" in text
-    assert 'data-slide-id="evil"' in text
+    data = json.loads(await service.revision_bytes(db, new_rev.id))
+    assert data["slides"][0]["id"] == "points"
+    assert data["slides"][1]["id"] == "intro"
+    assert data["slides"][0]["title"] == "New title"
 
 
-async def test_html_deck_revise_missing_id_fails(db, workspace, artifact_storage):
+async def test_deck_revise_missing_id_fails(db, workspace, artifact_storage):
     from agentos.artifacts import service
 
     art, rev = await service.create_structured(
         db,
         workspace_id="agent-1",
         workspace_path=workspace,
-        rel_path="deck.html",
-        format="html",
+        rel_path="review.deck.json",
+        format="deck",
         spec=_deck_spec(),
-        created_by="agent-1",
     )
+    import pytest
 
-    with pytest.raises(ValueError, match="unknown slide id"):
+    with pytest.raises(Exception, match="unknown slide id"):
         await service.revise_structured(
             db,
             art.id,
             workspace_path=workspace,
             base_revision_id=rev.id,
             ops=[{"op": "remove_slide", "slide": "nope"}],
-            created_by="agent-1",
         )
 
 
-def test_html_deck_spec_validation():
-    from agentos.artifacts.formats import html
+def test_deck_spec_validation():
+    from agentos.artifacts.formats import deck
 
-    # Unknown spec version rejected, not silently downgraded.
     with pytest.raises(ValueError, match="version"):
-        html.build({**_deck_spec(), "version": 99}, "/tmp")
-    # Theme hex validated.
-    with pytest.raises(ValueError, match="hex"):
-        html.build({**_deck_spec(), "theme": {"accent": "red"}}, "/tmp")
-    # Slide budget enforced.
-    with pytest.raises(ValueError, match="100 slides"):
-        html.build(
+        deck.build({**_deck_spec(), "version": 99}, "/tmp")
+    with pytest.raises(ValueError, match="theme.accent"):
+        deck.build({**_deck_spec(), "theme": {"accent": "red"}}, "/tmp")
+    with pytest.raises(ValueError, match="exceeds"):
+        deck.build(
             {**_deck_spec(), "slides": [{"blocks": [{"type": "divider"}]}] * 101},
             "/tmp",
         )
-    # Duplicate slide ids rejected.
+    with pytest.raises(ValueError, match="unknown layout"):
+        deck.build(
+            {**_deck_spec(), "slides": [{"layout": "carousel", "blocks": []}]},
+            "/tmp",
+        )
+    with pytest.raises(ValueError, match="unsupported block"):
+        deck.build(
+            {**_deck_spec(), "slides": [{"blocks": [{"type": "html", "html": "<p>x</p>"}]}]},
+            "/tmp",
+        )
     with pytest.raises(ValueError, match="duplicate slide id"):
-        html.build(
+        deck.build(
             {
                 **_deck_spec(),
-                "slides": [
-                    {"id": "a", "blocks": [{"type": "divider"}]},
-                    {"id": "a", "blocks": [{"type": "divider"}]},
-                ],
+                "slides": [{"id": "x"}, {"id": "x"}],
             },
             "/tmp",
         )
-    # html + blocks on one slide rejected.
-    with pytest.raises(ValueError, match="not both"):
-        html.build(
-            {
-                **_deck_spec(),
-                "slides": [{"html": "<p>x</p>", "blocks": [{"type": "divider"}]}],
-            },
-            "/tmp",
-        )
-    # Fragment that sanitizes to nothing rejected.
-    with pytest.raises(ValueError, match="sanitized to nothing"):
-        html.build({"title": "x", "slides": [{"html": "<script>x</script>"}]}, "/tmp")
-    # Unknown slide layout / theme font rejected.
-    with pytest.raises(ValueError, match="layout"):
-        html.build({"slides": [{"layout": "carousel", "blocks": [{"type": "divider"}]}]}, "/tmp")
-    with pytest.raises(ValueError, match="font"):
-        html.build({**_deck_spec(), "theme": {"font": "comic-sans"}}, "/tmp")
+    with pytest.raises(ValueError, match="theme font"):
+        deck.build({**_deck_spec(), "theme": {"font": "comic-sans"}}, "/tmp")
 
 
-def test_html_deck_layout_reveal_font_features():
-    from agentos.artifacts.formats import html
+def _tiny_png() -> bytes:
+    from io import BytesIO
 
-    spec = {
-        "title": "Launch",
-        "theme": {"font": "serif", "accent": "#7C3AED"},
-        "slides": [
-            {"id": "cover", "layout": "title", "title": "Big reveal", "notes": "open strong"},
-            {
-                "id": "body",
-                "title": "Agenda",
-                "blocks": [
-                    {"type": "paragraph", "text": "always visible"},
-                    {"type": "bullets", "items": ["one", "two"], "reveal": True},
-                    {"type": "bullets", "items": ["three"], "reveal": True},
-                ],
-            },
-        ],
-    }
-    data = html.build(spec, "/tmp")
-    text = data.decode()
-    assert 'class="slide layout-title"' in text
-    assert "--deck-font:" in text and "Georgia" in text
-    assert text.count('class="blk rv"') == 2
-    assert 'class="blk"' in text
-    # Slide furniture: progress bar, per-slide footer, notes overlay.
-    assert 'id="deck-progress"' in text and 'class="slide-foot"' in text
-    assert 'id="deck-notes-overlay"' in text
-    # Bridge supports step/goto; state reports reveal progress.
-    assert "'step'" in text and "gotoSlide" in text
-    assert "canPrev" in text and "pending" in text
-    info = html.inspect(data)
-    assert info["structure"]["reveal_blocks"] == 2
-    assert info["structure"]["section_ids_match"] is True
-    assert html.validate(data)["valid"] is True
-    assert html.admission(data) is not None
+    from PIL import Image
+
+    buf = BytesIO()
+    Image.new("RGB", (2, 2), "red").save(buf, format="PNG")
+    return buf.getvalue()
 
 
-def test_html_deck_validate_rejects_foreign_html():
-    from agentos.artifacts.formats import html
-
-    assert html.validate(b"<html><body>hello</body></html>")["valid"] is False
-    assert html.validate(b"not html at all")["valid"] is False
-
-
-def test_html_deck_admission_and_crafted_refusal():
-    from agentos.artifacts.formats import html
-
-    data = html.build(_deck_spec(), "/tmp")
-    info = html.admission(data)
-    assert info is not None
-    assert info["runtime"] == "deck-rt3"
-    assert info["title"] == "Q3 Review"
-    assert info["slides"] == 2
-
-    # Legacy decks stay playable — runtime upgrades must not strand portable
-    # files (each embeds its own runtime; admission accepts every known
-    # platform runtime, CSP hash-pins each).
-    for ver, js in (("deck-rt2", html._RUNTIME_JS_V2), ("deck-rt1", html._RUNTIME_JS_V1)):
-        old = html.admission(data.decode().replace(html._RUNTIME_JS, js, 1).encode())
-        assert old is not None and old["runtime"] == ver
-    assert "script-src" in html.DECK_CSP and html.DECK_CSP.count("sha256-") == 3
-
-    # Foreign html and crafted extra scripts are never admitted.
-    assert html.admission(b"<p>hi</p>") is None
-    crafted = data.decode().replace("</body>", "<script>alert(1)</script></body>").encode()
-    assert html.admission(crafted) is None
-
-    # Spec text with &, quotes and a literal "</script>" still round-trips —
-    # the embedded spec JSON escapes `<` so it can't break the element.
-    tricky = html.build(
-        {
-            "title": "R&D",
-            "slides": [
-                {
-                    "notes": "x </script> y",
-                    "blocks": [{"type": "paragraph", "text": "a & b"}],
-                }
-            ],
-        },
-        "/tmp",
-    )
-    assert html.admission(tricky) is not None
-    assert html.inspect(tricky)["structure"]["title"] == "R&D"
-
-
-def test_html_deck_csp_pins_runtime_only():
-    from agentos.artifacts.formats import html
-
-    assert "script-src 'sha256-" in html.DECK_CSP
-    script_src = html.DECK_CSP.split("script-src")[1].split(";")[0]
-    assert "unsafe-inline" not in script_src
-    assert "connect-src 'none'" in html.DECK_CSP
-    assert "sandbox allow-scripts" in html.DECK_CSP
-
-
-_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32  # magic bytes are the type check
-
-
-def _asset_spec():
+def _asset_deck_spec():
     return {
+        "kind": "deck",
         "title": "Assets",
         "slides": [
             {
@@ -815,73 +693,66 @@ def _asset_spec():
                     {"type": "paragraph", "text": "below"},
                 ],
             },
-            {
-                "id": "s2",
-                "html": '<p>shot</p><img src="assets/shot.png" alt="s">',
-            },
         ],
     }
 
 
-def test_html_deck_workspace_assets_embed(tmp_path):
-    from agentos.artifacts.formats import html
+def test_deck_workspace_assets_embed(tmp_path):
+    import json as _json
+
+    from agentos.artifacts.formats import deck
 
     (tmp_path / "assets").mkdir()
-    (tmp_path / "assets/logo.png").write_bytes(_PNG)
-    (tmp_path / "assets/shot.png").write_bytes(_PNG + b"x")
-
-    data = html.build(_asset_spec(), tmp_path)
-    text = data.decode()
-    # Both refs became embedded data URIs; no workspace path survives.
-    assert text.count("data:image/png;base64,") == 2
-    assert 'assets/logo.png"' not in text.split('id="deck-spec"')[0]
-    info = html.inspect(data)
-    assets = info["structure"]["assets"]
-    assert [a["path"] for a in assets] == ["assets/logo.png", "assets/shot.png"]
-    assert all(a["mime"] == "image/png" and a["sha256"] for a in assets)
-    assert html.admission(data) is not None
-
-    # Revise re-resolves refs against the CURRENT workspace file.
-    (tmp_path / "assets/logo.png").write_bytes(_PNG + b"changed")
-    out = html.revise(data, [{"op": "set_title", "title": "v2"}], tmp_path)
-    assert html.inspect(out)["structure"]["title"] == "v2"
-    assert len(html.inspect(out)["structure"]["assets"]) == 2
+    (tmp_path / "assets" / "logo.png").write_bytes(_tiny_png())
+    data = deck.build(_asset_deck_spec(), tmp_path)
+    spec = _json.loads(data)
+    assert spec["assets"][0]["data_uri"].startswith("data:image/png;base64,")
+    assert spec["assets"][0]["sha256"]
+    info = deck.inspect(data)
+    # Inspect reports inventory metadata — never the embedded bytes.
+    assert "data_uri" not in info["structure"]["assets"][0]
+    assert info["structure"]["assets"][0]["path"] == "assets/logo.png"
 
 
-def test_html_deck_asset_rejections(tmp_path):
-    from agentos.artifacts.formats import html
+def test_deck_asset_rejections(tmp_path):
+    import pytest
 
-    (tmp_path / "assets").mkdir()
-    (tmp_path / "assets/ok.png").write_bytes(_PNG)
-    (tmp_path / "assets/evil.svg").write_text("<svg xmlns='x'><script/></svg>")
-    (tmp_path / "assets/notimg.txt").write_text("hello")
-    outside = tmp_path.parent / "outside.png"
-    outside.write_bytes(_PNG)
+    from agentos.artifacts.formats import deck
 
-    def build_with(src, slide=None):
-        spec = slide or {"slides": [{"blocks": [{"type": "image", "src": src}]}]}
-        return html.build(spec, tmp_path)
-
-    # Traversal / absolute / missing / non-raster all refused.
-    with pytest.raises(ValueError):
-        build_with("../outside.png")
-    with pytest.raises(ValueError):
-        build_with(str(outside))
-    with pytest.raises(ValueError, match="not found"):
-        build_with("assets/missing.png")
-    with pytest.raises(ValueError, match="not a raster"):
-        build_with("assets/evil.svg")
-    with pytest.raises(ValueError, match="not a raster"):
-        build_with("assets/notimg.txt")
-    # Same rules inside html fragments — bad refs are stripped by the
-    # sanitizer (never resolved), good refs embed.
-    frag = {"slides": [{"html": '<img src="../outside.png"><img src="assets/ok.png">'}]}
-    data = html.build(frag, tmp_path)
-    assert data.decode().count("data:image/png;base64,") == 1
-    assert "outside.png" not in data.decode().split("<body>")[1].split("<script")[0]
+    with pytest.raises(Exception, match="traversal|escape|containment|relative"):
+        deck.build(
+            {
+                "slides": [
+                    {"blocks": [{"type": "image", "src": "../outside.png"}]},
+                ]
+            },
+            tmp_path,
+        )
+    with pytest.raises(Exception):
+        deck.build(
+            {"slides": [{"blocks": [{"type": "image", "src": "missing.png"}]}]},
+            tmp_path,
+        )
+    (tmp_path / "fake.png").write_bytes(b"not an image")
+    with pytest.raises(ValueError, match="unreadable"):
+        deck.build(
+            {"slides": [{"blocks": [{"type": "image", "src": "fake.png"}]}]},
+            tmp_path,
+        )
 
 
-# --- W2e: PDF export + read-only imported PDFs ---
+def test_deck_source_is_plain_json_not_html():
+    """The canonical file is JSON — no runtime, no markup, no admission step."""
+    import json as _json
+
+    from agentos.artifacts.formats import deck
+
+    data = deck.build(_deck_spec(), "/tmp")
+    spec = _json.loads(data)
+    assert spec["kind"] == "deck"
+    assert "<script" not in data.decode()
+    assert deck.validate(data)["valid"] is True
+    assert deck.validate(b"{not json")["valid"] is False
 
 
 def _pdf_bytes(pages: int = 2) -> bytes:

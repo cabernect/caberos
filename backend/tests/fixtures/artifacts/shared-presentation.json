@@ -1,0 +1,59 @@
+{
+  "kind": "deck",
+  "version": 1,
+  "title": "Presentation Engine Review",
+  "motion": {
+    "transition": {"type": "fade", "duration_ms": 350},
+    "entrance": {"type": "rise", "duration_ms": 250}
+  },
+  "theme": {
+    "background": "#faf9f5",
+    "accent": "#315c73",
+    "text": "#202a31",
+    "font": "sans"
+  },
+  "slides": [
+    {
+      "id": "cover",
+      "layout": "title",
+      "title": "One story. Two renderers.",
+      "blocks": [
+        {"type": "paragraph", "text": "A shared presentation source for the browser and PowerPoint."}
+      ],
+      "notes": "This file is a synthetic demonstration, not a product performance report."
+    },
+    {
+      "id": "principle",
+      "title": "Keep the source structured",
+      "blocks": [
+        {"type": "bullets", "reveal": "items", "items": [
+          "Author content once as JSON, with stable slide identities.",
+          "Render HTML for live playback and PPTX for native editing.",
+          "Capture only unsupported slides as declared image fallbacks."
+        ]},
+        {"type": "paragraph", "text": "No text extraction from rendered HTML is needed.", "reveal": true}
+      ],
+      "notes": "The reveal becomes fully visible in the PowerPoint output."
+    },
+    {
+      "id": "comparison",
+      "title": "Same content, honest capabilities",
+      "blocks": [
+        {"type": "table", "rows": [
+          ["Output", "Purpose", "Limitation"],
+          ["HTML", "Live playback", "Platform runtime only"],
+          ["Editable PPTX", "Native editing", "Template layout may differ"],
+          ["Image fallback", "Unsupported slide", "Not individually editable"]
+        ]}
+      ]
+    },
+    {
+      "id": "picture",
+      "title": "Images remain separate objects",
+      "blocks": [
+        {"type": "image", "src": "workspace/figure.png", "alt": "Synthetic geometric fixture"}
+      ],
+      "notes": "The image snapshot is embedded in the canonical source. Export never rereads a newer live image."
+    }
+  ]
+}

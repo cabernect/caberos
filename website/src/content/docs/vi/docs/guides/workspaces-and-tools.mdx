@@ -31,6 +31,39 @@ Nếu lịch sử workspace của session cũ không rõ hoặc mâu thuẫn, Ca
 đoán vị trí. Không trỏ sang một thư mục không liên quan để né lỗi đó. Attachment
 lịch sử và live path của artifact phải được resolve từ provenance đã lưu.
 
+## Deck và xem HTML (nhánh phát triển v0.2.2)
+
+Presentation được tạo dưới dạng spec `.deck.json` — một nguồn JSON duy nhất
+được preview panel hiển thị thành slide và xuất ra PowerPoint chỉnh sửa native.
+Chọn **Export PPTX** để tải `.pptx` có text, bảng và ảnh là object chỉnh sửa
+được; file ghi hash nguồn và revision trong metadata, không chèn thêm nội dung
+vào speaker notes. Bố cục native hỗ trợ tiêu đề nhiều dòng và điều chỉnh chữ
+trong giới hạn: nội dung ít nhất 16 pt, bảng ít nhất 12 pt. Nếu nội dung vẫn
+không vừa hoặc chưa được hỗ trợ, thao tác xuất liệt kê slide cần chuyển thành
+ảnh và lý do. Chỉ chuyển những slide đó sau khi bạn đồng ý; slide khác vẫn
+chỉnh sửa được. Ảnh nguồn bị lỗi sẽ bị từ chối, không xuất thành ảnh trống.
+File `.html` thông thường không phải deck — xem bên dưới.
+
+Chọn **Slideshow** trong chế độ **Slides** để trình chiếu từ slide hiện tại.
+Player yêu cầu toàn màn hình; nếu trình duyệt không cho phép, player vẫn phủ
+kín vùng hiển thị. Dùng phím mũi tên, Space hoặc Page Up/Down để chuyển slide;
+Home/End đến slide đầu/cuối. Nhấn Escape hoặc **Exit slideshow** để quay lại
+preview ở slide đang xem. Slideshow phát hiệu ứng fade/slide và fade/rise theo
+spec; Next hiện dần block hoặc từng bullet trước khi chuyển slide, Back đảo
+ngược các bước. Preview thường hiển thị toàn bộ nội dung. Chế độ giảm chuyển
+động tắt hiệu ứng và hiển thị mọi nội dung ngay. PPTX xuất trạng thái cuối tĩnh,
+không có các hoạt ảnh trình duyệt này. Chưa hỗ trợ tự chuyển slide.
+
+Trang `.html`/`.htm` thông thường mở bằng **Rendered**, cuộn dọc và có nút
+**Source** để xem mã nguồn. Hỗ trợ CSS inline và ảnh PNG/JPEG/GIF/WebP nhúng.
+Script, liên kết điều hướng, form, frame, SVG và tải tài nguyên ngoài hoặc từ
+file local bị vô hiệu hóa. Trang vượt giới hạn text-preview chỉ hiển thị nguồn
+kèm thông báo cắt ngắn. Đây là bản xem tĩnh, không phải runtime cho app; file
+nguồn tải xuống không bị sửa.
+
+Yêu cầu rõ PPTX nếu cần file PowerPoint native — agent có thể dựng cùng deck
+spec đó trực tiếp thành output `.pptx`.
+
 ## Cấu hình Tools
 
 Mở global **Settings → Tools** để cấu hình backend của capability độc lập với
@@ -112,6 +145,12 @@ LibreOffice: bố cục, phông chữ, hiệu ứng PowerPoint và phân trang, 
 có thể khác bản gốc hoặc bị lược bỏ. Preview bảng tính không hiển thị mọi tính
 năng và không tính công thức. Thông báo không chặn việc xem hay thay đổi file
 gốc; preview PDF, ảnh, văn bản và media vẫn giữ hành vi hiện có.
+
+Preview PPTX có bộ chọn slide và nội dung trích xuất trong khung cố định theo
+tỷ lệ slide của file (16:9 nếu không có thông tin). Nội dung dài cuộn trong khung,
+không thu nhỏ chữ hay đổi kích thước từng slide. Preview không tái tạo bố cục
+slide gốc. Ghi chú thuyết trình được tách riêng và mặc định thu gọn.
+Vẫn có thể chuyển slide và thu phóng; file gốc không thay đổi.
 
 Live byte của artifact cần workspace root được chứng minh. Artifact cũ không
 resolve được root hiển thị đúng trạng thái; live preview có thể trả conflict

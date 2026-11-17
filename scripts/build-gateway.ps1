@@ -23,6 +23,7 @@ Set-Location $BackendDir
 
 $defaultsSrc = Join-Path $BackendDir "src\agentos\defaults"
 $catalogSrc = Join-Path $BackendDir "src\agentos\mcp\catalog.yaml"
+$frontendDist = Join-Path $RootDir "frontend\dist"
 $modelsDevSrc = Join-Path $BackendDir "src\agentos\providers\data"
 
 uv run pyinstaller `
@@ -45,6 +46,7 @@ uv run pyinstaller `
     --add-data "$defaultsSrc;agentos/defaults" `
     --add-data "$catalogSrc;agentos/mcp" `
     --add-data "$modelsDevSrc;agentos/providers/data" `
+    --add-data "$frontendDist;frontend-dist" `
     src\agentos\gateway_entry.py
 
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed with exit code $LASTEXITCODE" }

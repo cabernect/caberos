@@ -30,8 +30,7 @@ passing evidence. Cross-cutting cases need end-to-end verification in W6.
 |---|---|
 | [W0](00-contracts-fixtures.md) | Defines fixtures, supported subsets and rubric used throughout |
 | [W1](01-rendering-foundation.md) | A06, A10-A13, A17-A22, renderer portions of A27-A29 |
-| [W2](02-native-pptx.md) | A01-A02, A04, A07-A08, PPTX portions of A34-A36 |
-| [W2H](02h-html-presentations.md) | A31-A33 and HTML safety/revision cases |
+| [W2, including former W2H](02-presentations.md) | A01-A02, A04, A07-A08, A31-A36, proposed A43-A49; separate HTML and native renderer evidence |
 | [W3](03-docx-craft.md) | A01, A03, A05, A07, A09, DOCX portion of A34 |
 | [W3X](03x-xlsx-craft.md) | A37-A42 and workbook preservation/conflict cases |
 | [W4](04-preview-experience.md) | A13-A16, A19, A26 and shared revision/race UX |
@@ -84,6 +83,16 @@ passing evidence. Cross-cutting cases need end-to-end verification in W6.
 | A40 | Workbook preservation guards | Unsupported features, protection, external links and reference-changing edits detected; warn/refuse rather than silently discard content or break formulas |
 | A41 | Formula-result honesty | Formula expression distinct from unevaluated/cached/fresh result; edits invalidate freshness; no fabricated zero; unapproved engine never claimed |
 | A42 | XLSX preview/editability | Styled bounded sheet/range/chart preview, explicit truncation and result provenance; native Excel table/chart/formula editing verified |
+| A43 (proposed) | Shared presentation source | One immutable spec/assets revision supplies HTML and native PPTX; output identity/cache keys include renderer/template versions; no DOM reconstruction or live-asset rereads |
+| A44 (proposed) | Targeted agent edits and manual protection | Stable slide/block addressing survives reorder; unrelated content is unchanged; overlapping operator edits require fresh diff/approval; stale batches fail atomically |
+| A45 (proposed) | Inline text editing | Plain-text paste, IME/multiline, blur/commit/cancel, focus and error recovery work; failed saves retain the draft; generated HTML is never authoritative |
+| A46 (proposed) | Structure/data controls | Reorder/duplicate/delete/layout/theme/block/table/chart edits preserve valid IDs and content; incompatible region mappings require review; keyboard alternatives exist |
+| A47 (proposed) | Undo/history/concurrency | Undo/redo/restore create auditable new revisions without deleting history; stale approvals and incoming agent results cannot overwrite unsaved/newer user work |
+| A48 (proposed) | Native/image-fallback honesty | Supported native objects remain editable; exact fallback slides/regions and reasons are disclosed before download and in the file; blank/clipped/broken captures do not pass |
+| A49 (proposed) | Same-revision regeneration and editing isolation | Changed slide updates without stale-generation races; all exports bind to the committed source or show pending/failure; sandboxed edit bridge cannot gain parent/API/IPC authority; PDF requires separate P7 evidence |
+
+A43-A49 are proposed with the unified W2 editing plan, not passing results or
+evidence that its revised implementation scope has been reviewed.
 
 If a release-critical target or native Office check is unavailable, mark it
 blocked and explicitly revise the release promise before shipping. Do not

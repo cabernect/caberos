@@ -23,6 +23,11 @@ layout engine is required. See `docs/plans/v0.2.2/preview-contract.md`.
 HTML capture/runtime policy still needs explicit decisions; a Canva-like editor
 and agent-authored apps remain future scope.
 
+W2 implementation scope: `.deck.json` is the canonical presentation source.
+Editing is agent-driven through targeted operations and base-revision checks;
+history and restore-as-new-revision remain. The manual slide editor and separate
+proposal-review/approval pipeline are removed/deferred, not current W2 gates.
+
 ## Where things are
 
 - `docs/spec-v0.1.md` — the v0.1 specification, 40 decisions (D1–D40).
@@ -128,6 +133,21 @@ Registered in `capabilities/builtin.py` (+ `run_subagent`/`read_subagent` in `to
 | `artifact_adopt` / `artifact_history` / `artifact_restore` | no | no | Track existing file; list revisions; restore-as-new-revision |
 
 ## Subsystem notes
+
+### Presentation authoring (v0.2.2 development)
+W2/W2H are consolidated in `docs/plans/v0.2.2/02-presentations.md`: one
+canonical `.deck.json` spec feeds the React slide renderer in PreviewPanel
+and the native PPTX export (`artifacts/deck_pptx.py`) — never reverse-parsed
+from HTML. Image blocks pin workspace rasters as embedded data-URI snapshots
+at build time; revisions never reread mutable workspace bytes. The old
+generated-HTML deck stack (formats/html.py, deck_capture.py, deck_export.py,
+/workspace/deck* endpoints) is removed. Ordinary HTML keeps the static,
+scrollable, scripts-disabled preview via `html_preview.py`. Structured deck
+revisions use targeted ops (set_title|set_theme|add_slide|remove_slide|
+set_slide|move_slide) by slide id or index. Image-fallback export for
+slides the native template can't express is planned, not shipped — export
+currently refuses those slides with a 422. Inline slide editing and
+structure controls are planned per the consolidated plan.
 
 ### Skills (governed library)
 DB is the resolution authority: `Skill`/`SkillRevision`/`SkillAssignment`. `resolve_effective_skills()` precedence: agent-local > global > built-in (global respects availability/assignments; disabled/archived agent-local rows suppress the live dir). Runs pin `skill_revision_ids` (`rev:<id>` or `live:<sha256>`) in the manifest — mid-run publishes can't wobble a run. Built-ins seed from `skills/builtins.py` (`BUILTIN_SKILLS`: browser-workflows, doc-coauthoring, evolve, frontend-design, office-documents, skill-creator); removed names are retired at startup. "Create Skill" opens a builder-mode session (`skill-creator` force-loaded, drafts land in `skill-drafts/`, no publish capability by construction). Imports (ZIP/repo URL) go through `skills/importer.py` hardening and land as drafts. Drafts are for *new* skills only: updates to an existing agent-local skill edit the live `skills/<name>/` dir and are pinned as revisions by `snapshot_agent_local_drift` at session close — a same-name `skill-drafts/` dir can never index or publish (unique name per scope+owner) and reconcile logs it as an orphan.

@@ -298,6 +298,65 @@ export interface PreviewSheet {
   truncated: boolean;
 }
 
+/** Canonical .deck.json presentation spec — one source for the in-app
+ *  slide renderer and the native PPTX export (see backend deck_spec.py). */
+export interface DeckEffect {
+  type: "none" | "fade" | "rise" | "slide";
+  duration_ms?: number;
+}
+
+export interface DeckBlock {
+  id?: string;
+  type: "heading" | "paragraph" | "bullets" | "table" | "image" | "divider" | string;
+  text?: string;
+  items?: string[];
+  rows?: unknown[][];
+  src?: string;
+  alt?: string;
+  /** two_content layout: 0/undefined = left column, 1 = right column. */
+  column?: number;
+  reveal?: boolean | "items";
+  animation?: DeckEffect;
+  chart_type?: "bar" | "line" | "pie";
+  categories?: string[];
+  series?: {name: string; values: number[]}[];
+  [key: string]: unknown;
+}
+
+export interface DeckSlide {
+  id: string;
+  layout?: "title" | "content" | "two_content" | "section" | string;
+  title?: string;
+  blocks?: DeckBlock[];
+  notes?: string;
+  transition?: DeckEffect;
+  [key: string]: unknown;
+}
+
+export interface DeckSpec {
+  kind?: string;
+  version?: number;
+  title?: string;
+  motion?: { transition?: DeckEffect; entrance?: DeckEffect };
+  theme?: {
+    background?: string;
+    accent?: string;
+    text?: string;
+    font?: "sans" | "serif" | "mono" | string;
+  };
+  slides: DeckSlide[];
+  /** Pinned image snapshots embedded at build time — `path` matches the
+   *  image block's `src`; `data_uri` carries the exact revision bytes. */
+  assets?: {
+    path: string;
+    mime?: string;
+    bytes?: number;
+    sha256?: string;
+    data_uri?: string;
+  }[];
+  assets_truncated?: boolean;
+}
+
 export interface PreviewPayload {
   kind:
     | "markdown"
@@ -311,6 +370,7 @@ export interface PreviewPayload {
     | "slides"
     | "workbook"
     | "deck"
+    | "html"
     | "media"
     | "unknown";
   size: number;
@@ -324,6 +384,8 @@ export interface PreviewPayload {
    *  the workspace (the agent renamed/moved it after producing it). */
   moved_from?: string;
   content?: string;
+  /** Static, sanitized document with an embedded restrictive CSP. */
+  html_document?: string | null;
   truncated?: boolean;
   language?: string;
   valid?: boolean;
@@ -349,9 +411,10 @@ export interface PreviewPayload {
   formulas_recalculated?: boolean;
   media?: "audio" | "video";
   too_large?: boolean;
-  /** Deck admission metadata — present only for kind "deck" (generated,
-   *  admitted CaberOS decks eligible for isolated playback). */
-  deck?: { runtime: string; title?: string | null; slides: number };
+  /** Canonical presentation source — present only for kind "deck"
+   *  (.deck.json). The panel renders these slides directly; the same spec
+   *  feeds the native PPTX export. */
+  spec?: DeckSpec;
   /** Ephemeral-upload previews only — first PDF page as base64 PNG. */
   thumb_png?: string;
   error?: string;

@@ -1,6 +1,6 @@
 {
   "generator": "tests/fixtures/artifacts/generate.py",
-  "corpus_version": 2,
+  "corpus_version": 3,
   "environment": {
     "python-pptx": "1.0.2",
     "python-docx": "1.2.0",
@@ -724,6 +724,32 @@
         "runtime_isolation_verified": false
       },
       "execution_policy": "isolated-opt-in-only"
+    },
+    {
+      "file": "ordinary-report.html",
+      "sha256": "a3f6ade0e62b1d4acf0462cce03036c549990991e3fe5596186097cf87e8da69",
+      "bytes": 2834,
+      "spec": {
+        "note": "Ordinary scrolling HTML document — static sanitized preview, never a deck"
+      },
+      "expected": {
+        "kind": "html",
+        "scrollable": true
+      },
+      "execution_policy": "parse-only"
+    },
+    {
+      "file": "shared-presentation.json",
+      "sha256": "a1211a99d865aa885b2b35b6228707e123aae8dc423e99e705a8f88901aecec0",
+      "bytes": 1990,
+      "spec": {
+        "note": "Canonical .deck.json spec — shared source for the slide renderer and native PPTX export"
+      },
+      "expected": {
+        "kind": "deck",
+        "slides": 4
+      },
+      "execution_policy": "parse-only"
     }
   ]
 }

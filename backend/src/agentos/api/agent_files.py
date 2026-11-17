@@ -6,7 +6,7 @@ import os
 import re
 from collections import OrderedDict
 from pathlib import Path
-from typing import TYPE_CHECKING, NamedTuple
+from typing import NamedTuple
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from pydantic import BaseModel
@@ -19,9 +19,6 @@ from ..db import get_db
 from ..memory import recall, triples
 from ..models.operator import Operator
 from ..skills.loader import _load_skill_from_dir
-
-if TYPE_CHECKING:
-    from ..models.artifact import Artifact
 
 router = APIRouter(prefix="/api/agents", tags=["agent-files"])
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
@@ -991,220 +988,76 @@ async def raw_workspace_file(
     return Response(content=src.data, media_type=mime)
 
 
-@router.get("/{agent_id}/workspace/deck")
-async def deck_workspace_file(
+@router.get("/{agent_id}/workspace/deck-export.pptx")
+async def workspace_deck_export(
     agent_id: str,
+    expected_sha256: str,
     operator: Operator = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
     path: str = "",
     artifact_id: str | None = None,
     revision_id: str | None = None,
     session_id: str | None = None,
+    allow_fallback: bool = False,
+    expected_plan: str | None = None,
 ):
-    """Admitted deck playback — the only endpoint that executes deck HTML.
+    """Render a .deck.json source revision to native PPTX.
 
-    Admission (generated-deck marker + valid spec + platform-scripts-only)
-    gates *execution*, not access: raw bytes stay available via
-    /workspace/raw for download and source view. The CSP pins the single
-    allowed script by hash and the sandbox directive forces an opaque
-    origin — defense in depth behind the iframe's sandbox attribute.
+    The spec is the source of truth — never reverse-parsed from HTML.
+    Slides the native template can't express are refused with their
+    indices until the declared image-fallback path lands (W2 P3).
     """
+    import json as _json
+    from urllib.parse import quote
+
     from fastapi.responses import Response
 
-    from ..artifacts.formats import html as deck_fmt
+    from ..artifacts import deck_exports
+    from ..artifacts.deck_spec import normalize as _norm_deck
 
     ws = await _workspace_root(db, agent_id, session_id)
     src = await _resolve_source(db, ws, agent_id, path, artifact_id, revision_id)
-    if deck_fmt.admission(src.data) is None:
-        raise HTTPException(status_code=404, detail="not an admitted deck")
+    source_sha = hashlib.sha256(src.data).hexdigest()
+    if expected_sha256 != source_sha:
+        raise HTTPException(
+            status_code=409, detail="File changed — refresh the preview before export"
+        )
+    if not src.name.lower().endswith(".deck.json"):
+        raise HTTPException(status_code=400, detail="not a .deck.json presentation source")
+    try:
+        raw = _json.loads(src.data.decode("utf-8"))
+        spec = _norm_deck(raw)
+        spec["assets"] = raw.get("assets") or []
+    except (UnicodeDecodeError, ValueError, TypeError) as e:
+        raise HTTPException(status_code=400, detail=f"invalid deck spec: {e}") from e
+    try:
+        content, assessment = await deck_exports.pptx(
+            spec,
+            source_sha256=source_sha,
+            revision_id=revision_id,
+            allow_fallback=allow_fallback,
+            expected_plan=expected_plan,
+        )
+    except (ValueError, OSError, TimeoutError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    stem = (
+        src.name[: -len(".deck.json")]
+        if src.name.lower().endswith(".deck.json")
+        else Path(src.name).stem
+    )
+    filename = f"{stem}.pptx"
     return Response(
-        content=src.data,
-        media_type="text/html",
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
         headers={
-            "Content-Security-Policy": deck_fmt.DECK_CSP,
-            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename, safe='')}",
+            "Cache-Control": "no-store",
+            "X-Source-SHA256": source_sha,
+            "X-Export-Mode": "native-with-image-fallbacks"
+            if assessment["image_fallbacks"]
+            else "native-objects",
         },
     )
-
-
-# --- Deck captures (W2H slice 6) ---
-#
-# Bounded, revision-bound slide renders produced by the managed browser —
-# the visual verify step structural inspect can't provide. PNGs are cached
-# content-addressed on disk (deck sha256), so identical revision bytes share
-# captures across requests and restarts; manifests are cached per
-# (reveal, slide-set) alongside them.
-
-_CAPTURE_FINAL = 999  # goto reveal sentinel — clamps to the slide's own count
-_capture_locks: dict[str, asyncio.Lock] = {}
-
-
-def _capture_root(deck_sha: str) -> Path:
-    return settings.db_path.parent / "artifact-captures" / deck_sha
-
-
-def _capture_lock(key: str) -> asyncio.Lock:
-    lock = _capture_locks.get(key)
-    if lock is None:
-        if len(_capture_locks) > 256:
-            for stale in [k for k, lk in _capture_locks.items() if not lk.locked()]:
-                _capture_locks.pop(stale, None)
-        lock = _capture_locks[key] = asyncio.Lock()
-    return lock
-
-
-def _parse_reveal(raw: str) -> int:
-    if raw == "final":
-        return _CAPTURE_FINAL
-    try:
-        v = int(raw)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="reveal must be 'final' or an integer")
-    if not 0 <= v <= _CAPTURE_FINAL:
-        raise HTTPException(status_code=400, detail="reveal out of range")
-    return v
-
-
-def _parse_slides(raw: str, count: int) -> list[int] | None:
-    if not raw.strip():
-        return None
-    try:
-        idx = sorted({int(p) for p in raw.split(",") if p.strip()})
-    except ValueError:
-        raise HTTPException(status_code=400, detail="slides must be comma-separated indices")
-    bad = [i for i in idx if i < 0 or i >= count]
-    if bad:
-        raise HTTPException(status_code=400, detail=f"slide indices out of range: {bad}")
-    return idx or None
-
-
-async def _capture_source(
-    db: AsyncSession,
-    agent_id: str,
-    artifact_id: str,
-    revision_id: str | None,
-) -> tuple[bytes, str, "Artifact"]:
-    """Revision bytes for capture — always immutable revision storage,
-    never the live file (captures must match the revision they evidence)."""
-    from ..artifacts import service as artifact_service
-    from ..artifacts.service import ArtifactError
-
-    try:
-        artifact = await artifact_service._get(db, artifact_id)
-    except ArtifactError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
-    if artifact.workspace_id != agent_id:
-        raise HTTPException(status_code=404, detail="Artifact not found")
-    rid = revision_id or artifact.current_revision_id
-    if not rid:
-        raise HTTPException(
-            status_code=409,
-            detail="artifact has no revisions to capture",
-        )
-    from ..models.artifact import ArtifactRevision
-
-    rev = await db.get(ArtifactRevision, rid)
-    if rev is None or rev.artifact_id != artifact.id:
-        raise HTTPException(status_code=404, detail="Revision not found")
-    data = await artifact_service.revision_bytes(db, rid)
-    return data, rid, artifact
-
-
-@router.get("/{agent_id}/artifacts/{artifact_id}/deck-captures")
-async def deck_captures(
-    agent_id: str,
-    artifact_id: str,
-    operator: Operator = Depends(require_operator),
-    db: AsyncSession = Depends(get_db),
-    revision_id: str | None = None,
-    reveal: str = "final",
-    slides: str = "",
-) -> dict:
-    """Render + return the slide-capture manifest for a deck revision.
-
-    Runs (or reuses) the managed-browser capture: per-slide metrics
-    (overflow, shrink-to-fit scale, reveal counts, blank/broken-image
-    flags) plus content-addressed PNG URLs. `reveal` selects the build
-    state — 'final' shows every reveal step; an integer captures that
-    exact step count. `slides` limits the set (default: all slides).
-    """
-    import json as _json
-
-    from ..artifacts import deck_capture
-    from ..artifacts.formats import html as deck_fmt
-
-    data, rid, artifact = await _capture_source(db, agent_id, artifact_id, revision_id)
-    rev_n = _parse_reveal(reveal)
-    info = deck_fmt.admission(data)
-    if info is None:
-        raise HTTPException(status_code=400, detail="not an admitted deck")
-    idx = _parse_slides(slides, info["slides"])
-
-    deck_sha = hashlib.sha256(data).hexdigest()
-    root = _capture_root(deck_sha)
-    sig = ",".join(str(i) for i in idx) if idx else "all"
-    manifest_path = root / f"manifest-r{rev_n}-{sig}.json"
-    lock_key = f"{deck_sha}:{rev_n}:{sig}"
-    async with _capture_lock(lock_key):
-        if manifest_path.exists():
-            return _json.loads(manifest_path.read_text())
-        try:
-            result = await deck_capture.capture_deck(data, slides=idx, reveal=rev_n)
-        except deck_capture.DeckCaptureError as e:
-            raise HTTPException(status_code=422, detail=str(e)) from e
-        manifest = {
-            "version": result["version"],
-            "artifact_id": artifact.id,
-            "revision_id": rid,
-            "runtime": result["runtime"],
-            "title": result["title"],
-            "slide_count": result["slide_count"],
-            "viewport": result["viewport"],
-            "reveal": rev_n,
-            "slides": [
-                {
-                    "index": s["index"],
-                    "reveal": s["reveal"],
-                    "metrics": s["metrics"],
-                    "png_url": (
-                        f"/api/agents/{agent_id}/artifacts/{artifact_id}"
-                        f"/deck-captures/{s['index']}.png"
-                        f"?revision_id={rid}&reveal={rev_n}"
-                    ),
-                }
-                for s in result["slides"]
-            ],
-        }
-        root.mkdir(parents=True, exist_ok=True)
-        for s in result["slides"]:
-            (root / f"slide-{s['index']}-r{rev_n}.png").write_bytes(s["png"])
-        manifest_path.write_text(_json.dumps(manifest))
-        return manifest
-
-
-@router.get("/{agent_id}/artifacts/{artifact_id}/deck-captures/{index}.png")
-async def deck_capture_png(
-    agent_id: str,
-    artifact_id: str,
-    index: int,
-    operator: Operator = Depends(require_operator),
-    db: AsyncSession = Depends(get_db),
-    revision_id: str | None = None,
-    reveal: str = "final",
-):
-    """One captured slide PNG — run the manifest endpoint first."""
-    from fastapi.responses import Response
-
-    data, _rid, _artifact = await _capture_source(db, agent_id, artifact_id, revision_id)
-    rev_n = _parse_reveal(reveal)
-    deck_sha = hashlib.sha256(data).hexdigest()
-    png = _capture_root(deck_sha) / f"slide-{index}-r{rev_n}.png"
-    if not png.exists():
-        raise HTTPException(
-            status_code=404,
-            detail="capture not rendered — call the deck-captures manifest first",
-        )
-    return Response(content=png.read_bytes(), media_type="image/png")
 
 
 @router.get("/{agent_id}/workspace/pdf-page")
@@ -1266,6 +1119,7 @@ async def list_artifact_revisions(
 
 class RestoreRevisionRequest(BaseModel):
     revision_id: str
+    base_revision_id: str | None = None
 
 
 @router.post("/{agent_id}/artifacts/{artifact_id}/restore")
@@ -1296,10 +1150,15 @@ async def restore_artifact_revision(
             artifact_id,
             workspace_path=ws,
             revision_id=req.revision_id,
+            base_revision_id=req.base_revision_id,
             created_by=f"operator:{operator.id}",
         )
     except ArtifactError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
+        from ..artifacts.service import ArtifactConflictError
+
+        raise HTTPException(
+            status_code=409 if isinstance(e, ArtifactConflictError) else 404, detail=str(e)
+        ) from e
     return {"revision_id": rev.id, "revision_number": rev.revision_number}
 
 

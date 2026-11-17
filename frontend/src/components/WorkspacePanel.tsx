@@ -84,10 +84,32 @@ export function WorkspacePanel({
 
       {tab === "workspace" && (
         <div className="flex min-h-0 flex-1">
-          {/* File tree column */}
-          <div className="flex w-[190px] shrink-0 flex-col border-r border-line">
-            <div className="border-b border-line p-2">
-              <div className="flex items-center gap-1.5 rounded-[8px] border border-line bg-ground px-2 py-1.5">
+          {/* Preview column — left; the file picker sits on the right. */}
+          <div className="flex min-w-0 flex-1 flex-col">
+            {selected ? (
+              <PreviewPanel
+                agentId={agentId}
+                source={selected}
+                backend={previewBackend}
+                onClose={() => onSelect(null)}
+                onRevise={onRevise}
+                className="h-full border-0"
+              />
+            ) : (
+              <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
+                <FileText className="h-6 w-6 text-ink-faint" />
+                <p className="text-[12px] text-ink-muted">
+                  Select a file to preview it here.
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* File tree column — right. h-12 header matches the preview
+              header so the two divider lines sit on the same row. */}
+          <div className="flex w-[190px] shrink-0 flex-col border-l border-line">
+            <div className="flex h-12 items-center border-b border-line px-3">
+              <div className="flex w-full items-center gap-1.5 rounded-[8px] border border-line bg-ground px-2 py-1.5">
                 <Search className="h-3 w-3 shrink-0 text-ink-faint" />
                 <input
                   value={filter}
@@ -111,27 +133,6 @@ export function WorkspacePanel({
               <div className="border-t border-line px-3 py-2 text-[10px] text-ink-faint">
                 <span className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-accent align-middle" />
                 changed in this chat
-              </div>
-            )}
-          </div>
-
-          {/* Preview column */}
-          <div className="flex min-w-0 flex-1 flex-col">
-            {selected ? (
-              <PreviewPanel
-                agentId={agentId}
-                source={selected}
-                backend={previewBackend}
-                onClose={() => onSelect(null)}
-                onRevise={onRevise}
-                className="h-full border-0"
-              />
-            ) : (
-              <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
-                <FileText className="h-6 w-6 text-ink-faint" />
-                <p className="text-[12px] text-ink-muted">
-                  Select a file to preview it here.
-                </p>
               </div>
             )}
           </div>

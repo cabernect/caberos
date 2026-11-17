@@ -11,7 +11,7 @@ file. Uploaded PPTX/DOCX/XLSX may use existing best-effort previews with visible
 limitations. Do not disable them because no faithful Office renderer exists.
 Keep existing PDF/image/text/Markdown/code/CSV/media previews.
 
-Native editable Office creation/editing and HTML deck playback remain included.
+Native editable Office creation/editing and deck-spec playback remain included.
 Neither implies perfect Office layout reproduction in CaberOS. No new preview
 dependency is required just to continue W0/W1.
 
@@ -25,8 +25,8 @@ dependency is required just to continue W0/W1.
 | PDF | Existing PDF pages | Existing limits/errors; no new Office conversion step |
 | Images/SVG | Existing safe image view | Preserve existing decoding bounds and SVG image-loading policy |
 | Text/Markdown/code/CSV/media | Existing format-specific views | Existing truncation/format limits remain explicit |
-| HTML deck | Planned W2H isolated live playback and stable captures | No Office engine; motion tests separate from screenshots |
-| Ordinary raw HTML | Existing code/source view | Do not silently execute uploaded HTML as an admitted deck |
+| `.deck.json` presentation | React renderer draws the normalized spec at 16:9; Slideshow plays spec-defined transitions, entrances, and click reveals; same source feeds native PPTX | Normal preview and PPTX show all content; browser motion is not exported to native PPTX. Reduced motion disables effects and reveals all content. Unsupported/overfull native content fails explicitly |
+| Ordinary raw HTML | Static rendered page with vertical scrolling and a Source toggle | Empty iframe sandbox and restrictive CSP; no scripts, navigation, forms, frames, or external/local asset requests. Inline CSS and embedded raster images supported; active/SVG markup removed. Over the text preview limit, source-only with a truncation notice. Never admitted as a deck just by extension. |
 
 An optional richer preview from a CaberOS-authored spec must identify itself as
 a design/spec representation and pin the spec/assets to that exact revision.

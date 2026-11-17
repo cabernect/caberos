@@ -1141,13 +1141,18 @@ def register_builtin_capabilities() -> None:
         "Structured document spec — e.g. docx: {title?, blocks:[heading|"
         "paragraph|list|table|image|page_break]}; xlsx: {sheets:[{name,rows,"
         "cells,freeze,column_widths,formats}]}; pptx: {slides:[{layout,title,"
-        "subtitle,blocks:[bullets|table|image|chart|notes|text]}]}; html deck: "
-        "{title?, theme?{background,accent,text,font:sans|serif|mono}, "
-        "slides:[{id?,layout?:content|title,title?,html?|"
-        "blocks?[heading|paragraph|bullets|table|image|divider],notes?,"
-        "blocks may set reveal:true for stepwise build}]}. image blocks and "
-        "<img> in html fragments take src=workspace-relative raster paths "
-        "(png/jpg/gif/webp, embedded at build; no scripts/external URLs)."
+        "subtitle,blocks:[bullets|table|image|chart|notes|text]}]}; deck "
+        "(.deck.json, the editable presentation source shared by the HTML "
+        'player and PPTX export): {kind:"deck", title?, theme?{background,'
+        "accent,text,font:sans|serif|mono}, slides:[{id?,layout?:title|content|"
+        "two_content|section,title?,blocks?[heading|paragraph|bullets|table|"
+        "image|divider],notes?,transition?}], motion?{transition:{type:none|fade|slide,"
+        "duration_ms:0..2000},entrance:{type:none|fade|rise,duration_ms:0..2000}}}. "
+        "Blocks may set id, reveal:true or reveal:'items' (bullets only), "
+        "animation:{type:none|fade|rise,duration_ms:0..2000}. Motion plays in "
+        "Slideshow; PPTX shows final static content. image blocks take "
+        "src=workspace-relative raster paths (png/jpg/gif/webp, pinned as "
+        "embedded snapshots at build; no scripts/external URLs)."
     )
     registry.register(
         CapabilityDef(
@@ -1155,7 +1160,7 @@ def register_builtin_capabilities() -> None:
             effects=frozenset({"workspace_write"}),
             kind="tool",
             description=(
-                "Create a versioned deliverable (docx/xlsx/pptx/html deck) in the "
+                "Create a versioned deliverable (docx/xlsx/pptx/deck) in the "
                 "workspace from a structured spec — never raw file bytes. Files "
                 "are saved under artifacts/ (prefix added automatically). " + _doc_spec_hint
             ),
@@ -1168,7 +1173,7 @@ def register_builtin_capabilities() -> None:
                     },
                     "format": {
                         "type": "string",
-                        "enum": ["docx", "xlsx", "pptx", "html"],
+                        "enum": ["docx", "xlsx", "pptx", "deck"],
                         "description": "Format; inferred from path extension when omitted",
                     },
                     "spec": {"type": "object", "description": _doc_spec_hint},
@@ -1217,8 +1222,8 @@ def register_builtin_capabilities() -> None:
                 "of overwriting when the file changed externally. Ops — docx: "
                 "append_blocks|replace_paragraph|set_cell; xlsx: set_cell|append_rows|"
                 "add_sheet|remove_sheet; pptx: add_slide|move_slide|set_title|append_bullets; "
-                "html deck: set_title|set_theme|add_slide|remove_slide|set_slide "
-                "(slide refs are 0-based index or slide id)."
+                "deck (.deck.json): set_title|set_theme|add_slide|remove_slide|set_slide|"
+                "move_slide (slide refs are 0-based index or slide id)."
             ),
             parameters_schema={
                 "type": "object",
@@ -1286,12 +1291,16 @@ def register_builtin_capabilities() -> None:
             name="artifact_restore",
             effects=frozenset({"workspace_write"}),
             kind="tool",
-            description="Write an old revision's bytes back to the workspace as a NEW revision — history is never rewritten.",
+            description="Write an old revision's bytes back to the workspace as a NEW revision — history is never rewritten. Deck restores also require the current base_revision_id; stale restores fail.",
             parameters_schema={
                 "type": "object",
                 "properties": {
                     "artifact_id": {"type": "string"},
                     "revision_id": {"type": "string"},
+                    "base_revision_id": {
+                        "type": "string",
+                        "description": "Current revision id; required when restoring a deck.",
+                    },
                     "change_summary": {"type": "string"},
                 },
                 "required": ["artifact_id", "revision_id"],

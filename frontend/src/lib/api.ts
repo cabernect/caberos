@@ -98,9 +98,12 @@ export interface PreviewBackend {
   blob(source: PreviewSource): Promise<string>;
   /** Object URL of a rendered PDF page PNG. */
   pdfPage(page: number, source: PreviewSource): Promise<string>;
-  /** URL serving an admitted deck for isolated iframe playback.
-   *  Absent → the surface can't play decks (static source only). */
-  deckUrl?(source: PreviewSource): Promise<string>;
+  /** Native editable PPTX rendered from the .deck.json spec — pinned to
+   *  the exact previewed source hash. Absent → the surface can't export. */
+  exportDeckPptx?(source: PreviewSource, filename: string, sha256: string): Promise<void>;
+  deckExportPlan?(source: PreviewSource, sha: string): Promise<{plan_hash: string; image_fallbacks: {slide: number; reason: string}[]; declared_motion?: boolean}>;
+  exportDeckWithFallback?(source: PreviewSource, filename: string, sha: string, planHash: string): Promise<void>;
+  exportDeckPdf?(source: PreviewSource, filename: string, sha: string): Promise<void>;
 }
 
 export class ApiError extends Error {
@@ -648,12 +651,14 @@ export const api = {
       `/api/agents/${id}/workspace/pdf-page?page=${page}&${sourceQuery(opts)}`,
     ),
 
-  // Admitted-deck playback URL — the iframe can't send Bearer headers, so
-  // this rides the session cookie on the same-origin /api path.
-  deckFileUrl: async (id: string, opts: PreviewSource = {}): Promise<string> => {
-    const base = await baseReady;
-    return `${base}/api/agents/${id}/workspace/deck?${sourceQuery(opts)}`;
-  },
+  // Native PPTX export for a .deck.json presentation source — the backend
+  // renders the spec directly (never reverse-parses HTML) and refuses
+  // slides the native template can't express until image fallback lands.
+  exportDeckPptx: (id: string, opts: PreviewSource, filename: string, sha256: string) =>
+    downloadFile(
+      `/api/agents/${id}/workspace/deck-export.pptx?${sourceQuery(opts)}&expected_sha256=${encodeURIComponent(sha256)}`,
+      filename,
+    ),
 
   listArtifactRevisions: (id: string, artifactId: string) =>
     request<{ revisions: ArtifactRevisionInfo[] }>(
@@ -663,10 +668,11 @@ export const api = {
     id: string,
     artifactId: string,
     revisionId: string,
+    baseRevisionId?: string,
   ) =>
     request<{ revision_id: string; revision_number: number }>(
       `/api/agents/${id}/artifacts/${artifactId}/restore`,
-      { method: "POST", body: JSON.stringify({ revision_id: revisionId }) },
+      { method: "POST", body: JSON.stringify({ revision_id: revisionId, base_revision_id: baseRevisionId }) },
     ),
   compareArtifactRevisions: (
     id: string,
@@ -689,7 +695,7 @@ export const api = {
   },
   adoptWorkspaceFile: (id: string, path: string, sessionId?: string) =>
     request<{ artifact_id: string; revision_id: string; path: string }>(
-      `/api/agents/${id}/artifacts/adopt`,
+      `/api/agents/${id}/artifacts/adopt${sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ""}`,
       {
         method: "POST",
         body: JSON.stringify({ path, session_id: sessionId }),
@@ -1878,7 +1884,14 @@ export function workspaceBackend(
     preview: (source) => api.previewFile(agentId, pin(source)),
     blob: (source) => api.fetchFileBlob(agentId, pin(source)),
     pdfPage: (page, source) => api.fetchPdfPage(agentId, page, pin(source)),
-    deckUrl: (source) => api.deckFileUrl(agentId, pin(source)),
+    exportDeckPptx: (source, filename, sha256) => api.exportDeckPptx(agentId, pin(source), filename, sha256),
+    deckExportPlan: (source, sha) => request(`/api/agents/${agentId}/workspace/deck-export-plan?${sourceQuery(pin(source))}&expected_sha256=${encodeURIComponent(sha)}`),
+    exportDeckWithFallback: (source, filename, sha, planHash) => downloadFile(
+      `/api/agents/${agentId}/workspace/deck-export.pptx?${sourceQuery(pin(source))}&expected_sha256=${encodeURIComponent(sha)}&allow_fallback=true&expected_plan=${encodeURIComponent(planHash)}`, filename,
+    ),
+    exportDeckPdf: (source, filename, sha) => downloadFile(
+      `/api/agents/${agentId}/workspace/deck-export.pdf?${sourceQuery(pin(source))}&expected_sha256=${encodeURIComponent(sha)}`, filename,
+    ),
   };
 }
 

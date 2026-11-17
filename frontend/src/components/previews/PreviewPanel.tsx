@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ArrowLeft,
   Download,
   ExternalLink,
   FileClock,
+  FileDown,
   FileText,
   FolderOpen,
   GitCompareArrows,
@@ -54,7 +55,10 @@ interface PreviewPanelProps {
  */
 export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, onRevise, className }: PreviewPanelProps) {
   const { confirm } = useConfirm();
-  const isWorkspace = !backend;
+  // Workspace surface = real agentId (non-workspace surfaces pass "" per the
+  // prop contract). Keying off `backend` broke when WorkspacePanel started
+  // passing an explicit session-pinned backend — Track/Delete silently hid.
+  const isWorkspace = agentId !== "";
   // Memoize — a fresh backend object every render would retrigger the
   // fetch effect below and loop forever.
   const be = useMemo(() => backend ?? workspaceBackend(agentId), [backend, agentId]);
@@ -65,6 +69,7 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, onR
   const [history, setHistory] = useState<ArtifactRevisionInfo[] | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
+  const [exporting, setExporting] = useState<"pptx" | "pdf" | null>(null);
   const [viewing, setViewing] = useState<PreviewSource>(source);
   // Expanded mode — the same panel floats over a backdrop for focused
   // reading; Escape collapses back to the docked panel before closing.
@@ -139,6 +144,8 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, onR
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        // The presentation player owns Escape, including its fullscreen fallback.
+        if (document.querySelector("[data-deck-slideshow]")) return;
         e.stopPropagation();
         if (expanded) setExpanded(false);
         else onClose?.();
@@ -194,7 +201,7 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, onR
   const restoreRevision = async (rev: ArtifactRevisionInfo) => {
     if (!artifact) return;
     try {
-      const res = await api.restoreArtifactRevision(agentId, artifact.id, rev.revision_id);
+      const res = await api.restoreArtifactRevision(agentId, artifact.id, rev.revision_id, artifact.current_revision_id ?? undefined);
       setActionMsg(`Restored as revision ${res.revision_number}`);
       setHistoryOpen(false);
       backToCurrent();
@@ -275,6 +282,49 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, onR
     onRevise(lines.join("\n"));
   };
 
+  // Native PPTX export for .deck.json specs — pinned to the previewed
+  // source hash; the backend refuses unsupported slides with a real error.
+  const canExportDeck =
+    payload?.kind === "deck" && !!be.exportDeckPptx && !!payload.source?.sha256;
+  const exportDeck = async () => {
+    const sha = payload?.source?.sha256;
+    if (!payload || !canExportDeck || !sha || exporting !== null) return;
+    setExporting("pptx");
+    setActionMsg(null);
+    const filename = `${payload.name.replace(/\.deck\.json$/i, "") || "deck"}.pptx`;
+    try {
+      const plan = await be.deckExportPlan?.(viewing, sha);
+      if (plan?.declared_motion && !await confirm({
+        title: "Static PowerPoint export",
+        message: "This deck declares slide transitions or animations. They play in Slideshow but are browser-only — the PPTX exports the final static state of every slide.",
+        confirmLabel: "Export static PPTX",
+      })) return;
+      if (plan?.image_fallbacks.length) {
+        if (!be.exportDeckWithFallback || !await confirm({
+          title: "Some slides need image fallback",
+          message: `${plan.image_fallbacks.map(s => `Slide ${s.slide}: ${s.reason}`).join("\n")}\n\nThese slides will be images, not individually editable. Other slides remain native objects.`,
+          confirmLabel: `Export with ${plan.image_fallbacks.length} image slides`,
+        })) return;
+        await be.exportDeckWithFallback(viewing, filename, sha, plan.plan_hash);
+        return;
+      }
+      await be.exportDeckPptx!(viewing, filename, sha);
+    } catch (e) {
+      setActionMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setExporting(null);
+    }
+  };
+  const exportPdf = async () => {
+    if (!payload?.source?.sha256 || !be.exportDeckPdf || exporting !== null) return;
+    setExporting("pdf");
+    setActionMsg(null);
+    try {
+      await be.exportDeckPdf(viewing, `${payload.name.replace(/\.deck\.json$/i, "")}.pdf`, payload.source.sha256);
+    } catch (e) { setActionMsg(String(e)); }
+    finally { setExporting(null); }
+  };
+
   const trackHistory = async () => {
     if (!currentPath) return;
     try {
@@ -323,8 +373,9 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, onR
         role="complementary"
         aria-label="File preview"
       >
-      {/* Header */}
-      <div className="flex items-center gap-2 border-b border-[var(--border)] px-3 py-2">
+      {/* Header — h-12 matches the workspace file picker's header row so
+          the two divider lines align across the panel. */}
+      <div className="flex h-12 items-center gap-2 border-b border-[var(--border)] px-3">
         <FileText className="h-4 w-4 shrink-0 text-[var(--ink-3)]" />
         <div className="min-w-0 flex-1">
           <p className="truncate text-[13px] font-medium text-[var(--ink)]">
@@ -339,31 +390,49 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, onR
             {currentPath && ` · ${currentPath}`}
           </p>
         </div>
-        <button
-          onClick={() => {
-            setLoaded(null);
-            fetchPreview();
-          }}
-          className="rounded-[4px] p-1 text-[var(--ink-3)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--ink)]"
-          aria-label="Refresh preview"
-          title="Refresh preview"
+        <HeaderTip
+          tip={
+            <span className="block">
+              <span className="block font-medium text-[var(--ink)]">
+                {payload?.name || currentPath || "Download"}
+              </span>
+              <span className="block text-[var(--ink-3)]">
+                {payload ? `${payload.kind} · ${formatBytes(payload.size)}` : ""}
+                {currentPath ? `${payload ? " · " : ""}${currentPath}` : ""}
+              </span>
+            </span>
+          }
         >
-          <RefreshCcw className="h-4 w-4" />
-        </button>
-        {/* Decks skip panel-expand: the player has real fullscreen
-            (requestFullscreen on the iframe) — a bigger iframe adds
-            nothing a slide deck needs. */}
-        {payload?.kind !== "deck" && (
+          <button
+            onClick={download}
+            className="rounded-[4px] p-1 text-[var(--ink-3)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--ink)]"
+            aria-label="Download file"
+          >
+            <Download className="h-4 w-4" />
+          </button>
+        </HeaderTip>
+        <HeaderTip tip="Reload the latest file contents">
+          <button
+            onClick={() => {
+              setLoaded(null);
+              fetchPreview();
+            }}
+            className="rounded-[4px] p-1 text-[var(--ink-3)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--ink)]"
+            aria-label="Refresh preview"
+          >
+            <RefreshCcw className="h-4 w-4" />
+          </button>
+        </HeaderTip>
+        <HeaderTip tip={expanded ? "Restore panel size" : "Expand preview to a larger view"}>
           <button
             ref={expandBtnRef}
             onClick={() => setExpanded((v) => !v)}
             className="rounded-[4px] p-1 text-[var(--ink-3)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--ink)]"
             aria-label={expanded ? "Restore panel size" : "Expand preview"}
-            title={expanded ? "Restore panel size" : "Expand preview"}
           >
             {expanded ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
           </button>
-        )}
+        </HeaderTip>
         {/* No close button — Workspace's panel ✕ / Skills' "← files"
             back button / Escape already cover dismissal; one less
             header control. onClose still drives the Escape path. */}
@@ -398,84 +467,107 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, onR
         </div>
       )}
 
-      {/* Actions */}
-      <div className="flex flex-wrap items-center gap-1 border-b border-[var(--border)] px-3 py-1.5">
-        {artifact && (
-          <div className="relative" ref={historyRef}>
-            <ActionButton icon={History} label="History" onClick={openHistory} />
-            {historyOpen && (
-              <div className="absolute left-0 top-full z-20 mt-1 max-h-64 w-72 overflow-auto rounded-[5px] border border-[var(--border)] bg-[var(--white)] shadow-lg">
-                {history === null ? (
-                  <p className="p-3 text-[12px] text-[var(--ink-3)]">Loading…</p>
-                ) : history.length === 0 ? (
-                  <p className="p-3 text-[12px] text-[var(--ink-3)]">No revisions.</p>
-                ) : (
-                  history.map((rev) => (
-                    <div
-                      key={rev.revision_id}
-                      className="flex items-center gap-2 border-b border-[var(--border)]/50 px-3 py-2 text-[12px] last:border-0"
-                    >
-                      <button
-                        onClick={() => viewRevision(rev)}
-                        className="flex-1 text-left"
-                        style={{ background: "none", border: "none", cursor: "pointer" }}
+      {/* Actions — artifact history/revise plus secondary actions (desktop
+          open/reveal, track history, delete). Renders only when at least
+          one action exists so plain previews don't show an empty strip. */}
+      {(artifact ||
+        canExportDeck ||
+        isDesktopShell ||
+        (isWorkspace && !artifact && currentPath) ||
+        (isWorkspace && viewing.path && onDeleted)) && (
+        <div className="flex flex-wrap items-center gap-1 border-b border-[var(--border)] px-3 py-1.5">
+          {artifact && (
+            <div className="relative" ref={historyRef}>
+              <ActionButton icon={History} label="History" onClick={openHistory} />
+              {historyOpen && (
+                <div className="absolute left-0 top-full z-20 mt-1 max-h-64 w-72 overflow-auto rounded-[5px] border border-[var(--border)] bg-[var(--white)] shadow-lg">
+                  {history === null ? (
+                    <p className="p-3 text-[12px] text-[var(--ink-3)]">Loading…</p>
+                  ) : history.length === 0 ? (
+                    <p className="p-3 text-[12px] text-[var(--ink-3)]">No revisions.</p>
+                  ) : (
+                    history.map((rev) => (
+                      <div
+                        key={rev.revision_id}
+                        className="flex items-center gap-2 border-b border-[var(--border)]/50 px-3 py-2 text-[12px] last:border-0"
                       >
-                        <span className="font-medium text-[var(--ink)]">
-                          r{rev.revision_number}
-                          {rev.current && (
-                            <span className="ml-1 text-[10px] text-[var(--accent)]">current</span>
-                          )}
-                        </span>
-                        <span className="ml-2 text-[var(--ink-3)]">
-                          {rev.change_summary || formatBytes(rev.byte_size)}
-                        </span>
-                      </button>
-                      {!rev.current && (
-                        <>
-                          <button
-                            onClick={() => compareRevision(rev)}
-                            title="Compare this revision with current"
-                            aria-label={`Compare r${rev.revision_number} with current`}
-                            className="rounded-[3px] p-1 text-[var(--ink-3)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--accent)]"
-                          >
-                            <GitCompareArrows className="h-3.5 w-3.5" />
-                          </button>
-                          <button
-                            onClick={() => restoreRevision(rev)}
-                            title="Restore this revision (creates a new revision)"
-                            className="rounded-[3px] p-1 text-[var(--ink-3)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--accent)]"
-                          >
-                            <RefreshCcw className="h-3.5 w-3.5" />
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  ))
-                )}
-              </div>
-            )}
-          </div>
-        )}
-        {artifact && onRevise && (
-          <ActionButton icon={PencilLine} label="Revise" onClick={reviseDraft} />
-        )}
-        <ActionButton icon={Download} label="Download" onClick={download} />
-        {isDesktopShell && (
-          <>
-            <ActionButton icon={ExternalLink} label="Open" onClick={openFile} />
-            <ActionButton icon={FolderOpen} label="Reveal" onClick={revealFile} />
-          </>
-        )}
-        {isWorkspace && !artifact && currentPath && (
-          <ActionButton icon={FileClock} label="Track history" onClick={trackHistory} />
-        )}
-        {isWorkspace && viewing.path && onDeleted && (
-          <ActionButton icon={Trash2} label="Delete" onClick={deleteFile} />
-        )}
-      </div>
+                        <button
+                          onClick={() => viewRevision(rev)}
+                          className="flex-1 text-left"
+                          style={{ background: "none", border: "none", cursor: "pointer" }}
+                        >
+                          <span className="font-medium text-[var(--ink)]">
+                            r{rev.revision_number}
+                            {rev.current && (
+                              <span className="ml-1 text-[10px] text-[var(--accent)]">current</span>
+                            )}
+                          </span>
+                          <span className="ml-2 text-[var(--ink-3)]">
+                            {rev.change_summary || formatBytes(rev.byte_size)}
+                          </span>
+                        </button>
+                        {!rev.current && (
+                          <>
+                            <button
+                              onClick={() => compareRevision(rev)}
+                              title="Compare this revision with current"
+                              aria-label={`Compare r${rev.revision_number} with current`}
+                              className="rounded-[3px] p-1 text-[var(--ink-3)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--accent)]"
+                            >
+                              <GitCompareArrows className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              onClick={() => restoreRevision(rev)}
+                              title="Restore this revision (creates a new revision)"
+                              className="rounded-[3px] p-1 text-[var(--ink-3)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--accent)]"
+                            >
+                              <RefreshCcw className="h-3.5 w-3.5" />
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+          {artifact && onRevise && (
+            <ActionButton icon={PencilLine} label="Revise" onClick={reviseDraft} />
+          )}
+          {canExportDeck && (
+            <ActionButton
+              icon={FileDown}
+              label={exporting === "pptx" ? "Exporting…" : "Export PPTX"}
+              onClick={exportDeck}
+              disabled={exporting !== null}
+            />
+          )}
+          {payload?.kind === "deck" && be.exportDeckPdf && (
+            <ActionButton icon={FileDown} label={exporting === "pdf" ? "Exporting…" : "Export PDF"} onClick={exportPdf} disabled={exporting !== null} />
+          )}
+          {isDesktopShell && (
+            <>
+              <ActionButton icon={ExternalLink} label="Open" onClick={openFile} />
+              <ActionButton icon={FolderOpen} label="Reveal" onClick={revealFile} />
+            </>
+          )}
+          {isWorkspace && !artifact && currentPath && (
+            <ActionButton icon={FileClock} label="Track history" onClick={trackHistory} />
+          )}
+          {isWorkspace && viewing.path && onDeleted && (
+            <ActionButton icon={Trash2} label="Delete" onClick={deleteFile} />
+          )}
+        </div>
+      )}
       {actionMsg && (
         <p className="border-b border-[var(--border)] px-3 py-1 text-[11px] text-[var(--ink-2)]">
           {actionMsg}
+        </p>
+      )}
+      {payload?.kind === "deck" && payload.spec && (
+        <p className="border-b border-[var(--border)] px-3 py-1 text-[11px] text-[var(--ink-3)]">
+          Motion plays in Slideshow. PPTX export shows all content without animations.
         </p>
       )}
 
@@ -488,7 +580,7 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, onR
           axes (auto margins clamp to top-align + scroll when taller), wide
           kinds get a wider column, text kinds a readable column. */}
       <div
-        className={`flex-1 overflow-auto ${
+        className={`${payload && ["deck", "html"].includes(payload.kind) && !compare ? "flex min-h-0 flex-1 flex-col overflow-hidden" : "flex-1 overflow-auto"} ${
           expanded
             ? payload && !compare && ["image", "pdf", "media"].includes(payload.kind)
               ? "flex flex-col"
@@ -498,15 +590,17 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, onR
       >
         <div
           className={
-            !expanded
-              ? ""
-              : payload && !compare && ["image", "pdf", "media"].includes(payload.kind)
-                ? "m-auto w-fit max-w-full p-6"
-                : `mx-auto w-full p-6 ${
-                    compare || (payload && ["table", "workbook", "slides"].includes(payload.kind))
-                      ? "max-w-[1000px]"
-                      : "max-w-[840px]"
-                  }`
+            payload && ["deck", "html"].includes(payload.kind) && !compare
+              ? "min-h-0 flex-1"
+              : !expanded
+                ? ""
+                : payload && !compare && ["image", "pdf", "media"].includes(payload.kind)
+                  ? "m-auto w-fit max-w-full p-6"
+                  : `mx-auto w-full p-6 ${
+                      compare || (payload && ["table", "workbook", "slides"].includes(payload.kind))
+                        ? "max-w-[1000px]"
+                        : "max-w-[840px]"
+                    }`
           }
         >
         {compare ? (
@@ -575,17 +669,40 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, onR
   );
 }
 
+/** Hover tooltip for header icon buttons — richer than a native title:
+ *  shows on mouseenter below the button, right-aligned to it. */
+function HeaderTip({ tip, children }: { tip: ReactNode; children: ReactNode }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <span
+      className="relative"
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+    >
+      {children}
+      {hover && (
+        <span className="absolute right-0 top-full z-50 mt-1 block w-max max-w-72 rounded-[5px] border border-[var(--border)] bg-[var(--white)] px-2.5 py-1.5 text-left text-[11px] leading-snug text-[var(--ink-2)] shadow-lg [overflow-wrap:anywhere]">
+          {tip}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function ActionButton({
   icon: Icon,
   label,
   onClick,
+  disabled,
 }: {
   icon: typeof Download;
   label: string;
   onClick: () => void;
+  disabled?: boolean;
 }) {
   return (
     <button
+      disabled={disabled}
       onClick={onClick}
       className="flex items-center gap-1 rounded-[4px] px-1.5 py-1 text-[11px] text-[var(--ink-2)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--ink)]"
       style={{ border: "none", background: "none", cursor: "pointer" }}

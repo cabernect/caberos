@@ -1,11 +1,18 @@
 # W2H - HTML Presentation Authoring And Isolated Playback
 
+Planning update 2026-11-16: W2H is now the HTML renderer track within
+[Unified W2](02-presentations.md), not a separate authoring architecture.
+That plan owns source/editing/export direction and implementation order.
+Progress entries below are historical. The provisional shared-spec/native
+changes in the working tree are unverified and implementation is paused for
+plan review; they are not accepted completion evidence.
+
 Status: prioritized first per operator decision 2026-11-13 — HTML decks are
 the primary authoring path for presented deliverables (live preview beats
 approximate Office extraction); Office files remain available via the
 existing spec paths and uploaded Office keeps best-effort previews with
-limitation alerts. HTML→PPTX export is NOT promised by this plan. Existing
-HTML fixture is a sample, not a shipped artifact format.
+limitation alerts. HTML-to-PPTX now has an explicit image-based download path;
+native-editable HTML conversion and PDF export remain separate scope.
 
 Progress 2026-11-13: slices 1+2+3 landed — `formats/html.py` deck handler
 (spec v1 → self-contained .html, whitelist fragment sanitizer, deck-rt1
@@ -64,9 +71,26 @@ egress). Deterministic states via the `goto` bridge; per-slide metrics
 are revision-bound (never live bytes), content-addressed on disk
 (`data/artifact-captures/<sha256>/`), manifest+PNG cache verified live
 (8ms cache hit). Tests: admission/param guards + real-browser capture +
-reveal-state determinism (5 tests, skip without runtime). Remaining in
-slice 6: frontend surfacing of captures in the preview panel; agent-side
-verify wiring (artifact_inspect could report capture availability).
+reveal-state determinism (5 tests, skip without runtime).
+
+Progress 2026-11-13 (cont. 4): slice 6 frontend + slice 7 landed —
+captures now serve ANY admitted source via
+`GET /workspace/deck-captures` (+ `/{i}.png`) resolving live file,
+artifact-live, or pinned revision bytes through `_resolve_source`
+(manifest `revision_id` is null for live bytes; route family is part of
+the cache key so artifact/workspace manifests can't cross-serve).
+Preview panel: camera toggle in deck chrome opens a lazy thumbnail
+strip — per-slide PNGs + warning badges (overflow/blank/broken images/
+heavy shrink-to-fit), click-to-jump via `goto`/`nav`. Tauri fix: the
+shell is cross-origin to the gateway so the deck iframe could neither
+send Bearer nor receive the Lax cookie — `deckFileUrl` now fetches the
+admitted bytes with auth and serves a `blob:` URL with the endpoint CSP
+re-embedded as `<meta>` (hash-pinned script-src still holds; iframe
+sandbox keeps the opaque origin). Slice 7: self-containment regression
+test (no external loaders — scripts/styles/images/fonts all inline) +
+offline playback notes in the office-documents skill. Remaining:
+agent-side verify wiring (artifact_inspect reporting capture metrics);
+slice 8 export (deferred).
 
 Bounded execution is satisfied by the constrained scripting model, not a
 watchdog: admitted decks contain ONLY the platform runtime (hash-pinned
@@ -99,6 +123,19 @@ safe execution of every uploaded `.html` file.
   and Tauri isolation, execution bounds, capture protocol, and failure recovery.
 - Define reduced motion and explicit stable capture states, independent of
   elapsed time. Captures identify revision, slide, viewport, and reveal state.
+
+Progress 2026-11-16: ordinary HTML now has a separate static rendered/source
+preview, not slide playback. Scripts, navigation, forms, embedded frames and
+external/local asset requests are disabled; inline styles and embedded raster
+images are supported. Truncated documents stay source-only.
+Deck chrome offers **Export PPTX (images)**: final-state 1280x720 captures,
+one full-bleed image per 16:9 PowerPoint slide, with source SHA-256/revision and
+lossiness recorded in file properties and speaker notes. This is an explicit
+derived download, not a source mutation or a native-editable conversion.
+The caller supplies the preview hash; changed live files return 409.
+Overflowing/blank/broken-image slides return 422 instead of a silently clipped
+export. Captures hide standalone navigation; rt1 captures use its `nav` bridge.
+The managed browser must already be installed; export never downloads it.
 
 ## Implementation Slices
 

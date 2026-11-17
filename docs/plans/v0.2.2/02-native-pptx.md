@@ -1,5 +1,10 @@
 # W2 - Native Editable PPTX Craft
 
+Planning update 2026-11-16: this is the native-renderer requirements track of
+[Unified W2: Presentation Authoring, Editing And Outputs](02-presentations.md).
+That plan owns the implementation order, shared source, editing and conflict
+semantics. Existing requirements below remain obligations, not completion claims.
+
 Status: basic PPTX builder exists; richer craft, templates, effects, and edits planned.
 Dependencies: [W0](00-contracts-fixtures.md); rendered quality checks use [W1](01-rendering-foundation.md).
 
@@ -11,8 +16,9 @@ then changes one identified slide without rebuilding unrelated slides.
 Operator downloads `.pptx` and edits text, shapes, tables, and chart data in
 PowerPoint. Full-slide screenshots are not an acceptable editable deck.
 
-This is separate from [HTML presentations](02h-html-presentations.md). CaberOS
-may show static PPTX previews even when supported effects play in PowerPoint.
+This renderer shares a canonical presentation source with the
+[HTML track](02h-html-presentations.md), but has separate native verification.
+CaberOS may show static PPTX previews even when supported effects play in PowerPoint.
 
 ## Baseline And Scope
 

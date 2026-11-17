@@ -128,36 +128,99 @@ def test_code_preview_carries_language():
     assert payload["language"] == "python"
 
 
-def test_html_deck_preview_admitted_kind():
+def test_deck_json_preview_kind():
     from agentos import previews
-    from agentos.artifacts.formats import html as deck
+    from agentos.artifacts.formats import deck
 
-    data = deck.build({"title": "T", "slides": [{"blocks": [{"type": "divider"}]}]}, "/tmp")
-    payload = previews.preview_bytes(data, "deck.html")
+    data = deck.build({"kind": "deck", "title": "T", "slides": [{"title": "One"}]}, "/tmp")
+    payload = previews.preview_bytes(data, "review.deck.json")
     assert payload["kind"] == "deck"
-    assert payload["deck"]["slides"] == 1
-    assert payload["deck"]["runtime"] == "deck-rt3"
+    assert payload["spec"]["title"] == "T"
+    assert payload["spec"]["slides"][0]["id"] == "s1"
 
 
-def test_html_foreign_preview_stays_code():
+def test_deck_json_invalid_falls_back_to_code():
     from agentos import previews
 
-    payload = previews.preview_bytes(b"<html><body>hi</body></html>", "page.html")
+    payload = previews.preview_bytes(b'{"slides": "nope"', "broken.deck.json")
     assert payload["kind"] == "code"
+    assert payload["language"] == "json"
+
+
+def test_html_foreign_preview_is_static_and_keeps_source():
+    from agentos import previews
+
+    source = '<html><body style="color:green"><h1>hi</h1></body></html>'
+    payload = previews.preview_bytes(source.encode(), "page.html")
+    assert payload["kind"] == "html"
     assert payload["language"] == "html"
+    assert payload["content"] == source
+    assert '<body style="color:green">' in payload["html_document"]
+    assert "<h1>hi</h1>" in payload["html_document"]
 
 
-def test_html_deck_crafted_script_not_admitted():
+def test_html_script_never_renders():
     from agentos import previews
-    from agentos.artifacts.formats import html as deck
 
-    data = deck.build(
-        {"title": "T", "slides": [{"blocks": [{"type": "divider"}]}]}, "/tmp"
-    ).decode()
-    crafted = data.replace("</body>", "<script>alert(1)</script></body>").encode()
-    # Refused playback admission → honest static source view instead.
-    payload = previews.preview_bytes(crafted, "deck.html")
-    assert payload["kind"] == "code"
+    crafted = b"<html><body><p>ok</p><script>alert(1)</script></body></html>"
+    payload = previews.preview_bytes(crafted, "page.html")
+    assert payload["kind"] == "html"
+    assert "<script" not in payload["html_document"]
+    assert "alert(1)" in payload["content"]
+
+
+def test_static_html_removes_active_markup_and_navigation():
+    from bs4 import BeautifulSoup
+
+    from agentos import previews
+    from agentos.html_preview import STATIC_HTML_CSP
+
+    source = """
+    <html><head><base href="https://example.org">
+    <meta http-equiv="refresh" content="0;url=https://example.org">
+    <style>body{background:#fafafa}p{color:olive}</style>
+    <link rel="stylesheet" href="https://example.org/style.css"></head>
+    <body onload="alert(1)"><h1>Report</h1><p>Keep this</p>
+    <script>fetch('/api/settings')</script>
+    <a href="https://example.org" ping="/api/settings" target="_top">Link</a>
+    <form action="/api/settings"><input value="x"><button>Submit</button></form>
+    <iframe srcdoc="<script>alert(1)</script>"></iframe>
+    <object data="https://example.org"></object>
+    <svg><a href="https://example.org"><text>svg link</text></a></svg>
+    <img src="https://example.org/a.png" onerror="alert(1)">
+    <img src="file:///private/photo.png">
+    <img src="data:image/png;base64,aGVsbG8=" alt="Embedded">
+    </body></html>
+    """
+    payload = previews.preview_bytes(source.encode(), "report.HTM")
+    doc = BeautifulSoup(payload["html_document"], "html.parser")
+    assert payload["kind"] == "html"
+    assert (
+        doc.head.find("meta", attrs={"http-equiv": "Content-Security-Policy"})["content"]
+        == STATIC_HTML_CSP
+    )
+    assert doc.h1.text == "Report"
+    assert "color:olive" in doc.style.text
+    assert not doc.find(["script", "iframe", "object", "form", "input", "svg", "base", "link"])
+    assert not doc.find("meta", attrs={"http-equiv": "refresh"})
+    assert not doc.a.has_attr("href")
+    assert not doc.body.has_attr("onload")
+    assert [img.get("src") for img in doc.find_all("img")] == [
+        None,
+        None,
+        "data:image/png;base64,aGVsbG8=",
+    ]
+    assert payload["content"] == source
+
+
+def test_truncated_html_is_source_only():
+    from agentos import previews
+
+    payload = previews.preview_bytes(b"<p>" + b"x" * previews.TEXT_CHARS, "long.html")
+    assert payload["kind"] == "html"
+    assert payload["truncated"]
+    assert payload["html_document"] is None
+    assert len(payload["content"]) == previews.TEXT_CHARS
 
 
 def test_csv_preview_bounds_rows_and_reports_total():
@@ -353,6 +416,166 @@ async def test_preview_workspace_text_file(client, workspace_root, artifact_stor
     assert data["source"]["artifact_id"] is None
     assert data["source"]["revision_id"] is None
     assert data["source"]["sha256"] == hashlib.sha256((ws / "notes.md").read_bytes()).hexdigest()
+
+
+async def test_static_html_preview_uses_exact_revision(
+    db, client, workspace_root, artifact_storage
+):
+    from agentos.artifacts import service
+
+    ws = _agent_workspace(workspace_root)
+    old = b"<h1>Original page</h1>"
+    art, rev = await service.create(
+        db,
+        workspace_id="agent-1",
+        workspace_path=ws,
+        rel_path="page.html",
+        data=old,
+    )
+    (ws / "page.html").write_text("<h1>Untracked replacement</h1>")
+    resp = await client.get(
+        "/api/agents/agent-1/workspace/preview",
+        params={"artifact_id": art.id, "revision_id": rev.id},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["kind"] == "html"
+    assert "Original page" in body["html_document"]
+    assert "Untracked replacement" not in body["html_document"]
+    assert body["source"]["revision_id"] == rev.id
+    assert body["source"]["sha256"] == hashlib.sha256(old).hexdigest()
+
+
+async def test_deck_pptx_export_is_revision_bound_native(
+    db, client, workspace_root, artifact_storage
+):
+    from io import BytesIO
+
+    from pptx import Presentation
+
+    from agentos.artifacts import service
+    from agentos.artifacts.formats import deck as deck_fmt
+
+    ws = _agent_workspace(workspace_root)
+    spec = {
+        "kind": "deck",
+        "title": "Export original",
+        "slides": [
+            {
+                "id": "one",
+                "title": "One",
+                "blocks": [{"type": "paragraph", "text": "alpha"}],
+                "notes": "Authored speaker note",
+            },
+            {"id": "two", "title": "Two", "blocks": [{"type": "bullets", "items": ["x", "y"]}]},
+        ],
+    }
+    data = deck_fmt.build(spec, ws)
+    art, rev = await service.create_structured(
+        db,
+        workspace_id="agent-1",
+        workspace_path=ws,
+        rel_path="deck.deck.json",
+        format="deck",
+        spec=spec,
+    )
+    (ws / "artifacts" / "deck.deck.json").write_text("live file replaced")
+    sha = hashlib.sha256(data).hexdigest()
+    resp = await client.get(
+        "/api/agents/agent-1/workspace/deck-export.pptx",
+        params={"artifact_id": art.id, "revision_id": rev.id, "expected_sha256": sha},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["x-source-sha256"] == sha
+    assert resp.headers["x-export-mode"] == "native-objects"
+    assert resp.headers["content-disposition"].endswith("deck.pptx")
+    prs = Presentation(BytesIO(resp.content))
+    assert len(prs.slides) == 2
+    titles = [s.shapes.title.text for s in prs.slides]
+    assert titles == ["One", "Two"]
+    # Native editable text, not a screenshot.
+    assert any(
+        shape.has_text_frame and "alpha" in shape.text_frame.text for shape in prs.slides[0].shapes
+    )
+    for index, slide in enumerate(prs.slides):
+        assert slide.notes_slide.notes_text_frame.text == spec["slides"][index].get("notes", "")
+    assert sha[:16] in prs.core_properties.comments
+    assert rev.id in prs.core_properties.comments
+    assert (ws / "artifacts" / "deck.deck.json").read_text() == "live file replaced"
+
+
+async def test_deck_export_rejects_changed_or_non_deck_file(
+    client, workspace_root, artifact_storage
+):
+    ws = _agent_workspace(workspace_root)
+    data = b"<h1>Not a deck</h1>"
+    (ws / "page.html").write_bytes(data)
+    url = "/api/agents/agent-1/workspace/deck-export.pptx"
+    changed = await client.get(url, params={"path": "page.html", "expected_sha256": "stale"})
+    assert changed.status_code == 409
+    non_deck = await client.get(
+        url,
+        params={"path": "page.html", "expected_sha256": hashlib.sha256(data).hexdigest()},
+    )
+    assert non_deck.status_code == 400
+
+
+async def test_deck_export_refuses_missing_pinned_assets(client, workspace_root, artifact_storage):
+    """A missing asset is invalid source, not something raster fallback can fix."""
+    ws = _agent_workspace(workspace_root)
+    data = (
+        b'{"kind":"deck","title":"T","slides":[{"title":"S","blocks":'
+        b'[{"type":"image","src":"missing.png"}]}]}'
+    )
+    (ws / "deck.deck.json").write_bytes(data)
+    resp = await client.get(
+        "/api/agents/agent-1/workspace/deck-export.pptx",
+        params={"path": "deck.deck.json", "expected_sha256": hashlib.sha256(data).hexdigest()},
+    )
+    assert resp.status_code == 422
+    assert "slide 1" in resp.json()["detail"]
+
+
+async def test_deck_export_pdf_is_revision_bound(
+    client, workspace_root, artifact_storage, monkeypatch
+):
+    """PDF export renders the pinned spec through the same React canvas —
+    the browser capture itself is stubbed at the render seam."""
+    from io import BytesIO
+
+    from pypdf import PdfWriter
+
+    from agentos.artifacts import deck_exports
+
+    ws = _agent_workspace(workspace_root)
+    data = (
+        b'{"kind":"deck","title":"PDF","slides":['
+        b'{"id":"one","title":"One","blocks":[{"type":"paragraph","text":"alpha"}]},'
+        b'{"id":"two","title":"Two","blocks":[{"type":"bullets","items":["x"]}]}]}'
+    )
+    (ws / "deck.deck.json").write_bytes(data)
+
+    async def fake_render(spec, *, slides=None, pdf=False):
+        assert pdf is True
+        writer = PdfWriter()
+        for _ in spec["slides"]:
+            writer.add_blank_page(width=960, height=540)
+        out = BytesIO()
+        writer.write(out)
+        return out.getvalue()
+
+    monkeypatch.setattr(deck_exports.deck_render, "render", fake_render)
+    sha = hashlib.sha256(data).hexdigest()
+    resp = await client.get(
+        "/api/agents/agent-1/workspace/deck-export.pdf",
+        params={"path": "deck.deck.json", "expected_sha256": sha},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"] == "application/pdf"
+    assert resp.headers["x-source-sha256"] == sha
+    assert resp.headers["x-export-mode"] == "react-fixed-pages"
+    assert resp.headers["content-disposition"].endswith("deck.pdf")
+    assert resp.content.startswith(b"%PDF")
 
 
 async def test_preview_resolves_renamed_file_with_moved_from(

@@ -118,6 +118,7 @@ async def artifact_restore(args: dict[str, Any], workspace_path: str, **kwargs: 
             args["artifact_id"],
             workspace_path=workspace_path,
             revision_id=args["revision_id"],
+            base_revision_id=args.get("base_revision_id"),
             change_summary=args.get("change_summary"),
             **_provenance(kwargs),
         )

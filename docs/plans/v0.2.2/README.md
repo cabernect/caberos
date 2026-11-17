@@ -24,19 +24,21 @@ slices, failure behavior, test scenarios, and completion checklists.
 |---|---|---|---|
 | W0 | Decide supported features, safety rules, and what good output looks like | [Contracts and fixtures](00-contracts-fixtures.md) | In progress; initial drafts are not approval |
 | W1 | Preview exact revisions with honest modes/limitations | [Preview foundation](01-rendering-foundation.md) | Existing Office extraction is baseline; metadata/capture work planned |
-| W2 | Make attractive PPTX files that remain editable in PowerPoint | [Native PPTX](02-native-pptx.md) | Basic handler exists; craft/effects/template work planned |
-| W2H | Make HTML decks with live motion and offline browser playback | [HTML presentations](02h-html-presentations.md) | Planned; fixture is not a shipped feature |
+| W2 (includes former W2H) | Author and edit one presentation spec; render HTML, native PPTX and planned PDF | [Unified presentation plan](02-presentations.md) | Direction accepted; implementation sequence and editing scope proposed for review; provisional code is not completion evidence |
 | W3 | Make styled, editable Word reports and targeted document edits | [DOCX craft](03-docx-craft.md) | Basic handler exists; richer styles/templates planned |
 | W3X | Make styled Excel files and safely edit uploaded workbooks | [XLSX craft and editing](03x-xlsx-craft.md) | First styling/layout slice shipped; remaining scope planned |
 | W4 | Let the operator comfortably view and request changes to deliverables | [Shared preview UX](04-preview-experience.md) | Existing panel is baseline; richer UX planned |
 | W5 | Let the agent see exact output and fix visual problems | [Visual inspection loop](05-visual-inspection.md) | Planned |
 | W6 | Prove the whole workflow, document limitations, and release | [Acceptance and release](06-acceptance-release.md) | Planned; no release approval implied |
 
-### HTML And Office Are Separate Paths
+### One Presentation Source, Separate Renderer Evidence
 
-- W2 produces `.pptx`: native editable Office objects with a static, best-effort
+The [unified W2 plan](02-presentations.md) supersedes the independent W2/W2H
+authoring split. The renderer obligations below remain supporting tracks:
+
+- W2's PPTX track produces native editable Office objects with a static, best-effort
   in-app preview. W1 identifies preview mode/limits; no Office layout engine is required.
-- W2H produces an HTML presentation: live browser playback, supported motion,
+- W2's HTML track (formerly W2H) produces live browser playback, supported motion,
   offline assets, and an isolated runtime. It does not need an Office engine.
 - W3 produces `.docx`; W3X produces `.xlsx`. Neither is an HTML presentation.
 - W4 brings these views into the shared panel; W5 lets agents inspect their
@@ -48,8 +50,7 @@ slices, failure behavior, test scenarios, and completion checklists.
 ```text
 W0 shared identity / asset / safety contracts
   +-- Preview modes / limits ---> W1 ---------------------+
-  +-- PPTX contract -----------> W2 ----------------------+
-  +-- HTML isolation/package -> W2H (no Office dependency)+--> W4 --> W5
+  +-- Presentation source ----> W2 (HTML/PPTX/PDF tracks) -+--> W4 --> W5
   +-- DOCX contract -----------> W3 ----------------------+          |
   +-- XLSX remaining scope ----> W3X ---------------------+          v
                                                                   W6
@@ -157,6 +158,11 @@ and supported captures. See [detailed W1](01-rendering-foundation.md).
 
 ## W2 - Native Editable Presentation Craft
 
+Supporting native-renderer requirements, not a separate authoring architecture.
+The primary sequence, spec editing and conflict policy are in
+[Unified W2](02-presentations.md). Preserve the requirements below as its native
+track; they are not satisfied merely by adding a shared JSON type.
+
 Outcome: designed PPTX slides made of editable objects, not slide screenshots.
 
 1. Add a small theme vocabulary: palette, heading/body fonts, type scale,
@@ -192,6 +198,10 @@ to text, shape, table, and native chart data, followed by save/reopen.
 Parser success alone cannot satisfy the editability gate.
 
 ## W2H - HTML Presentation Authoring And Playback
+
+Historical label, now the HTML renderer track within
+[Unified W2](02-presentations.md). Playback/isolation obligations remain;
+this is no longer an independently mutable presentation source.
 
 Outcome: a first-class portable HTML deck, not a screenshot-based PPTX substitute.
 

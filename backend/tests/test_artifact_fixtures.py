@@ -239,8 +239,13 @@ def test_malformed_office_preview_errors_are_separate_from_limited_supported_vie
         ("uploaded.svg", b'<svg xmlns="http://www.w3.org/2000/svg"/>', "image"),
         ("uploaded.mp3", b"synthetic media metadata input", "media"),
         ("uploaded.mp4", b"synthetic media metadata input", "media"),
-        ("uploaded.html", b"<script>throw Error('must stay source')</script>", "code"),
+        ("uploaded.html", b"<script>throw Error('must not execute')</script>", "html"),
     ],
 )
 def test_non_office_upload_preview_support_is_preserved(name, data, kind):
-    assert previews.preview_bytes(data, name)["kind"] == kind
+    payload = previews.preview_bytes(data, name)
+    assert payload["kind"] == kind
+    if kind == "html":
+        assert payload["content"] == data.decode()
+        assert "<script" not in payload["html_document"]
+        assert "script-src 'none'" in payload["html_document"]

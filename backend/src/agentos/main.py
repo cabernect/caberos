@@ -31,6 +31,7 @@ from .api import (  # noqa: E402
     channels,
     chat,
     data,
+    deck_exports,
     dependencies,
     elicitation,
     fs,
@@ -629,6 +630,7 @@ app.include_router(auth_router)
 app.include_router(providers.router)
 app.include_router(agents.router)
 app.include_router(agent_files.router)
+app.include_router(deck_exports.router)
 app.include_router(chat.router)
 app.include_router(home.router)
 app.include_router(approvals.router)

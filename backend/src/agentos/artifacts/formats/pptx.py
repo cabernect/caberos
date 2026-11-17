@@ -29,6 +29,10 @@ _MARGIN = Inches(0.7)
 
 
 def build(spec: dict, workspace_path: str | Path) -> bytes:
+    if spec.get("kind") == "deck":
+        from ..deck_pptx import build as build_deck
+
+        return build_deck(spec, workspace_path)
     prs = Presentation()
     prs.slide_width = _SLIDE_W
     prs.slide_height = _SLIDE_H
