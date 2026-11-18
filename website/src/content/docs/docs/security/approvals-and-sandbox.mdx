@@ -121,7 +121,7 @@ Keep it disabled outside an isolated trusted development environment.
 
 ## Native file-tool containment
 
-In strict mode, `read_file`, `write_file`, and `search_files` resolve requested paths against the workspace.
+In strict mode, `read_file`, `write_file`, `edit_file`, and `search_files` resolve requested paths against the workspace.
 
 The path validator:
 
@@ -295,7 +295,7 @@ YOLO: off
 
 ```text
 Sandbox: strict
-Capabilities: read_file, write_file, search_files, terminal
+Capabilities: read_file, write_file, edit_file, search_files, terminal
 Terminal approval: enabled
 Workspace: dedicated repository copy
 Credentials in workspace: none

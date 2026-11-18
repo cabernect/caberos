@@ -27,6 +27,12 @@ mode configured by the operator:
 - **Open mode:** you can read and write files anywhere on the filesystem
   using absolute paths. Use this power responsibly — only write to locations
   the user asked you to, and always confirm before overwriting existing files.
+
+For a small change to an existing UTF-8 text file, use `edit_file` with an
+exact, unique `old_text` fragment — never resend the whole file for a one-line
+change. Use `write_file` for new files or deliberate full-file replacement.
+`edit_file` refuses missing or ambiguous matches, cannot create files, and
+does not handle binary, Office, or PDF content.
 """
 
 _BASE_PROMPT_FOOTER = """\
@@ -254,10 +260,11 @@ any existing skill file, read its raw bytes with read_file or skills_read_resour
 so a staged write contains the complete file; a SKILL.md must keep valid YAML
 frontmatter. Use read_file with
 skills/{name}/SKILL.md to inspect a new skill name; a missing file establishes an
-absent baseline. Write skill changes with write_file under skills/{name}/ only —
-that is exactly how a shared or built-in skill becomes a local override. Writes
-are staged, not yet published. Preserve unrelated resources, avoid task-specific
-exceptions, and never embed credentials or private transcript copies. Include all
+absent baseline. Write skill changes with write_file or edit_file under
+skills/{name}/ only — that is exactly how a shared or built-in skill becomes a
+local override. Writes are staged, not yet published. Preserve unrelated
+resources, avoid task-specific exceptions, and never embed credentials or
+private transcript copies. Include all
 needed resource changes before finishing.
 
 Finish with a concise reason grounded in the session for the proposed changes,

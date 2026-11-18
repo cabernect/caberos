@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 import pytest
 
 from agentos.capabilities.tools.datetime_tool import datetime_now
-from agentos.capabilities.tools.file import read_file, search_files, write_file
+from agentos.capabilities.tools.file import edit_file, read_file, search_files, write_file
 
 # --- search_files: content mode (grep) ---
 
@@ -278,6 +278,78 @@ async def test_write_file_modifies(workspace):
     )
     assert result["action"] == "modified"
     assert "diff" in result
+
+
+# --- edit_file: exact unique-fragment replacement ---
+
+
+@pytest.mark.asyncio
+async def test_edit_file_replaces_unique_fragment(workspace):
+    path = os.path.join(workspace, "note.txt")
+    with open(path, "w") as f:
+        f.write("first\nold title\nlast\n")
+    result = await edit_file(
+        {"path": "note.txt", "old_text": "old title", "new_text": "new title"},
+        workspace_path=workspace,
+    )
+    assert result["success"] is True
+    assert result["action"] == "modified"
+    assert "-old title" in result["diff"]
+    assert "+new title" in result["diff"]
+    with open(path) as f:
+        assert f.read() == "first\nnew title\nlast\n"
+
+
+@pytest.mark.asyncio
+async def test_edit_file_reports_unchanged_on_noop(workspace):
+    with open(os.path.join(workspace, "same.txt"), "w") as f:
+        f.write("same\n")
+    result = await edit_file(
+        {"path": "same.txt", "old_text": "same", "new_text": "same"},
+        workspace_path=workspace,
+    )
+    assert result["action"] == "unchanged"
+
+
+@pytest.mark.asyncio
+async def test_edit_file_refuses_missing_and_ambiguous_without_writes(workspace):
+    path = os.path.join(workspace, "dup.txt")
+    with open(path, "w") as f:
+        f.write("same\nsame\n")
+    for old in ("missing", "same"):
+        result = await edit_file(
+            {"path": "dup.txt", "old_text": old, "new_text": "changed"},
+            workspace_path=workspace,
+        )
+        assert "error" in result
+    with open(path) as f:
+        assert f.read() == "same\nsame\n"
+
+
+@pytest.mark.asyncio
+async def test_edit_file_rejects_missing_file_and_empty_old_text(workspace):
+    result = await edit_file(
+        {"path": "gone.txt", "old_text": "x", "new_text": "y"}, workspace_path=workspace
+    )
+    assert "not found" in result["error"]
+    result = await edit_file(
+        {"path": "gone.txt", "old_text": "", "new_text": "y"}, workspace_path=workspace
+    )
+    assert "must not be empty" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_edit_file_refuses_binary(workspace):
+    path = os.path.join(workspace, "blob.bin")
+    with open(path, "wb") as f:
+        f.write(b"\x89PNG\xff\xfe binary")
+    result = await edit_file(
+        {"path": "blob.bin", "old_text": "PNG", "new_text": "JPG"},
+        workspace_path=workspace,
+    )
+    assert "error" in result
+    with open(path, "rb") as f:
+        assert f.read() == b"\x89PNG\xff\xfe binary"
 
 
 # --- datetime_now ---

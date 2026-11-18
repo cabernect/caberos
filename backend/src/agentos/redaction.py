@@ -294,6 +294,7 @@ _ARG_ALLOWLISTS = {
     "read_file": {"path", "start_page", "end_page"},
     "search_files": {"mode", "pattern", "path"},
     "write_file": {"path"},
+    "edit_file": {"path"},
     "doc_list": {"limit", "offset"},
     "doc_inspect": {"document_id"},
     "doc_search": {"query", "limit"},

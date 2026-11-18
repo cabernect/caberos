@@ -105,6 +105,7 @@ Registered in `capabilities/builtin.py` (+ `run_subagent`/`read_subagent` in `to
 |---|---|---|---|
 | `read_file` | no | no | Read workspace file (text/docs/images w/ vision cap; 50k cap) |
 | `write_file` | no | no | Write workspace file (returns diff) |
+| `edit_file` | no | no | Replace one exact unique text fragment in an existing UTF-8 file (returns diff; refuses missing/ambiguous matches) |
 | `search_files` | no | no | `mode`: content (grep) / name (glob) / list |
 | `terminal` | yes | yes | Shell command in sandbox (persistent background session) |
 | `read_terminal` / `close_terminal` | no | no | Read/close a terminal session |

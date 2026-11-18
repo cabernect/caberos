@@ -277,6 +277,7 @@ _SENSITIVE_NAMES = {
     "agent_ask_user",
     "run_subagent",
     "write_file",
+    "edit_file",
     "web_fetch",
 }
 

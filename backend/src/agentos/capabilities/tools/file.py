@@ -1,4 +1,4 @@
-"""File capability implementations — read_file, write_file, search_files.
+"""File capability implementations — read_file, write_file, edit_file, search_files.
 
 All paths are validated against the workspace boundary before execution (D29).
 search_files merges the old file_search (grep), file_glob (find by pattern),
@@ -37,6 +37,33 @@ def _looks_binary(head: bytes) -> bool:
         return False
     controls = sum(1 for b in head if b < 9 or (13 < b < 32))
     return controls / len(head) > 0.05
+
+
+def _file_diff(before: str, after: str, path: str) -> str:
+    import difflib
+
+    return "".join(
+        difflib.unified_diff(
+            before.splitlines(keepends=True),
+            after.splitlines(keepends=True),
+            fromfile=f"a/{path}",
+            tofile=f"b/{path}",
+        )
+    )
+
+
+def _write_text_atomically(path: str, content: str) -> None:
+    import tempfile
+
+    fd, temporary = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".edit-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+        os.chmod(temporary, os.stat(path).st_mode)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
 
 
 def _elements_to_text(elements: list[dict]) -> str:
@@ -330,8 +357,6 @@ async def write_file(args: dict[str, Any], workspace_path: str, **kwargs: Any) -
         if "content" not in args:
             return {"error": "write_file requires content"}
         return await skill_edits.write_file(args["path"], args["content"])
-    import difflib
-
     wm = WorkspaceManager()
     path = wm.validate_path(workspace_path, args["path"], kwargs.get("sandbox_mode", "strict"))
     os.makedirs(os.path.dirname(path), exist_ok=True) if os.path.dirname(path) else None
@@ -355,21 +380,76 @@ async def write_file(args: dict[str, Any], workspace_path: str, **kwargs: Any) -
     # Generate unified diff if the file existed and changed
     if before_content is not None:
         if before_content != args["content"]:
-            diff_lines = list(
-                difflib.unified_diff(
-                    before_content.splitlines(keepends=True),
-                    args["content"].splitlines(keepends=True),
-                    fromfile=f"a/{args['path']}",
-                    tofile=f"b/{args['path']}",
-                )
-            )
-            result["diff"] = "".join(diff_lines)
+            result["diff"] = _file_diff(before_content, args["content"], args["path"])
             result["action"] = "modified"
         else:
             result["action"] = "unchanged"
     else:
         result["action"] = "created"
 
+    return result
+
+
+async def edit_file(args: dict[str, Any], workspace_path: str, **kwargs: Any) -> dict[str, Any]:
+    """Replace one exact, unique UTF-8 text fragment without resending the file."""
+    if kwargs.get("skill_edits") is not None:
+        return await _edit_skill_file(args, kwargs["skill_edits"])
+    for key in ("path", "old_text", "new_text"):
+        if not isinstance(args.get(key), str):
+            return {"error": f"edit_file requires string {key}"}
+    old_text, new_text = args["old_text"], args["new_text"]
+    if not old_text:
+        return {"error": "old_text must not be empty; use write_file to create a file"}
+    wm = WorkspaceManager()
+    path = wm.validate_path(workspace_path, args["path"], kwargs.get("sandbox_mode", "strict"))
+    if not os.path.isfile(path):
+        return {"error": f"File not found: {args['path']}"}
+    try:
+        with open(path, encoding="utf-8") as f:
+            before = f.read()
+    except (OSError, UnicodeDecodeError):
+        return {"error": f"File is not readable UTF-8 text: {args['path']}"}
+    count = before.count(old_text)
+    if count == 0:
+        return {"error": "old_text was not found; read the current file and retry"}
+    if count > 1:
+        return {"error": "old_text is ambiguous; include more surrounding context"}
+    after = before.replace(old_text, new_text, 1)
+    if after == before:
+        return {"success": True, "path": args["path"], "action": "unchanged", "bytes": len(after)}
+    _write_text_atomically(path, after)
+    return {
+        "success": True,
+        "path": args["path"],
+        "action": "modified",
+        "diff": _file_diff(before, after, args["path"]),
+    }
+
+
+async def _edit_skill_file(args: dict[str, Any], edits: Any) -> dict[str, Any]:
+    for key in ("path", "old_text", "new_text"):
+        if not isinstance(args.get(key), str):
+            return {"error": f"edit_file requires string {key}"}
+    old_text, new_text = args["old_text"], args["new_text"]
+    if not old_text:
+        return {"error": "old_text must not be empty"}
+    current = await edits.read_file(args["path"])
+    if "error" in current:
+        return current
+    if current.get("absent") or current.get("next_offset") is not None:
+        return {"error": "Read the complete skill file before editing it"}
+    before = current["content"]
+    count = before.count(old_text)
+    if count == 0:
+        return {"error": "old_text was not found; read the current file and retry"}
+    if count > 1:
+        return {"error": "old_text is ambiguous; include more surrounding context"}
+    after = before.replace(old_text, new_text, 1)
+    if after == before:
+        return {"success": True, "path": args["path"], "action": "unchanged", "staged": True}
+    result = await edits.write_file(args["path"], after)
+    if result.get("staged"):
+        result.update(action="modified", diff=_file_diff(before, after, args["path"]))
     return result
 
 

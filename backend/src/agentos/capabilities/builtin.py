@@ -22,7 +22,7 @@ from .tools.browser import (
 )
 from .tools.catalog import capabilities_load, capabilities_search
 from .tools.datetime_tool import datetime_now
-from .tools.file import read_file, search_files, write_file
+from .tools.file import edit_file, read_file, search_files, write_file
 from .tools.knowledge import doc_inspect, doc_list, doc_query_rows, doc_search
 from .tools.media import image_edit, image_generate
 from .tools.memory import (
@@ -91,7 +91,11 @@ def register_builtin_capabilities() -> None:
             name="write_file",
             effects=frozenset({"workspace_write"}),
             kind="tool",
-            description="Write a file to the agent's workspace",
+            description=(
+                "Write a UTF-8 file — creates new files or replaces an existing "
+                "file's whole content. For a small change to an existing text "
+                "file, prefer edit_file so only the changed fragment is sent."
+            ),
             parameters_schema={
                 "type": "object",
                 "properties": {
@@ -104,6 +108,36 @@ def register_builtin_capabilities() -> None:
             require_approval=False,
             subject_scoped=False,
             execute=write_file,
+        )
+    )
+
+    registry.register(
+        CapabilityDef(
+            name="edit_file",
+            effects=frozenset({"workspace_write"}),
+            kind="tool",
+            description=(
+                "Edit an existing UTF-8 text file by replacing one exact, unique "
+                "old_text fragment with new_text. Refuses missing or ambiguous "
+                "matches without changing the file. Cannot create files or edit "
+                "binary/Office/PDF content — read the current text first."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Existing file path"},
+                    "old_text": {
+                        "type": "string",
+                        "description": "Exact text to replace; include enough context to be unique",
+                    },
+                    "new_text": {"type": "string", "description": "Replacement text"},
+                },
+                "required": ["path", "old_text", "new_text"],
+            },
+            egress=False,
+            require_approval=False,
+            subject_scoped=False,
+            execute=edit_file,
         )
     )
 

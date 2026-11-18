@@ -133,7 +133,7 @@ task: |
 model:
   provider_id: ""
   name: ""
-# capabilities: [read_file, write_file, web_search]  # omit = all tools; [] = none
+# capabilities: [read_file, write_file, edit_file, web_search]  # omit = all tools; [] = none
 limits:
   max_turns_per_run: 200
   max_cost_per_run: 1.0

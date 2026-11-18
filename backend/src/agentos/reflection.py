@@ -38,6 +38,7 @@ REFLECTION_CAPABILITIES = frozenset(
     {
         "read_file",
         "write_file",
+        "edit_file",
         "skills_list",
         "skills_load",
         "skills_read_resource",
@@ -337,7 +338,7 @@ async def reflect_session(db, agent_config, session, contact_id, source_run_ids)
             )
             saved = published["revision_ids"]
             failed_writes = any(
-                call["name"] == "write_file" and not call["allowed"]
+                call["name"] in ("write_file", "edit_file") and not call["allowed"]
                 for call in result.tool_calls_made
             )
             if published["errors"] or (failed_writes and not saved):

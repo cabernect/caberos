@@ -3,7 +3,7 @@ name: office-documents
 description: Office deliverables through CaberOS artifacts — use to create, revise, or read presentations/slides (.deck.json and PPTX), Word documents, Excel spreadsheets, or PDFs.
 license: MIT
 compatibility: CaberOS >= 0.2 (Artifact Studio); direct PDF creation is supported, Office-to-PDF conversion is not
-allowed-tools: artifact_create artifact_inspect artifact_revise artifact_adopt artifact_history artifact_restore read_file write_file skills_read_resource
+allowed-tools: artifact_create artifact_inspect artifact_revise artifact_adopt artifact_history artifact_restore read_file write_file edit_file skills_read_resource
 ---
 
 # Office Documents
@@ -17,7 +17,7 @@ Pick the branch that matches the request.
 ## Create
 
 1. **Plan the structure** — the headings (Word), sheets and columns (Excel), or slide titles (PowerPoint) — and confirm it with the user when the brief leaves it open.
-2. **Honor the requested output.** Slides/presentations follow the Presentation workflow below: `.deck.json` is the source; PPTX is a derived deliverable, not a replacement for that source. Ordinary HTML pages/reports are separate: use `write_file` for self-contained HTML with inline CSS and embedded raster images. HTML opens as a scrolling static page, with scripts, navigation, forms, and external/local assets disabled.
+2. **Honor the requested output.** Slides/presentations follow the Presentation workflow below: `.deck.json` is the source; PPTX is a derived deliverable, not a replacement for that source. Ordinary HTML pages/reports are separate: use `write_file` for new self-contained HTML with inline CSS and embedded raster images; use `edit_file` for small changes to existing HTML/text rather than rewriting the whole file. HTML opens as a scrolling static page, with scripts, navigation, forms, and external/local assets disabled.
 3. Call `artifact_create` with `path` (relative to `artifacts/`, e.g. `q3-report.docx`), the `spec`, and a `change_summary`. Images come from workspace files — `attachments/…` inputs or files you saved earlier.
 4. Call `artifact_inspect` on the returned id.
 
