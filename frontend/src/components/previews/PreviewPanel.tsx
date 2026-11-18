@@ -2,7 +2,6 @@ import { cloneElement, useCallback, useEffect, useId, useMemo, useRef, useState,
 import {
   ArrowLeft,
   Download,
-  ExternalLink,
   FileClock,
   FileDown,
   FileText,
@@ -23,6 +22,12 @@ import { useConfirm } from "@/lib/confirmHook";
 import type { ArtifactRevisionInfo, PreviewPayload } from "@/lib/types";
 import { formatBytes, PreviewBody } from "./renderers";
 import { OfficePreviewNotice } from "./OfficePreviewNotice";
+
+const revealLabel = /windows/i.test(navigator.userAgent)
+  ? "Show in Explorer"
+  : /mac os|macintosh/i.test(navigator.userAgent)
+    ? "Reveal in Finder"
+    : "Show in folder";
 
 const isDesktopShell =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -243,17 +248,6 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, onR
       a.download = payload?.name || "download";
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 10_000);
-    } catch (e) {
-      setActionMsg(e instanceof Error ? e.message : String(e));
-    }
-  };
-
-  const openFile = async () => {
-    const absPath = payload?.absolute_path;
-    if (!absPath || !isDesktopShell) return;
-    try {
-      const { openPath } = await import("@tauri-apps/plugin-opener");
-      await openPath(absPath);
     } catch (e) {
       setActionMsg(e instanceof Error ? e.message : String(e));
     }
@@ -562,10 +556,7 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, onR
             <ActionButton icon={FileDown} label={exporting === "pdf" ? "Exporting…" : "Export PDF"} onClick={exportPdf} disabled={exporting !== null} />
           )}
           {isDesktopShell && (
-            <>
-              <ActionButton icon={ExternalLink} label="Open" onClick={openFile} />
-              <ActionButton icon={FolderOpen} label="Reveal" onClick={revealFile} />
-            </>
+            <ActionButton icon={FolderOpen} label={revealLabel} onClick={revealFile} />
           )}
           {isWorkspace && !artifact && currentPath && (
             <ActionButton icon={FileClock} label="Track history" onClick={trackHistory} />
