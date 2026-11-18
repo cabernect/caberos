@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { cloneElement, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
 import {
   ArrowLeft,
   Download,
@@ -17,6 +17,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { DiffBlock } from "@/components/DiffBlock";
+import { Button } from "@/components/ui/button";
 import { api, workspaceBackend, type PreviewBackend, type PreviewSource } from "@/lib/api";
 import { useConfirm } from "@/lib/confirmHook";
 import type { ArtifactRevisionInfo, PreviewPayload } from "@/lib/types";
@@ -151,8 +152,9 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, onR
         else onClose?.();
       }
     };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
+    // Inner controls (for example a focused tooltip) handle Escape first.
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, [onClose, expanded]);
 
   // Close the history dropdown on outside click.
@@ -367,21 +369,21 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, onR
       <div
         className={
           expanded
-            ? "fixed inset-x-0 top-[2.5vh] bottom-[2.5vh] z-50 mx-auto flex w-[min(1240px,95vw)] flex-col overflow-hidden rounded-[10px] border border-[var(--border)] bg-[var(--white)] shadow-2xl"
-            : `flex h-full flex-col border-l border-[var(--border)] bg-[var(--sidebar)] ${className || ""}`
+            ? "fixed inset-x-0 top-[2.5vh] bottom-[2.5vh] z-50 mx-auto flex w-[min(1240px,95vw)] flex-col overflow-hidden rounded-lg border border-line bg-ground text-ink shadow-2xl"
+            : `flex h-full min-h-0 min-w-0 flex-col border-l border-line bg-ground text-ink ${className || ""}`
         }
         role="complementary"
         aria-label="File preview"
       >
       {/* Header — h-12 matches the workspace file picker's header row so
           the two divider lines align across the panel. */}
-      <div className="flex h-12 items-center gap-2 border-b border-[var(--border)] px-3">
-        <FileText className="h-4 w-4 shrink-0 text-[var(--ink-3)]" />
+      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-line bg-surface px-3">
+        <FileText aria-hidden="true" className="h-4 w-4 shrink-0 text-ink-faint" />
         <div className="min-w-0 flex-1">
-          <p className="truncate text-[13px] font-medium text-[var(--ink)]">
+          <p className="truncate text-[13px] font-medium text-ink">
             {payload?.name || currentPath || "Preview"}
           </p>
-          <p className="truncate text-[11px] text-[var(--ink-3)]">
+          <p className="truncate text-xs text-ink-muted">
             {payload
               ? `${payload.kind} · ${formatBytes(payload.size)}`
               : error
@@ -393,45 +395,51 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, onR
         <HeaderTip
           tip={
             <span className="block">
-              <span className="block font-medium text-[var(--ink)]">
+              <span className="block font-medium text-ink">
                 {payload?.name || currentPath || "Download"}
               </span>
-              <span className="block text-[var(--ink-3)]">
+              <span className="block text-ink-muted">
                 {payload ? `${payload.kind} · ${formatBytes(payload.size)}` : ""}
                 {currentPath ? `${payload ? " · " : ""}${currentPath}` : ""}
               </span>
             </span>
           }
         >
-          <button
+          <Button
+            variant="ghost"
+            size="icon-sm"
             onClick={download}
-            className="rounded-[4px] p-1 text-[var(--ink-3)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--ink)]"
+            className="text-ink-muted"
             aria-label="Download file"
           >
             <Download className="h-4 w-4" />
-          </button>
+          </Button>
         </HeaderTip>
         <HeaderTip tip="Reload the latest file contents">
-          <button
+          <Button
+            variant="ghost"
+            size="icon-sm"
             onClick={() => {
               setLoaded(null);
               fetchPreview();
             }}
-            className="rounded-[4px] p-1 text-[var(--ink-3)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--ink)]"
+            className="text-ink-muted"
             aria-label="Refresh preview"
           >
             <RefreshCcw className="h-4 w-4" />
-          </button>
+          </Button>
         </HeaderTip>
         <HeaderTip tip={expanded ? "Restore panel size" : "Expand preview to a larger view"}>
-          <button
+          <Button
+            variant="ghost"
+            size="icon-sm"
             ref={expandBtnRef}
             onClick={() => setExpanded((v) => !v)}
-            className="rounded-[4px] p-1 text-[var(--ink-3)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--ink)]"
+            className="text-ink-muted"
             aria-label={expanded ? "Restore panel size" : "Expand preview"}
           >
             {expanded ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-          </button>
+          </Button>
         </HeaderTip>
         {/* No close button — Workspace's panel ✕ / Skills' "← files"
             back button / Escape already cover dismissal; one less
@@ -441,7 +449,7 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, onR
       {/* Moved-file notice — the requested path no longer exists; the
           panel resolved a unique basename match and says so. */}
       {payload?.moved_from && (
-        <div className="flex items-center gap-2 border-b border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-[11px] text-[var(--ink-2)]">
+        <div className="flex shrink-0 items-center gap-2 border-b border-line bg-surface px-3 py-2 text-xs text-ink-muted">
           <FileClock className="h-3.5 w-3.5 shrink-0" />
           <span className="flex-1">
             This file was moved or renamed — showing <span className="font-mono">{payload.path}</span>.
@@ -451,19 +459,20 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, onR
 
       {/* Revision banner — never silently swaps content, just flags. */}
       {artifact?.newer_exists && (
-        <div className="flex items-center gap-2 border-b border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-[11px] text-[var(--ink-2)]">
+        <div className="flex shrink-0 items-center gap-2 border-b border-line bg-surface px-3 py-2 text-xs text-ink-muted">
           <FileClock className="h-3.5 w-3.5 shrink-0" />
           <span className="flex-1">
             Viewing revision {artifact.viewing_revision_number} — revision{" "}
             {artifact.current_revision_number} is current.
           </span>
-          <button
+          <Button
+            variant="link"
+            size="xs"
             onClick={backToCurrent}
-            className="font-medium text-[var(--accent)] hover:underline"
-            style={{ background: "none", border: "none", cursor: "pointer" }}
+            className="px-0"
           >
             View latest
-          </button>
+          </Button>
         </div>
       )}
 
@@ -475,54 +484,60 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, onR
         isDesktopShell ||
         (isWorkspace && !artifact && currentPath) ||
         (isWorkspace && viewing.path && onDeleted)) && (
-        <div className="flex flex-wrap items-center gap-1 border-b border-[var(--border)] px-3 py-1.5">
+        <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-line bg-surface px-3 py-2">
           {artifact && (
             <div className="relative" ref={historyRef}>
               <ActionButton icon={History} label="History" onClick={openHistory} />
               {historyOpen && (
-                <div className="absolute left-0 top-full z-20 mt-1 max-h-64 w-72 overflow-auto rounded-[5px] border border-[var(--border)] bg-[var(--white)] shadow-lg">
+                <div className="absolute left-0 top-full z-20 mt-1 max-h-64 w-64 max-w-[calc(100vw-3rem)] overflow-auto rounded-md border border-line bg-surface p-1 shadow-lg">
                   {history === null ? (
-                    <p className="p-3 text-[12px] text-[var(--ink-3)]">Loading…</p>
+                    <p className="p-3 text-xs text-ink-muted">Loading…</p>
                   ) : history.length === 0 ? (
-                    <p className="p-3 text-[12px] text-[var(--ink-3)]">No revisions.</p>
+                    <p className="p-3 text-xs text-ink-muted">No revisions.</p>
                   ) : (
                     history.map((rev) => (
                       <div
                         key={rev.revision_id}
-                        className="flex items-center gap-2 border-b border-[var(--border)]/50 px-3 py-2 text-[12px] last:border-0"
+                        className="flex items-center gap-1 border-b border-line px-1 py-1 text-xs last:border-0"
                       >
-                        <button
+                        <Button
+                          variant="ghost"
+                          size="sm"
                           onClick={() => viewRevision(rev)}
-                          className="flex-1 text-left"
-                          style={{ background: "none", border: "none", cursor: "pointer" }}
+                          className="h-auto min-h-8 min-w-0 flex-1 justify-start whitespace-normal px-1.5 py-1.5 text-left text-xs font-normal"
                         >
-                          <span className="font-medium text-[var(--ink)]">
+                          <span className="shrink-0 font-medium text-ink">
                             r{rev.revision_number}
                             {rev.current && (
-                              <span className="ml-1 text-[10px] text-[var(--accent)]">current</span>
+                              <span className="ml-1 text-xs text-accent">current</span>
                             )}
                           </span>
-                          <span className="ml-2 text-[var(--ink-3)]">
+                          <span className="min-w-0 break-words text-ink-muted">
                             {rev.change_summary || formatBytes(rev.byte_size)}
                           </span>
-                        </button>
+                        </Button>
                         {!rev.current && (
                           <>
-                            <button
+                            <Button
+                              variant="ghost"
+                              size="icon-xs"
                               onClick={() => compareRevision(rev)}
                               title="Compare this revision with current"
                               aria-label={`Compare r${rev.revision_number} with current`}
-                              className="rounded-[3px] p-1 text-[var(--ink-3)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--accent)]"
+                              className="text-ink-muted hover:text-accent"
                             >
                               <GitCompareArrows className="h-3.5 w-3.5" />
-                            </button>
-                            <button
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon-xs"
                               onClick={() => restoreRevision(rev)}
                               title="Restore this revision (creates a new revision)"
-                              className="rounded-[3px] p-1 text-[var(--ink-3)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--accent)]"
+                              aria-label={`Restore r${rev.revision_number}`}
+                              className="text-ink-muted hover:text-accent"
                             >
                               <RefreshCcw className="h-3.5 w-3.5" />
-                            </button>
+                            </Button>
                           </>
                         )}
                       </div>
@@ -561,12 +576,12 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, onR
         </div>
       )}
       {actionMsg && (
-        <p className="border-b border-[var(--border)] px-3 py-1 text-[11px] text-[var(--ink-2)]">
+        <p role="status" className="shrink-0 border-b border-line bg-surface px-3 py-2 text-xs text-ink-muted">
           {actionMsg}
         </p>
       )}
       {payload?.kind === "deck" && payload.spec && (
-        <p className="border-b border-[var(--border)] px-3 py-1 text-[11px] text-[var(--ink-3)]">
+        <p className="shrink-0 border-b border-line bg-surface px-3 py-2 text-xs text-ink-muted">
           Motion plays in Slideshow. PPTX export shows all content without animations.
         </p>
       )}
@@ -605,20 +620,21 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, onR
         >
         {compare ? (
           <div>
-            <button
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => setCompare(null)}
-              className="mb-2 flex items-center gap-1.5 rounded-[4px] px-2 py-1 text-[12px] text-[var(--ink-2)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--ink)]"
-              style={{ border: "none", background: "none", cursor: "pointer" }}
+              className="mb-2 text-ink-muted"
             >
               <ArrowLeft className="h-3.5 w-3.5" /> Back to preview
-            </button>
+            </Button>
             {compare.loading ? (
               <div className="flex items-center justify-center py-8">
-                <Loader2 className="h-5 w-5 animate-spin text-[var(--ink-3)]" />
+                <Loader2 className="h-5 w-5 animate-spin text-ink-faint" />
               </div>
             ) : compare.comparable ? (
               <>
-                <p className="mb-2 text-[11px] text-[var(--ink-3)]">
+                <p className="mb-2 text-xs text-ink-muted">
                   r{compare.fromN} → r{compare.toN}
                 </p>
                 <DiffBlock
@@ -628,8 +644,8 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, onR
                 />
               </>
             ) : (
-              <div className="rounded-[5px] border border-[var(--border)] bg-[var(--surface)] p-3 text-[12px] text-[var(--ink-2)]">
-                <p className="font-medium text-[var(--ink)]">Binary compare not supported</p>
+              <div className="rounded-md border border-line bg-surface p-3 text-xs text-ink-muted">
+                <p className="font-medium text-ink">Binary compare not supported</p>
                 <p className="mt-1">
                   r{compare.fromN} ({formatBytes(compare.fromBytes ?? 0)}) → r{compare.toN} (
                   {formatBytes(compare.toBytes ?? 0)})
@@ -647,10 +663,10 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, onR
             onFocus={setFocusLabel}
           />
         ) : error ? (
-          <div className="rounded-[5px] border border-[var(--border)] bg-[var(--surface)] p-3 text-[12px] text-[var(--ink-2)]">
+          <div className="rounded-md border border-line bg-surface p-3 text-xs text-ink-muted">
             {/^404\b/.test(error) ? (
               <>
-                <p className="font-medium text-[var(--ink)]">File not found</p>
+                <p className="font-medium text-ink">File not found</p>
                 <p className="mt-1">It may have been moved or deleted from the workspace.</p>
               </>
             ) : (
@@ -659,7 +675,7 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, onR
           </div>
         ) : (
           <div className="flex h-full items-center justify-center">
-            <Loader2 className="h-5 w-5 animate-spin text-[var(--ink-3)]" />
+            <Loader2 className="h-5 w-5 animate-spin text-ink-faint" />
           </div>
         )}
         </div>
@@ -669,19 +685,30 @@ export function PreviewPanel({ agentId, source, backend, onClose, onDeleted, onR
   );
 }
 
-/** Hover tooltip for header icon buttons — richer than a native title:
- *  shows on mouseenter below the button, right-aligned to it. */
-function HeaderTip({ tip, children }: { tip: ReactNode; children: ReactNode }) {
+/** Header descriptions are available on both hover and keyboard focus. */
+function HeaderTip({ tip, children }: {
+  tip: ReactNode;
+  children: ReactElement<{ "aria-describedby"?: string }>;
+}) {
   const [hover, setHover] = useState(false);
+  const tipId = useId();
   return (
     <span
-      className="relative"
+      className="relative inline-flex shrink-0"
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
+      onFocus={() => setHover(true)}
+      onBlur={() => setHover(false)}
+      onKeyDown={(event) => {
+        if (event.key === "Escape" && hover) {
+          event.stopPropagation();
+          setHover(false);
+        }
+      }}
     >
-      {children}
+      {cloneElement(children, { "aria-describedby": hover ? tipId : undefined })}
       {hover && (
-        <span className="absolute right-0 top-full z-50 mt-1 block w-max max-w-72 rounded-[5px] border border-[var(--border)] bg-[var(--white)] px-2.5 py-1.5 text-left text-[11px] leading-snug text-[var(--ink-2)] shadow-lg [overflow-wrap:anywhere]">
+        <span id={tipId} role="tooltip" className="absolute right-0 top-full z-50 mt-2 block w-max max-w-[min(18rem,calc(100vw-3rem))] rounded-md border border-line bg-surface px-3 py-2 text-left text-xs leading-relaxed text-ink-muted shadow-lg [overflow-wrap:anywhere]">
           {tip}
         </span>
       )}
@@ -701,14 +728,15 @@ function ActionButton({
   disabled?: boolean;
 }) {
   return (
-    <button
+    <Button
+      variant="ghost"
+      size="xs"
       disabled={disabled}
       onClick={onClick}
-      className="flex items-center gap-1 rounded-[4px] px-1.5 py-1 text-[11px] text-[var(--ink-2)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--ink)]"
-      style={{ border: "none", background: "none", cursor: "pointer" }}
+      className="text-ink-muted"
     >
       <Icon className="h-3.5 w-3.5" />
       {label}
-    </button>
+    </Button>
   );
 }

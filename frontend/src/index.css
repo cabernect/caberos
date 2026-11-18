@@ -118,23 +118,26 @@
 /* --- Temporary dark-mode remediation (retires with the page sweep) ---
    --white now aliases --surface so most former overrides are no-ops.
    Remaining: literal white text/background in inline styles or classes
-   that Tailwind can't re-point via the alias. */
-:root[data-theme="dark"] .text-white,
-:root[data-theme="dark"] [style*="color: #fff"],
-:root[data-theme="dark"] [style*="color: white"],
-:root[data-theme="dark"] [style*="color: rgb(255, 255, 255)"] {
+   that Tailwind can't re-point via the alias. Authored artifact colors
+   are content, not application chrome, and must not be remapped. */
+:root[data-theme="dark"] :is(
+  .text-white,
+  [style*="color: #fff"],
+  [style*="color: white"],
+  [style*="color: rgb(255, 255, 255)"]
+):not([data-artifact-content], [data-artifact-content] *) {
   color: var(--ground) !important;
 }
 
-:root[data-theme="dark"] .bg-white {
+:root[data-theme="dark"] .bg-white:not([data-artifact-content], [data-artifact-content] *) {
   background-color: var(--surface) !important;
 }
 
-:root[data-theme="dark"] .hover\:bg-\[var\(--white\)\]:hover {
+:root[data-theme="dark"] .hover\:bg-\[var\(--white\)\]:hover:not([data-artifact-content], [data-artifact-content] *) {
   background-color: var(--sunken) !important;
 }
 
-:root[data-theme="dark"] .bg-\[var\(--accent\)\] {
+:root[data-theme="dark"] .bg-\[var\(--accent\)\]:not([data-artifact-content], [data-artifact-content] *) {
   color: var(--accent-foreground);
 }
 /* --- end temporary remediation --- */

@@ -107,6 +107,22 @@ describe("Office preview limitations", () => {
 });
 
 describe("W4 preview experience", () => {
+  it("describes header actions on keyboard focus and dismisses their tooltip with Escape", async () => {
+    const be = backend(vi.fn().mockResolvedValue(payload()));
+    render(
+      <ConfirmProvider>
+        <PreviewPanel agentId="" source={{ path: "uploaded.pptx" }} backend={be} />
+      </ConfirmProvider>,
+    );
+    await screen.findByText("Review content");
+    const refresh = screen.getByRole("button", { name: "Refresh preview" });
+    fireEvent.focus(refresh);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Reload the latest file contents");
+    expect(refresh).toHaveAttribute("aria-describedby", screen.getByRole("tooltip").id);
+    fireEvent.keyDown(refresh, { key: "Escape" });
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
+
   it("separates speaker notes from slide content and resets notes when navigating", async () => {
     const be = backend(vi.fn().mockResolvedValue(payload({
       path: "notes-preview.pptx",

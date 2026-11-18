@@ -4,6 +4,7 @@ import { ChevronLeft, ChevronRight, FileWarning, Loader2, Presentation, X, ZoomI
 import type { PreviewBackend, PreviewSource } from "@/lib/api";
 import type { DeckBlock, DeckEffect, DeckSlide, DeckSpec, PreviewElement, PreviewPayload } from "@/lib/types";
 import { Markdown } from "@/components/Markdown";
+import { Button } from "@/components/ui/button";
 import { readView, viewStateKey, writeView } from "./viewState";
 import { useObjectUrl } from "./useObjectUrl";
 import { DeckChart } from "./DeckChart";
@@ -112,28 +113,55 @@ function ModeToggle({
   onChange: (mode: string) => void;
 }) {
   return (
-    <div className="flex shrink-0 gap-1 text-[11px]">
+    <div className="inline-flex shrink-0 gap-1 rounded-md bg-sunken p-1">
       {options.map((m) => {
         const active = m === value;
         const disabled = disabledOptions?.includes(m) ?? false;
         return (
-          <button
+          <Button
             key={m}
+            variant="ghost"
+            size="xs"
             onClick={() => onChange(m)}
             aria-pressed={active}
             disabled={disabled}
-            className="rounded-[4px] border px-2 py-1 transition-colors disabled:opacity-40"
-            style={{
-              borderColor: "var(--border)",
-              background: active ? "var(--accent)" : "var(--surface)",
-              color: active ? "var(--white)" : "var(--ink-2)",
-              cursor: "pointer",
-            }}
+            className={active ? "bg-surface text-ink shadow-sm" : "text-ink-muted"}
           >
             {m}
-          </button>
+          </Button>
         );
       })}
+    </div>
+  );
+}
+
+function ZoomControls({ zoom, onChange }: { zoom: number; onChange: (zoom: number) => void }) {
+  return (
+    <div className="flex shrink-0 items-center gap-1 text-ink-muted">
+      <Button
+        variant="outline"
+        size="icon-xs"
+        onClick={() => onChange(Math.max(0.5, Math.round((zoom - 0.25) * 100) / 100))}
+        disabled={zoom <= 0.5}
+        aria-label="Zoom out"
+      >
+        <ZoomOut aria-hidden="true" />
+      </Button>
+      <span aria-live="polite" className="w-10 text-center font-mono text-xs tabular-nums">
+        {Math.round(zoom * 100)}%
+      </span>
+      <Button
+        variant="outline"
+        size="icon-xs"
+        onClick={() => onChange(Math.min(2, Math.round((zoom + 0.25) * 100) / 100))}
+        disabled={zoom >= 2}
+        aria-label="Zoom in"
+      >
+        <ZoomIn aria-hidden="true" />
+      </Button>
+      <Button variant="outline" size="xs" onClick={() => onChange(1)} disabled={zoom === 1}>
+        Fit
+      </Button>
     </div>
   );
 }
@@ -327,26 +355,28 @@ function PdfView({
   if (pageCount === 0) return <Note text="No pages to render." />;
   return (
     <div className={expanded ? "flex flex-col items-center" : ""}>
-      <div className="mb-2 flex items-center gap-2 text-[12px] text-[var(--ink-2)]">
-        <button
+      <div className="mb-2 flex items-center gap-2 text-xs text-ink-muted">
+        <Button
+          variant="outline"
+          size="icon-xs"
           onClick={() => setPage((p) => Math.max(1, p - 1))}
           disabled={page <= 1}
-          className="rounded-[4px] border border-[var(--border)] p-1 transition-colors hover:bg-[var(--surface)] disabled:opacity-40"
           aria-label="Previous page"
         >
           <ChevronLeft className="h-3.5 w-3.5" />
-        </button>
+        </Button>
         <span className="font-mono">
           {page} / {pageCount}
         </span>
-        <button
+        <Button
+          variant="outline"
+          size="icon-xs"
           onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
           disabled={page >= pageCount}
-          className="rounded-[4px] border border-[var(--border)] p-1 transition-colors hover:bg-[var(--surface)] disabled:opacity-40"
           aria-label="Next page"
         >
           <ChevronRight className="h-3.5 w-3.5" />
-        </button>
+        </Button>
       </div>
       {error ? (
         <Note text={error} />
@@ -537,7 +567,7 @@ function SlidesView({
           aria-label="Go to slide"
           value={current}
           onChange={(e) => setSelected(Number(e.target.value))}
-          className="mb-2 h-8 w-full min-w-0 truncate rounded-[4px] border border-[var(--border)] bg-[var(--surface)] px-2 text-[12px] text-[var(--ink)] focus-visible:outline focus-visible:outline-[var(--accent)]"
+          className="mb-2 h-8 w-full min-w-0 truncate rounded-md border border-line bg-surface px-2.5 text-xs text-ink focus-visible:border-ring focus-visible:outline-2 focus-visible:outline-ring"
         >
           {slides.map((s, i) => (
             <option key={i} value={i}>
@@ -547,54 +577,31 @@ function SlidesView({
         </select>
       )}
       {count > 0 && (
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-[11px] text-[var(--ink-3)]">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-xs text-ink-muted">
           <div className="flex items-center gap-2">
-            <button
+            <Button
+              variant="outline"
+              size="icon-xs"
               onClick={() => setSelected((s) => Math.max(0, Math.min(s, count - 1) - 1))}
               disabled={current <= 0}
-              className="rounded-[4px] border border-[var(--border)] p-1 transition-colors hover:bg-[var(--surface)] disabled:opacity-40"
               aria-label="Previous slide"
             >
               <ChevronLeft className="h-3.5 w-3.5" />
-            </button>
+            </Button>
             <span aria-live="polite" className="font-mono tabular-nums">
               {current + 1} / {count}
             </span>
-            <button
+            <Button
+              variant="outline"
+              size="icon-xs"
               onClick={() => setSelected((s) => Math.min(count - 1, Math.min(s, count - 1) + 1))}
               disabled={current >= count - 1}
-              className="rounded-[4px] border border-[var(--border)] p-1 transition-colors hover:bg-[var(--surface)] disabled:opacity-40"
               aria-label="Next slide"
             >
               <ChevronRight className="h-3.5 w-3.5" />
-            </button>
+            </Button>
           </div>
-          <div className="flex items-center gap-1">
-            <button
-              onClick={() => setZoom((z) => Math.max(0.5, Math.round((z - 0.25) * 100) / 100))}
-              disabled={zoom <= 0.5}
-              className="rounded-[4px] border border-[var(--border)] p-1 transition-colors hover:bg-[var(--surface)] disabled:opacity-40"
-              aria-label="Zoom out"
-            >
-              <ZoomOut className="h-3.5 w-3.5" />
-            </button>
-            <span className="w-9 text-center font-mono">{Math.round(zoom * 100)}%</span>
-            <button
-              onClick={() => setZoom((z) => Math.min(2, Math.round((z + 0.25) * 100) / 100))}
-              disabled={zoom >= 2}
-              className="rounded-[4px] border border-[var(--border)] p-1 transition-colors hover:bg-[var(--surface)] disabled:opacity-40"
-              aria-label="Zoom in"
-            >
-              <ZoomIn className="h-3.5 w-3.5" />
-            </button>
-            <button
-              onClick={() => setZoom(1)}
-              disabled={zoom === 1}
-              className="rounded-[4px] border border-[var(--border)] px-1.5 py-1 transition-colors hover:bg-[var(--surface)] disabled:opacity-40"
-            >
-              Fit
-            </button>
-          </div>
+          <ZoomControls zoom={zoom} onChange={setZoom} />
         </div>
       )}
       {slide && (
@@ -717,33 +724,8 @@ function DocumentView({ payload }: { payload: PreviewPayload }) {
   }, [viewKey, zoom]);
   return (
     <div>
-      <div className="mb-2 flex justify-end gap-1">
-        <button
-          onClick={() => setZoom((z) => Math.max(0.5, Math.round((z - 0.25) * 100) / 100))}
-          disabled={zoom <= 0.5}
-          className="rounded-[4px] border border-[var(--border)] p-1 transition-colors hover:bg-[var(--surface)] disabled:opacity-40"
-          aria-label="Zoom out"
-        >
-          <ZoomOut className="h-3.5 w-3.5" />
-        </button>
-        <span className="w-9 py-1 text-center font-mono text-[11px] text-[var(--ink-3)]">
-          {Math.round(zoom * 100)}%
-        </span>
-        <button
-          onClick={() => setZoom((z) => Math.min(2, Math.round((z + 0.25) * 100) / 100))}
-          disabled={zoom >= 2}
-          className="rounded-[4px] border border-[var(--border)] p-1 transition-colors hover:bg-[var(--surface)] disabled:opacity-40"
-          aria-label="Zoom in"
-        >
-          <ZoomIn className="h-3.5 w-3.5" />
-        </button>
-        <button
-          onClick={() => setZoom(1)}
-          disabled={zoom === 1}
-          className="rounded-[4px] border border-[var(--border)] px-1.5 py-1 text-[11px] transition-colors hover:bg-[var(--surface)] disabled:opacity-40"
-        >
-          Fit
-        </button>
+      <div className="mb-2 flex justify-end">
+        <ZoomControls zoom={zoom} onChange={setZoom} />
       </div>
       <div className="overflow-x-auto">
         <div style={{ zoom } as CSSProperties}>
@@ -910,6 +892,7 @@ function WorkbookGrid({ sheet }: { sheet: NonNullable<PreviewPayload["sheets"]>[
         }}
       >
       <table
+        data-artifact-content=""
         className="border-collapse text-[12px]"
         style={{ tableLayout: "fixed" }}
       >
@@ -1025,7 +1008,7 @@ function WorkbookGrid({ sheet }: { sheet: NonNullable<PreviewPayload["sheets"]>[
       </table>
       </div>
       {/* Status bar */}
-      <div className="mt-1 flex items-center justify-between rounded-[5px] border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-[10px] text-[var(--ink-3)]">
+      <div className="mt-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-md border border-line bg-surface px-2 py-1 text-xs text-ink-muted">
         <span>
           {sheet.name} · {rows}×{cols}
           {sheet.row_count > rows || (sheet.col_count ?? 0) > cols
@@ -1077,50 +1060,22 @@ function WorkbookView({
     : [];
   return (
     <div>
-      <div className="mb-2 flex items-center justify-between gap-2">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto pb-1">
         {sheets.map((s, i) => (
-          <button
+          <Button
             key={i}
+            variant="ghost"
+            size="xs"
             onClick={() => setSelected(i)}
-            className="shrink-0 rounded-[4px] border px-2 py-1 text-[11px] transition-colors"
-            style={{
-              borderColor: i === current ? "var(--accent)" : "var(--border)",
-              background: i === current ? "var(--surface)" : "transparent",
-              color: i === current ? "var(--ink)" : "var(--ink-2)",
-              cursor: "pointer",
-            }}
+            aria-pressed={i === current}
+            className={i === current ? "bg-accent-tint text-ink hover:bg-accent-tint" : "text-ink-muted"}
           >
             {s.name}
-          </button>
+          </Button>
         ))}
         </div>
-        <div className="flex shrink-0 items-center gap-1">
-          <button
-            onClick={() => setZoom((z) => Math.max(0.5, Math.round((z - 0.25) * 100) / 100))}
-            disabled={zoom <= 0.5}
-            className="rounded-[4px] border border-[var(--border)] p-1 transition-colors hover:bg-[var(--surface)] disabled:opacity-40"
-            aria-label="Zoom out"
-          >
-            <ZoomOut className="h-3.5 w-3.5" />
-          </button>
-          <span className="w-9 text-center font-mono text-[11px]">{Math.round(zoom * 100)}%</span>
-          <button
-            onClick={() => setZoom((z) => Math.min(2, Math.round((z + 0.25) * 100) / 100))}
-            disabled={zoom >= 2}
-            className="rounded-[4px] border border-[var(--border)] p-1 transition-colors hover:bg-[var(--surface)] disabled:opacity-40"
-            aria-label="Zoom in"
-          >
-            <ZoomIn className="h-3.5 w-3.5" />
-          </button>
-          <button
-            onClick={() => setZoom(1)}
-            disabled={zoom === 1}
-            className="rounded-[4px] border border-[var(--border)] px-1.5 py-1 text-[11px] transition-colors hover:bg-[var(--surface)] disabled:opacity-40"
-          >
-            Fit
-          </button>
-        </div>
+        <ZoomControls zoom={zoom} onChange={setZoom} />
       </div>
       {sheet && (
         <div style={{ zoom } as CSSProperties}>
@@ -1317,6 +1272,7 @@ export function DeckSlideCanvas({ slide, spec, revealed = Infinity, animate = fa
 
   return (
     <div
+      data-artifact-content=""
       className="relative overflow-hidden"
       style={{
         width: DECK_W,
@@ -1631,42 +1587,45 @@ function DeckView({
         else if (e.key === "ArrowLeft") { e.preventDefault(); step(-1); }
       }}
     >
-      <div className="flex items-center justify-between gap-2 px-1 pb-2">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 px-1 pb-2">
         <ModeToggle
           value={mode}
           options={["Slides", "Source"]}
           onChange={setMode}
         />
         {mode === "Slides" && (
-          <div className="flex flex-wrap items-center gap-2 text-[11px] text-[var(--ink-3)]">
-            <button
+          <div className="flex flex-wrap items-center gap-2 text-xs text-ink-muted">
+            <Button
+              variant="outline"
+              size="xs"
               type="button"
               onClick={startSlideshow}
-              className="flex items-center gap-1 rounded-[4px] border border-[var(--border)] px-2 py-1 text-[var(--ink-2)] transition-colors hover:bg-[var(--surface)]"
             >
               <Presentation className="h-3.5 w-3.5" /> Slideshow
-            </button>
+            </Button>
             <span className="font-mono tabular-nums">
               {slides.length ? `${clamped + 1} / ${slides.length}` : "…"}
             </span>
-            <button
+            <Button
+              variant="outline"
+              size="icon-xs"
               type="button"
               aria-label="Previous slide"
               disabled={clamped <= 0}
               onClick={() => step(-1)}
-              className="rounded-[4px] border border-[var(--border)] p-1 transition-colors hover:bg-[var(--surface)] disabled:opacity-40"
             >
               <ChevronLeft className="h-3.5 w-3.5" />
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="outline"
+              size="icon-xs"
               type="button"
               aria-label="Next slide"
               disabled={clamped >= slides.length - 1}
               onClick={() => step(1)}
-              className="rounded-[4px] border border-[var(--border)] p-1 transition-colors hover:bg-[var(--surface)] disabled:opacity-40"
             >
               <ChevronRight className="h-3.5 w-3.5" />
-            </button>
+            </Button>
           </div>
         )}
       </div>

@@ -2246,27 +2246,6 @@ export function Conversation() {
           </div>
         </div>
 
-        {showJumpToLatest && (
-          <button
-            onClick={handleJumpToLatest}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                handleJumpToLatest();
-              }
-            }}
-            className="absolute bottom-[170px] left-1/2 -translate-x-1/2 rounded-full px-3 py-1.5 text-[12px] font-medium shadow-lg transition-shadow focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
-            style={{
-              background: "var(--white)",
-              border: "1px solid var(--border)",
-              color: "var(--ink-2)",
-              cursor: "pointer",
-            }}
-          >
-            <ArrowDown className="mr-1 inline h-3 w-3" />
-            Jump to latest
-          </button>
-        )}
         </div>
 
         {/* Disabled agent banner — the composer stays dead too (B39) */}
@@ -2331,6 +2310,22 @@ export function Conversation() {
             sessions render a read-only notice in the same slot. */}
         <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 bg-[linear-gradient(to_bottom,transparent_0px,var(--ground)_48px)]">
           <div className="pointer-events-auto relative mt-12 px-4 pb-3">
+        {/* Anchor to the composer so wrapping controls cannot cover the jump button. */}
+        {showJumpToLatest && (
+          <button
+            onClick={handleJumpToLatest}
+            className="absolute -top-10 left-1/2 -translate-x-1/2 rounded-full px-3 py-1.5 text-[12px] font-medium shadow-lg transition-shadow focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
+            style={{
+              background: "var(--white)",
+              border: "1px solid var(--border)",
+              color: "var(--ink-2)",
+              cursor: "pointer",
+            }}
+          >
+            <ArrowDown className="mr-1 inline h-3 w-3" />
+            Jump to latest
+          </button>
+        )}
         {/* /compact outcome — composer-adjacent so it stays visible no
             matter where the message list is scrolled. */}
         {activeSessionId && compactStatus[activeSessionId] && (

@@ -24,11 +24,11 @@ export function OfficePreviewNotice({
     <div
       role="note"
       aria-label="Office preview limitations"
-      className="flex shrink-0 items-start gap-2 border-b border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[12px] leading-relaxed text-[var(--ink-2)]"
+      className="flex shrink-0 items-start gap-2 border-b border-line bg-surface px-3 py-2 text-xs leading-relaxed text-ink-muted"
     >
-      <Info aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
+      <Info aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent" />
       <p className="min-w-0">
-        <span className="font-medium text-[var(--ink)]">Limited preview. </span>
+        <span className="font-medium text-ink">Limited preview. </span>
         {message}
       </p>
     </div>
