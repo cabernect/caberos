@@ -1,6 +1,7 @@
 """Test the harness loop with a scripted model double."""
 
 import asyncio
+import json
 import uuid
 from types import SimpleNamespace
 
@@ -476,6 +477,157 @@ async def test_chat_stream_extracts_reasoning_tokens(monkeypatch):
     assert final is not None
     # Explicit 0 from the usage chunk is preserved, not reported as missing.
     assert final.thinking_tokens == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api", ["chat", "responses"])
+@pytest.mark.parametrize("tool_name", ["write_file", "mcp.editor.write_file"])
+async def test_tool_progress_arrives_before_arguments_are_generated(monkeypatch, api, tool_name):
+    """A long file body must not hide the tool name until generation finishes."""
+    args = {"path": "deck.html", "content": "private document content " * 500}
+    encoded = json.dumps(args)
+    wire_name = tool_name.replace(".", "_")
+    produced = []
+
+    async def events():
+        produced.append("name")
+        if api == "chat":
+            yield SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(
+                            content=None,
+                            tool_calls=[
+                                SimpleNamespace(
+                                    index=0,
+                                    id="call-1",
+                                    function=SimpleNamespace(name=wire_name, arguments=""),
+                                )
+                            ],
+                        )
+                    )
+                ],
+            )
+        else:
+            yield SimpleNamespace(
+                type="response.output_item.added",
+                item=SimpleNamespace(
+                    type="function_call", id="item-1", call_id="call-1", name=wire_name
+                ),
+            )
+        for part in (encoded[:2000], encoded[2000:6500], encoded[6500:]):
+            produced.append("arguments")
+            if api == "chat":
+                yield SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            delta=SimpleNamespace(
+                                content=None,
+                                tool_calls=[
+                                    SimpleNamespace(
+                                        index=0,
+                                        id=None,
+                                        function=SimpleNamespace(name=None, arguments=part),
+                                    )
+                                ],
+                            )
+                        )
+                    ],
+                )
+            else:
+                yield SimpleNamespace(
+                    type="response.function_call_arguments.delta", item_id="item-1", delta=part
+                )
+        if api == "responses":
+            yield SimpleNamespace(type="response.completed", response=_responses_response(0))
+
+    transport = _FakeTransport(completion=events, responses=events)
+    adapter = LiteLLMAdapter(db=None, transport=transport)
+
+    async def load_provider(_id):
+        return _CHAT_PROVIDER if api == "chat" else _RESPONSES_PROVIDER
+
+    monkeypatch.setattr(adapter, "_load_provider", load_provider)
+    stream = adapter.complete_stream(
+        agent_model=ModelConfig(provider_id="p", name="m"),
+        messages=[{"role": "user", "content": "Create a presentation"}],
+        tools=[{"type": "function", "function": {"name": tool_name, "parameters": {}}}],
+    )
+    try:
+        kind, progress = await anext(stream)
+        assert kind == "tool_call_progress"
+        assert produced == ["name"]
+        assert progress["name"] == tool_name
+        assert progress["args_chars"] == 0
+        remaining = [event async for event in stream]
+        updates = [payload for kind, payload in remaining if kind == "tool_call_progress"]
+        assert updates
+        assert updates[-1]["args_chars"] > 4096
+        assert all(update["name"] == tool_name for update in updates)
+        assert "private document content" not in repr(updates)
+        final = next(payload for kind, payload in remaining if kind == "done")
+        assert final.tool_calls == [{"id": "call-1", "name": tool_name, "args": args}]
+    finally:
+        await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_harness_streams_preparation_without_executing_an_incomplete_call():
+    release_arguments = asyncio.Event()
+    preparing = asyncio.Event()
+    calls = []
+    args = {"path": "deck.html", "content": "<h1>Complete document</h1>"}
+
+    class PreparingModel(ScriptedModel):
+        async def complete_stream(self, **kwargs):
+            if self._index == 0:
+                yield "tool_call_progress", {"index": 0, "name": "write_file", "args_chars": 0}
+                await release_arguments.wait()
+            async for event in super().complete_stream(**kwargs):
+                yield event
+
+    class RecordingSyscall:
+        async def mediate(self, call, **kwargs):
+            calls.append(call)
+            return SyscallResult(output={"success": True}, allowed=True)
+
+    async def emit(event_type, payload):
+        if event_type == "tool_call_progress":
+            preparing.set()
+
+    model = PreparingModel(
+        [
+            ScriptedResponse(tool_calls=[{"id": "call-1", "name": "write_file", "args": args}]),
+            ScriptedResponse(content="done"),
+        ]
+    )
+    task = asyncio.create_task(
+        Harness(model=model).run(
+            agent_config=AgentConfig(
+                id="preparation-test",
+                name="Preparation Test",
+                model=ModelConfig(provider_id="test", name="scripted"),
+                capabilities=[CapabilityGrant(name="write_file", require_approval=False)],
+            ),
+            session=None,
+            message="Create a presentation",
+            syscall_handler=RecordingSyscall(),
+            run_id=str(uuid.uuid4()),
+            event_emitter=emit,
+        )
+    )
+    try:
+        await asyncio.wait_for(preparing.wait(), timeout=5)
+        assert not task.done()
+        assert calls == []
+        release_arguments.set()
+        result = await asyncio.wait_for(task, timeout=5)
+        assert result.status == "completed"
+        assert len(calls) == 1
+        assert calls[0].args == args
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.mark.asyncio

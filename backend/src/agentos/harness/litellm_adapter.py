@@ -553,6 +553,7 @@ class LiteLLMAdapter:
         full_content = ""
         full_thinking = ""
         tool_calls: dict[str, dict[str, Any]] = {}
+        progress_marks: dict[str, int] = {}
         tokens_in = tokens_out = 0
         cached_tokens: int | None = None
         thinking_tokens: int | None = None
@@ -579,11 +580,33 @@ class LiteLLMAdapter:
                         "id": self._response_attr(item, "call_id") or key,
                         "name": self._response_attr(item, "name", ""),
                         "args": "",
+                        "index": len(tool_calls),
                     }
+                    name = tool_calls[key]["name"]
+                    yield (
+                        "tool_call_progress",
+                        {
+                            "index": tool_calls[key]["index"],
+                            "name": restore_map.get(name, name) or None,
+                            "args_chars": 0,
+                        },
+                    )
             elif event_type == "response.function_call_arguments.delta":
                 key = self._response_attr(event, "item_id", "")
                 if key in tool_calls:
                     tool_calls[key]["args"] += self._response_attr(event, "delta", "") or ""
+                    args_len = len(tool_calls[key]["args"])
+                    if args_len - progress_marks.get(key, 0) >= 4096:
+                        progress_marks[key] = args_len
+                        name = tool_calls[key]["name"]
+                        yield (
+                            "tool_call_progress",
+                            {
+                                "index": tool_calls[key]["index"],
+                                "name": restore_map.get(name, name) or None,
+                                "args_chars": args_len,
+                            },
+                        )
             elif event_type == "response.function_call_arguments.done":
                 key = self._response_attr(event, "item_id", "")
                 if key in tool_calls:
@@ -837,6 +860,7 @@ class LiteLLMAdapter:
         delta_type is one of:
             "token" — a chunk of output text
             "thinking" — a chunk of reasoning text
+            "tool_call_progress" — tool preparation metadata, never argument contents
             "tool_call" — a complete tool call (accumulated from deltas)
             "done" — final signal with usage/cost info
 
@@ -940,8 +964,7 @@ class LiteLLMAdapter:
         full_content = ""
         full_thinking = ""
         tool_calls_map: dict[int, dict[str, Any]] = {}
-        # Throttle arg-progress events — providers stream many small deltas;
-        # emit at ~4KB boundaries so the UI shows life during long writes.
+        # Announce tools immediately, then throttle count updates to ~4k chars.
         progress_marks: dict[int, int] = {}
         tokens_in = 0
         tokens_out = 0
@@ -996,29 +1019,35 @@ class LiteLLMAdapter:
             if delta.tool_calls:
                 for tc_delta in delta.tool_calls:
                     idx = tc_delta.index or 0
-                    if idx not in tool_calls_map:
+                    is_new = idx not in tool_calls_map
+                    if is_new:
                         tool_calls_map[idx] = {
                             "id": tc_delta.id or str(uuid.uuid4()),
                             "name": "",
                             "args": "",
                         }
+                    previous_name = tool_calls_map[idx]["name"]
                     if tc_delta.function:
                         if tc_delta.function.name:
                             tool_calls_map[idx]["name"] = tc_delta.function.name
                         if tc_delta.function.arguments:
                             tool_calls_map[idx]["args"] += tc_delta.function.arguments
-                            args_len = len(tool_calls_map[idx]["args"])
-                            last = progress_marks.get(idx, 0)
-                            if args_len - last >= 4096:
-                                progress_marks[idx] = args_len
-                                yield (
-                                    "tool_call_progress",
-                                    {
-                                        "index": idx,
-                                        "name": tool_calls_map[idx]["name"] or None,
-                                        "args_chars": args_len,
-                                    },
-                                )
+                    name = tool_calls_map[idx]["name"]
+                    args_len = len(tool_calls_map[idx]["args"])
+                    if (
+                        is_new
+                        or name != previous_name
+                        or args_len - progress_marks.get(idx, 0) >= 4096
+                    ):
+                        progress_marks[idx] = args_len
+                        yield (
+                            "tool_call_progress",
+                            {
+                                "index": idx,
+                                "name": restore_map.get(name, name) or None,
+                                "args_chars": args_len,
+                            },
+                        )
 
         # Parse accumulated tool calls
         tool_calls: list[dict[str, Any]] = []

@@ -66,6 +66,13 @@ spec đó trực tiếp thành output `.pptx`.
 
 ## Cấu hình Tools
 
+Với tool call được stream, chat hiện **Preparing tool-name…** ngay khi provider
+cho biết tên tool, rồi cập nhật số ký tự khi đang tạo argument lớn (ví dụ nội dung
+file HTML). Đây là bước chuẩn bị, không phải thực thi: indicator không hiển thị
+nội dung argument, và tool vẫn phải chờ call hoàn chỉnh cùng các bước kiểm tra
+quyền/phê duyệt thông thường. Response không stream không thể cung cấp tiến độ
+sớm này.
+
 Mở global **Settings → Tools** để cấu hình backend của capability độc lập với
 reasoning model của agent. Model Offering là provider và exact model cho một
 operation dùng model; service search/speech chuyên dụng dùng chung cơ chế giữ

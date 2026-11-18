@@ -68,6 +68,13 @@ build the same deck spec directly into `.pptx` output.
 
 ## Configure Tools
 
+For streamed tool calls, chat shows **Preparing tool-name…** as soon as the
+provider identifies the tool, with character-count updates during large argument
+generation (for example, an HTML file body). This is preparation, not execution:
+arguments are not shown in the progress indicator, and the tool still waits for
+the complete call and the normal permission/approval checks. Non-streaming
+responses cannot provide this early progress.
+
 Open global **Settings → Tools** to configure capability backends separately
 from the agent's reasoning model. A Model Offering is the provider and exact
 model selected for a model-backed operation; a dedicated search or speech

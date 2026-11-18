@@ -784,15 +784,28 @@ export function Conversation() {
       case "tool_call_progress":
         // The model is still generating a tool call's arguments (e.g. a
         // large file body) — surface progress instead of dead air.
-        updateStreamingForSession(sessionId, (prev) =>
-          prev
-            ? {
-                ...prev,
-                toolProgress: { name: data.name ?? null, argsChars: data.args_chars ?? 0 },
-                awaitingModel: false,
-              }
-            : prev,
-        );
+        updateStreamingForSession(sessionId, (prev) => {
+          if (!prev) return prev;
+          // Preparation ends the prose/thinking phase, but is not execution.
+          let items = prev.items;
+          if (prev.thinking) {
+            const durationSec = prev.thinkingStartTime
+              ? Math.round((Date.now() - prev.thinkingStartTime) / 1000)
+              : null;
+            items = [...items, { type: "thinking" as const, id: `thinking-${items.length}`, data: { content: prev.thinking, durationSec } }];
+          }
+          if (prev.text) {
+            items = [...items, { type: "text" as const, id: `text-${items.length}`, data: { content: prev.text } }];
+          }
+          return {
+            ...prev,
+            items,
+            thinking: "",
+            text: "",
+            toolProgress: { name: data.name ?? null, argsChars: data.args_chars ?? 0 },
+            awaitingModel: false,
+          };
+        });
         break;
 
       case "turn_complete":
@@ -2561,15 +2574,23 @@ function StreamingMessage({
       {/* Model is streaming a tool call's arguments (large file bodies
           take minutes) — show live progress instead of dead air. */}
       {streaming.toolProgress && !streaming.completed && (
-        <div className="mb-4 flex items-center gap-1.5">
+        <div
+          role="status"
+          aria-label="Preparing tool call"
+          className="mb-4 flex min-w-0 items-center gap-1.5 text-xs text-ink-muted"
+        >
           <span
-            className="pulse inline-block h-1.5 w-1.5 rounded-full"
-            style={{ background: "#FBBF24" }}
+            aria-hidden="true"
+            className="pulse inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-warning"
           />
-          <span className="font-mono text-[11px] text-[var(--ink-2)]">
-            {streaming.toolProgress.name ?? "tool call"} — generating arguments…{" "}
-            {(streaming.toolProgress.argsChars / 1000).toFixed(1)}k
+          <span className="min-w-0 break-words font-mono">
+            Preparing {streaming.toolProgress.name ?? "tool call"}…
           </span>
+          {streaming.toolProgress.argsChars > 0 && (
+            <span className="shrink-0 font-mono text-ink-faint">
+              {(streaming.toolProgress.argsChars / 1000).toFixed(1)}k chars
+            </span>
+          )}
         </div>
       )}
 
