@@ -1,6 +1,10 @@
 # W5 - Agent Visual Inspection And Bounded Revision
 
-Status: planned; no visual-review capability is claimed from fixture inspection.
+Status: deferred by operator decision; not a v0.2.2 release requirement.
+The proposed implementation below is retained for future reference, not shipped.
+Use structured-content inspection and operator previews; users may attach
+screenshots through existing image input when visual feedback is needed.
+Neither JSON inspection nor a successful render establishes visual approval.
 Dependencies: [W1](01-rendering-foundation.md), relevant authoring lanes and
 [W2H](02h-html-presentations.md) capture; [W4](04-preview-experience.md) integrates operator requests.
 

@@ -1,7 +1,8 @@
 # W6 - Integrated Acceptance, Documentation, And Release
 
 Status: planned. No release, commit or push is authorized by this document.
-Dependencies: required exits from W0-W5; [acceptance matrix](acceptance-matrix.md)
+Dependencies: required exits from W0-W4 (including W3X); W5 is deferred by
+operator decision and is not a release gate. The [acceptance matrix](acceptance-matrix.md)
 is the scenario checklist.
 
 ## Purpose And Operator Outcome

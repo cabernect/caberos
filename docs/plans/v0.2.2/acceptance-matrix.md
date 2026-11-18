@@ -6,6 +6,10 @@ Sequence: [workstreams](README.md).
 Preview scope: [preview contract](preview-contract.md). Best-effort Office views
 with explicit non-blocking alerts are accepted for uploads and generated files.
 No LibreOffice or full Office-layout renderer is required.
+W5 autonomous visual inspection is deferred by operator decision. Its A23-A25
+scenarios are deferred, not passes or v0.2.2 release blockers; visual-review
+portions of cross-format scenarios are likewise outside the current release.
+Structural inspection, operator previews and native-output checks remain in scope.
 
 ## Evidence Rules
 

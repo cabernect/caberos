@@ -28,7 +28,7 @@ slices, failure behavior, test scenarios, and completion checklists.
 | W3 | Make styled, editable Word reports and targeted document edits | [DOCX craft](03-docx-craft.md) | Basic handler exists; richer styles/templates planned |
 | W3X | Make styled Excel files and safely edit uploaded workbooks | [XLSX craft and editing](03x-xlsx-craft.md) | First styling/layout slice shipped; remaining scope planned |
 | W4 | Let the operator comfortably view and request changes to deliverables | [Shared preview UX](04-preview-experience.md) | Existing panel is baseline; richer UX planned |
-| W5 | Let the agent see exact output and fix visual problems | [Visual inspection loop](05-visual-inspection.md) | Planned |
+| W5 | Let the agent see exact output and fix visual problems | [Visual inspection loop](05-visual-inspection.md) | Deferred by operator decision; not a v0.2.2 gate |
 | W6 | Prove the whole workflow, document limitations, and release | [Acceptance and release](06-acceptance-release.md) | Planned; no release approval implied |
 
 ### One Presentation Source, Separate Renderer Evidence
@@ -334,6 +334,10 @@ revision switching, and narrow layouts. Large fixtures stay bounded.
 Include XLSX style/formula-result states and HTML live/static mode distinctions.
 
 ## W5 - Agent Visual Inspection And Revision Loop
+
+Deferred by operator decision. The proposal below is future scope, not a release
+gate. Existing authoring, structural inspection, targeted revisions and operator
+previews remain; visual feedback can use user-supplied screenshots.
 
 Outcome: agents can examine actual output and correct it before delivery.
 
