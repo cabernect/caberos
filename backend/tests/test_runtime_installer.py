@@ -236,13 +236,13 @@ async def test_plan_rejects_invalid_sha_at_plan_time(tmp_path):
     assert e.value.status == 409
 
 
-async def test_plan_reuse_when_ready(tmp_path):
+async def test_plan_reuse_when_managed_ready(tmp_path):
     rows = _status_rows(
         {
             2: {
                 "status": "ready",
                 "version": "2.53.0",
-                "source": "system",
+                "source": "managed",
                 "executables": {"git": "/usr/bin/git"},
             }
         }
@@ -251,6 +251,15 @@ async def test_plan_reuse_when_ready(tmp_path):
     installer = _installer(tmp_path, status_rows=rows, recipes=rec)
     plan = await installer.plan(["git"], "op-1")
     assert plan["dependencies"][0]["action"] == "reuse"
+
+
+async def test_plan_downloads_managed_even_when_system_is_ready(tmp_path):
+    rows = _status_rows({2: {"status": "ready", "source": "system", "version": "2.53.0"}})
+    blob = _tar({"bin/git": b"#!"})
+    installer = _installer(tmp_path, status_rows=rows, recipes=_with_blobs(_recipe_env(), git=blob))
+    plan = await installer.plan(["git"], "op-1")
+    assert plan["dependencies"][0]["action"] == "install"
+    assert plan["dependencies"][0]["sha256"] == hashlib.sha256(blob).hexdigest()
 
 
 async def test_plan_rejects_unknown_and_duplicate(tmp_path):
@@ -697,10 +706,10 @@ async def test_cancel_preserves_earlier_dep_status(tmp_path, preceding):
     if preceding == "completed":
         recipes = _with_blobs(_recipe_env(), git=git_blob, nodejs=b"")
         status_rows = _status_rows()
-    else:  # git already ready via system — plan reuses it
+    else:  # only a ready managed runtime is reused
         recipes = _with_blobs(_recipe_env(), nodejs=b"")
         status_rows = _status_rows(
-            {2: {"status": "ready", "source": "system", "version": "2.53.0"}}
+            {2: {"status": "ready", "source": "managed", "version": "2.53.0"}}
         )
     installer = _installer(tmp_path, download=download, status_rows=status_rows, recipes=recipes)
     plan = await installer.plan(["git", "nodejs"], "op-1")

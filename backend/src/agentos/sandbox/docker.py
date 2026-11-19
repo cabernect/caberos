@@ -17,6 +17,7 @@ import uuid
 from functools import partial
 from pathlib import Path
 
+from ..terminal_environment import workspace_tool_environment
 from .base import SandboxBackend, SandboxLaunch, ShellResult, kill_process_group
 from .process import collect_process
 
@@ -126,11 +127,9 @@ class DockerBackend(SandboxBackend):
             f"{workspace}:/workspace",
             "-w",
             "/workspace",
-            # Matches BwrapBackend/SeatbeltBackend: HOME is the workspace, not
-            # whatever the image's default user has (root's /root on Alpine).
-            "-e",
-            "HOME=/workspace",
         ]
+        for key, value in workspace_tool_environment("/workspace").items():
+            args.extend(["-e", f"{key}={value}"])
         if not allow_network:
             args += ["--network", "none"]
         args += [_SANDBOX_IMAGE, "/bin/sh", "-c", command]
@@ -165,11 +164,13 @@ class DockerBackend(SandboxBackend):
                 proc.kill()
                 await asyncio.wait_for(proc.wait(), timeout=_KILL_GRACE)
 
-    def plan_launch(self, workspace_path: str, command: str) -> SandboxLaunch:
+    def plan_launch(
+        self, workspace_path: str, command: str, *, allow_network: bool = False
+    ) -> SandboxLaunch:
         # Create first: stopping an attach client must not race a late container
         # creation. Once acknowledged, removing this resource also stops a late start.
         name = f"caberos-sandbox-{uuid.uuid4().hex}"
-        args = self._docker_argv(workspace_path, command, False, name)
+        args = self._docker_argv(workspace_path, command, allow_network, name)
         args[1] = "create"
         args.remove("--rm")
         return SandboxLaunch(

@@ -161,6 +161,24 @@ Sessions pin their workspace root; changing the agent default affects new sessio
 
 Global `ToolBinding` configuration selects implementation, never authority. Search service credentials reuse encrypted Provider rows; `scope=search`/`speech` separates services from chat-model discovery. Image generation/editing are mediated capabilities. Speech is authenticated operator STT/TTS, not an agent tool: editable batch dictation and explicit Read Aloud, with cached audio and generation-guarded playback. Missing prices remain unknown. Local terminal backend selection and `TerminalTransport`/`LocalTransport` are implemented; SSH/Daytona/Modal, realtime Voice Mode, video generation, and agent-authored apps remain deferred.
 
+MCP and terminal default to `runtime_source=auto`: explicit binary override,
+healthy existing managed install, then a compatible standard public system
+install (e.g. Homebrew). Auto never searches arbitrary PATH/private-home managers
+and rejects public-bin symlinks resolving outside public runtime roots.
+`AGENTOS_RUNTIME_SOURCE=managed|system` pins one source without cross-source
+fallback; invalid managed pointers fail closed. No automatic installs. Terminal warms the
+bounded readiness cache, puts verified runtime dirs first, and never sources shell
+profiles or mutates gateway env. Strict grants read/execute only on selected
+managed version trees, never their parent store or app data. Runtimes are
+read-only; workspace/store overlap fails closed. Open remains full-user execution.
+Strict terminal networking is allowed by
+operator decision: workspace content may leave the machine, packages may download,
+and dev servers may listen. File-write/private-read rules remain; bwrap includes
+read-only public resolver/certificate configuration for networking. Package
+cache/prefix/temp defaults stay workspace-local. This is not an offline mode or
+data-loss prevention. Low-level sandbox APIs still default to no network unless
+the caller opts in; both sync and background terminal paths explicitly opt in.
+
 ### Observability
 `model_calls` is the unified ledger (chat/embedding/probe/extract/title; thinking tokens are reported-only). Correlation via `call_id`/`sub_agent_id` on audits/approvals/elicitations/artifacts — exact joins, never temporal. `GET /api/runs/{id}` returns a projected `timeline` (audit roots → tombstone tool_call → pending approval); `/api/spend?scope=platform` reads the ledger while agent scope keeps historic run totals — they are intentionally not algebraically equal. `redaction.py` is the shared read boundary; sensitive payloads fail closed. Traces page: span tree + waterfall + observation inspector.
 
@@ -180,7 +198,7 @@ Managed Chrome-for-Testing (explicit first-use install consent), CDP sessions, h
 Channels (Telegram/Discord/Zalo OA/Zalo Bot) route through the same pipeline and audit. MCP: stdio/HTTP client, registry, encrypted credentials, OAuth loopback + refresh, stdio PATH resolution (`CABEROS_MCP_RUNTIME_PATH`), per-tool `tool_filter` + deny overrides.
 
 ### Runtime readiness / dependencies
-Optional tools/runtimes live in global Settings → General. Direction: app-managed/private installs by default, fixed subprocess recipes, guided system install when unmanaged — all gated on explicit consent. No automatic downloads.
+Optional tools/runtimes live in global Settings → General. Reuse healthy managed or standard system installs before offering a consent-based managed download; no duplicate install is required for compatible Homebrew runtimes. Fixed installer recipes and guided setup remain operator-approved. No automatic downloads.
 
 ## Attachments & workspace layout
 

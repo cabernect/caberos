@@ -8,6 +8,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from ..terminal_environment import strict_runtime_roots, terminal_path, workspace_tool_environment
 from .base import SandboxBackend, ShellResult, kill_process_group
 from .process import collect_process
 
@@ -33,6 +34,9 @@ def _build_profile(workspace: str, allow_network: bool) -> str:
     if any(ord(c) < 32 or ord(c) == 127 for c in str(root)):
         raise ValueError("Strict Seatbelt workspaces cannot contain control characters.")
     workspace = str(root).replace("\\", "\\\\").replace('"', '\\"')
+    runtimes = [
+        value.replace("\\", "\\\\").replace('"', '\\"') for value in strict_runtime_roots(str(root))
+    ]
     lines = [
         "(version 1)",
         "(deny default)",
@@ -44,10 +48,12 @@ def _build_profile(workspace: str, allow_network: bool) -> str:
         "(allow process-exec*)",
         "(allow file-read*)",
         *(f'(deny file-read* (subpath "{denied}"))' for denied in _PRIVATE_DENY_ROOTS),
+        *(f'(allow file-read* (subpath "{runtime}"))' for runtime in runtimes),
         f'(allow file-read* (subpath "{workspace}"))',
         "(deny file-write*)",
         f'(allow file-write* (subpath "{workspace}"))',
         '(allow file-write* (literal "/dev/null"))',
+        *(f'(deny file-write* (subpath "{runtime}"))' for runtime in runtimes),
     ]
     if allow_network:
         lines.append("(allow network*)")
@@ -130,11 +136,8 @@ class SeatbeltBackend(SandboxBackend):
     def spawn_env(self, workspace_path: str) -> dict[str, str] | None:
         ws_resolved = str(Path(workspace_path).resolve())
         return {
-            "PATH": "/usr/bin:/bin",
-            "HOME": ws_resolved,
-            "TMPDIR": ws_resolved,
-            "TMP": ws_resolved,
-            "TEMP": ws_resolved,
+            "PATH": terminal_path("/usr/bin:/bin"),
+            **workspace_tool_environment(ws_resolved),
         }
 
     async def run_command(

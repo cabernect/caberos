@@ -14,6 +14,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from agentos.sandbox.seatbelt import SeatbeltBackend, _build_profile
+from agentos.terminal_environment import terminal_path
 from tests.process_fakes import FakeProcess
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="Seatbelt profiles use POSIX paths")
@@ -80,11 +81,16 @@ def test_environment_has_workspace_home_and_temp_without_host_secrets(tmp_path, 
     env = SeatbeltBackend().spawn_env(str(tmp_path))
     root = str(tmp_path.resolve())
     assert env == {
-        "PATH": "/usr/bin:/bin",
+        "PATH": terminal_path("/usr/bin:/bin"),
         "HOME": root,
         "TMPDIR": root,
         "TMP": root,
         "TEMP": root,
+        "XDG_CACHE_HOME": f"{root}/.cache",
+        "npm_config_cache": f"{root}/.cache/npm",
+        "npm_config_prefix": f"{root}/.local",
+        "UV_CACHE_DIR": f"{root}/.cache/uv",
+        "PIP_CACHE_DIR": f"{root}/.cache/pip",
     }
 
 

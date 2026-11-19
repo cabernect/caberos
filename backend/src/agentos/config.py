@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field
 
@@ -100,6 +101,8 @@ class Settings(BaseSettings):
     # Explicit runtime binary overrides — env-only for now
     # (AGENTOS_RUNTIME_BINARY_OVERRIDES as a JSON dict of command→path).
     runtime_binary_overrides: dict[str, str] = {}
+    # Auto reuses managed installs, then compatible runtimes in standard locations.
+    runtime_source: Literal["auto", "managed", "system"] = "auto"
 
     # Private-network exceptions for general web fetch — exact hostnames (or
     # IP literals) the agent's web_fetch may reach on loopback/RFC1918/ULA.

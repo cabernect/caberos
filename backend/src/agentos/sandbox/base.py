@@ -151,19 +151,23 @@ class SandboxBackend(ABC):
         """Env for a spawned sandbox process; None = inherit parent env."""
         return None
 
-    def plan_launch(self, workspace_path: str, command: str) -> SandboxLaunch:
+    def plan_launch(
+        self, workspace_path: str, command: str, *, allow_network: bool = False
+    ) -> SandboxLaunch:
         """Choose an owned identity without creating processes or external resources."""
         return SandboxLaunch(
-            argv=self.spawn_argv(workspace_path, command),
+            argv=self.spawn_argv(workspace_path, command, allow_network=allow_network),
             env=self.spawn_env(workspace_path),
         )
 
     async def activate_launch(self, launch: SandboxLaunch) -> None:
         """Create a resource only after the controller has persisted its identity."""
 
-    async def prepare_launch(self, workspace_path: str, command: str) -> SandboxLaunch:
+    async def prepare_launch(
+        self, workspace_path: str, command: str, *, allow_network: bool = False
+    ) -> SandboxLaunch:
         """Convenience for callers that do not need durable admission."""
-        launch = self.plan_launch(workspace_path, command)
+        launch = self.plan_launch(workspace_path, command, allow_network=allow_network)
         await self.activate_launch(launch)
         return launch
 

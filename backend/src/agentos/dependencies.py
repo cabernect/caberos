@@ -1,8 +1,8 @@
 """Optional Tools & Runtimes — dependency readiness (W11 Track B slice).
 
-Readiness only — this module never installs, downloads, or mutates PATH.
-Install jobs are a later slice; operators see honest status plus whether a
-publisher-verified managed recipe exists for their platform.
+Readiness only: no installs, downloads, or process-wide PATH mutation.
+Auto reuses managed installs, then verified standard system installations.
+Source pins and binary overrides are explicit. The installer owns consent.
 """
 
 from __future__ import annotations
@@ -27,6 +27,9 @@ from .runtime_support import (
     is_executable,
     npm_entrypoint,
     probe_environment,
+    runtime_directories,
+    standard_runtime_directories,
+    standard_runtime_roots,
 )
 
 log = logging.getLogger("agentos.dependencies")
@@ -42,11 +45,7 @@ Runner = Callable[..., Awaitable[tuple[int, bytes, bytes]]]
 Finder = Callable[[str], str | None]
 
 # Same candidate roots as the MCP stdio resolver — no PATH mutation.
-_SYSTEM_DIRS = [
-    "/opt/homebrew/bin",
-    "/usr/local/bin",
-    os.path.expanduser("~/.local/bin"),
-]
+_SYSTEM_DIRS = runtime_directories()
 
 
 class OutputLimitExceeded(RuntimeError):
@@ -161,6 +160,7 @@ class RuntimeDependencyRegistry:
         self._cache: list[dict] | None = None
         self._cache_at = 0.0
         self._last_paths: dict[str, str] = {}
+        self._last_managed_roots: tuple[str, ...] = ()
         self._inflight: asyncio.Task | None = None
 
     # -- public API -------------------------------------------------------
@@ -188,6 +188,19 @@ class RuntimeDependencyRegistry:
         """Synchronous resolution to the last health-verified path —
         never spawns a process."""
         return self._last_paths.get(command)
+
+    def managed_runtime_roots(self, workspace: str | None = None) -> tuple[str, ...]:
+        """Read-only grants for the health-verified selection, never the data dir."""
+        store = self._root.resolve()
+        if workspace is not None:
+            ws = Path(workspace).resolve()
+            if _inside(store, ws) or _inside(ws, store):
+                raise ValueError("Strict workspace must not overlap the managed runtime store.")
+        for value in self._last_managed_roots:
+            root = Path(value)
+            if root.resolve() != root or not root.is_dir() or not _inside(root, store):
+                raise RuntimeError("Managed runtime changed or disappeared; re-check runtimes.")
+        return self._last_managed_roots
 
     _CHILD_DEP_ORDER = ("node", "npm", "npx", "uv", "uvx", "git")
 
@@ -226,15 +239,18 @@ class RuntimeDependencyRegistry:
             if row["status"] == "ready":
                 last.update(row["executables"])
         self._last_paths = last
+        self._last_managed_roots = tuple(
+            row["managed_root"]
+            for row in rows
+            if row["status"] == "ready" and row["source"] == "managed" and row.get("managed_root")
+        )
         return copy.deepcopy(rows)
 
     async def _probe_all_inner(self) -> list[dict]:
         return await asyncio.gather(*(self._probe_dep(did) for did in _DEPENDENCIES))
 
     async def _probe_dep(self, dep_id: str) -> dict:
-        """Evaluate candidate groups in source order; first health-ready
-        candidate wins. An explicit-override failure is terminal — never
-        silently falls back to a different source."""
+        """Evaluate the configured sources without mixing command groups."""
         spec = _DEPENDENCIES[dep_id]
         try:
             if dep_id == "chromium":
@@ -244,11 +260,20 @@ class RuntimeDependencyRegistry:
                 return self._row(
                     dep_id,
                     status="error",
-                    source="override",
+                    source=(
+                        "override"
+                        if any(c in settings.runtime_binary_overrides for c in spec["commands"])
+                        else ("system" if settings.runtime_source == "system" else "managed")
+                    ),
                     detail=hard_error,
                 )
             if not candidates:
-                return self._row(dep_id, status="missing", source="none")
+                return self._row(
+                    dep_id,
+                    status="missing",
+                    source="none",
+                    detail="Install in Optional Tools & Runtimes, or configure a system runtime.",
+                )
             best_failure: dict | None = None
             best_source = "none"
             best_executables: dict = {}
@@ -275,6 +300,7 @@ class RuntimeDependencyRegistry:
                             source=cand["source"],
                             executables=cand["executables"],
                             version=versions,
+                            managed_root=cand.get("managed_root"),
                         )
                     failure = {
                         "status": status,
@@ -316,6 +342,13 @@ class RuntimeDependencyRegistry:
             return [{"executables": group, "source": "override"}], None
 
         candidates: list[dict] = []
+        if settings.runtime_source != "system":
+            managed, error = self._managed_candidate(dep_id, spec)
+            if settings.runtime_source == "managed" or error:
+                return ([managed] if managed is not None else []), error
+            if managed is not None:
+                candidates.append(managed)
+
         if len(commands) == 1:
             # Every matching location is a candidate in order — a broken
             # earlier install must not mask a ready later one.
@@ -329,11 +362,18 @@ class RuntimeDependencyRegistry:
         else:
             for group in self._system_groups(dep_id, commands, spec):
                 candidates.append({"executables": group, "source": "system"})
-        managed, managed_err = self._managed_candidate(dep_id, spec)
-        if managed is not None:
-            candidates.append(managed)
-        elif managed_err and not candidates:
-            return [], managed_err
+        if settings.runtime_source == "auto":
+            # Do not follow a public-bin symlink into ~/.hermes, nvm, or app data.
+            roots = [Path(root) for root in standard_runtime_roots()]
+            candidates = [
+                candidate
+                for candidate in candidates
+                if candidate["source"] == "managed"
+                or all(
+                    any(Path(path).resolve().is_relative_to(root) for root in roots)
+                    for path in candidate["executables"].values()
+                )
+            ]
         return candidates, None
 
     def _override_group(
@@ -444,8 +484,10 @@ class RuntimeDependencyRegistry:
         if rel_dir.is_absolute() or ".." in rel_dir.parts:
             return invalid()
         base = (self._root / dep_id).resolve()
-        version_dir = base / directory
-        if not _inside(version_dir, base) or not version_dir.is_dir():
+        version_dir = (base / directory).resolve()
+        if version_dir == base or not _inside(version_dir, base) or not version_dir.is_dir():
+            return invalid()
+        if any(ord(c) < 32 or ord(c) == 127 for c in str(version_dir)):
             return invalid()
         executables = data.get("executables")
         if not isinstance(executables, dict):
@@ -469,6 +511,7 @@ class RuntimeDependencyRegistry:
             "executables": out,
             "source": "managed",
             "declared_version": version,
+            "managed_root": str(version_dir),
         }, None
 
     # -- health ------------------------------------------------------------
@@ -593,6 +636,7 @@ class RuntimeDependencyRegistry:
         version: Any = None,
         executables: dict | None = None,
         detail: str | None = None,
+        managed_root: str | None = None,
     ) -> dict:
         spec = _DEPENDENCIES[dep_id]
         managed = spec.get("managed", False)
@@ -616,9 +660,12 @@ class RuntimeDependencyRegistry:
             "unlocks": spec["unlocks"],
             "managed_recipe_available": managed,
             "guidance_url": spec.get("guidance_url"),
+            **({"managed_root": managed_root} if managed_root else {}),
         }
 
     def _search_dirs(self) -> list[str]:
+        if settings.runtime_source == "auto":
+            return standard_runtime_directories()
         path_dirs = [d for d in os.environ.get("PATH", "").split(os.pathsep) if d]
         dirs = list(path_dirs)
         for d in _SYSTEM_DIRS:

@@ -1,4 +1,4 @@
-"""Optional Tools & Runtimes status — readiness only, no installers."""
+"""Operator-only runtime readiness and consent-based managed installation."""
 
 from typing import Literal
 

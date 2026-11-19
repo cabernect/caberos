@@ -118,9 +118,19 @@ async def db(db_engine, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def isolated_fs_roots(tmp_path, monkeypatch):
-    """Route all writable runtime roots into tmp_path — tests must never
-    touch the real agent home, workspace, knowledge, or data dirs."""
+    """Isolate writable roots and host runtime discovery; discovery tests
+    supply their own candidates rather than probing the developer's tools."""
+    import agentos.dependencies as dependencies
     from agentos.config import settings
+
+    monkeypatch.setattr(
+        dependencies,
+        "_REGISTRY",
+        dependencies.RuntimeDependencyRegistry(
+            data_dir=tmp_path.parent / f"{tmp_path.name}-managed-runtimes",
+            finder=lambda command: None,
+        ),
+    )
 
     monkeypatch.setattr(settings, "agent_home_root", tmp_path / "agents")
     monkeypatch.setattr(settings, "workspace_root", tmp_path / "workspaces")
