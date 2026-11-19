@@ -139,7 +139,11 @@ File-tool containment applies to CaberOS native file tools. It does not automati
 ### Strict mode
 
 The terminal capability selects the local backend configured in
-**Settings → Tools → Terminal** and requests network-disabled execution.
+**Settings → Tools → Terminal**. Strict confines filesystem writes, not
+networking: terminal calls allow package downloads and development servers.
+Commands can send workspace content externally and reach localhost or LAN
+services; the managed browser's private-network allowlist does not constrain
+terminal commands. Use host firewall/container policies for network restrictions.
 Auto remains OS-native; an unavailable explicit backend does not fall back to
 open execution. Existing background terminals retain their admitted backend.
 
@@ -149,24 +153,78 @@ Open mode launches `/bin/sh -c` directly with the workspace as current directory
 
 Open mode should be considered full local-user command authority. Approval can help review commands but cannot make arbitrary shell execution intrinsically safe.
 
+### Installed command discovery
+
+MCP and local terminal calls default to **automatic runtime selection**:
+explicit binary overrides first, then a healthy existing CaberOS-managed install,
+then compatible installations in standard public locations such as
+`/opt/homebrew/bin`, `/usr/local/bin`, or OS runtime directories.
+A usable Homebrew installation does not require a duplicate managed download.
+Auto does not search arbitrary inherited `PATH` entries or private-home managers
+such as `~/.hermes`/nvm; symlinks into private locations are rejected too.
+Node/npm/npx are checked as one complete group, not combined across directories.
+Managed installation remains an explicit-consent option in
+**Settings → General → Optional Tools & Runtimes**, not an automatic download.
+The selected verified runtime directories lead terminal `PATH`; empty and
+relative entries are excluded, and the workspace is not added automatically.
+Shell profiles are not loaded and the gateway environment is not changed.
+Open still inherits other OS commands: runtime selection is not an executable
+allowlist and does not restrict commands deliberately invoked by absolute path.
+To pin one source, set `AGENTOS_RUNTIME_SOURCE=managed` or `system`, or use
+`AGENTOS_RUNTIME_BINARY_OVERRIDES` (a JSON command-to-path mapping).
+Overrides take precedence; explicit source pins do not fall back to another source.
+An invalid managed pointer remains an error rather than being silently ignored.
+The default is `AGENTOS_RUNTIME_SOURCE=auto`.
+Changes apply to newly launched commands, not already-running background terminals.
+
+Strict mode keeps its reduced environment and OS confinement. On macOS,
+verified managed version trees receive read/execute access despite private-home
+read denies; the rest of the data directory (DB, credentials, other versions)
+is not exposed by those grants. Shared runtimes remain non-writable to Strict.
+Linux mounts only selected managed version trees read-only; Windows MXC adds
+them to readonly paths and keeps system-directory precedence.
+Strict workspaces may not overlap the managed store, even through symlinks.
+System/override runtimes do not gain private-read exceptions automatically.
+Tools under denied or unmounted directories can still fail even when discovered.
+Linux networking additionally receives read-only public DNS/hosts/NSS and
+certificate-store configuration, not the host's full `/etc` or private trees.
+
+Discovery itself does not install packages. Strict terminal calls may use
+`npm`/`npx`/`uvx` to download packages; package lifecycle scripts run under the
+same sandbox. `HOME`, temp variables, npm cache/prefix, uv/pip cache and
+`XDG_CACHE_HOME` default inside the workspace. Global npm installs are therefore
+workspace-local, not system-wide. Installers that insist on writing to protected
+locations can still fail. Home-based version
+managers are not initialized by sourcing `.zshrc` or another shell profile.
+Configured MCP servers resolve their own environment and do not inherit the
+native terminal's sandbox policy.
+
 ## macOS Seatbelt behavior
 
 Strict terminal calls use `/usr/bin/sandbox-exec` with a generated profile.
 
 | Resource | Current policy |
 | --- | --- |
-| File reads | Runtime reads allowed, then private trees under `/Users`, `/private/var/folders`, and `/private/tmp` denied; the workspace is re-allowed |
+| File reads | Runtime reads allowed, private trees denied, then the workspace and selected verified managed version trees re-allowed |
 | File writes | Denied outside the workspace, except `/dev/null` |
 | Process execution | Allowed so system and installed tools can run |
 | Process fork | Allowed |
-| Network | Denied for strict terminal calls |
-| Environment | Reduced `PATH`; `HOME`, `TMPDIR`, `TMP`, and `TEMP` point to the workspace |
+| Network | Allowed for strict terminal calls, including package downloads, local servers and external transmission of workspace content |
+| Environment | System `PATH` plus discovered runtime directories; `HOME`, `TMPDIR`, `TMP`, and `TEMP` point to the workspace; host secrets are not inherited |
 
 The profile preserves reads needed by system runtimes; it is not a claim that
 every readable byte is inside the workspace. Private-tree denies narrow host
 access, and availability includes a synthetic workspace/sibling confinement
 self-check. A failed self-check makes strict execution unavailable rather than
 enabling a permissive profile.
+
+GUI applications and helpers are outside this profile's scope. The generated
+profile does not allow Mach service lookup, so sandboxed processes cannot
+connect to WindowServer, the pasteboard, LaunchServices, or TCC. A command such
+as `agent-desktop permissions --guide` can report `started` and keep a helper
+alive while no window appears. Run GUI-dependent commands in Open mode or
+outside the CaberOS agent terminal; Open mode still needs the relevant macOS
+privacy grants for the responsible app.
 
 The dedicated live Seatbelt test cases require an isolated macOS runner and
 `CABEROS_TEST_SEATBELT_LIVE=1`. Skipping those cases is not proof of enforcement
@@ -182,11 +240,12 @@ Require approval for terminal calls and inspect commands for paths, redirections
 Strict terminal calls use Bubblewrap with:
 
 - a cleared environment;
-- minimal `PATH` and workspace `HOME`;
+- system/runtime `PATH` restricted to existing read-only runtime mounts and workspace `HOME`;
 - read-only `/usr`, `/bin`, `/lib`, and `/lib64` bindings;
 - a writable workspace mounted at `/workspace`;
 - a temporary in-memory `/tmp`;
-- isolated process, IPC, mount, and network namespaces through `--unshare-all`;
+- isolated process, IPC and mount namespaces; terminal calls share host networking via `--share-net`;
+- read-only public DNS/hosts/NSS and CA certificate configuration for networked calls;
 - parent-death and new-session controls;
 - no shared network unless explicitly requested by code.
 
@@ -204,19 +263,19 @@ Avoid commands that daemonize, fork detached processes, or start persistent serv
 
 ## Network boundaries
 
-Strict terminal calls request no network:
+Strict and Open terminal calls both allow networking. Strict is a filesystem
+restriction, not an offline or data-loss-prevention mode. Package scripts can
+transmit workspace files; a dev server can expose them to its clients. Prefer
+loopback-bound development servers unless broader exposure is intended.
 
-- Seatbelt adds a network deny rule on macOS.
-- Bubblewrap leaves the network namespace unshared on Linux.
-
-This restriction does not apply to:
+Other network pathways remain separate:
 
 - `web_search` or `web_fetch`, which intentionally use the gateway’s network;
 - hosted model requests;
 - MCP HTTP servers;
 - stdio MCP servers making their own network requests;
 - external channel adapters;
-- terminal commands in open mode.
+- configured MCP server processes, whose sandbox policy is independent.
 
 Capability approval and egress labels control model access to those pathways; host firewalls provide an additional independent layer.
 
@@ -319,9 +378,9 @@ confirm the run used strict mode. Unexpected access to a protected private path
 should be investigated, not dismissed as normal. Disable terminal while
 investigating, or use a stronger VM/container/OS-account boundary.
 
-### Strict command cannot access the network
+### Strict command reports a network failure
 
-That is expected. Use an explicit web or MCP capability with appropriate approval, or change the architecture rather than weakening shell isolation casually.
+Strict terminal calls allow networking, so this is not a sandbox network block. Check DNS, proxy or firewall settings, the runtime doing the request, and host network policy. If the command still cannot connect, use an explicit web or MCP capability with appropriate approval for governed access rather than weakening filesystem isolation casually.
 
 ### A command keeps running after a timeout
 

@@ -75,17 +75,68 @@ Strict mode resolve `read_file`, `write_file`, `edit_file`, `search_files` trong
 
 ## Terminal sandbox
 
-Strict terminal dùng OS backend và request network-disabled. Open mode chạy `/bin/sh -c` trực tiếp với quyền gateway process; đây là full local-user command authority. Approval chỉ giúp review, không làm arbitrary shell intrinsically safe.
+Strict terminal dùng OS backend để giới hạn filesystem write, không chặn network:
+có thể download package, chạy dev server và gửi nội dung workspace ra ngoài.
+Terminal cũng có thể truy cập localhost/LAN; private-network allowlist của managed
+browser không giới hạn terminal. Dùng host firewall/container policy nếu cần chặn
+network. Open mode chạy `/bin/sh -c` trực tiếp với quyền gateway process; đây là
+full local-user command authority. Approval chỉ giúp review, không làm arbitrary
+shell intrinsically safe.
 
 Chọn backend local tại **Settings → Tools → Terminal**. Auto giữ lựa chọn native;
 backend chỉ định không khả dụng thì không fallback sang open execution.
 Background terminal giữ backend lúc admission.
+
+### Tìm CLI đã cài
+
+MCP và terminal local mặc định **tự chọn runtime**: binary override rõ ràng,
+rồi CaberOS-managed install đã có và healthy, rồi install tương thích tại public
+location tiêu chuẩn như `/opt/homebrew/bin`, `/usr/local/bin` hoặc OS directory.
+Homebrew dùng được thì không cần tải thêm managed copy.
+Auto không tìm trong `PATH` tùy ý hay private-home manager như `~/.hermes`/nvm;
+symlink trỏ vào private location cũng bị loại. Node/npm/npx phải đủ cùng một
+directory, không ghép từ nhiều install. Managed install vẫn là lựa chọn cần
+operator đồng ý trong **Settings → General → Optional Tools & Runtimes**;
+readiness không tự download. Runtime đã verify đứng đầu terminal `PATH`; bỏ entry
+rỗng/relative, không tự thêm workspace, không load shell profile hay đổi gateway env.
+Open vẫn kế thừa OS command khác: đây không phải executable allowlist, cũng không
+chặn command gọi bằng absolute path. Muốn pin source, đặt
+`AGENTOS_RUNTIME_SOURCE=managed` hoặc `system`, hoặc dùng
+`AGENTOS_RUNTIME_BINARY_OVERRIDES` (JSON command-to-path); override ưu tiên cao nhất.
+Source pin rõ ràng không fallback source khác; managed pointer không hợp lệ vẫn
+báo lỗi, không bỏ qua âm thầm. Mặc định là `AGENTOS_RUNTIME_SOURCE=auto`.
+Chỉ command mới nhận thay đổi, background terminal đang chạy giữ nguyên.
+
+Strict vẫn giữ environment tối thiểu và OS confinement. macOS thêm runtime
+đã verify được đọc/thực thi trong đúng version tree dù nằm trong private home;
+không cấp đọc cả data directory, DB, credential hay version khác. Strict không
+được ghi shared runtime. Linux mount đúng version tree read-only; Windows MXC thêm
+readonly path và giữ ưu tiên system directory. Workspace Strict không được overlap
+managed store, kể cả qua symlink. System/override runtime không tự có private-read exception.
+Tool trong thư mục bị deny hoặc chưa mount vẫn có thể không chạy được.
+Linux thêm read-only public DNS/hosts/NSS và CA certificate configuration cho
+network, không mount toàn bộ `/etc` hay mở private directory.
+
+Tìm thấy CLI không tự cài package. Strict terminal cho phép `npm`/`npx`/`uvx`
+download; lifecycle script của package vẫn chạy trong cùng sandbox.
+`HOME`, temp, npm cache/prefix, uv/pip cache và `XDG_CACHE_HOME` mặc định nằm trong
+workspace; npm global install vì thế chỉ ghi trong workspace, không phải system.
+Installer cố ghi protected path vẫn có thể thất bại. Không source `.zshrc` hay profile
+khác để khởi tạo version manager. MCP server cấu hình environment riêng và
+không tự kế thừa sandbox policy của native terminal.
 
 macOS Seatbelt cho runtime read, sau đó deny private tree dưới `/Users`,
 `/private/var/folders`, `/private/tmp` và re-allow workspace. Write bị deny ngoài
 workspace, trừ `/dev/null`; `HOME` và các biến temp trỏ vào workspace. Availability
 check dùng workspace/sibling tổng hợp; fail thì strict execution không khả dụng,
 không dùng profile permissive.
+
+GUI app/helper nằm ngoài phạm vi profile này. Profile không cho Mach service
+lookup nên process trong sandbox không kết nối được WindowServer, pasteboard,
+LaunchServices hay TCC. Ví dụ `agent-desktop permissions --guide` có thể báo
+`started` và giữ helper sống nhưng không hiện window; chạy command cần GUI ở
+Open mode hoặc ngoài terminal của CaberOS. Open mode vẫn cần macOS privacy
+grant cho responsible app.
 
 Đây không phải cam kết mọi readable byte đều nằm trong workspace. Live Seatbelt
 test cần isolated macOS runner và `CABEROS_TEST_SEATBELT_LIVE=1`; skip không chứng
@@ -94,11 +145,16 @@ minh enforcement trên mọi host. Access bất ngờ tới protected private pa
 OS-account/container/VM boundary cho workload rủi ro cao.
 
 Linux Bubblewrap dùng environment tối thiểu, workspace writable, tmp memory và
-namespace isolation; cần host support.
+process/IPC/mount namespace isolation; terminal share host network với public
+resolver/certificate config read-only; cần host support.
 
 ## Network boundary
 
-Strict terminal không network, nhưng `web_search`, `web_fetch`, hosted model, MCP HTTP, stdio MCP tự gọi network, channel và Open mode vẫn có thể giao tiếp ngoài. Egress/approval là policy layer; host firewall là layer độc lập.
+Strict và Open terminal đều có network. Strict không phải offline hay
+data-loss-prevention mode: package script có thể gửi workspace file ra ngoài,
+dev server có thể phục vụ file cho client. Nên bind dev server vào loopback trừ
+khi muốn chia sẻ rộng hơn. `web_search`, `web_fetch`, hosted model, MCP và channel
+là pathway riêng. Egress/approval là policy layer; host firewall là layer độc lập.
 
 ## MCP, sub-agent và audit
 
