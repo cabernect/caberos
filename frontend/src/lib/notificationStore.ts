@@ -39,6 +39,7 @@ import {
   surfaceEnabled,
 } from "./notificationPrefs";
 import { deliverOs, osAdapter } from "./notifAdapters";
+import { syncDockBadge } from "./dockBadge";
 import { notificationTarget } from "./notificationLinks";
 
 const POLL_MS = 5_000;
@@ -112,7 +113,14 @@ function navigateToNotification(n: Notification) {
   else window.location.assign(path);
 }
 
+function unreadCount(): number {
+  let n = 0;
+  for (const item of notifications) if (!item.read) n++;
+  return n;
+}
+
 function emit() {
+  syncDockBadge(unreadCount());
   for (const cb of listeners) cb();
 }
 

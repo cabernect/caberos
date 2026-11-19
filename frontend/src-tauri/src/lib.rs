@@ -134,9 +134,13 @@ async fn notification_os_request() -> &'static str {
 #[cfg(target_os = "macos")]
 #[tauri::command]
 async fn notification_os_send(title: String, body: String) -> Result<(), String> {
+    // UNNotificationContent.sound nil means silent — the banner style can
+    // allow sound while the payload itself carries none. "Glass" is a
+    // system-library sound, so no bundle resource is needed.
     let n = mac_usernotifications::Notification::new()
         .title(title)
-        .message(body);
+        .message(body)
+        .sound("Glass");
     mac_usernotifications::send(n)
         .await
         .map(|_| ())
@@ -160,6 +164,35 @@ async fn notification_os_state() -> &'static str {
 async fn notification_os_request() -> &'static str {
     "unavailable"
 }
+
+/// Mirror the unread inbox count onto the macOS Dock badge. AppKit calls
+/// must run on the main thread, so the badge write is dispatched there;
+/// other platforms have no equivalent surface wired yet and no-op.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn set_dock_badge(app: AppHandle, count: u32) {
+    let _ = app.run_on_main_thread(move || {
+        use objc2::MainThreadMarker;
+        use objc2_app_kit::NSApplication;
+        use objc2_foundation::NSString;
+
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        let nsapp = NSApplication::sharedApplication(mtm);
+        let dock = nsapp.dockTile();
+        let label = if count == 0 {
+            None
+        } else {
+            Some(NSString::from_str(&count.to_string()))
+        };
+        dock.setBadgeLabel(label.as_deref());
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+fn set_dock_badge(_app: AppHandle, _count: u32) {}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -205,7 +238,8 @@ pub fn run() {
             read_dropped_file,
             notification_os_state,
             notification_os_request,
-            notification_os_send
+            notification_os_send,
+            set_dock_badge
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
