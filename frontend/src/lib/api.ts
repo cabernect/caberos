@@ -15,6 +15,7 @@ import type {
   HealthStatus,
   HeartbeatConfig,
   HeartbeatStatus,
+  CompactionConfig,
   Limits,
   McpCatalogEntry,
   McpServerInfo,
@@ -493,6 +494,7 @@ export const api = {
       capabilities?: CapabilityGrant[] | null;
       limits?: Limits;
       heartbeat?: HeartbeatConfig;
+      compaction?: Partial<CompactionConfig>;
     },
   ) =>
     request<{ id: string; version: number; version_id: string }>(

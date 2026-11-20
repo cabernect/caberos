@@ -9,6 +9,31 @@ Each GitHub release attaches the same desktop artifacts: a macOS Apple Silicon
 and `latest.json` — the manifest the in-app updater polls to discover new
 versions.
 
+## [0.2.3] — 2026-11-20 "Context Hotfix"
+
+### Added
+
+- **Editable auto-compact threshold**: agent settings expose the compaction
+  threshold (percent of context window, default 70%) via `PUT
+  /api/agents/{id}` and the General settings tab; partial updates merge
+  with existing compaction settings and out-of-range values return 422.
+
+### Fixed
+
+- **Runaway context from stored tool results**: stored `tool_call` rows
+  replayed verbatim into later runs, so a single oversized result (e.g. an
+  ~870KB terminal screenshot) could push session context past 600k tokens
+  even though the live path capped each result at 50k chars.
+  `format_stored_message` now applies the same `TOOL_RESULT_MAX_CHARS`
+  bound at replay; the database keeps full bytes for audit.
+- **`/compact` reporting "nothing to compact" on tail-only histories**:
+  forced tail pruning ran after the empty-middle early return, so manual
+  compaction could never shrink a giant protected-tail payload. Tail
+  pruning now runs first and its savings are reported honestly.
+- **Static HTML preview hiding no-JS fallbacks**: the sanitizer dropped
+  `<noscript>` entirely; it now unwraps it so author-provided fallbacks
+  (e.g. scroll-reveal overrides) render in the scripts-disabled preview.
+
 ## [0.2.2] — 2026-11-19 "Artifact Craft & Preview"
 
 ### Added
@@ -351,7 +376,8 @@ versions.
   mediation, approvals, audit trail, chat UI, channels, and Tauri desktop app
   for macOS.
 
-[Unreleased]: https://github.com/cabernect/caberos/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/cabernect/caberos/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/cabernect/caberos/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/cabernect/caberos/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/cabernect/caberos/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/cabernect/caberos/compare/v0.1.9...v0.2.0

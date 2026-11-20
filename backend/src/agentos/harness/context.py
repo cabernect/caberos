@@ -279,6 +279,11 @@ def attachment_lines(attachments: list[Any]) -> list[str]:
     return lines
 
 
+# Hard ceiling on a single tool result's serialized size in model-facing
+# history — replay honors the same bound the live path applied, so a stored
+# row can never overflow the window on its own in a later run.
+TOOL_RESULT_MAX_CHARS = 50_000
+
 _SUPPORTED_STORED_ROLES = {"user", "assistant", "tool_call"}
 
 
@@ -338,6 +343,13 @@ def format_stored_message(msg: Any) -> list[dict[str, Any]]:
                 result
                 if isinstance(result, str)
                 else ("" if result is None else json.dumps(result))
+            )
+        if len(result_str) > TOOL_RESULT_MAX_CHARS:
+            result_str = (
+                result_str[:TOOL_RESULT_MAX_CHARS]
+                + f"\n\n[truncated — result was {len(result_str)} chars; "
+                f"the {TOOL_RESULT_MAX_CHARS}-char limit applies. "
+                "Narrow the call or page through the data.]"
             )
         return [
             {

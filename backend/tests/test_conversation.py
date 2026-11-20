@@ -820,3 +820,32 @@ async def test_grown_tool_schemas_trigger_budget_check_on_short_conversation(
     assert run.status == "failed"
     assert "budget" in (run.error or "").lower()
     assert model.seen_calls == []
+
+
+def test_stored_tool_result_replay_is_bounded():
+    """A stored tool_call row larger than the live-path cap replays
+    truncated — the DB keeps full bytes, the model sees the same bound it
+    saw when the call ran."""
+    from types import SimpleNamespace
+
+    from agentos.harness.context import TOOL_RESULT_MAX_CHARS, format_stored_message
+
+    row = SimpleNamespace(
+        role="tool_call",
+        content=json.dumps(
+            {
+                "id": "c1",
+                "capability": "terminal",
+                "args": {"command": "shot"},
+                "status": "complete",
+                "result": "x" * (TOOL_RESULT_MAX_CHARS * 3),
+            }
+        ),
+        attachments=None,
+    )
+    out = format_stored_message(row)
+    assert out[0]["role"] == "assistant"
+    tool_msg = out[1]
+    assert tool_msg["role"] == "tool"
+    assert "truncated" in tool_msg["content"]
+    assert len(tool_msg["content"]) < TOOL_RESULT_MAX_CHARS + 400

@@ -74,7 +74,7 @@ class CompactionConfig(BaseModel):
     """
 
     auto_compaction: bool = True
-    threshold: float = 0.7
+    threshold: float = Field(default=0.7, gt=0, le=1)
     protect_first_n: int = 3
     protect_last_n: int = 20
     tail_budget_fraction: float = 0.20

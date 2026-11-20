@@ -17,7 +17,6 @@ _DROP_CONTENT = {
     "object",
     "embed",
     "template",
-    "noscript",
     "svg",
     "math",
 }
