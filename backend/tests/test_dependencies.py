@@ -508,7 +508,7 @@ async def test_git_shim_blocked_never_probes_usr_bin_git(tmp_path, monkeypatch):
 
 
 async def test_chromium_system_version_not_pinned_claim(tmp_path, monkeypatch):
-    """A system Chrome 149 must not wear the managed 145 pin."""
+    """A system Chrome must not wear the managed-runtime pin."""
     import agentos.browser.runtime as br
 
     monkeypatch.setattr(
