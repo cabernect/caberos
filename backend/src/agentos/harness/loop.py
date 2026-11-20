@@ -92,6 +92,40 @@ def _is_context_overflow(err: Exception) -> bool:
     return any(p in msg for p in _CONTEXT_OVERFLOW_PATTERNS)
 
 
+# Backoff before each retry — one entry per retry, so 3 attempts total.
+_MODEL_RETRY_DELAYS_S = (2.0, 8.0)
+_TRANSIENT_ERROR_NAMES = frozenset(
+    {
+        "APIConnectionError",
+        "APITimeoutError",
+        "Timeout",
+        "ConnectError",
+        "ConnectTimeout",
+        "ReadTimeout",
+        "RemoteProtocolError",
+        "ReadError",
+        "WriteError",
+        "PoolTimeout",
+        "NetworkError",
+        "ServiceUnavailableError",
+        "InternalServerError",
+        "BadGatewayError",
+        "GatewayTimeout",
+    }
+)
+
+
+def _is_transient_model_error(err: BaseException) -> bool:
+    """Network/5xx/429 failures worth retrying — auth, context overflow and
+    request-shape errors are not."""
+    status = getattr(err, "status_code", None)
+    if isinstance(status, int):
+        return status == 429 or status >= 500
+    if isinstance(err, (TimeoutError, ConnectionError)):
+        return True
+    return type(err).__name__ in _TRANSIENT_ERROR_NAMES
+
+
 class ApprovalBatch:
     """Barrier for all calls emitted by one model turn."""
 
@@ -677,10 +711,8 @@ class Harness:
                             agent_config, history, tool_schemas, event_emitter
                         )
                     else:
-                        response: ScriptedResponse = await self.model.complete(
-                            agent_model=agent_config.model,
-                            messages=history,
-                            tools=tool_schemas,
+                        response: ScriptedResponse = await self._complete_with_retry(
+                            agent_config, history, tool_schemas, event_emitter
                         )
                         # Emit thinking if present (non-streaming path)
                         if response.thinking and event_emitter:
@@ -1316,6 +1348,50 @@ class Harness:
             result = await result
         return result
 
+    async def _emit_model_retry(
+        self, event_emitter: EventEmitter, attempt: int, delay_s: float
+    ) -> None:
+        """Tell the UI a transient model-call failure is being retried."""
+        await self._emit(
+            event_emitter,
+            "model_retry",
+            {
+                "attempt": attempt + 2,
+                "max_attempts": len(_MODEL_RETRY_DELAYS_S) + 1,
+                "delay_s": delay_s,
+            },
+        )
+
+    async def _complete_with_retry(
+        self,
+        agent_config: AgentConfig,
+        history: list[dict[str, str]],
+        tool_schemas: list[dict[str, Any]],
+        event_emitter: EventEmitter,
+    ) -> ScriptedResponse:
+        """Non-streaming complete with bounded retry on transient errors.
+        Safe to retry — nothing is emitted or executed until it returns."""
+        for attempt in range(len(_MODEL_RETRY_DELAYS_S) + 1):
+            try:
+                return await self.model.complete(
+                    agent_model=agent_config.model,
+                    messages=history,
+                    tools=tool_schemas,
+                )
+            except Exception as e:
+                if attempt == len(_MODEL_RETRY_DELAYS_S) or not _is_transient_model_error(e):
+                    raise
+                delay = _MODEL_RETRY_DELAYS_S[attempt]
+                logger.warning(
+                    "Transient model error (attempt %d), retrying in %.0fs: %s",
+                    attempt + 1,
+                    delay,
+                    str(e)[:200],
+                )
+                await self._emit_model_retry(event_emitter, attempt, delay)
+                await asyncio.sleep(delay)
+        raise AssertionError("unreachable")
+
     async def _call_streaming(
         self,
         agent_config: AgentConfig,
@@ -1323,21 +1399,46 @@ class Harness:
         tool_schemas: list[dict[str, Any]],
         event_emitter: EventEmitter,
     ) -> ScriptedResponse:
-        """Call the model with streaming, emitting token/thinking events as they arrive."""
+        """Call the model with streaming, emitting token/thinking events as they arrive.
+
+        Retries transient failures only before the first delta reaches the
+        UI — once content has streamed, restarting would duplicate it."""
         response: ScriptedResponse | None = None
-        async for delta_type, content in self.model.complete_stream(
-            agent_model=agent_config.model,
-            messages=history,
-            tools=tool_schemas,
-        ):
-            if delta_type == "token" and event_emitter:
-                await self._emit(event_emitter, "token", {"content": content})
-            elif delta_type == "thinking" and event_emitter:
-                await self._emit(event_emitter, "thinking", {"content": content})
-            elif delta_type == "tool_call_progress" and event_emitter:
-                await self._emit(event_emitter, "tool_call_progress", content)
-            elif delta_type == "done":
-                response = content
+        emitted_output = False
+        for attempt in range(len(_MODEL_RETRY_DELAYS_S) + 1):
+            try:
+                async for delta_type, content in self.model.complete_stream(
+                    agent_model=agent_config.model,
+                    messages=history,
+                    tools=tool_schemas,
+                ):
+                    if delta_type in ("token", "thinking", "tool_call_progress"):
+                        emitted_output = True
+                    if delta_type == "token" and event_emitter:
+                        await self._emit(event_emitter, "token", {"content": content})
+                    elif delta_type == "thinking" and event_emitter:
+                        await self._emit(event_emitter, "thinking", {"content": content})
+                    elif delta_type == "tool_call_progress" and event_emitter:
+                        await self._emit(event_emitter, "tool_call_progress", content)
+                    elif delta_type == "done":
+                        response = content
+                break
+            except Exception as e:
+                if (
+                    emitted_output
+                    or attempt == len(_MODEL_RETRY_DELAYS_S)
+                    or not _is_transient_model_error(e)
+                ):
+                    raise
+                delay = _MODEL_RETRY_DELAYS_S[attempt]
+                logger.warning(
+                    "Transient model stream error (attempt %d), retrying in %.0fs: %s",
+                    attempt + 1,
+                    delay,
+                    str(e)[:200],
+                )
+                await self._emit_model_retry(event_emitter, attempt, delay)
+                await asyncio.sleep(delay)
 
         if response is None:
             raise RuntimeError("Streaming ended without a 'done' event")

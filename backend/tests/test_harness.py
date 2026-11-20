@@ -68,7 +68,9 @@ async def test_streaming_model_idle_timeout_ends_stalled_stream(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_harness_reports_stream_timeout_to_the_user(db, workspace):
+async def test_harness_reports_stream_timeout_to_the_user(db, workspace, monkeypatch):
+    monkeypatch.setattr("agentos.harness.loop._MODEL_RETRY_DELAYS_S", (0.0, 0.0))
+
     class TimedOutModel:
         async def complete_stream(self, **_kwargs):
             raise TimeoutError("Model stream was idle for 30s")
@@ -100,6 +102,128 @@ async def test_harness_reports_stream_timeout_to_the_user(db, workspace):
     # message_complete is no longer emitted by the loop — it's emitted by
     # runner.py after the pipeline finishes, with full context metadata.
     # The loop now just returns the result without emitting message_complete.
+
+
+def _retry_test_config() -> AgentConfig:
+    return AgentConfig(
+        id="retry-test",
+        name="Retry Test",
+        model=ModelConfig(provider_id="test", name="scripted"),
+        capabilities=[],
+    )
+
+
+class _FlakyStreamModel(ScriptedModel):
+    """Fails complete_stream a configurable number of times before delegating."""
+
+    def __init__(self, failures: int, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.failures = failures
+        self.calls = 0
+
+    async def complete_stream(self, **kwargs):
+        self.calls += 1
+        if self.calls <= self.failures:
+            raise ConnectionError("network unreachable")
+            yield  # makes this an async generator
+        async for event in super().complete_stream(**kwargs):
+            yield event
+
+
+@pytest.mark.asyncio
+async def test_transient_stream_error_is_retried(db, workspace, monkeypatch):
+    monkeypatch.setattr("agentos.harness.loop._MODEL_RETRY_DELAYS_S", (0.0, 0.0))
+    events = []
+
+    async def emit(event_type, payload):
+        events.append((event_type, payload))
+
+    model = _FlakyStreamModel(1, [ScriptedResponse(content="Recovered")])
+    result = await Harness(model=model).run(
+        agent_config=_retry_test_config(),
+        session=None,
+        message="hi",
+        syscall_handler=StubSyscallHandler(db=db, workspace_path=workspace),
+        run_id=str(uuid.uuid4()),
+        event_emitter=emit,
+    )
+
+    assert result.status == "completed"
+    assert model.calls == 2
+    assert result.final_answer == "Recovered"
+    retry_events = [p for t, p in events if t == "model_retry"]
+    assert len(retry_events) == 1
+    assert retry_events[0]["attempt"] == 2
+    assert retry_events[0]["max_attempts"] == 3
+
+
+@pytest.mark.asyncio
+async def test_transient_errors_exhaust_retries_then_fail(db, workspace, monkeypatch):
+    monkeypatch.setattr("agentos.harness.loop._MODEL_RETRY_DELAYS_S", (0.0, 0.0))
+
+    model = _FlakyStreamModel(10, [ScriptedResponse(content="never")])
+    result = await Harness(model=model).run(
+        agent_config=_retry_test_config(),
+        session=None,
+        message="hi",
+        syscall_handler=StubSyscallHandler(db=db, workspace_path=workspace),
+        run_id=str(uuid.uuid4()),
+    )
+
+    assert result.status == "failed"
+    assert model.calls == 3  # bounded: initial + 2 retries
+
+
+@pytest.mark.asyncio
+async def test_non_transient_stream_error_is_not_retried(db, workspace, monkeypatch):
+    monkeypatch.setattr("agentos.harness.loop._MODEL_RETRY_DELAYS_S", (0.0, 0.0))
+
+    class AuthModel(ScriptedModel):
+        calls = 0
+
+        async def complete_stream(self, **kwargs):
+            type(self).calls += 1
+            exc = Exception("401 invalid api key")
+            exc.status_code = 401
+            raise exc
+            yield
+
+    result = await Harness(model=AuthModel([])).run(
+        agent_config=_retry_test_config(),
+        session=None,
+        message="hi",
+        syscall_handler=StubSyscallHandler(db=db, workspace_path=workspace),
+        run_id=str(uuid.uuid4()),
+    )
+
+    assert result.status == "failed"
+    assert AuthModel.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_stream_error_after_output_is_not_retried(db, workspace, monkeypatch):
+    """Once deltas have reached the UI, restarting would duplicate them —
+    the run fails honestly instead."""
+    monkeypatch.setattr("agentos.harness.loop._MODEL_RETRY_DELAYS_S", (0.0, 0.0))
+
+    class MidStreamFailModel(ScriptedModel):
+        calls = 0
+
+        async def complete_stream(self, **kwargs):
+            type(self).calls += 1
+            yield "thinking", "partial reasoning"
+            raise ConnectionError("connection reset mid-stream")
+
+    result = await Harness(model=MidStreamFailModel([])).run(
+        agent_config=_retry_test_config(),
+        session=None,
+        message="hi",
+        syscall_handler=StubSyscallHandler(db=db, workspace_path=workspace),
+        run_id=str(uuid.uuid4()),
+    )
+
+    assert result.status == "failed"
+    assert MidStreamFailModel.calls == 1
 
 
 def test_base_system_prompt_present():

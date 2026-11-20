@@ -103,6 +103,7 @@ interface StreamingResponse {
   turnCosts: TurnCost[];
   guardrailWarnings: string[];
   toolProgress: { name: string | null; argsChars: number } | null;  // model is streaming a tool call's arguments
+  retryNotice: string | null;   // transient model-call failure being retried
   completed: boolean;  // true when run is done — hides cursor, keeps content visible
   subagents: Map<string, SubAgentStream>;  // subagent_id -> nested stream
 }
@@ -131,6 +132,7 @@ function createStreamingResponse(): StreamingResponse {
     turnCosts: [],
     guardrailWarnings: [],
     toolProgress: null,
+    retryNotice: null,
     completed: false,
     subagents: new Map(),
   };
@@ -655,7 +657,20 @@ export function Conversation() {
       case "typing":
         // A new turn's model call was dispatched — the gap between turns.
         updateStreamingForSession(sessionId, (prev) =>
-          prev ? { ...prev, awaitingModel: true } : prev,
+          prev ? { ...prev, awaitingModel: true, retryNotice: null } : prev,
+        );
+        break;
+
+      case "model_retry":
+        // A transient model-call failure (network drop, 5xx, 429) is being
+        // retried — show it instead of dead air during the backoff.
+        updateStreamingForSession(sessionId, (prev) =>
+          prev
+            ? {
+                ...prev,
+                retryNotice: `Connection lost — retrying (${data.attempt}/${data.max_attempts})…`,
+              }
+            : prev,
         );
         break;
 
@@ -2598,6 +2613,14 @@ function StreamingMessage({
           streamed back yet — otherwise the gap after a completed tool
           call reads as dead air. */}
       {streaming.awaitingModel && !streaming.completed && <TypingIndicator />}
+      {streaming.awaitingModel && streaming.retryNotice && !streaming.completed && (
+        <div
+          className="mt-1 font-mono text-[11px]"
+          style={{ color: "var(--ink-3)" }}
+        >
+          {streaming.retryNotice}
+        </div>
+      )}
 
       {/* Output files the run produced — only once the run completes:
           mid-run the agent may still rename/move/edit them, so early
