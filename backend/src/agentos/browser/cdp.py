@@ -191,6 +191,14 @@ class BrowserSession:
         ]
         if not visible:
             args.insert(1, "--headless=new")
+        # The managed CfT build is adhoc-signed, so macOS Keychain doesn't
+        # trust it — every launch stalls ~10s on a Safe Storage prompt that
+        # headless runs never answer. Mock keychain keeps automation profiles
+        # working; signed system browsers keep the real one.
+        from .runtime import runtime_root
+
+        if Path(self._binary).resolve().is_relative_to(runtime_root()):
+            args.append("--use-mock-keychain")
         # Containers can't run Chrome's sandbox (no userns/CAP_SYS_ADMIN) and
         # /dev/shm is tiny — both are launch-fatal without these flags.
         if os.environ.get("AGENTOS_BROWSER_NO_SANDBOX"):
