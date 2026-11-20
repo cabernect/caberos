@@ -32,6 +32,28 @@ _DROP_PREFIXES = {
 }
 
 
+_XDR = "{http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing}"
+_UNSUPPORTED_DRAWING_TAGS = {f"{_XDR}sp", f"{_XDR}grpSp", f"{_XDR}cxnSp", f"{_XDR}contentPart"}
+
+
+def _has_unsupported_drawing_shapes(data: bytes) -> bool:
+    """True when a drawing part holds objects openpyxl cannot round-trip.
+
+    Pictures, charts and tables survive load+save; shapes, text boxes,
+    connectors, groups and ink content parts are silently dropped."""
+    try:
+        with zipfile.ZipFile(BytesIO(data)) as zf:
+            for name in zf.namelist():
+                if not re.fullmatch(r"xl/drawings/drawing\d+\.xml", name):
+                    continue
+                root = ElementTree.fromstring(zf.read(name))
+                if any(el.tag in _UNSUPPORTED_DRAWING_TAGS for el in root.iter()):
+                    return True
+    except (zipfile.BadZipFile, ElementTree.ParseError):
+        pass
+    return False
+
+
 def _part_names(data: bytes) -> set[str]:
     try:
         with zipfile.ZipFile(BytesIO(data)) as zf:
@@ -55,6 +77,8 @@ def _feature_inventory(data: bytes) -> dict:
         "defined_names": 0,
     }
     drops = {cat for prefix, cat in _DROP_PREFIXES.items() for n in names if n.startswith(prefix)}
+    if _has_unsupported_drawing_shapes(data):
+        drops.add("shapes")
     try:
         wb = load_workbook(BytesIO(data))
         inv["defined_names"] = len(wb.defined_names)
@@ -139,7 +163,7 @@ def revise(data: bytes, ops: list[dict], workspace_path: str | Path) -> bytes:
         elif kind == "add_conditional_format":
             _add_conditional_format(wb[op["sheet"]], op)
         elif kind == "remove_conditional_format":
-            wb[op["sheet"]].conditional_formatting.subtract(op["range"])
+            _remove_conditional_format(wb[op["sheet"]], op["range"])
         else:
             raise ValueError(f"unknown xlsx op: {kind}")
     buf = BytesIO()
@@ -398,6 +422,16 @@ def _add_conditional_format(ws, spec: dict) -> None:
         font=dxf.font,
     )
     ws.conditional_formatting.add(_sqref(spec.get("range")), rule)
+
+
+def _remove_conditional_format(ws, ref: str) -> None:
+    """Remove every rule registered on exactly this sqref — mirrors
+    _remove_data_validation's exact-range semantics."""
+    target = _sqref(ref)
+    try:
+        del ws.conditional_formatting[target]
+    except KeyError:
+        raise ValueError(f"no conditional formatting on range {target!r}") from None
 
 
 def _build_sheet(wb: Workbook, sheet_spec: dict) -> None:

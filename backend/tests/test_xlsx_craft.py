@@ -226,6 +226,68 @@ def test_data_validation_and_conditional_format() -> None:
             xlsx_fmt.revise(data, [op], ".")
 
 
+def test_remove_conditional_format_roundtrip() -> None:
+    data = xlsx_fmt.build(
+        {
+            "sheets": [
+                {
+                    "name": "S",
+                    "rows": [[1]],
+                    "conditional_formats": [
+                        {"range": "A1", "operator": "greaterThan", "formula": ["0"]}
+                    ],
+                }
+            ]
+        },
+        ".",
+    )
+    rev = xlsx_fmt.revise(
+        data,
+        [
+            {
+                "op": "add_conditional_format",
+                "sheet": "S",
+                "range": "B1",
+                "operator": "equal",
+                "formula": ["x"],
+            },
+            {"op": "remove_conditional_format", "sheet": "S", "range": "B1"},
+            {"op": "remove_conditional_format", "sheet": "S", "range": "A1"},
+        ],
+        ".",
+    )
+    assert len(_wb(rev)["S"].conditional_formatting) == 0
+    # removing a range with no rules is an error, not a silent no-op
+    with pytest.raises(ValueError, match="no conditional formatting"):
+        xlsx_fmt.revise(
+            data, [{"op": "remove_conditional_format", "sheet": "S", "range": "Z9"}], "."
+        )
+
+
+_XDR = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+
+
+def _with_drawing(data: bytes, inner: str) -> bytes:
+    drawing = (
+        f'<xdr:wsDr xmlns:xdr="{_XDR}"><xdr:twoCellAnchor>{inner}'
+        "<xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>"
+    )
+    return _with_extra_part(data, "xl/drawings/drawing1.xml", drawing.encode())
+
+
+def test_drawing_shapes_block_revise_until_acknowledged() -> None:
+    """Text boxes / autoshapes in drawings are dropped by openpyxl's
+    round-trip — preflight must flag them like pivot tables."""
+    data = xlsx_fmt.build({"sheets": [{"name": "S", "rows": [[1]]}]}, ".")
+    textbox = _with_drawing(data, '<xdr:sp macro="" textlink=""/>')
+    assert xlsx_fmt._feature_inventory(textbox)["drops_on_edit"] == ["shapes"]
+    with pytest.raises(ValueError, match="accept_feature_loss"):
+        xlsx_fmt.revise(textbox, [{"op": "set_cell", "sheet": "S", "cell": "A1", "value": 2}], ".")
+    # pictures and chart frames are preserved — no false positive
+    picture = _with_drawing(data, "<xdr:pic><xdr:nvPicPr/></xdr:pic>")
+    assert xlsx_fmt._feature_inventory(picture)["drops_on_edit"] == []
+
+
 def test_formulas_stay_unevaluated_and_counted() -> None:
     data = xlsx_fmt.build(
         {
