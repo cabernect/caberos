@@ -212,8 +212,6 @@ class BrowserSession:
         allowed_domains: list[str] | None = None,
         visible: bool = False,
     ) -> Observation:
-        import websockets
-
         if visible and not _display_available():
             raise BrowserError(
                 "visible mode needs a desktop session — this host has no "
@@ -229,6 +227,23 @@ class BrowserSession:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+        try:
+            return await self._open_attached(url, research, allowed_domains)
+        except BaseException:
+            # A failed open must not leak the browser — stray processes
+            # hold global Mach names and wedge later launches.
+            await self.close()
+            raise
+
+    async def _open_attached(
+        self,
+        url: str,
+        research: bool,
+        allowed_domains: list[str] | None,
+    ) -> Observation:
+        import websockets
+
+        port_file = self._profile_dir / "DevToolsActivePort"
         deadline = time.monotonic() + LOAD_TIMEOUT_S
         port = ws_path = ""
         while True:
@@ -356,6 +371,11 @@ class BrowserSession:
         for task in (self._intercept_task, self._reader_task):
             if task and not task.done():
                 task.cancel()
+        if self._ws is not None:
+            try:
+                await self._ws.close()
+            except Exception:
+                pass
         if self._proc:
             self._proc.terminate()
             try:
