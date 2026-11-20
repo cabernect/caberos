@@ -9,6 +9,94 @@ Each GitHub release attaches the same desktop artifacts: a macOS Apple Silicon
 and `latest.json` — the manifest the in-app updater polls to discover new
 versions.
 
+## [0.2.2] — 2026-11-19 "Artifact Craft & Preview"
+
+### Added
+
+- **Structured artifact authoring**: agents create tracked deliverables from
+  structured specs via `artifact_create`, inspect them with
+  `artifact_inspect`, and apply targeted, base-revision-checked edits with
+  `artifact_revise`. Existing files become tracked via `artifact_adopt` or
+  the preview panel's "Track history" action; `artifact_history` and
+  `artifact_restore` keep every revision recoverable.
+- **Presentations**: one canonical `.deck.json` spec feeds the in-app slide
+  renderer and native PPTX export — layouts, native text/shapes/tables/
+  charts, speaker notes, and pinned image snapshots. Browser motion plays
+  in the app; PPTX export is a disclosed static snapshot (exported metadata
+  records `browser_motion_exported: false`). PDF export is bound to the
+  same spec revision.
+- **DOCX craft**: named styles, covers, section breaks, headers/footers
+  with page fields, table sizing and repeated headers, image sizing,
+  stable block IDs, and block-level revision operations — all editable in
+  Microsoft Word.
+- **XLSX craft**: multi-sheet workbooks with fills, borders, alignment,
+  number formats, merges, freeze panes, auto-filter, native tables and
+  charts, bounded data validation and conditional formatting. Formulas
+  are authored as real formula cells and recalculate in Excel; CaberOS
+  never claims to evaluate them. Uploaded workbooks get feature preflight
+  and preservation gates — revisions refuse to silently drop unsupported
+  features until acknowledged.
+- **`edit_file` capability**: exact, unique-fragment replacement for
+  existing UTF-8 files — small edits no longer require regenerating the
+  whole file. Missing or ambiguous matches refuse without writing;
+  `write_file` remains for creation and full replacement.
+- **Tool-call preparation streaming**: the chat shows
+  "Preparing `tool_name`…" with a live character count as soon as a tool
+  name streams, instead of appearing idle while large arguments generate.
+  Nothing executes until the call is complete.
+- **Window state persistence**: the desktop app remembers its size,
+  position, and maximized state across launches.
+- **Desktop notifications**: the unread inbox count mirrors onto the
+  macOS Dock badge, and OS alerts play an explicit sound instead of
+  posting silently.
+
+### Changed
+
+- **Reuse installed runtimes**: MCP and terminal prefer explicit overrides,
+  then existing healthy managed runtimes, then compatible standard system installs
+  such as Homebrew. No duplicate managed download is required; managed installation
+  stays opt-in. Auto selection excludes private-home managers and symlinks into
+  private locations. Strict gets read/execute
+  access to selected managed version trees, not the surrounding data directory,
+  and cannot modify the shared runtime store. Project dependencies/caches stay
+  in the workspace. Explicit source pins and binary overrides do not silently
+  fall back to another source.
+- **Strict terminal networking**: Strict now confines filesystem writes while
+  allowing network access for package installs and development servers.
+  Workspace content can be sent externally, and terminal calls can reach
+  localhost/LAN services. Package cache/prefix/temp defaults stay in the
+  workspace; Strict is not an offline or data-loss-prevention mode.
+- **Shared preview experience**: one renderer contract across chat,
+  Workspace, and Skill resources — slide navigation and slideshow,
+  workbook sheet tabs with a formula bar, cell/range selection with
+  status-bar statistics, per-source zoom, and a revision-bound "Revise"
+  action that prefills a draft without auto-submitting. Old chat
+  revisions open the exact stored bytes and flag newer workspace
+  versions without auto-switching.
+- **Workspace panel**: controls now use the shared design tokens and
+  components; the file list collapses for narrow panels. Authored
+  document colors are preserved in dark mode.
+- **External links in chat** open in the system browser instead of
+  navigating the desktop app window itself.
+- **Desktop preview actions**: the workspace "Open" button was removed in
+  favor of "Reveal" (platform-aware label) to avoid widening the
+  file-open permission scope.
+
+### Limitations (unchanged by design)
+
+- Office previews are extracted-content, best-effort views with a
+  persistent limitation notice — no Office layout engine is bundled.
+- PPTX playback of transitions/animations is not shown in-app; export is
+  a static, disclosed snapshot.
+- Formula results are never fabricated: formulas are stored, not
+  recalculated.
+- Ordinary HTML previews are static with scripts, navigation, and
+  external resources disabled.
+- Autonomous visual review (W5) is deferred; JSON inspection remains the
+  verification contract.
+- Windows and Docker packaged runs are not verified in this release
+  cycle; macOS Apple Silicon is the validated desktop platform.
+
 ## [0.2.1] — 2026-11-10 "Honest Vault, Workspace & Tools"
 
 ### Added
@@ -263,7 +351,8 @@ versions.
   mediation, approvals, audit trail, chat UI, channels, and Tauri desktop app
   for macOS.
 
-[Unreleased]: https://github.com/cabernect/caberos/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/cabernect/caberos/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/cabernect/caberos/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/cabernect/caberos/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/cabernect/caberos/compare/v0.1.9...v0.2.0
 [0.1.9]: https://github.com/cabernect/caberos/compare/v0.1.8...v0.1.9
