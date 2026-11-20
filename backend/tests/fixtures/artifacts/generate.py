@@ -9,6 +9,7 @@ outputs are generated locally; regenerate only when the spec or generator change
 """
 
 import argparse
+import base64
 import hashlib
 import json
 from functools import partial
@@ -25,7 +26,6 @@ from fixture_variants import (
     transition_deck,
     uploaded_feature_workbook,
 )
-from PIL import Image, ImageDraw
 
 from agentos.artifacts.formats import docx as docx_fmt
 from agentos.artifacts.formats import pptx as pptx_fmt
@@ -36,30 +36,15 @@ CORPUS_VERSION = 3
 
 
 def _figure_png(path: Path) -> None:
-    """Deterministic bar-chart figure — the 'supplied figure' for decks/docs.
+    """Fixed bar-chart figure — the 'supplied figure' for decks/docs.
 
-    Fixed geometry and Pillow's bundled default font; no system font lookup.
+    Ships as pre-encoded bytes: Pillow's PNG output is not byte-stable
+    across platforms (bundled zlib builds differ), which broke corpus
+    regeneration on CI. The PNG itself is a one-time render of the same
+    chart, committed next to this script.
     """
-    W, H = 960, 540
-    img = Image.new("RGB", (W, H), "#F7F5F0")
-    d = ImageDraw.Draw(img)
-    d.rectangle([40, 40, W - 40, H - 60], outline="#1F4E79", width=3)
-    title = "Quarterly revenue index (fixture)"
-    d.text((60, 60), title, fill="#1F4E79")
-    cats = ["Q1", "Q2", "Q3", "Q4"]
-    vals = [42, 58, 51, 67]
-    base_y, top_y = H - 90, 110
-    bar_w, gap = 90, 60
-    x0 = 120
-    max_v = 80
-    for i, (c, v) in enumerate(zip(cats, vals)):
-        x = x0 + i * (bar_w + gap)
-        bh = int((v / max_v) * (base_y - top_y))
-        d.rectangle([x, base_y - bh, x + bar_w, base_y], fill="#4A7C59")
-        d.text((x + bar_w // 2 - 6, base_y + 10), c, fill="#222")
-        d.text((x + bar_w // 2 - 10, base_y - bh - 22), str(v), fill="#222")
-    d.line([60, base_y, W - 60, base_y], fill="#333", width=2)
-    img.save(path, "PNG")
+    encoded = (HERE / "figure.png.b85").read_text()
+    path.write_bytes(base64.b85decode("".join(encoded.split())))
 
 
 ANALYSIS_DECK_SPEC = {
