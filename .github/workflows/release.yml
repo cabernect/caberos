@@ -88,6 +88,24 @@ jobs:
         working-directory: backend
         run: uv sync --frozen
 
+      # The gateway bundles frontend/dist (the SPA it serves), so the
+      # frontend must be built before PyInstaller runs — not just before
+      # the Tauri step.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
       - name: Cache PyInstaller build
         uses: actions/cache@v4
         with:
@@ -152,17 +170,6 @@ jobs:
           echo "Packaged gateway did not become ready"
           cat "$CHECK_DIR/gateway.log"
           exit 1
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install frontend dependencies
-        working-directory: frontend
-        run: npm ci
 
       - name: Cache Rust build
         uses: actions/cache@v4
