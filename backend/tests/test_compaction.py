@@ -7,6 +7,7 @@ Tests the 4-phase pipeline:
   Phase 4: Reassemble + sanitize tool pairs
 """
 
+import json
 from unittest.mock import AsyncMock, patch
 
 from agentos.config_schema import AgentConfig, CompactionConfig, ModelConfig
@@ -311,6 +312,46 @@ class TestCompactContext:
         call_args = mock.call_args
         assert call_args[1]["previous_summary"] == previous
 
+    async def test_run_id_resolver_mints_lazy_attribution(self):
+        """run_id_resolver fires only when a summary call is dispatched —
+        its return value becomes the summary call's run attribution."""
+        config = _make_agent_config(
+            CompactionConfig(
+                auto_compaction=True,
+                protect_first_n=2,
+                protect_last_n=2,
+                tail_budget_fraction=0.20,
+            )
+        )
+        msgs = _make_messages(10, chars=2000)
+        resolver = AsyncMock(return_value="compact-run-1")
+
+        with (
+            patch("agentos.harness.compaction.generate_summary", new_callable=AsyncMock) as mock,
+            patch("agentos.harness.compaction.get_model_max_tokens", return_value=500),
+        ):
+            mock.return_value = "## Goal\nTest summary"
+            result = await compact_context(
+                msgs, config, "test-model", force=True, run_id_resolver=resolver
+            )
+
+        assert result.compacted
+        resolver.assert_awaited_once()
+        assert mock.call_args[1]["run_id"] == "compact-run-1"
+
+    async def test_run_id_resolver_not_called_when_no_middle(self):
+        """Under-threshold compaction never dispatches a summary — the
+        resolver (and any Run row it would mint) stays untouched."""
+        config = _make_agent_config(CompactionConfig(auto_compaction=True))
+        msgs = _make_messages(3)
+        resolver = AsyncMock(return_value="compact-run-1")
+
+        with patch("agentos.harness.compaction.get_model_max_tokens", return_value=500):
+            result = await compact_context(msgs, config, "test-model", run_id_resolver=resolver)
+
+        assert not result.compacted
+        resolver.assert_not_awaited()
+
     async def test_compaction_auto_off(self):
         """Auto-compaction off → no compaction unless forced."""
         config = _make_agent_config(CompactionConfig(auto_compaction=False))
@@ -462,6 +503,73 @@ class TestCompactContext:
         mock.assert_not_called()
         assert not result.compacted
         assert result.messages == msgs  # all 10 survive
+
+    async def test_forced_compact_huge_window_finds_middle(self):
+        """Regression: with a ~922k window the auto threshold exceeded the
+        whole conversation, so /compact reported 'nothing to compact'.
+        Forced compaction now targets roughly halving the current context."""
+        config = _make_agent_config(
+            CompactionConfig(auto_compaction=True, protect_first_n=3, protect_last_n=20)
+        )
+        msgs = _make_messages(40, chars=2000)
+
+        with (
+            patch("agentos.harness.compaction.generate_summary", new_callable=AsyncMock) as mock,
+            patch("agentos.harness.compaction.get_model_max_tokens", return_value=922_000),
+        ):
+            mock.return_value = "## Goal\nTest summary"
+            result = await compact_context(
+                msgs, config, "test-model", force=True, input_budget=922_000
+            )
+
+        assert result.compacted
+        assert result.middle_count > 0
+        assert result.compacted_tokens < result.original_tokens
+
+    async def test_forced_compact_stubs_giant_tail_payloads(self):
+        """Manual /compact prunes oversized tool args/results inside the
+        protected tail — auto-compaction keeps the tail verbatim."""
+        config = _make_agent_config(
+            CompactionConfig(auto_compaction=True, protect_first_n=2, protect_last_n=2)
+        )
+        msgs = _make_messages(12, chars=1500)
+        # Giant write_file payload sitting inside the tail.
+        msgs[-1] = {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "tc-big",
+                    "type": "function",
+                    "function": {
+                        "name": "write_file",
+                        "arguments": json.dumps({"path": "big.md", "content": "x" * 40000}),
+                    },
+                }
+            ],
+        }
+        msgs[-2] = {"role": "tool", "tool_call_id": "tc-big", "content": "wrote 40000 bytes"}
+
+        with (
+            patch("agentos.harness.compaction.generate_summary", new_callable=AsyncMock) as mock,
+            patch("agentos.harness.compaction.get_model_max_tokens", return_value=922_000),
+        ):
+            mock.return_value = "## Goal\nTest summary"
+            result = await compact_context(
+                msgs, config, "test-model", force=True, input_budget=922_000
+            )
+
+        assert result.compacted
+        blob = json.dumps(result.messages)
+        # Payload is truncated, not dropped: head content + explicit marker,
+        # and the tool_call arguments remain valid JSON.
+        assert "truncated by /compact" in blob
+        assert "x" * 40000 not in blob
+        tail_msgs = [m for m in result.messages if m.get("tool_calls")]
+        assert tail_msgs
+        args = json.loads(tail_msgs[-1]["tool_calls"][0]["function"]["arguments"])
+        assert "big.md" == args["path"]
+        assert "truncated by /compact" in args["content"]
 
     async def test_summary_failure_returns_originals_with_error(self):
         """Provider failure must not fabricate a summary — the original

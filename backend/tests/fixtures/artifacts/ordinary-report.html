@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ordinary HTML Report</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 32px 20px; background: #e9eff1; color: #202a31; font-family: Georgia, serif; }
+    main { max-width: 760px; margin: auto; padding: clamp(24px, 5vw, 56px); background: #fffefa; }
+    header { padding-bottom: 28px; border-bottom: 3px solid #315c73; }
+    h1 { margin: 12px 0; font-size: clamp(32px, 6vw, 52px); line-height: 1.05; }
+    h2 { color: #315c73; margin-top: 44px; }
+    p, li { font-size: 18px; line-height: 1.7; }
+    .label { font: 12px monospace; text-transform: uppercase; letter-spacing: .12em; color: #315c73; }
+    section { padding: 12px 0 28px; }
+    table { width: 100%; border-collapse: collapse; font-size: 16px; }
+    th, td { padding: 14px 10px; text-align: left; border-bottom: 1px solid #ccd6da; }
+    th { background: #e9eff1; }
+    aside { padding: 20px; background: #e9eff1; }
+    footer { margin-top: 48px; border-top: 1px solid #ccd6da; padding-top: 24px; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <span class="label">Static HTML preview sample</span>
+      <h1>A document, not a slide.</h1>
+      <p>This report flows vertically. It has no deck marker, slideshow runtime, or slide controls.</p>
+    </header>
+    <section>
+      <h2>1. What this checks</h2>
+      <p>Inline CSS, headings, lists, tables and long content should remain readable at the width of the preview panel. Scroll down inside the page to reach the end.</p>
+      <ul>
+        <li>Resize the panel: paragraphs wrap rather than stretching a slide.</li>
+        <li>Choose Source to inspect the original document.</li>
+        <li>Return to Rendered to read the formatted page.</li>
+      </ul>
+    </section>
+    <section>
+      <h2>2. Preview modes</h2>
+      <table>
+        <thead><tr><th>File</th><th>Expected behavior</th></tr></thead>
+        <tbody>
+          <tr><td>Ordinary HTML</td><td>Static page, vertical scrolling</td></tr>
+          <tr><td>HTML presentation</td><td>16:9 slides and navigation</td></tr>
+          <tr><td>PowerPoint</td><td>Best-effort content preview</td></tr>
+        </tbody>
+      </table>
+    </section>
+    <section>
+      <h2>3. Isolation is deliberate</h2>
+      <aside><p>The preview does not run arbitrary scripts, navigate links, submit forms, or load external/local assets. A downloaded file has a different trust context.</p></aside>
+      <p>This sample needs no network connection, fonts, JavaScript, or external stylesheet. Everything required for its static appearance is contained in this file.</p>
+    </section>
+    <footer><span class="label">End of the ordinary HTML report</span></footer>
+  </main>
+</body>
+</html>

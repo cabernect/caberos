@@ -1,8 +1,9 @@
 # Global Tool Bindings
 
-Status: first slice implemented (`search.web` engine options, planned media
-entries, mediator freezing, `/api/settings/tools` API). This document now also
-records the extended backend-registry roadmap below.
+Status: initial bindings/DDGS/Tavily/image slices implemented and fixture-tested.
+Additional search adapters, operator speech, and local/remote terminal configuration
+remain pending; see [W9](09-search-services.md),
+[W10](10-speech-input-output.md), and [W11](11-terminal-backends.md).
 
 ## Goal
 
@@ -10,7 +11,8 @@ Separate platform tool configuration from per-agent authority. Global bindings
 choose how a supported tool executes; agent grants decide who may execute it.
 The Tools tab is the capability backend registry: each supported tool can have
 its implementation swapped — engine options, a keyed service, a model offering,
-or an execution backend — without touching per-agent grants.
+or an execution backend — without touching per-agent grants. Tools also owns
+operator speech configuration; these UI actions are not agent capabilities.
 
 ## Existing File Targets
 
@@ -25,7 +27,10 @@ Extend `lib/api.ts` and the existing provider/model selectors where appropriate.
 
 For model-backed tools, store a capability key, provider id, model name, validated
 tool-specific options, revision, and readiness/validation metadata. Store secret
-references only; provider credentials stay in the encrypted provider store.
+references only. Existing model credentials stay in encrypted provider storage;
+dedicated service credentials reuse Provider records/encryption with service-type
+classification. Configure them inline in Tools; do not add a second secret store.
+UI placement never implies plaintext storage.
 
 Search is not inherently model-backed. Keep the current DDGS path usable;
 represent its engine configuration separately from Model Offering selection.
@@ -43,25 +48,27 @@ and card UI already generalize. Four binding shapes exist or are planned:
 
 - **engine** — implementation plus validated options, no provider/model
   (implemented: `search.web` ddgs cascade).
-- **provider** — keyed service: a Provider row supplies credentials; no model
-  needed (roadmap: keyed search).
-- **model** — provider + model + options (planned: media).
+- **provider** — keyed service: a Provider record supplies encrypted
+  credentials; no model needed (W9: keyed search).
+- **model** — provider + model + options (implemented: image).
 - **backend** — execution environment selection plus per-backend options
-  (roadmap: terminal sandbox).
+  (W11: local and remote terminal execution).
 
 | Binding key | Shape | Status / notes |
 |---|---|---|
-| `search.web` | engine → provider | Implemented: free `ddgs` cascade with engine order, SafeSearch, region. Roadmap: keyed services (exa, tavily, brave-api, firecrawl) bound to Provider rows of new search provider types — credentials stay in encrypted provider storage. |
-| `exec.terminal` | backend | Roadmap: `auto` keeps today's seatbelt/bwrap → docker → mxc probe order; or pin docker / ssh / daytona / modal. The `SandboxBackend` abstraction is already pluggable — ssh/daytona/modal are new implementations; remote backends take credentials via provider references, never inline secrets. |
-| `media.tts` | model | Planned for this release (W6); spec exists, marked unimplemented until the handler ships. Provider + model + voice/format options. |
-| `media.image` | model | Planned (W6 alternative); provider + model + size/quality options. |
-| `media.stt` | model | Roadmap; spec entry when an STT handler is committed. Provider + model + language options. |
+| `search.web` | engine or service | DDGS preserved; Tavily inline Provider configuration/dispatch fixture-tested. Exa/Brave API adapters and live verification pending. Firecrawl stays follow-up scope. |
+| `exec.terminal` | backend | W11: local-only Auto or explicit supported Seatbelt/Bubblewrap/Docker/MXC; remote SSH/Daytona/Modal with encrypted Tools connections, pinned sessions, consented transfer, verified isolation, and lease cleanup. Remote adapters are not implemented yet. |
+| `media.tts` | operator speech service/model | W10: Read Aloud beside Copy beneath agent messages, not the old proposed `media_speak` tool. Provider/model/voice/format configured in Tools. |
+| `media.image` | model | Implemented: `image_generate` and `image_edit` share provider/model/options. |
+| `media.stt` | operator speech service/model | W10: composer dictation into an editable draft, not an agent tool. Provider/model/language configured in Tools. |
 | `media.video` | model | Future; register only alongside a real backend. |
 
 Every new key keeps the same contract: a card shows live selectors only when a
 real backend exists — planned entries render an honest note, never a fake
-selector. Keyed services always reference a Provider row; secrets never enter
-`tool_bindings` rows or API responses.
+selector. Dedicated service setup stays entirely in Tools, not a new Providers
+section. Bindings reference encrypted credentials; secrets never enter plaintext
+options or read responses. Remove/replace the unimplemented `media_speak` mapping
+when adding the operator TTS path; do not expose it as a loadable schema.
 
 ## Resolution Contract
 
@@ -86,11 +93,12 @@ typed keys/options, version conflict handling, and safe provider references.
 Return configured/available/unavailable reasons separately; never return secrets.
 Audit updates using the existing operator-audit mechanism.
 
-The global Tools tab shows functional search and the chosen media configuration.
-Future STT/TTS/image/video entries may explain planned support, but cannot present
-nonfunctional selectors or claim executable capabilities merely because a model
-name can be saved. Reuse Model Offering language and free-text model overrides
-where supported; do not guess modality support from an alias.
+The global Tools tab owns working search/image configuration and, as W9/W10 land,
+dedicated search and independent STT/TTS connections. Do not present nonfunctional
+selectors as supported merely because a model name can be saved. Reuse Model
+Offering language for model-backed operations; search APIs are not model offerings.
+Do not guess modality support from an alias. Video and realtime Voice Mode stay
+deferred; speech UI actions use W10's operator boundary rather than agent grants.
 
 ## Implementation Steps
 

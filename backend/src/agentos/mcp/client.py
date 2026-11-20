@@ -32,17 +32,14 @@ from contextlib import AsyncExitStack
 from typing import Any
 from urllib.parse import urlparse
 
+from ..runtime_support import runtime_directories
 from .transport import PolicyTransport
 
 log = logging.getLogger("agentos.mcp.client")
 
 # Common runtime install directories for stdio command resolution.
 # Ordered by preference — Homebrew first, then system, then user-local.
-_RUNTIME_DIRS = [
-    "/opt/homebrew/bin",
-    "/usr/local/bin",
-    os.path.expanduser("~/.local/bin"),
-]
+_RUNTIME_DIRS = runtime_directories()
 
 
 _KNOWN_RUNTIME_COMMANDS = {"node", "npm", "npx", "uv", "uvx", "git"}

@@ -810,6 +810,21 @@ def test_launch_args_container_flags(monkeypatch, tmp_path):
     assert "--headless=new" not in s._launch_args(visible=True)
 
 
+async def test_open_failure_kills_browser_process(tmp_path, monkeypatch):
+    """A failed open must not leak the browser — stray processes hold
+    global Mach names and wedge later launches."""
+    import agentos.browser.cdp as cdp_mod
+
+    monkeypatch.setattr(cdp_mod, "LOAD_TIMEOUT_S", 0.5)
+    fake = tmp_path / "fake-browser"
+    fake.write_text("#!/bin/sh\nexec sleep 30\n")
+    fake.chmod(0o755)
+    session = BrowserSession(fake, tmp_path / "prof")
+    with pytest.raises(BrowserError):
+        await session.open("http://127.0.0.1:1/")
+    assert not session.alive()
+
+
 @needs_browser
 async def test_live_iframe_and_shadow_dom(tmp_path):
     """Scoped observe reaches into iframes (frame AX tree via contentDocument)

@@ -5,11 +5,11 @@ import json
 import uuid
 
 import pytest_asyncio
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from agentos.models import Base
-from agentos.models.model_catalog import ModelCatalogOffering, ModelCatalogRevision
+from agentos.models.model_catalog import ModelCatalogOffering
 from agentos.models.provider import Provider
 from agentos.providers import catalog as catalog_mod
 from agentos.providers.catalog import CatalogSnapshot
@@ -146,7 +146,7 @@ class TestOfferings:
             except ValueError:
                 pass
 
-    async def test_revision_appends_on_change(self, provider_db):
+    async def test_revision_bumps_on_change_without_history_rows(self, provider_db):
         pid = await _make_provider(provider_db, api_key="k")
         async with provider_db() as db:
             o = await update_override(db, pid, "m1", {"supports_vision": True})
@@ -154,16 +154,14 @@ class TestOfferings:
             o = await update_override(db, pid, "m1", {"supports_thinking": True})
             await db.commit()
             assert o.revision > rev1
-            rows = (
-                (
-                    await db.execute(
-                        select(ModelCatalogRevision).where(ModelCatalogRevision.offering_id == o.id)
-                    )
+            # No history table exists — revision is only a change marker.
+            result = await db.execute(
+                text(
+                    "SELECT name FROM sqlite_master WHERE type='table' "
+                    "AND name='model_catalog_revisions'"
                 )
-                .scalars()
-                .all()
             )
-            assert len(rows) >= 2
+            assert result.fetchone() is None
 
 
 class TestFingerprint:
@@ -480,6 +478,27 @@ class TestRefreshJobs:
             await asyncio.sleep(0.4)
         finally:
             mc.discover_provider_models = orig
+
+    async def test_unchanged_refresh_does_not_bump_revision(self, provider_db):
+        from agentos.providers import model_catalog as mc
+
+        pid = await _make_provider(provider_db, type="openai", api_key="k")
+        models = [{"id": "m1", "name": "m1"}]
+        orig = mc.discover_provider_models
+        mc.discover_provider_models = lambda _p: asyncio.sleep(0, models)
+        try:
+            await mc._refresh_provider(pid, provider_db, asyncio.Lock())
+            await mc._refresh_provider(pid, provider_db, asyncio.Lock())
+        finally:
+            mc.discover_provider_models = orig
+        async with provider_db() as db:
+            row = (
+                await db.execute(
+                    select(ModelCatalogOffering).where(ModelCatalogOffering.provider_id == pid)
+                )
+            ).scalar_one()
+            assert row.revision == 1
+            assert row.discovery_state == "available"
 
     async def test_stale_config_mid_fetch_discards_results(self, provider_db):
         from agentos.providers import model_catalog as mc

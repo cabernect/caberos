@@ -15,6 +15,7 @@ from typing import Any
 from ...sandbox import get_backend
 from ...sandbox.base import kill_process_group
 from ...sandbox.process import collect_process
+from ...terminal_environment import open_terminal_environment, prepare_terminal_runtimes
 
 
 def shell_dialect_note() -> str:
@@ -94,6 +95,7 @@ async def _run_sync(
     command: str, workspace_path: str, sandbox_mode: str, timeout: int, db: Any = None
 ) -> dict[str, Any]:
     """Run a command to completion — the terminal capability's sync path."""
+    await prepare_terminal_runtimes()
     if sandbox_mode == "open":
         start = time.monotonic()
         proc = await asyncio.create_subprocess_exec(
@@ -101,6 +103,7 @@ async def _run_sync(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=workspace_path,
+            env=open_terminal_environment(),
             start_new_session=True,
             # Packaged shell children run with no console; without the flag
             # cmd.exe would allocate a visible window on every call.
@@ -122,7 +125,7 @@ async def _run_sync(
             workspace_path=workspace_path,
             command=command,
             timeout=timeout,
-            allow_network=False,
+            allow_network=True,
         )
     output = {
         "stdout": result.stdout,

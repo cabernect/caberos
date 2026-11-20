@@ -220,6 +220,19 @@ def test_build_config_supplies_the_environment_as_key_value_strings(tmp_path):
     assert all(isinstance(entry, str) and "=" in entry for entry in env)
 
 
+def test_discovered_runtime_paths_still_require_readable_roots(monkeypatch):
+    allowed = "C:\\Program Files\\nodejs"
+    denied = "C:\\Users\\operator\\managed-node\\bin"
+    monkeypatch.setattr(
+        "agentos.sandbox.mxc.installed_runtime_directories", lambda: [allowed, denied]
+    )
+    with patch.dict("os.environ", _HOST_ENV, clear=True):
+        entries = _sandbox_path("C:\\Windows").split(";")
+    assert entries[0] == "C:\\Windows\\System32"
+    assert allowed in entries
+    assert denied not in entries
+
+
 def test_build_config_allow_network():
     config = _build_config("C:\\ws", "echo hi", allow_network=True)
     assert config["network"] == {"defaultPolicy": "allow"}

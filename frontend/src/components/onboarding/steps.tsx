@@ -949,7 +949,7 @@ export const TOOL_ROWS: {
     icon: Pencil,
     title: "Change files",
     desc: "Create, edit or delete files.",
-    caps: ["write_file"],
+    caps: ["write_file", "edit_file"],
     recommended: "ask",
   },
   {

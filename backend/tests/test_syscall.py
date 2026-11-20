@@ -163,6 +163,59 @@ class TestSyscallHandler:
         assert result.allowed is True
         assert result.output["content"] == "written content"
 
+    async def test_edit_file_mediated_and_confined(self, db, workspace):
+        import os
+
+        with open(os.path.join(workspace, "note.txt"), "w") as f:
+            f.write("keep\nold line\nkeep\n")
+        handler = SyscallHandler(db=db, workspace_path=workspace)
+        agent_config = _make_agent_config(["edit_file"])
+        session = _make_session("contact-1")
+
+        result = await handler.mediate(
+            call=ToolCall(
+                id="1",
+                name="edit_file",
+                args={"path": "note.txt", "old_text": "old line", "new_text": "new line"},
+            ),
+            session=session,
+            agent_config=agent_config,
+            run_id="run-1",
+        )
+        assert result.allowed is True
+        assert result.output["action"] == "modified"
+        with open(os.path.join(workspace, "note.txt")) as f:
+            assert f.read() == "keep\nnew line\nkeep\n"
+
+        # Ambiguous match is a clean tool error, not a write
+        with open(os.path.join(workspace, "dup.txt"), "w") as f:
+            f.write("x\nx\n")
+        result = await handler.mediate(
+            call=ToolCall(
+                id="2",
+                name="edit_file",
+                args={"path": "dup.txt", "old_text": "x", "new_text": "y"},
+            ),
+            session=session,
+            agent_config=agent_config,
+            run_id="run-1",
+        )
+        assert result.allowed is True
+        assert "error" in result.output
+
+        # Path escape still refused by the same workspace boundary
+        result = await handler.mediate(
+            call=ToolCall(
+                id="3",
+                name="edit_file",
+                args={"path": "../escape.txt", "old_text": "a", "new_text": "b"},
+            ),
+            session=session,
+            agent_config=agent_config,
+            run_id="run-1",
+        )
+        assert result.allowed is False or "error" in (result.output or {})
+
     async def test_search_files(self, db, workspace):
         import os
 

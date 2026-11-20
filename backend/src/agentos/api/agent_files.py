@@ -1,7 +1,10 @@
 """Agent files API — MEMORY.md, skills, workspace browser, memory management (D34, D37)."""
 
+import asyncio
+import hashlib
 import os
 import re
+from collections import OrderedDict
 from pathlib import Path
 from typing import NamedTuple
 
@@ -45,6 +48,30 @@ class _ResolvedSource(NamedTuple):
     file_path: Path | None
     live_root: Path | None = None
     unresolved_tracking: bool = False
+    moved_from: str | None = None
+    source_hash: str = ""
+
+
+def _find_moved_file(ws: Path, missing_name: str) -> Path | None:
+    """Locate `missing_name` elsewhere in the workspace after a rename/move.
+
+    Bounded walk; resolves only on exactly one basename match so ambiguous
+    names never silently pick a file. Returns the absolute path or None.
+    """
+    wanted = missing_name.lower()
+    matches: list[Path] = []
+    scanned = 0
+    for root, dirs, files in os.walk(ws):
+        dirs[:] = [d for d in dirs if not d.startswith(".")]
+        for fname in files:
+            scanned += 1
+            if scanned > 20000:
+                return None
+            if fname.lower() == wanted:
+                matches.append(Path(root) / fname)
+                if len(matches) > 1:
+                    return None
+    return matches[0] if matches else None
 
 
 def _agent_home(agent_id: str) -> Path:
@@ -767,16 +794,85 @@ async def _resolve_source(
             if not target.exists() or not target.is_file():
                 raise HTTPException(status_code=404, detail="File not found")
             data = target.read_bytes()
-        return _ResolvedSource(data, Path(artifact.current_path).name, artifact, None, live_root)
+        return _ResolvedSource(
+            data,
+            Path(artifact.current_path).name,
+            artifact,
+            None,
+            live_root,
+            source_hash=hashlib.sha256(data).hexdigest(),
+        )
 
     try:
         target = Path(WorkspaceManager().validate_path(str(ws), path))
     except ValueError as error:
         raise HTTPException(status_code=403, detail="Path outside workspace") from error
+    moved_from: str | None = None
     if not target.exists() or not target.is_file():
-        raise HTTPException(status_code=404, detail="File not found")
-    artifact, unresolved = await artifact_service.get_by_path(db, agent_id, path, ws)
-    return _ResolvedSource(target.read_bytes(), target.name, artifact, target, ws, unresolved)
+        # Stale links happen when the agent renames/moves a file after
+        # producing it (file chips snapshot the write-time path). Resolve a
+        # unique basename match and flag it — never guess among duplicates.
+        found = _find_moved_file(ws, target.name)
+        if found is None:
+            raise HTTPException(status_code=404, detail="File not found")
+        moved_from = path
+        target = found
+    rel = str(target.relative_to(ws))
+    artifact, unresolved = await artifact_service.get_by_path(db, agent_id, rel, ws)
+    data = target.read_bytes()
+    return _ResolvedSource(
+        data,
+        target.name,
+        artifact,
+        target,
+        ws,
+        unresolved,
+        moved_from,
+        source_hash=hashlib.sha256(data).hexdigest(),
+    )
+
+
+# Preview cache — bounded LRU of extraction payloads keyed by content hash +
+# name + preview implementation version. It sits AFTER source resolution, so
+# every request — cache hit or miss — re-runs ownership/root checks; the
+# cache never grants access. Entries are immutable payloads; callers get a
+# shallow copy before adding per-request fields.
+_PREVIEW_CACHE_MAX = 64
+_preview_cache: OrderedDict[str, dict] = OrderedDict()
+_preview_locks: dict[str, asyncio.Lock] = {}
+
+
+def _preview_lock(key: str) -> asyncio.Lock:
+    lock = _preview_locks.get(key)
+    if lock is None:
+        if len(_preview_locks) >= _PREVIEW_CACHE_MAX * 4:
+            for stale in [k for k, lk in _preview_locks.items() if not lk.locked()]:
+                _preview_locks.pop(stale, None)
+        lock = _preview_locks[key] = asyncio.Lock()
+    return lock
+
+
+async def _cached_preview(data: bytes, name: str) -> dict:
+    """preview_bytes behind a bounded cache + per-key single-flight.
+
+    Extraction runs in a worker thread so a large parse never stalls the
+    event loop; concurrent requests for the same key share one computation.
+    """
+    from .. import previews
+
+    digest = hashlib.sha256(data).hexdigest()
+    key = f"{digest}:{name}:{previews.PREVIEW_VERSION}"
+    async with _preview_lock(key):
+        hit = _preview_cache.get(key)
+        if hit is not None:
+            _preview_cache.move_to_end(key)
+            return dict(hit)
+        payload = await asyncio.to_thread(previews.preview_bytes, data, name)
+        _preview_cache[key] = payload
+        _preview_cache.move_to_end(key)
+        while len(_preview_cache) > _PREVIEW_CACHE_MAX:
+            _preview_cache.popitem(last=False)
+        return dict(payload)
 
 
 async def _artifact_meta(db: AsyncSession, artifact, revision_id: str | None) -> dict:
@@ -831,14 +927,21 @@ async def preview_workspace_file(
     session_id: str | None = None,
 ) -> dict:
     """Bounded preview payload for a workspace file or artifact revision."""
-    from .. import previews
-
     ws = await _workspace_root(db, agent_id, session_id)
     src = await _resolve_source(db, ws, agent_id, path, artifact_id, revision_id)
-    payload = previews.preview_bytes(src.data, src.name)
+    payload = await _cached_preview(src.data, src.name)
     payload["artifact"] = (
         await _artifact_meta(db, src.artifact, revision_id) if src.artifact else None
     )
+    # Source identity + hash of the exact bytes rendered — revision-pinned
+    # bytes vs live file reads are distinguishable so consumers never
+    # assume a live preview equals the current revision.
+    payload["source"] = {
+        "kind": "revision" if revision_id else "live_file",
+        "artifact_id": src.artifact.id if src.artifact else None,
+        "revision_id": revision_id,
+        "sha256": src.source_hash,
+    }
     if src.unresolved_tracking:
         # A legacy artifact row claims this path but its root can't be
         # established — expose that instead of calling the file ordinary.
@@ -847,11 +950,16 @@ async def preview_workspace_file(
         payload["path"] = src.artifact.current_path
     else:
         payload["path"] = path
+    if src.moved_from and src.file_path is not None and src.live_root is not None:
+        # Stale path resolved to a renamed/moved file — surface the real
+        # location and flag it so the panel can say so honestly.
+        payload["path"] = str(src.file_path.relative_to(src.live_root))
+        payload["moved_from"] = src.moved_from
     # Operator-only: the desktop shell uses the absolute path for
     # open/reveal-in-finder. Revision previews point at the live file —
     # under the artifact's evidence root when it differs from ws; None
     # when no root can be established at all.
-    live_path = src.artifact.current_path if src.artifact else path
+    live_path = src.artifact.current_path if src.artifact else payload["path"]
     payload["absolute_path"] = str(src.live_root / live_path) if src.live_root else None
     return payload
 
@@ -878,6 +986,78 @@ async def raw_workspace_file(
     if src.file_path is not None:
         return FileResponse(src.file_path, media_type=mime, filename=src.name)
     return Response(content=src.data, media_type=mime)
+
+
+@router.get("/{agent_id}/workspace/deck-export.pptx")
+async def workspace_deck_export(
+    agent_id: str,
+    expected_sha256: str,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+    path: str = "",
+    artifact_id: str | None = None,
+    revision_id: str | None = None,
+    session_id: str | None = None,
+    allow_fallback: bool = False,
+    expected_plan: str | None = None,
+):
+    """Render a .deck.json source revision to native PPTX.
+
+    The spec is the source of truth — never reverse-parsed from HTML.
+    Slides the native template can't express are refused with their
+    indices until the declared image-fallback path lands (W2 P3).
+    """
+    import json as _json
+    from urllib.parse import quote
+
+    from fastapi.responses import Response
+
+    from ..artifacts import deck_exports
+    from ..artifacts.deck_spec import normalize as _norm_deck
+
+    ws = await _workspace_root(db, agent_id, session_id)
+    src = await _resolve_source(db, ws, agent_id, path, artifact_id, revision_id)
+    source_sha = hashlib.sha256(src.data).hexdigest()
+    if expected_sha256 != source_sha:
+        raise HTTPException(
+            status_code=409, detail="File changed — refresh the preview before export"
+        )
+    if not src.name.lower().endswith(".deck.json"):
+        raise HTTPException(status_code=400, detail="not a .deck.json presentation source")
+    try:
+        raw = _json.loads(src.data.decode("utf-8"))
+        spec = _norm_deck(raw)
+        spec["assets"] = raw.get("assets") or []
+    except (UnicodeDecodeError, ValueError, TypeError) as e:
+        raise HTTPException(status_code=400, detail=f"invalid deck spec: {e}") from e
+    try:
+        content, assessment = await deck_exports.pptx(
+            spec,
+            source_sha256=source_sha,
+            revision_id=revision_id,
+            allow_fallback=allow_fallback,
+            expected_plan=expected_plan,
+        )
+    except (ValueError, OSError, TimeoutError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    stem = (
+        src.name[: -len(".deck.json")]
+        if src.name.lower().endswith(".deck.json")
+        else Path(src.name).stem
+    )
+    filename = f"{stem}.pptx"
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename, safe='')}",
+            "Cache-Control": "no-store",
+            "X-Source-SHA256": source_sha,
+            "X-Export-Mode": "native-with-image-fallbacks"
+            if assessment["image_fallbacks"]
+            else "native-objects",
+        },
+    )
 
 
 @router.get("/{agent_id}/workspace/pdf-page")
@@ -939,6 +1119,7 @@ async def list_artifact_revisions(
 
 class RestoreRevisionRequest(BaseModel):
     revision_id: str
+    base_revision_id: str | None = None
 
 
 @router.post("/{agent_id}/artifacts/{artifact_id}/restore")
@@ -969,10 +1150,15 @@ async def restore_artifact_revision(
             artifact_id,
             workspace_path=ws,
             revision_id=req.revision_id,
+            base_revision_id=req.base_revision_id,
             created_by=f"operator:{operator.id}",
         )
     except ArtifactError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
+        from ..artifacts.service import ArtifactConflictError
+
+        raise HTTPException(
+            status_code=409 if isinstance(e, ArtifactConflictError) else 404, detail=str(e)
+        ) from e
     return {"revision_id": rev.id, "revision_number": rev.revision_number}
 
 

@@ -22,7 +22,7 @@ from .tools.browser import (
 )
 from .tools.catalog import capabilities_load, capabilities_search
 from .tools.datetime_tool import datetime_now
-from .tools.file import read_file, search_files, write_file
+from .tools.file import edit_file, read_file, search_files, write_file
 from .tools.knowledge import doc_inspect, doc_list, doc_query_rows, doc_search
 from .tools.media import image_edit, image_generate
 from .tools.memory import (
@@ -91,7 +91,11 @@ def register_builtin_capabilities() -> None:
             name="write_file",
             effects=frozenset({"workspace_write"}),
             kind="tool",
-            description="Write a file to the agent's workspace",
+            description=(
+                "Write a UTF-8 file — creates new files or replaces an existing "
+                "file's whole content. For a small change to an existing text "
+                "file, prefer edit_file so only the changed fragment is sent."
+            ),
             parameters_schema={
                 "type": "object",
                 "properties": {
@@ -104,6 +108,36 @@ def register_builtin_capabilities() -> None:
             require_approval=False,
             subject_scoped=False,
             execute=write_file,
+        )
+    )
+
+    registry.register(
+        CapabilityDef(
+            name="edit_file",
+            effects=frozenset({"workspace_write"}),
+            kind="tool",
+            description=(
+                "Edit an existing UTF-8 text file by replacing one exact, unique "
+                "old_text fragment with new_text. Refuses missing or ambiguous "
+                "matches without changing the file. Cannot create files or edit "
+                "binary/Office/PDF content — read the current text first."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Existing file path"},
+                    "old_text": {
+                        "type": "string",
+                        "description": "Exact text to replace; include enough context to be unique",
+                    },
+                    "new_text": {"type": "string", "description": "Replacement text"},
+                },
+                "required": ["path", "old_text", "new_text"],
+            },
+            egress=False,
+            require_approval=False,
+            subject_scoped=False,
+            execute=edit_file,
         )
     )
 
@@ -1141,7 +1175,18 @@ def register_builtin_capabilities() -> None:
         "Structured document spec — e.g. docx: {title?, blocks:[heading|"
         "paragraph|list|table|image|page_break]}; xlsx: {sheets:[{name,rows,"
         "cells,freeze,column_widths,formats}]}; pptx: {slides:[{layout,title,"
-        "subtitle,blocks:[bullets|table|image|chart|notes|text]}]}"
+        "subtitle,blocks:[bullets|table|image|chart|notes|text]}]}; deck "
+        "(.deck.json, the editable presentation source shared by the HTML "
+        'player and PPTX export): {kind:"deck", title?, theme?{background,'
+        "accent,text,font:sans|serif|mono}, slides:[{id?,layout?:title|content|"
+        "two_content|section,title?,blocks?[heading|paragraph|bullets|table|"
+        "image|divider],notes?,transition?}], motion?{transition:{type:none|fade|slide,"
+        "duration_ms:0..2000},entrance:{type:none|fade|rise,duration_ms:0..2000}}}. "
+        "Blocks may set id, reveal:true or reveal:'items' (bullets only), "
+        "animation:{type:none|fade|rise,duration_ms:0..2000}. Motion plays in "
+        "Slideshow; PPTX shows final static content. image blocks take "
+        "src=workspace-relative raster paths (png/jpg/gif/webp, pinned as "
+        "embedded snapshots at build; no scripts/external URLs)."
     )
     registry.register(
         CapabilityDef(
@@ -1149,7 +1194,7 @@ def register_builtin_capabilities() -> None:
             effects=frozenset({"workspace_write"}),
             kind="tool",
             description=(
-                "Create a versioned Office deliverable (docx/xlsx/pptx) in the "
+                "Create a versioned deliverable (docx/xlsx/pptx/deck) in the "
                 "workspace from a structured spec — never raw file bytes. Files "
                 "are saved under artifacts/ (prefix added automatically). " + _doc_spec_hint
             ),
@@ -1162,7 +1207,7 @@ def register_builtin_capabilities() -> None:
                     },
                     "format": {
                         "type": "string",
-                        "enum": ["docx", "xlsx", "pptx"],
+                        "enum": ["docx", "xlsx", "pptx", "deck"],
                         "description": "Format; inferred from path extension when omitted",
                     },
                     "spec": {"type": "object", "description": _doc_spec_hint},
@@ -1210,7 +1255,9 @@ def register_builtin_capabilities() -> None:
                 "Requires base_revision_id (from inspect/history); conflicts instead "
                 "of overwriting when the file changed externally. Ops — docx: "
                 "append_blocks|replace_paragraph|set_cell; xlsx: set_cell|append_rows|"
-                "add_sheet|remove_sheet; pptx: add_slide|move_slide|set_title|append_bullets."
+                "add_sheet|remove_sheet; pptx: add_slide|move_slide|set_title|append_bullets; "
+                "deck (.deck.json): set_title|set_theme|add_slide|remove_slide|set_slide|"
+                "move_slide (slide refs are 0-based index or slide id)."
             ),
             parameters_schema={
                 "type": "object",
@@ -1278,12 +1325,16 @@ def register_builtin_capabilities() -> None:
             name="artifact_restore",
             effects=frozenset({"workspace_write"}),
             kind="tool",
-            description="Write an old revision's bytes back to the workspace as a NEW revision — history is never rewritten.",
+            description="Write an old revision's bytes back to the workspace as a NEW revision — history is never rewritten. Deck restores also require the current base_revision_id; stale restores fail.",
             parameters_schema={
                 "type": "object",
                 "properties": {
                     "artifact_id": {"type": "string"},
                     "revision_id": {"type": "string"},
+                    "base_revision_id": {
+                        "type": "string",
+                        "description": "Current revision id; required when restoring a deck.",
+                    },
                     "change_summary": {"type": "string"},
                 },
                 "required": ["artifact_id", "revision_id"],

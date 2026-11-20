@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   ArrowRight,
@@ -8,13 +8,15 @@ import {
   Folder,
   FolderOpen,
   Search,
-  X,
 } from "lucide-react";
 import { api, workspaceBackend, type PreviewSource } from "@/lib/api";
 import type { Citation, RunSummary, WorkspaceEntry } from "@/lib/types";
 import { formatRelative } from "@/lib/time";
 import { PreviewPanel } from "@/components/previews/PreviewPanel";
+import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { FilterPills } from "@/components/ui/filter-pills";
+import { Input } from "@/components/ui/input";
 import { StatusWord, type StatusKind } from "@/components/ui/status-word";
 
 type PanelTab = "run" | "workspace" | "sources";
@@ -31,7 +33,8 @@ interface WorkspacePanelProps {
   changedPaths: Set<string>;
   citations: Citation[];
   runStatus: string | null;
-  onClose: () => void;
+  /** PreviewPanel revise drafts — the page prefills the chat composer. */
+  onRevise?: (draft: string) => void;
 }
 
 export function WorkspacePanel({
@@ -44,10 +47,12 @@ export function WorkspacePanel({
   changedPaths,
   citations,
   runStatus,
-  onClose,
+  onRevise,
 }: WorkspacePanelProps) {
   const [tab, setTab] = useState<PanelTab>("workspace");
   const [filter, setFilter] = useState("");
+  const [filesOpen, setFilesOpen] = useState(true);
+  const filesId = useId();
   // Stable backend object — a fresh one every render would invalidate
   // PreviewPanel's memoized identity and refetch image/pdf blobs in a loop.
   const previewBackend = useMemo(
@@ -56,10 +61,12 @@ export function WorkspacePanel({
   );
 
   return (
-    <div className="flex h-full min-w-0 flex-col border-l border-line bg-surface">
+    <div className="@container/workspace flex h-full min-h-0 min-w-0 flex-col border-l border-line bg-surface">
       {/* Tab strip — Run | Workspace | Sources, with the folder kind on
-          the right like the mockup's "Caber · persistent folder". */}
-      <div className="flex items-center gap-2 border-b border-line px-3 py-2">
+          the right like the mockup's "Caber · persistent folder".
+          py-3 makes the strip 59px — flush with the chat header's
+          bottom border so the two horizontal lines align. */}
+      <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-3">
         <FilterPills
           variant="segmented"
           pills={[
@@ -69,35 +76,79 @@ export function WorkspacePanel({
           ]}
           active={tab}
           onChange={(v) => setTab(v as PanelTab)}
+          className="shrink-0 [&_button]:focus-visible:outline-2 [&_button]:focus-visible:outline-offset-2 [&_button]:focus-visible:outline-ring"
         />
         <span
-          className="ml-auto truncate text-[11px] text-ink-faint"
+          className="min-w-0 flex-1 truncate text-right text-xs text-ink-faint"
           title={workspacePath ?? undefined}
         >
           {agentName} · {workspacePath ?? "persistent folder"}
         </span>
-        <button
-          onClick={onClose}
-          className="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-[6px] text-ink-muted transition-colors hover:bg-sunken hover:text-ink"
-          title="Close workspace panel"
-          aria-label="Close workspace panel"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
+        {tab === "workspace" && (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={filesOpen ? "Hide files" : "Show files"}
+            title={filesOpen ? "Hide files" : "Show files"}
+            aria-expanded={filesOpen}
+            aria-controls={filesId}
+            onClick={() => setFilesOpen((open) => !open)}
+            className="text-ink-muted"
+          >
+            <FolderOpen aria-hidden="true" />
+          </Button>
+        )}
+        {/* No ✕ — the chat header's panel toggle hides/shows this whole
+            panel; a second close here was redundant chrome. */}
       </div>
 
       {tab === "workspace" && (
-        <div className="flex min-h-0 flex-1">
-          {/* File tree column */}
-          <div className="flex w-[190px] shrink-0 flex-col border-r border-line">
-            <div className="border-b border-line p-2">
-              <div className="flex items-center gap-1.5 rounded-[8px] border border-line bg-ground px-2 py-1.5">
-                <Search className="h-3 w-3 shrink-0 text-ink-faint" />
-                <input
+        <div className="flex min-h-0 flex-1 flex-col @min-[640px]/workspace:flex-row">
+          {/* Preview column — left; the file picker sits on the right. */}
+          <div className={`${selected || !filesOpen ? "flex" : "hidden @min-[640px]/workspace:flex"} min-h-0 min-w-0 flex-1 flex-col`}>
+            {selected ? (
+              <PreviewPanel
+                agentId={agentId}
+                source={selected}
+                backend={previewBackend}
+                onClose={() => onSelect(null)}
+                onRevise={onRevise}
+                className="h-full border-0"
+              />
+            ) : (
+              <EmptyState
+                icon={FileText}
+                title="File preview"
+                className="min-h-0 flex-1 rounded-none border-0 px-4 py-8"
+                action={!filesOpen && (
+                  <Button variant="outline" size="sm" onClick={() => setFilesOpen(true)}>
+                    Browse files
+                  </Button>
+                )}
+              >
+                Select a file to preview it here.
+              </EmptyState>
+            )}
+          </div>
+
+          {/* File tree column — right. h-12 header matches the preview
+              header so the two divider lines sit on the same row. */}
+          <div
+            id={filesId}
+            aria-label="Workspace files"
+            role="region"
+            hidden={!filesOpen}
+            className={`${filesOpen ? "flex" : "hidden"} ${selected ? "max-h-48 shrink-0" : "min-h-0 flex-1"} w-full flex-col border-t border-line @min-[640px]/workspace:max-h-none @min-[640px]/workspace:w-48 @min-[640px]/workspace:flex-none @min-[640px]/workspace:border-t-0 @min-[640px]/workspace:border-l`}
+          >
+            <div className="flex h-12 shrink-0 items-center border-b border-line px-3">
+              <div className="relative w-full">
+                <Search aria-hidden="true" className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-ink-faint" />
+                <Input
                   value={filter}
                   onChange={(e) => setFilter(e.target.value)}
                   placeholder="Find file"
-                  className="w-full bg-transparent text-[12px] text-ink outline-none placeholder:text-ink-faint"
+                  aria-label="Find file"
+                  className="bg-ground pl-8 text-xs md:text-xs"
                 />
               </div>
             </div>
@@ -112,29 +163,9 @@ export function WorkspacePanel({
               />
             </div>
             {changedPaths.size > 0 && (
-              <div className="border-t border-line px-3 py-2 text-[10px] text-ink-faint">
+              <div className="shrink-0 border-t border-line px-3 py-2 text-xs text-ink-muted">
                 <span className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-accent align-middle" />
                 changed in this chat
-              </div>
-            )}
-          </div>
-
-          {/* Preview column */}
-          <div className="flex min-w-0 flex-1 flex-col">
-            {selected ? (
-              <PreviewPanel
-                agentId={agentId}
-                source={selected}
-                backend={previewBackend}
-                onClose={() => onSelect(null)}
-                className="h-full border-0"
-              />
-            ) : (
-              <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
-                <FileText className="h-6 w-6 text-ink-faint" />
-                <p className="text-[12px] text-ink-muted">
-                  Select a file to preview it here.
-                </p>
               </div>
             )}
           </div>
@@ -163,7 +194,7 @@ export function WorkspacePanel({
                     href={c.source_path}
                     target="_blank"
                     rel="noreferrer"
-                    className="block rounded-[8px] px-2.5 py-2 transition-colors hover:bg-sunken"
+                    className="block rounded-md px-3 py-2 transition-colors hover:bg-sunken focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
                   >
                     <span className="mr-1.5 text-[11px] text-ink-faint">
                       [{i + 1}]
@@ -314,14 +345,15 @@ function RunTab({
             {lastRun.error && (
               <RunKV label="Error" value={lastRun.error} tone="danger" />
             )}
-            <button
-              type="button"
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => navigate(`/traces/${agentId}/${lastRun.id}`)}
-              className="flex w-full items-center justify-between border-t border-line px-3 py-2 text-left text-[12px] font-medium text-accent transition hover:bg-ground"
+              className="h-9 w-full justify-between rounded-none border-t border-line px-3 text-xs text-accent"
             >
               View trace
               <ArrowRight className="h-3.5 w-3.5" />
-            </button>
+            </Button>
           </div>
         ) : (
           <p className="px-3 py-4 text-[12px] text-ink-muted">Loading…</p>
@@ -348,12 +380,12 @@ function RunKV({
 }) {
   return (
     <div className="flex items-baseline justify-between gap-3 border-b border-line px-3 py-1.5 last:border-b-0">
-      <span className="shrink-0 text-[12px] text-ink-3">{label}</span>
+      <span className="shrink-0 text-xs text-ink-faint">{label}</span>
       <span
         className={
           tone === "danger"
             ? "truncate text-right font-mono text-[12px] text-danger"
-            : "truncate text-right font-mono text-[12px] text-ink-2"
+            : "truncate text-right font-mono text-[12px] text-ink-muted"
         }
         title={title ?? value}
       >
@@ -440,9 +472,12 @@ function WorkspaceTree({
         const open = expanded.has(path);
         return (
           <div key={path}>
-            <button
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => toggle(path)}
-              className="flex w-full cursor-pointer items-center gap-1 rounded-[6px] px-1.5 py-1 text-left text-[12px] text-ink-muted transition-colors hover:bg-sunken hover:text-ink"
+              aria-expanded={open}
+              className="w-full justify-start gap-1 rounded-sm px-1.5 text-left text-xs font-normal text-ink-muted"
               style={{ paddingLeft: `${6 + depth * 14}px` }}
             >
               {open ? (
@@ -456,7 +491,7 @@ function WorkspaceTree({
                 <Folder className="h-3.5 w-3.5 shrink-0 text-ink-muted" />
               )}
               <span className="truncate">{e.name}</span>
-            </button>
+            </Button>
             {open && <div>{renderDir(path, depth + 1)}</div>}
           </div>
         );
@@ -464,16 +499,19 @@ function WorkspaceTree({
       const changed = changedPaths.has(path);
       const active = selectedPath === path;
       return (
-        <button
+        <Button
+          variant="ghost"
+          size="sm"
           key={path}
           onClick={() =>
             onSelect({ path, sessionId: sessionId ?? undefined })
           }
           title={path}
-          className={`flex w-full cursor-pointer items-center gap-1 rounded-[6px] px-1.5 py-1 text-left text-[12px] transition-colors ${
+          aria-current={active ? "true" : undefined}
+          className={`w-full justify-start gap-1 rounded-sm px-1.5 text-left text-xs font-normal ${
             active
-              ? "bg-accent-tint text-ink"
-              : "text-ink-muted hover:bg-sunken hover:text-ink"
+              ? "bg-accent-tint text-ink hover:bg-accent-tint"
+              : "text-ink-muted"
           }`}
           style={{ paddingLeft: `${22 + depth * 14}px` }}
         >
@@ -485,7 +523,7 @@ function WorkspaceTree({
               title="Changed in this chat"
             />
           )}
-        </button>
+        </Button>
       );
     });
   };

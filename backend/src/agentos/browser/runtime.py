@@ -37,8 +37,8 @@ from pathlib import Path
 
 from ..config import settings
 
-# Pinned approved artifact — the version the W4 spike exercised.
-RUNTIME_VERSION = "145.0.7632.6"
+# Pinned approved artifact — CfT stable; 145 hangs on macOS 27.
+RUNTIME_VERSION = "158.0.8127.36"
 _CFT_VERSIONS_URL = (
     "https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json"
 )

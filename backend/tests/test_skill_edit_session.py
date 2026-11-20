@@ -106,6 +106,39 @@ async def test_read_write_stage_publish_new_skill(db, tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_edit_file_stages_fragment_via_tool_seam(db, tmp_path, monkeypatch):
+    """edit_file delegates to the same staging session; nothing hits disk."""
+    await _mk(db, tmp_path, monkeypatch)
+    _mk_local_skill(
+        tmp_path,
+        "edited",
+        "---\nname: edited\ndescription: x\nlicense: L\ncompatibility: c\nallowed-tools: read_file\n---\nFirst paragraph.\nSecond paragraph.\n",
+    )
+    from agentos.capabilities.tools.file import edit_file
+
+    session = SkillEditSession(db, "qa-agent", await _resolve(db, "qa-agent"))
+    result = await edit_file(
+        {
+            "path": "skills/edited/SKILL.md",
+            "old_text": "First paragraph.",
+            "new_text": "Updated paragraph.",
+        },
+        "",
+        skill_edits=session,
+    )
+    assert result["staged"] is True
+    assert result["action"] == "modified"
+    assert "+Updated paragraph." in result["diff"]
+    assert "-First paragraph." in result["diff"]
+    live = _local_skill_dir(tmp_path, "edited") / "SKILL.md"
+    assert "First paragraph." in live.read_text()
+
+    res = await session.publish(reason="edit", source_run_id="r1", precondition=lambda n: None)
+    assert res["errors"] == [] and res["revision_ids"]
+    assert "Updated paragraph." in live.read_text()
+
+
+@pytest.mark.asyncio
 async def test_local_edit_snapshots_old_and_new(db, tmp_path, monkeypatch):
     """Existing local skill: publish snapshots the pre-edit bytes (no author)
     then writes the staged content as a new sourced revision."""

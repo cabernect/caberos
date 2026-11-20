@@ -291,11 +291,99 @@ export interface PreviewSlide {
   truncated?: boolean;
 }
 
+export interface PreviewSheetCell {
+  v: unknown;
+  /** Compact style subset: b=bold, i=italic, sz=font size, c=font color,
+   *  f=fill color, a=align, w=wrap, n=number format. */
+  s?: {
+    b?: boolean;
+    i?: boolean;
+    sz?: number;
+    c?: string;
+    f?: string;
+    a?: string;
+    w?: boolean;
+    n?: string;
+  };
+}
+
 export interface PreviewSheet {
   name: string;
-  rows: unknown[][];
+  /** Styled cell grid (null = empty). Rows may be jagged — rstripped. */
+  grid?: (PreviewSheetCell | null)[][];
+  /** Legacy value-only rows — present on older payloads. */
+  rows?: unknown[][];
   row_count: number;
+  col_count?: number;
+  merges?: string[];
+  freeze?: string | null;
+  col_widths?: Record<string, number>;
+  features?: {
+    tables?: string[];
+    charts?: number;
+    data_validations?: number;
+    conditional_formats?: number;
+  };
   truncated: boolean;
+}
+
+/** Canonical .deck.json presentation spec — one source for the in-app
+ *  slide renderer and the native PPTX export (see backend deck_spec.py). */
+export interface DeckEffect {
+  type: "none" | "fade" | "rise" | "slide";
+  duration_ms?: number;
+}
+
+export interface DeckBlock {
+  id?: string;
+  type: "heading" | "paragraph" | "bullets" | "table" | "image" | "divider" | string;
+  text?: string;
+  items?: string[];
+  rows?: unknown[][];
+  src?: string;
+  alt?: string;
+  /** two_content layout: 0/undefined = left column, 1 = right column. */
+  column?: number;
+  reveal?: boolean | "items";
+  animation?: DeckEffect;
+  chart_type?: "bar" | "line" | "pie";
+  categories?: string[];
+  series?: {name: string; values: number[]}[];
+  [key: string]: unknown;
+}
+
+export interface DeckSlide {
+  id: string;
+  layout?: "title" | "content" | "two_content" | "section" | string;
+  title?: string;
+  blocks?: DeckBlock[];
+  notes?: string;
+  transition?: DeckEffect;
+  [key: string]: unknown;
+}
+
+export interface DeckSpec {
+  kind?: string;
+  version?: number;
+  title?: string;
+  motion?: { transition?: DeckEffect; entrance?: DeckEffect };
+  theme?: {
+    background?: string;
+    accent?: string;
+    text?: string;
+    font?: "sans" | "serif" | "mono" | string;
+  };
+  slides: DeckSlide[];
+  /** Pinned image snapshots embedded at build time — `path` matches the
+   *  image block's `src`; `data_uri` carries the exact revision bytes. */
+  assets?: {
+    path: string;
+    mime?: string;
+    bytes?: number;
+    sha256?: string;
+    data_uri?: string;
+  }[];
+  assets_truncated?: boolean;
 }
 
 export interface PreviewPayload {
@@ -310,6 +398,8 @@ export interface PreviewPayload {
     | "document"
     | "slides"
     | "workbook"
+    | "deck"
+    | "html"
     | "media"
     | "unknown";
   size: number;
@@ -319,7 +409,12 @@ export interface PreviewPayload {
    *  open/reveal-in-finder. Always the live file, even for revision views. */
   absolute_path?: string;
   artifact: ArtifactMeta | null;
+  /** Set when a stale path resolved to a uniquely-named file elsewhere in
+   *  the workspace (the agent renamed/moved it after producing it). */
+  moved_from?: string;
   content?: string;
+  /** Static, sanitized document with an embedded restrictive CSP. */
+  html_document?: string | null;
   truncated?: boolean;
   language?: string;
   valid?: boolean;
@@ -330,6 +425,11 @@ export interface PreviewPayload {
   svg?: boolean;
   page_count?: number;
   format?: string;
+  /** Fidelity class per the preview contract — "approximate" marks an
+   *  extracted-content view, never native Office layout. */
+  mode?: "approximate" | "content" | "native" | "design";
+  /** Stable limitation codes for approximate views (layout, fonts, effects…). */
+  limitations?: string[];
   elements?: PreviewElement[];
   slides?: PreviewSlide[];
   slide_count?: number;
@@ -340,9 +440,23 @@ export interface PreviewPayload {
   formulas_recalculated?: boolean;
   media?: "audio" | "video";
   too_large?: boolean;
+  /** Canonical presentation source — present only for kind "deck"
+   *  (.deck.json). The panel renders these slides directly; the same spec
+   *  feeds the native PPTX export. */
+  spec?: DeckSpec;
   /** Ephemeral-upload previews only — first PDF page as base64 PNG. */
   thumb_png?: string;
   error?: string;
+  /** Preview implementation version — bumped when extraction semantics change. */
+  preview_version?: string;
+  /** Identity + hash of the exact bytes rendered: "revision" is pinned
+   *  managed-revision bytes, "live_file" is a fresh workspace-file read. */
+  source?: {
+    kind: "revision" | "live_file";
+    artifact_id: string | null;
+    revision_id: string | null;
+    sha256: string;
+  };
 }
 
 export interface ArtifactRevisionInfo {

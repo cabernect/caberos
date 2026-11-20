@@ -7,10 +7,41 @@ policy, I/O orchestration, or job state lives here.
 
 from __future__ import annotations
 
+import ntpath
 import os
+import platform
 from pathlib import Path
 
-# Fixed dependency specs — detection order is override → system → managed.
+
+def runtime_directories() -> list[str]:
+    """Common installed-runtime locations; never probe by running a shell."""
+    return ["/opt/homebrew/bin", "/usr/local/bin", os.path.expanduser("~/.local/bin")]
+
+
+def standard_runtime_directories() -> list[str]:
+    """Public install locations only, not the caller's PATH or private home."""
+    if platform.system() == "Windows":
+        programs = os.environ.get("ProgramFiles") or r"C:\Program Files"
+        system = os.environ.get("SystemRoot") or r"C:\Windows"
+        return [
+            ntpath.join(programs, "nodejs"),
+            ntpath.join(programs, "Git", "cmd"),
+            ntpath.join(system, "System32"),
+        ]
+    return ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
+
+
+def standard_runtime_roots() -> list[str]:
+    """Resolved auto candidates must also stay within public runtime trees."""
+    if platform.system() == "Windows":
+        return [
+            os.environ.get("ProgramFiles") or r"C:\Program Files",
+            os.environ.get("SystemRoot") or r"C:\Windows",
+        ]
+    return ["/opt/homebrew", "/usr", "/bin"]
+
+
+# Explicit override, then managed and standard system installs in auto mode.
 DEPENDENCIES: dict[str, dict] = {
     "nodejs": {
         "label": "Node.js",

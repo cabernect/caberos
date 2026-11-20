@@ -147,7 +147,7 @@ def render_document(elements: list[dict], workspace_path: str | Path | None = No
     Element vocabulary (superset of docx spec blocks):
       heading {text, level 1-3} · paragraph {text} · list {style, items}
       table {header, rows} · image {data|path} · chart {categories, series}
-      notes {text} · page_break {}
+      caption {text} · notes {text} · page_break {}
     Unknown kinds render as a bracketed marker, never crash the export.
     """
     styles = _styles()
@@ -183,6 +183,9 @@ def render_document(elements: list[dict], workspace_path: str | Path | None = No
             story.append(Spacer(1, 6))
         elif kind == "image":
             story.append(_image_flowable(el, workspace_path))
+            story.append(Spacer(1, 6))
+        elif kind == "caption":
+            story.append(Paragraph(_esc(el.get("text", "")), styles["note"]))
             story.append(Spacer(1, 6))
         elif kind == "notes":
             story.append(Paragraph(_esc(el.get("text", "")), styles["note"]))

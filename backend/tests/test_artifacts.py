@@ -6,6 +6,7 @@ workspace files, never internals.
 """
 
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -278,6 +279,10 @@ async def test_docx_create_inspect_roundtrip(db, workspace, artifact_storage):
     assert "Summary" in info["structure"]["headings"]
     assert info["structure"]["tables"] == 1
     assert info["structure"]["list_items"] == 2
+    # Agent-facing inspect declares the same preview fidelity the operator
+    # preview payload does — structure is exact, previews are approximate.
+    assert info["preview"]["mode"] == "approximate"
+    assert info["preview"]["limitations"] == ["layout", "fonts", "fields", "omitted_features"]
 
 
 async def test_docx_revise_applies_ops_as_new_revision(db, workspace, artifact_storage):
@@ -357,6 +362,63 @@ async def test_corrupt_file_reports_invalid_not_crash(db, workspace, artifact_st
     info = await service.inspect(db, art.id, workspace_path=workspace)
     assert info["valid"] is False
     assert info["errors"]
+    # Fidelity metadata survives invalid files — same as preview payloads.
+    assert info["preview"]["mode"] == "approximate"
+
+
+async def test_inspect_zip_bomb_refuses_safely(db, workspace, artifact_storage, monkeypatch):
+    """A package exceeding expansion bounds is refused with an explicit
+    error — never misreported as valid or corrupt."""
+    import docx as docx_lib
+
+    from agentos import previews
+    from agentos.artifacts import service
+    from agentos.artifacts.service import ArtifactError
+
+    doc = docx_lib.Document()
+    doc.add_paragraph("hi")
+    doc.save(Path(workspace) / "bomb.docx")
+    art, _ = await service.adopt(
+        db,
+        workspace_id="agent-1",
+        workspace_path=workspace,
+        rel_path="bomb.docx",
+        created_by="agent-1",
+    )
+
+    monkeypatch.setattr(previews, "OFFICE_ZIP_MAX_ENTRY_BYTES", 10)
+    with pytest.raises(ArtifactError, match="exceeds safe bounds"):
+        await service.inspect(db, art.id, workspace_path=workspace)
+
+
+async def test_revise_zip_bomb_refuses_safely(db, workspace, artifact_storage, monkeypatch):
+    """Structured revise hits the same expansion guard before parsing."""
+    import docx as docx_lib
+
+    from agentos import previews
+    from agentos.artifacts import service
+    from agentos.artifacts.service import ArtifactError
+
+    doc = docx_lib.Document()
+    doc.add_paragraph("hi")
+    doc.save(Path(workspace) / "memo.docx")
+    art, rev = await service.adopt(
+        db,
+        workspace_id="agent-1",
+        workspace_path=workspace,
+        rel_path="memo.docx",
+        created_by="agent-1",
+    )
+
+    monkeypatch.setattr(previews, "OFFICE_ZIP_MAX_TOTAL_BYTES", 10)
+    with pytest.raises(ArtifactError, match="exceeds safe bounds"):
+        await service.revise_structured(
+            db,
+            art.id,
+            workspace_path=workspace,
+            base_revision_id=rev.id,
+            ops=[{"op": "append_blocks", "blocks": [{"type": "paragraph", "text": "x"}]}],
+        )
 
 
 # --- W2c: XLSX structured generation ---
@@ -471,7 +533,226 @@ async def test_pptx_create_inspect_roundtrip(db, workspace, artifact_storage):
     assert s["charts"] == 1
 
 
-# --- W2e: PDF export + read-only imported PDFs ---
+# --- W2: presentation spec (.deck.json) artifacts ---
+
+
+def _deck_spec(**over):
+    spec = {
+        "kind": "deck",
+        "version": 1,
+        "title": "Q3 Review",
+        "theme": {"background": "#FAFAF7", "accent": "#3F6212", "text": "#1C1917"},
+        "slides": [
+            {
+                "id": "intro",
+                "layout": "title",
+                "title": "Welcome",
+                "blocks": [{"type": "paragraph", "text": "Hello team"}],
+            },
+            {
+                "id": "points",
+                "title": "Highlights",
+                "blocks": [{"type": "bullets", "items": ["a", "b"]}],
+            },
+        ],
+    }
+    spec.update(over)
+    return spec
+
+
+async def test_deck_create_inspect_roundtrip(db, workspace, artifact_storage):
+    from agentos.artifacts import service
+
+    art, rev = await service.create_structured(
+        db,
+        workspace_id="agent-1",
+        workspace_path=workspace,
+        rel_path="review.deck.json",
+        format="deck",
+        spec=_deck_spec(),
+    )
+    assert art.format == "deck"
+    data = await service.revision_bytes(db, rev.id)
+    parsed = json.loads(data)
+    assert parsed["kind"] == "deck"
+    assert parsed["title"] == "Q3 Review"
+    assert [s["id"] for s in parsed["slides"]] == ["intro", "points"]
+
+
+async def test_deck_revise_by_slide_id_and_index(db, workspace, artifact_storage):
+    from agentos.artifacts import service
+
+    art, rev = await service.create_structured(
+        db,
+        workspace_id="agent-1",
+        workspace_path=workspace,
+        rel_path="review.deck.json",
+        format="deck",
+        spec=_deck_spec(),
+    )
+    new_rev = await service.revise_structured(
+        db,
+        art.id,
+        workspace_path=workspace,
+        base_revision_id=rev.id,
+        ops=[
+            {
+                "op": "set_slide",
+                "slide": "points",
+                "value": {
+                    "id": "points",
+                    "title": "New title",
+                    "blocks": [{"type": "paragraph", "text": "rewritten"}],
+                },
+            },
+            {"op": "move_slide", "from": 0, "to": 1},
+        ],
+    )
+    data = json.loads(await service.revision_bytes(db, new_rev.id))
+    assert data["slides"][0]["id"] == "points"
+    assert data["slides"][1]["id"] == "intro"
+    assert data["slides"][0]["title"] == "New title"
+
+
+async def test_deck_revise_missing_id_fails(db, workspace, artifact_storage):
+    from agentos.artifacts import service
+
+    art, rev = await service.create_structured(
+        db,
+        workspace_id="agent-1",
+        workspace_path=workspace,
+        rel_path="review.deck.json",
+        format="deck",
+        spec=_deck_spec(),
+    )
+    import pytest
+
+    with pytest.raises(Exception, match="unknown slide id"):
+        await service.revise_structured(
+            db,
+            art.id,
+            workspace_path=workspace,
+            base_revision_id=rev.id,
+            ops=[{"op": "remove_slide", "slide": "nope"}],
+        )
+
+
+def test_deck_spec_validation():
+    from agentos.artifacts.formats import deck
+
+    with pytest.raises(ValueError, match="version"):
+        deck.build({**_deck_spec(), "version": 99}, "/tmp")
+    with pytest.raises(ValueError, match="theme.accent"):
+        deck.build({**_deck_spec(), "theme": {"accent": "red"}}, "/tmp")
+    with pytest.raises(ValueError, match="exceeds"):
+        deck.build(
+            {**_deck_spec(), "slides": [{"blocks": [{"type": "divider"}]}] * 101},
+            "/tmp",
+        )
+    with pytest.raises(ValueError, match="unknown layout"):
+        deck.build(
+            {**_deck_spec(), "slides": [{"layout": "carousel", "blocks": []}]},
+            "/tmp",
+        )
+    with pytest.raises(ValueError, match="unsupported block"):
+        deck.build(
+            {**_deck_spec(), "slides": [{"blocks": [{"type": "html", "html": "<p>x</p>"}]}]},
+            "/tmp",
+        )
+    with pytest.raises(ValueError, match="duplicate slide id"):
+        deck.build(
+            {
+                **_deck_spec(),
+                "slides": [{"id": "x"}, {"id": "x"}],
+            },
+            "/tmp",
+        )
+    with pytest.raises(ValueError, match="theme font"):
+        deck.build({**_deck_spec(), "theme": {"font": "comic-sans"}}, "/tmp")
+
+
+def _tiny_png() -> bytes:
+    from io import BytesIO
+
+    from PIL import Image
+
+    buf = BytesIO()
+    Image.new("RGB", (2, 2), "red").save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _asset_deck_spec():
+    return {
+        "kind": "deck",
+        "title": "Assets",
+        "slides": [
+            {
+                "id": "s1",
+                "blocks": [
+                    {"type": "image", "src": "assets/logo.png", "alt": "Logo"},
+                    {"type": "paragraph", "text": "below"},
+                ],
+            },
+        ],
+    }
+
+
+def test_deck_workspace_assets_embed(tmp_path):
+    import json as _json
+
+    from agentos.artifacts.formats import deck
+
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "assets" / "logo.png").write_bytes(_tiny_png())
+    data = deck.build(_asset_deck_spec(), tmp_path)
+    spec = _json.loads(data)
+    assert spec["assets"][0]["data_uri"].startswith("data:image/png;base64,")
+    assert spec["assets"][0]["sha256"]
+    info = deck.inspect(data)
+    # Inspect reports inventory metadata — never the embedded bytes.
+    assert "data_uri" not in info["structure"]["assets"][0]
+    assert info["structure"]["assets"][0]["path"] == "assets/logo.png"
+
+
+def test_deck_asset_rejections(tmp_path):
+    import pytest
+
+    from agentos.artifacts.formats import deck
+
+    with pytest.raises(Exception, match="traversal|escape|containment|relative"):
+        deck.build(
+            {
+                "slides": [
+                    {"blocks": [{"type": "image", "src": "../outside.png"}]},
+                ]
+            },
+            tmp_path,
+        )
+    with pytest.raises(Exception):
+        deck.build(
+            {"slides": [{"blocks": [{"type": "image", "src": "missing.png"}]}]},
+            tmp_path,
+        )
+    (tmp_path / "fake.png").write_bytes(b"not an image")
+    with pytest.raises(ValueError, match="unreadable"):
+        deck.build(
+            {"slides": [{"blocks": [{"type": "image", "src": "fake.png"}]}]},
+            tmp_path,
+        )
+
+
+def test_deck_source_is_plain_json_not_html():
+    """The canonical file is JSON — no runtime, no markup, no admission step."""
+    import json as _json
+
+    from agentos.artifacts.formats import deck
+
+    data = deck.build(_deck_spec(), "/tmp")
+    spec = _json.loads(data)
+    assert spec["kind"] == "deck"
+    assert "<script" not in data.decode()
+    assert deck.validate(data)["valid"] is True
+    assert deck.validate(b"{not json")["valid"] is False
 
 
 def _pdf_bytes(pages: int = 2) -> bytes:
@@ -717,6 +998,110 @@ def test_xlsx_build_sets_print_defaults():
     assert ws.page_margins.left == 0.5
 
 
+def test_xlsx_build_rich_styles_merges_and_filter():
+    """Rich cell/sheet styling survives a build → reopen round trip."""
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    from agentos.artifacts.formats import xlsx as xlsx_fmt
+
+    data = xlsx_fmt.build(
+        {
+            "sheets": [
+                {
+                    "name": "Budget",
+                    "rows": [["Item", "Q1"], ["Hosting", 120]],
+                    "cells": {
+                        "A1": {
+                            "value": "Item",
+                            "bold": True,
+                            "fill": "#1F4E79",
+                            "color": "FFFFFF",
+                            "align": "center",
+                            "border": {"style": "thin", "color": "#CCCCCC"},
+                        }
+                    },
+                    "formats": {"B2": {"number_format": "#,##0.00", "align": "right"}},
+                    "merges": ["D1:E1"],
+                    "auto_filter": "A1:B2",
+                    "row_heights": {"1": 28},
+                    "column_widths": {"A": 24},
+                    "freeze": "A2",
+                }
+            ]
+        },
+        ".",
+    )
+    wb = load_workbook(BytesIO(data))
+    ws = wb["Budget"]
+    a1 = ws["A1"]
+    assert a1.font.bold is True
+    assert a1.font.color.rgb == "00FFFFFF"
+    assert a1.fill.fgColor.rgb == "001F4E79"
+    assert a1.alignment.horizontal == "center"
+    assert a1.border.left.style == "thin"
+    assert ws["B2"].number_format == "#,##0.00"
+    assert ws["B2"].alignment.horizontal == "right"
+    assert "D1:E1" in [str(r) for r in ws.merged_cells.ranges]
+    assert ws.auto_filter.ref == "A1:B2"
+    assert ws.row_dimensions[1].height == 28
+    assert ws.column_dimensions["A"].width == 24
+    assert ws.freeze_panes == "A2"
+
+
+def test_xlsx_revise_style_and_layout_ops():
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    from agentos.artifacts.formats import xlsx as xlsx_fmt
+
+    data = xlsx_fmt.build({"sheets": [{"name": "S", "rows": [["h", "v"], [1, 2]]}]}, ".")
+    out = xlsx_fmt.revise(
+        data,
+        [
+            {
+                "op": "style_range",
+                "sheet": "S",
+                "range": "A1:B1",
+                "style": {"bold": True, "fill": "#EEEEEE", "border": "thin"},
+            },
+            {"op": "merge_cells", "sheet": "S", "range": "C1:D1"},
+            {"op": "set_column_width", "sheet": "S", "col": "A", "width": 30},
+            {"op": "set_row_height", "sheet": "S", "row": 3, "height": 22},
+            {"op": "set_auto_filter", "sheet": "S", "ref": "A1:B2"},
+            {"op": "set_freeze", "sheet": "S", "ref": "A2"},
+        ],
+        ".",
+    )
+    ws = load_workbook(BytesIO(out))["S"]
+    assert ws["A1"].font.bold is True
+    assert ws["B1"].fill.fgColor.rgb == "00EEEEEE"
+    assert ws["B1"].border.top.style == "thin"
+    assert "C1:D1" in [str(r) for r in ws.merged_cells.ranges]
+    assert ws.column_dimensions["A"].width == 30
+    assert ws.row_dimensions[3].height == 22
+    assert ws.auto_filter.ref == "A1:B2"
+    assert ws.freeze_panes == "A2"
+
+
+def test_xlsx_rejects_invalid_style_values():
+    from agentos.artifacts.formats import xlsx as xlsx_fmt
+
+    data = xlsx_fmt.build({"sheets": [{"name": "S", "rows": [["x"]]}]}, ".")
+    for bad in (
+        {"op": "style_range", "sheet": "S", "range": "A1:A1", "style": {"align": "diagonal"}},
+        {"op": "style_range", "sheet": "S", "range": "A1:A1", "style": {"border": "wavy"}},
+        {"op": "style_range", "sheet": "S", "range": "A1:A1", "style": {"fill": "not-a-color"}},
+    ):
+        try:
+            xlsx_fmt.revise(data, [bad], ".")
+        except ValueError:
+            continue
+        raise AssertionError(f"expected ValueError for {bad}")
+
+
 async def test_create_structured_lands_under_artifacts_dir(db, workspace, artifact_storage):
     """artifact_create paths are rooted at artifacts/ — the deliverables dir,
     mirroring attachments/ for inputs."""
@@ -877,3 +1262,120 @@ async def test_mediated_restore_adopt_carry_provenance(db, workspace, artifact_s
     assert revs[rev2].call_id == "call-r" and revs[rev2].sub_agent_id == "sub-p"
     assert revs[rev3].call_id == "call-rest" and revs[rev3].source_run_id == "run-prov"
     assert revs[adopt_rev].call_id == "call-a" and revs[adopt_rev].source_run_id == "run-prov"
+
+
+FIXTURES = Path(__file__).parent / "fixtures" / "artifacts"
+
+
+def _fixture_bytes(name: str) -> bytes:
+    return (FIXTURES / name).read_bytes()
+
+
+def test_fixture_pptx_decks_inspect_cleanly():
+    from agentos.artifacts.formats import pptx
+
+    for name in (
+        "analysis-deck.pptx",
+        "analysis-deck-longtitle.pptx",
+        "deck-vietnamese.pptx",
+        "analysis-deck-external-edit.pptx",
+    ):
+        info = pptx.inspect(_fixture_bytes(name))
+        assert info["structure"]["slides"] > 0, name
+
+
+def test_fixture_docx_reports_inspect_cleanly():
+    from agentos.artifacts.formats import docx
+
+    for name in ("report.docx", "report-vietnamese.docx"):
+        info = docx.inspect(_fixture_bytes(name))
+        assert info["structure"]["headings"], name
+        assert docx.validate(_fixture_bytes(name))["valid"], name
+
+
+def test_fixture_xlsx_inspect_reports_sheets_and_formulas():
+    from agentos.artifacts.formats import xlsx
+
+    info = xlsx.inspect(_fixture_bytes("workbook.xlsx"))
+    assert info["structure"]["sheets"] == ["Summary", "Weekly", "Notes"]
+    assert info["structure"]["formulas"] > 0
+
+
+def test_fixture_manifest_covers_all_files():
+    import json
+
+    manifest = json.loads((FIXTURES / "manifest.json").read_text())
+    on_disk = {p.name for p in FIXTURES.iterdir() if p.is_file() and p.name != "manifest.json"}
+    recorded = {f["file"] for f in manifest["files"]}
+    assert on_disk == recorded | {
+        "generate.py",
+        "fixture_variants.py",
+        "figure.png.b85",
+        "README.md",
+    }
+    for entry in manifest["files"]:
+        data = (FIXTURES / entry["file"]).read_bytes()
+        assert hashlib.sha256(data).hexdigest() == entry["sha256"], entry["file"]
+        assert len(data) == entry["bytes"], entry["file"]
+    asset = manifest["asset"]
+    assert hashlib.sha256((FIXTURES / asset["file"]).read_bytes()).hexdigest() == asset["sha256"]
+
+
+async def test_fixture_external_deck_conflict_preserves_both_byte_versions(
+    db, workspace, artifact_storage
+):
+    from agentos.artifacts import service
+
+    original = _fixture_bytes("analysis-deck.pptx")
+    external = _fixture_bytes("analysis-deck-external-edit.pptx")
+    art, revision = await service.create(
+        db,
+        workspace_id="agent-1",
+        workspace_path=workspace,
+        rel_path="deck.pptx",
+        data=original,
+    )
+    target = Path(workspace) / "deck.pptx"
+    target.write_bytes(external)
+    with pytest.raises(service.ArtifactConflictError):
+        await service.revise_structured(
+            db,
+            art.id,
+            workspace_path=workspace,
+            base_revision_id=revision.id,
+            ops=[{"op": "set_title", "slide": 0, "text": "Agent draft must not overwrite"}],
+        )
+    assert target.read_bytes() == external
+    assert await service.revision_bytes(db, revision.id) == original
+    assert len(await service.history(db, art.id)) == 1
+
+
+async def test_fixture_uploaded_workbook_adoption_retains_exact_original(
+    db, workspace, artifact_storage
+):
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    from agentos.artifacts import service
+
+    original = _fixture_bytes("uploaded-features.xlsx")
+    target = Path(workspace) / "uploaded.xlsx"
+    target.write_bytes(original)
+    art, base = await service.adopt(
+        db, workspace_id="agent-1", workspace_path=workspace, rel_path="uploaded.xlsx"
+    )
+    revised = await service.revise_structured(
+        db,
+        art.id,
+        workspace_path=workspace,
+        base_revision_id=base.id,
+        ops=[{"op": "set_cell", "sheet": "Summary", "cell": "B2", "value": 60}],
+    )
+    assert await service.revision_bytes(db, base.id) == original
+    book = load_workbook(BytesIO(await service.revision_bytes(db, revised.id)))
+    assert book["Summary"]["B2"].value == 60
+    assert book["Notes"]["B3"].value == "=SUM(Summary!B2:C2)"
+    assert "WeeklyMetrics" in book["Weekly"].tables
+    assert len(book["Weekly"].data_validations.dataValidation) == 1
+    assert len(book["Weekly"].conditional_formatting) == 1

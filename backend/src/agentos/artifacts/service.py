@@ -7,18 +7,21 @@ managed app data (next to the DB), never in the workspace.
 
 import hashlib
 import os
+import tempfile
 from pathlib import Path
 
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
 from ..models.artifact import Artifact, ArtifactRevision
+from ..previews import OFFICE_LIMITATIONS, office_fidelity, office_zip_error
 from ..sandbox.workspace import resolve_within
 from . import formats
 
 MAX_ARTIFACT_BYTES = 100 * 1024 * 1024
 
-_FORMATS = {"docx", "pptx", "xlsx", "pdf", "docm", "pptm", "xlsm"}
+_FORMATS = {"docx", "pptx", "xlsx", "pdf", "docm", "pptm", "xlsm", "deck"}
 
 
 class ArtifactError(Exception):
@@ -30,12 +33,30 @@ class ArtifactConflictError(ArtifactError):
     silently overwrite an external edit."""
 
 
+def _atomic_write(path: Path, data: bytes) -> None:
+    with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as stream:
+        temporary = Path(stream.name)
+        try:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
+    try:
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def storage_root() -> Path:
     """Managed storage for revision bytes — app data dir, not the workspace."""
     return settings.db_path.parent / "artifacts"
 
 
 def _format_of(rel_path: str) -> str:
+    if rel_path.lower().endswith(".deck.json"):
+        return "deck"
     suffix = Path(rel_path).suffix.lstrip(".").lower()
     return suffix if suffix in _FORMATS else "other"
 
@@ -134,6 +155,18 @@ async def revise(
     if base is None or base.artifact_id != artifact.id:
         raise ArtifactError(f"unknown base revision: {base_revision_id}")
 
+    # A conditional write obtains the database's writer/row lock and rejects
+    # stale bases even when two different revisions contain identical bytes.
+    reservation = await db.execute(
+        update(Artifact)
+        .where(Artifact.id == artifact_id, Artifact.current_revision_id == base_revision_id)
+        .values(current_revision_id=base_revision_id)
+        .execution_options(synchronize_session=False)
+    )
+    if reservation.rowcount != 1:
+        await db.rollback()
+        raise ArtifactConflictError("file changed since base revision — refresh and review")
+
     target = resolve_within(workspace_path, artifact.current_path)
     disk_hash = hashlib.sha256(target.read_bytes()).hexdigest() if target.exists() else None
     if disk_hash != base.content_hash:
@@ -144,7 +177,7 @@ async def revise(
             "preserve-both, capture external version, or discard draft"
         )
 
-    target.write_bytes(data)
+    previous = target.read_bytes()
     revision = await _store_revision(
         db,
         artifact,
@@ -160,7 +193,17 @@ async def revise(
     )
     artifact.current_revision_id = revision.id
     artifact.tracking_status = "tracked"
-    await db.commit()
+    if hashlib.sha256(target.read_bytes()).hexdigest() != base.content_hash:
+        await db.rollback()
+        raise ArtifactConflictError("file changed since base revision during save")
+    _atomic_write(target, data)
+    try:
+        await db.commit()
+    except BaseException:
+        await db.rollback()
+        if target.exists() and target.read_bytes() == data:
+            _atomic_write(target, previous)
+        raise
     return revision
 
 
@@ -211,6 +254,7 @@ async def restore(
     *,
     workspace_path: str | Path,
     revision_id: str,
+    base_revision_id: str | None = None,
     created_by: str | None = None,
     source_run_id: str | None = None,
     source_message_id: str | None = None,
@@ -226,6 +270,25 @@ async def restore(
         raise ArtifactError(f"unknown revision: {revision_id}")
 
     data = await revision_bytes(db, revision_id)
+    if artifact.format == "deck":
+        if base_revision_id is None:
+            raise ArtifactConflictError("deck restore requires the current base_revision_id")
+        validation = formats.get_handler("deck").validate(data)
+        if not validation["valid"]:
+            raise ArtifactError("historical presentation source is invalid")
+        return await revise(
+            db,
+            artifact_id,
+            workspace_path=workspace_path,
+            base_revision_id=base_revision_id,
+            data=data,
+            created_by=created_by,
+            source_run_id=source_run_id,
+            source_message_id=source_message_id,
+            call_id=call_id,
+            sub_agent_id=sub_agent_id,
+            change_summary=change_summary or f"restored revision {target_rev.revision_number}",
+        )
     target = resolve_within(workspace_path, artifact.current_path)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(data)
@@ -349,6 +412,8 @@ async def create_structured(
 ) -> tuple[Artifact, ArtifactRevision]:
     """Build a deliverable from a structured spec (never raw XML) and track
     it — the primary creation path for Office formats."""
+    if format == "deck" and not rel_path.lower().endswith(".deck.json"):
+        raise ArtifactError("deck artifacts must be named *.deck.json")
     try:
         handler = formats.get_handler(format)
     except formats.UnsupportedFormatError as e:
@@ -400,7 +465,21 @@ async def revise_structured(
     if not target.exists():
         raise ArtifactError(f"file missing: {artifact.current_path}")
 
-    new_data = handler.revise(target.read_bytes(), ops, workspace_path)
+    current = target.read_bytes()
+    if artifact.format == "deck":
+        base = await db.get(ArtifactRevision, base_revision_id)
+        if base is None or base.artifact_id != artifact_id:
+            raise ArtifactError(f"unknown base revision: {base_revision_id}")
+        if (
+            artifact.current_revision_id != base_revision_id
+            or hashlib.sha256(current).hexdigest() != base.content_hash
+        ):
+            raise ArtifactConflictError("file changed since base revision — refresh before editing")
+    if artifact.format in OFFICE_LIMITATIONS:
+        zip_err = office_zip_error(current)
+        if zip_err:
+            raise ArtifactError(f"package exceeds safe bounds: {zip_err}")
+    new_data = handler.revise(current, ops, workspace_path)
     return await revise(
         db,
         artifact_id,
@@ -432,6 +511,15 @@ async def inspect(db: AsyncSession, artifact_id: str, *, workspace_path: str | P
         "tracking_status": artifact.tracking_status,
         "current_revision_id": artifact.current_revision_id,
     }
+    # Fidelity declared for previews of this file — structure below is exact,
+    # the preview block says how approximate extracted/rendered views are.
+    if artifact.format in OFFICE_LIMITATIONS:
+        info["preview"] = office_fidelity(artifact.format)
+        zip_err = office_zip_error(data)
+        if zip_err:
+            # Refuse rather than claim validity we can't safely verify —
+            # a package this size is a resource bound, not corruption.
+            raise ArtifactError(f"package exceeds safe bounds: {zip_err}")
     try:
         handler = formats.get_handler(artifact.format)
     except formats.UnsupportedFormatError:

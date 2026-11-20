@@ -392,7 +392,13 @@ class SyscallHandler:
             "sub_agent_id": sub_agent_id,
         }
         if self.restrictions is not None:
-            if call.name in ("read_file", "write_file", "skills_load", "skills_read_resource"):
+            if call.name in (
+                "read_file",
+                "write_file",
+                "edit_file",
+                "skills_load",
+                "skills_read_resource",
+            ):
                 extra_kwargs["skill_edits"] = self.restrictions.skill_edits
             if call.name == "search_history":
                 extra_kwargs["history_scope"] = self.restrictions.history_scope

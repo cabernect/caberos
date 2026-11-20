@@ -162,6 +162,9 @@ class PostgresBackend(DatabaseBackend):
             await conn.execute(text(f'ALTER TABLE model_calls DROP CONSTRAINT "{quoted}"'))
         # Embedding calls moved into the unified model_calls ledger.
         await conn.execute(text("DROP TABLE IF EXISTS embedding_calls"))
+        # Per-offering resolved-history journaling was removed — revision is
+        # now only a change marker on the offering row.
+        await conn.execute(text("DROP TABLE IF EXISTS model_catalog_revisions"))
 
         # W10 ledger indexes — after the additive patches above.
         for index_sql in (

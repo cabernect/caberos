@@ -41,6 +41,11 @@ import time
 from functools import partial
 from pathlib import Path
 
+from ..terminal_environment import (
+    installed_runtime_directories,
+    strict_runtime_roots,
+    workspace_tool_environment,
+)
 from .base import SandboxBackend, ShellResult, kill_process_group
 from .process import collect_process
 
@@ -141,7 +146,7 @@ def _is_under(path: str, roots: list[str]) -> bool:
     return any(normalized == root or normalized.startswith(root + "\\") for root in roots)
 
 
-def _sandbox_path(system_root: str) -> str:
+def _sandbox_path(system_root: str, runtime_roots: tuple[str, ...] = ()) -> str:
     # Windows' own directories come first so `whoami`, `curl`, `find` and friends
     # resolve to the real tools: a host PATH that leads with Git's MSYS `usr\bin`
     # would otherwise pick MSYS builds, which cannot initialise inside the container.
@@ -156,7 +161,10 @@ def _sandbox_path(system_root: str) -> str:
         for name in _READABLE_ROOT_VARS
         if (value := os.environ.get(name) or (system_root if name == "SystemRoot" else None))
     ]
-    for entry in (os.environ.get("PATH") or "").split(_WINDOWS_PATH_SEP):
+    roots.extend(_norm(root) for root in runtime_roots)
+    candidates = (os.environ.get("PATH") or "").split(_WINDOWS_PATH_SEP)
+    candidates.extend(installed_runtime_directories())
+    for entry in candidates:
         if entry and _is_under(entry, roots):
             ordered.append(entry)
 
@@ -178,11 +186,11 @@ def _sandbox_env(workspace: str) -> list[str]:
         if value:
             env[name] = value
     system_root = env.setdefault("SystemRoot", "C:\\Windows")
-    env["PATH"] = _sandbox_path(system_root)
+    env["PATH"] = _sandbox_path(system_root, strict_runtime_roots(workspace))
 
     # Same contract as Seatbelt/bwrap: HOME is the workspace, never the real profile.
     # Tools that keep config (npm, pip, ...) then write somewhere they can.
-    env["HOME"] = workspace
+    env.update(workspace_tool_environment(workspace, windows=True))
     env["USERPROFILE"] = workspace
     env["APPDATA"] = ntpath.join(workspace, "AppData", "Roaming")
     # MXC requires LOCALAPPDATA to be present and derives the container's private
@@ -372,7 +380,11 @@ def _build_config(workspace: str, command: str, allow_network: bool) -> dict:
         "version": "0.6.0-alpha",
         "filesystem": {
             "readwritePaths": [workspace],
-            "readonlyPaths": [system_root, ntpath.join(system_root, "System32")],
+            "readonlyPaths": [
+                system_root,
+                ntpath.join(system_root, "System32"),
+                *strict_runtime_roots(workspace),
+            ],
         },
         "network": {"defaultPolicy": "allow" if allow_network else "block"},
         "ui": _ui_policy(),

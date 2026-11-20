@@ -2,11 +2,11 @@
 
 One offering row per (provider_id, model_id) keeps the provider's own
 observations, the operator's declared overrides, and the last resolved
-view. Resolved revisions are append-only so the effective history of a
-model's fields stays auditable across discovery runs and catalog
-snapshots. Discovery state distinguishes a confirmed-available model,
-a confirmed-unavailable one, and unknown — a failed discovery is never
-flattened into "empty list".
+view. ``revision`` is a change marker for API etags and call-accounting
+provenance; per-offering JSON history rows are not retained. Discovery
+state distinguishes a confirmed-available model, a confirmed-unavailable
+one, and unknown — a failed discovery is never flattened into "empty
+list".
 """
 
 from datetime import datetime
@@ -45,14 +45,3 @@ class ModelCatalogOffering(Base, IdMixin, TimestampMixin):
         DateTime(timezone=True), nullable=True
     )
     revision: Mapped[int] = mapped_column(Integer, default=0)
-
-
-class ModelCatalogRevision(Base):
-    __tablename__ = "model_catalog_revisions"
-    __table_args__ = (UniqueConstraint("offering_id", "revision"),)
-
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    offering_id: Mapped[str] = mapped_column(String(36), index=True)
-    revision: Mapped[int] = mapped_column(Integer)
-    resolved_json: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)

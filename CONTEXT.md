@@ -6,10 +6,61 @@ demonstrated outcomes.
 
 ## Language
 
+**Artifact**:
+A tracked deliverable with an enduring identity and an inspectable revision
+history, distinct from an ordinary untracked workspace file.
+_Avoid_: Treating every preview or attachment as a tracked artifact.
+
+**Artifact Revision**:
+An immutable version of an artifact's source file, attributable to the work
+that produced it.
+_Avoid_: Calling a regenerated preview a new source revision.
+
+**Native Editability**:
+The ability to edit a deliverable's supported text, shapes, tables, and charts
+as individual objects in its intended authoring application.
+_Avoid_: Describing a full-slide image as an editable presentation.
+
+**Rendered Preview**:
+A visual representation of a particular source version's page or slide layout,
+subject to the named renderer's fidelity and font limitations.
+_Avoid_: Treating extracted content as a layout-preserving preview or promising
+identical appearance in every Office application.
+
 **Model Offering**:
 A model exposed through a particular configured provider, under an exact request
 identifier. The same model name through another provider is a different offering.
 _Avoid_: Global model identity inferred from a nickname.
+
+**Tool Connection**:
+An operator-configured connection to a service used by a platform tool or speech
+action, independent of the agent's chat-model choice and capability authority.
+_Avoid_: Treating every service connection as an LLM Model Offering.
+
+**Terminal Execution Location**:
+The local or remote environment selected for a conversation's terminal work,
+distinct from its authoritative workspace and from permission to execute commands.
+_Avoid_: Treating a backend selection as a workspace relocation or authority grant.
+
+**Remote Working Copy**:
+An explicitly transferred working copy of approved workspace files used for
+remote execution; it is not automatically synchronized with the source workspace.
+_Avoid_: Shared mount, backup, or authoritative workspace.
+
+**Dictation**:
+Speech input that becomes an editable chat draft, sent only when the operator
+submits it.
+_Avoid_: Calling record-and-transcribe realtime Voice Mode.
+
+**Read Aloud**:
+Operator-requested spoken playback of an agent reply, with the original reply
+remaining available in chat.
+_Avoid_: An agent-invoked speech tool or automatic narration of every message.
+
+**Voice Mode**:
+The future live, two-way spoken conversation experience in which an agent can
+carry out instructions and ask questions under its existing authority.
+_Avoid_: Treating dictation and Read Aloud alone as realtime speech-to-speech.
 
 **Reported Cost**:
 A monetary amount explicitly reported for a model call, distinct from an amount

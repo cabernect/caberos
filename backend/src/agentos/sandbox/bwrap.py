@@ -8,6 +8,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from ..terminal_environment import strict_runtime_roots, terminal_path, workspace_tool_environment
 from .base import SandboxBackend, ShellResult, kill_process_group
 from .process import collect_process
 
@@ -69,51 +70,70 @@ class BwrapBackend(SandboxBackend):
         self, workspace_path: str, command: str, allow_network: bool = False
     ) -> list[str]:
         workspace = str(Path(workspace_path).resolve())
-        args = [
-            shutil.which("bwrap") or "bwrap",
-            "--clearenv",
-            "--setenv",
-            "PATH",
-            "/usr/bin:/bin",
-            "--setenv",
-            "HOME",
-            "/workspace",
-            "--ro-bind",
-            "/usr",
-            "/usr",
-            "--ro-bind",
-            "/bin",
-            "/bin",
-            "--ro-bind-try",
-            "/lib",
-            "/lib",
-            "--ro-bind-try",
-            "/lib64",
-            "/lib64",
-            "--dev",
-            "/dev",
-            "--proc",
-            "/proc",
-            "--tmpfs",
-            "/tmp",
-            "--bind",
-            workspace,
-            "/workspace",
-            "--chdir",
-            "/workspace",
-            "--unshare-all",
-            "--die-with-parent",
-            "--new-session",
-        ]
+        runtimes = strict_runtime_roots(workspace)
+        args = [shutil.which("bwrap") or "bwrap", "--clearenv"]
+        env = {**self.spawn_env(workspace_path), **workspace_tool_environment("/workspace")}
+        for key, value in env.items():
+            args.extend(["--setenv", key, value])
+        args.extend(
+            [
+                "--ro-bind",
+                "/usr",
+                "/usr",
+                "--ro-bind",
+                "/bin",
+                "/bin",
+                "--ro-bind-try",
+                "/lib",
+                "/lib",
+                "--ro-bind-try",
+                "/lib64",
+                "/lib64",
+                "--dev",
+                "/dev",
+                "--proc",
+                "/proc",
+                "--tmpfs",
+                "/tmp",
+                "--bind",
+                workspace,
+                "/workspace",
+                "--chdir",
+                "/workspace",
+                "--unshare-all",
+                "--die-with-parent",
+                "--new-session",
+            ]
+        )
+        for runtime in runtimes:
+            args.extend(["--ro-bind", runtime, runtime])
         if allow_network:
             args.append("--share-net")
+            # Public resolver/trust configuration only, never the whole host /etc.
+            for path in (
+                "/etc/resolv.conf",
+                "/etc/hosts",
+                "/etc/nsswitch.conf",
+                "/etc/ssl/certs",
+                "/etc/pki/tls/certs",
+                "/etc/pki/ca-trust/extracted",
+            ):
+                args.extend(["--ro-bind-try", path, path])
         args.extend(["/bin/sh", "-c", command])
         return args
 
     def spawn_env(self, workspace_path: str) -> dict[str, str]:
         # --clearenv protects the command; this also protects the launcher.
         workspace = str(Path(workspace_path).resolve())
-        return {"PATH": "/usr/bin:/bin", "HOME": workspace, "TMPDIR": workspace}
+        # Discovery must not create new host mounts or expose home directories.
+        path = terminal_path("/usr/bin:/bin")
+        roots = (*strict_runtime_roots(workspace), "/usr", "/bin", "/lib", "/lib64")
+        path = ":".join(
+            entry
+            for entry in path.split(":")
+            if any(Path(entry).is_relative_to(root) for root in roots)
+        )
+        return {"PATH": path, **workspace_tool_environment(workspace)}
 
     async def run_command(
         self, workspace_path: str, command: str, timeout: int = 30, allow_network: bool = False

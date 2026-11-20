@@ -10,6 +10,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from agentos.dependencies import RuntimeDependencyRegistry
 
 
+@pytest.fixture(autouse=True)
+def explicit_system_discovery(monkeypatch):
+    from agentos.config import settings
+
+    monkeypatch.setattr(settings, "runtime_source", "system")
+
+
 def _runner_ok(versions: dict[str, str]):
     """Runner mock: {path-substring: stdout text}, else exit 0/empty."""
 
@@ -203,9 +210,11 @@ async def test_bad_explicit_override_reports_error(tmp_path, monkeypatch):
     assert "node" in (node["detail"] or "")
 
 
-async def test_system_incompatible_falls_to_managed(tmp_path):
-    """Node 20 system group is incompatible → the managed 24 candidate is
-    health-evaluated next and wins — exact contract, not a set member."""
+async def test_managed_selection_ignores_system_group(tmp_path, monkeypatch):
+    """Managed selection never mixes commands with a system installation."""
+    from agentos.config import settings
+
+    monkeypatch.setattr(settings, "runtime_source", "managed")
     bindir = tmp_path / "bin"
     bindir.mkdir()
     for cmd in ("node", "npm", "npx"):
@@ -494,13 +503,12 @@ async def test_git_shim_blocked_never_probes_usr_bin_git(tmp_path, monkeypatch):
     )
     git = _row(await reg.status(), "git")
     assert "/usr/bin/git" not in calls
-    assert calls == ["/usr/bin/xcode-select", str(f)]
-    assert git["status"] == "ready"
-    assert git["source"] == "managed"
+    assert calls == ["/usr/bin/xcode-select"]
+    assert git["status"] == "missing"
 
 
 async def test_chromium_system_version_not_pinned_claim(tmp_path, monkeypatch):
-    """A system Chrome 149 must not wear the managed 145 pin."""
+    """A system Chrome must not wear the managed-runtime pin."""
     import agentos.browser.runtime as br
 
     monkeypatch.setattr(

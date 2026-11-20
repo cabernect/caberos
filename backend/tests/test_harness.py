@@ -1,6 +1,7 @@
 """Test the harness loop with a scripted model double."""
 
 import asyncio
+import json
 import uuid
 from types import SimpleNamespace
 
@@ -67,7 +68,9 @@ async def test_streaming_model_idle_timeout_ends_stalled_stream(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_harness_reports_stream_timeout_to_the_user(db, workspace):
+async def test_harness_reports_stream_timeout_to_the_user(db, workspace, monkeypatch):
+    monkeypatch.setattr("agentos.harness.loop._MODEL_RETRY_DELAYS_S", (0.0, 0.0))
+
     class TimedOutModel:
         async def complete_stream(self, **_kwargs):
             raise TimeoutError("Model stream was idle for 30s")
@@ -99,6 +102,181 @@ async def test_harness_reports_stream_timeout_to_the_user(db, workspace):
     # message_complete is no longer emitted by the loop — it's emitted by
     # runner.py after the pipeline finishes, with full context metadata.
     # The loop now just returns the result without emitting message_complete.
+
+
+def _retry_test_config() -> AgentConfig:
+    return AgentConfig(
+        id="retry-test",
+        name="Retry Test",
+        model=ModelConfig(provider_id="test", name="scripted"),
+        capabilities=[],
+    )
+
+
+class _FlakyStreamModel(ScriptedModel):
+    """Fails complete_stream a configurable number of times before delegating."""
+
+    def __init__(self, failures: int, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.failures = failures
+        self.calls = 0
+
+    async def complete_stream(self, **kwargs):
+        self.calls += 1
+        if self.calls <= self.failures:
+            raise ConnectionError("network unreachable")
+            yield  # makes this an async generator
+        async for event in super().complete_stream(**kwargs):
+            yield event
+
+
+@pytest.mark.asyncio
+async def test_transient_stream_error_is_retried(db, workspace, monkeypatch):
+    monkeypatch.setattr("agentos.harness.loop._MODEL_RETRY_DELAYS_S", (0.0, 0.0))
+    events = []
+
+    async def emit(event_type, payload):
+        events.append((event_type, payload))
+
+    model = _FlakyStreamModel(1, [ScriptedResponse(content="Recovered")])
+    result = await Harness(model=model).run(
+        agent_config=_retry_test_config(),
+        session=None,
+        message="hi",
+        syscall_handler=StubSyscallHandler(db=db, workspace_path=workspace),
+        run_id=str(uuid.uuid4()),
+        event_emitter=emit,
+    )
+
+    assert result.status == "completed"
+    assert model.calls == 2
+    assert result.final_answer == "Recovered"
+    retry_events = [p for t, p in events if t == "model_retry"]
+    assert len(retry_events) == 1
+    assert retry_events[0]["attempt"] == 2
+    assert retry_events[0]["max_attempts"] == 3
+
+
+@pytest.mark.asyncio
+async def test_transient_errors_exhaust_retries_then_fail(db, workspace, monkeypatch):
+    monkeypatch.setattr("agentos.harness.loop._MODEL_RETRY_DELAYS_S", (0.0, 0.0))
+
+    model = _FlakyStreamModel(10, [ScriptedResponse(content="never")])
+    result = await Harness(model=model).run(
+        agent_config=_retry_test_config(),
+        session=None,
+        message="hi",
+        syscall_handler=StubSyscallHandler(db=db, workspace_path=workspace),
+        run_id=str(uuid.uuid4()),
+    )
+
+    assert result.status == "failed"
+    assert model.calls == 3  # bounded: initial + 2 retries
+
+
+@pytest.mark.asyncio
+async def test_litellm_timeout_is_retried_on_both_paths(db, workspace, monkeypatch):
+    """litellm.Timeout carries status_code=408 and is not a builtin
+    TimeoutError — the classifier must still treat it as transient."""
+    monkeypatch.setattr("agentos.harness.loop._MODEL_RETRY_DELAYS_S", (0.0, 0.0))
+
+    def litellm_timeout():
+        return litellm.Timeout("timed out", model="m", llm_provider="openai")
+
+    class FlakyStream(ScriptedModel):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.calls = 0
+
+        async def complete_stream(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise litellm_timeout()
+                yield
+            async for event in super().complete_stream(**kwargs):
+                yield event
+
+    stream_model = FlakyStream([ScriptedResponse(content="stream ok")])
+    result = await Harness(model=stream_model).run(
+        agent_config=_retry_test_config(),
+        session=None,
+        message="hi",
+        syscall_handler=StubSyscallHandler(db=db, workspace_path=workspace),
+        run_id=str(uuid.uuid4()),
+    )
+    assert result.status == "completed" and stream_model.calls == 2
+
+    class FlakyComplete:
+        def __init__(self):
+            self.calls = 0
+
+        async def complete(self, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise litellm_timeout()
+            return ScriptedResponse(content="complete ok")
+
+    complete_model = FlakyComplete()
+    result = await Harness(model=complete_model).run(
+        agent_config=_retry_test_config(),
+        session=None,
+        message="hi",
+        syscall_handler=StubSyscallHandler(db=db, workspace_path=workspace),
+        run_id=str(uuid.uuid4()),
+    )
+    assert result.status == "completed" and complete_model.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_non_transient_stream_error_is_not_retried(db, workspace, monkeypatch):
+    monkeypatch.setattr("agentos.harness.loop._MODEL_RETRY_DELAYS_S", (0.0, 0.0))
+
+    class AuthModel(ScriptedModel):
+        calls = 0
+
+        async def complete_stream(self, **kwargs):
+            type(self).calls += 1
+            exc = Exception("401 invalid api key")
+            exc.status_code = 401
+            raise exc
+            yield
+
+    result = await Harness(model=AuthModel([])).run(
+        agent_config=_retry_test_config(),
+        session=None,
+        message="hi",
+        syscall_handler=StubSyscallHandler(db=db, workspace_path=workspace),
+        run_id=str(uuid.uuid4()),
+    )
+
+    assert result.status == "failed"
+    assert AuthModel.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_stream_error_after_output_is_not_retried(db, workspace, monkeypatch):
+    """Once deltas have reached the UI, restarting would duplicate them —
+    the run fails honestly instead."""
+    monkeypatch.setattr("agentos.harness.loop._MODEL_RETRY_DELAYS_S", (0.0, 0.0))
+
+    class MidStreamFailModel(ScriptedModel):
+        calls = 0
+
+        async def complete_stream(self, **kwargs):
+            type(self).calls += 1
+            yield "thinking", "partial reasoning"
+            raise ConnectionError("connection reset mid-stream")
+
+    result = await Harness(model=MidStreamFailModel([])).run(
+        agent_config=_retry_test_config(),
+        session=None,
+        message="hi",
+        syscall_handler=StubSyscallHandler(db=db, workspace_path=workspace),
+        run_id=str(uuid.uuid4()),
+    )
+
+    assert result.status == "failed"
+    assert MidStreamFailModel.calls == 1
 
 
 def test_base_system_prompt_present():
@@ -476,6 +654,157 @@ async def test_chat_stream_extracts_reasoning_tokens(monkeypatch):
     assert final is not None
     # Explicit 0 from the usage chunk is preserved, not reported as missing.
     assert final.thinking_tokens == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api", ["chat", "responses"])
+@pytest.mark.parametrize("tool_name", ["write_file", "mcp.editor.write_file"])
+async def test_tool_progress_arrives_before_arguments_are_generated(monkeypatch, api, tool_name):
+    """A long file body must not hide the tool name until generation finishes."""
+    args = {"path": "deck.html", "content": "private document content " * 500}
+    encoded = json.dumps(args)
+    wire_name = tool_name.replace(".", "_")
+    produced = []
+
+    async def events():
+        produced.append("name")
+        if api == "chat":
+            yield SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(
+                            content=None,
+                            tool_calls=[
+                                SimpleNamespace(
+                                    index=0,
+                                    id="call-1",
+                                    function=SimpleNamespace(name=wire_name, arguments=""),
+                                )
+                            ],
+                        )
+                    )
+                ],
+            )
+        else:
+            yield SimpleNamespace(
+                type="response.output_item.added",
+                item=SimpleNamespace(
+                    type="function_call", id="item-1", call_id="call-1", name=wire_name
+                ),
+            )
+        for part in (encoded[:2000], encoded[2000:6500], encoded[6500:]):
+            produced.append("arguments")
+            if api == "chat":
+                yield SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            delta=SimpleNamespace(
+                                content=None,
+                                tool_calls=[
+                                    SimpleNamespace(
+                                        index=0,
+                                        id=None,
+                                        function=SimpleNamespace(name=None, arguments=part),
+                                    )
+                                ],
+                            )
+                        )
+                    ],
+                )
+            else:
+                yield SimpleNamespace(
+                    type="response.function_call_arguments.delta", item_id="item-1", delta=part
+                )
+        if api == "responses":
+            yield SimpleNamespace(type="response.completed", response=_responses_response(0))
+
+    transport = _FakeTransport(completion=events, responses=events)
+    adapter = LiteLLMAdapter(db=None, transport=transport)
+
+    async def load_provider(_id):
+        return _CHAT_PROVIDER if api == "chat" else _RESPONSES_PROVIDER
+
+    monkeypatch.setattr(adapter, "_load_provider", load_provider)
+    stream = adapter.complete_stream(
+        agent_model=ModelConfig(provider_id="p", name="m"),
+        messages=[{"role": "user", "content": "Create a presentation"}],
+        tools=[{"type": "function", "function": {"name": tool_name, "parameters": {}}}],
+    )
+    try:
+        kind, progress = await anext(stream)
+        assert kind == "tool_call_progress"
+        assert produced == ["name"]
+        assert progress["name"] == tool_name
+        assert progress["args_chars"] == 0
+        remaining = [event async for event in stream]
+        updates = [payload for kind, payload in remaining if kind == "tool_call_progress"]
+        assert updates
+        assert updates[-1]["args_chars"] > 4096
+        assert all(update["name"] == tool_name for update in updates)
+        assert "private document content" not in repr(updates)
+        final = next(payload for kind, payload in remaining if kind == "done")
+        assert final.tool_calls == [{"id": "call-1", "name": tool_name, "args": args}]
+    finally:
+        await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_harness_streams_preparation_without_executing_an_incomplete_call():
+    release_arguments = asyncio.Event()
+    preparing = asyncio.Event()
+    calls = []
+    args = {"path": "deck.html", "content": "<h1>Complete document</h1>"}
+
+    class PreparingModel(ScriptedModel):
+        async def complete_stream(self, **kwargs):
+            if self._index == 0:
+                yield "tool_call_progress", {"index": 0, "name": "write_file", "args_chars": 0}
+                await release_arguments.wait()
+            async for event in super().complete_stream(**kwargs):
+                yield event
+
+    class RecordingSyscall:
+        async def mediate(self, call, **kwargs):
+            calls.append(call)
+            return SyscallResult(output={"success": True}, allowed=True)
+
+    async def emit(event_type, payload):
+        if event_type == "tool_call_progress":
+            preparing.set()
+
+    model = PreparingModel(
+        [
+            ScriptedResponse(tool_calls=[{"id": "call-1", "name": "write_file", "args": args}]),
+            ScriptedResponse(content="done"),
+        ]
+    )
+    task = asyncio.create_task(
+        Harness(model=model).run(
+            agent_config=AgentConfig(
+                id="preparation-test",
+                name="Preparation Test",
+                model=ModelConfig(provider_id="test", name="scripted"),
+                capabilities=[CapabilityGrant(name="write_file", require_approval=False)],
+            ),
+            session=None,
+            message="Create a presentation",
+            syscall_handler=RecordingSyscall(),
+            run_id=str(uuid.uuid4()),
+            event_emitter=emit,
+        )
+    )
+    try:
+        await asyncio.wait_for(preparing.wait(), timeout=5)
+        assert not task.done()
+        assert calls == []
+        release_arguments.set()
+        result = await asyncio.wait_for(task, timeout=5)
+        assert result.status == "completed"
+        assert len(calls) == 1
+        assert calls[0].args == args
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.mark.asyncio

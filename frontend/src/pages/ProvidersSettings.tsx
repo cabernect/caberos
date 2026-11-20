@@ -4794,7 +4794,7 @@ export function ToolsTab({ providers }: { providers: Provider[] }) {
   }
 
   return (
-    <div className="max-w-3xl space-y-4">
+    <div className="max-w-4xl space-y-4">
       {error && (
         <p className="rounded-md border border-[var(--danger)]/30 bg-[var(--danger)]/10 px-3 py-2 text-sm text-[var(--danger)]">
           {error}

@@ -109,6 +109,10 @@ export function describeCall(
       const path = str(args?.path);
       return path ? `Wrote ${path}` : "Wrote a file";
     }
+    case "edit_file": {
+      const path = str(args?.path);
+      return path ? `Edited ${path}` : "Edited a file";
+    }
     case "search_files": {
       const mode = str(args?.mode);
       const target = str(args?.query ?? args?.pattern ?? args?.path);

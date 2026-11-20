@@ -15,9 +15,25 @@ def build(spec: dict, workspace_path: str | Path) -> bytes:
     from ..pdf_render import render_document
 
     elements: list[dict] = []
-    if title := spec.get("title"):
+    title = spec.get("title")
+    blocks = spec.get("blocks", [])
+    has_cover = any(isinstance(b, dict) and b.get("type") == "cover" for b in blocks)
+    if title and not has_cover:
         elements.append({"type": "heading", "text": title, "level": 1})
-    elements.extend(spec.get("blocks", []))
+    for block in blocks:
+        kind = block.get("type") if isinstance(block, dict) else None
+        if kind == "cover":
+            # PDF has no cover-page concept — render as heading + subtitle.
+            cover_title = block.get("title") or title
+            if cover_title:
+                elements.append({"type": "heading", "text": cover_title, "level": 1})
+            if block.get("subtitle"):
+                elements.append({"type": "paragraph", "text": block["subtitle"]})
+            elements.append({"type": "page_break"})
+        elif kind == "section_break":
+            elements.append({"type": "page_break"})
+        else:
+            elements.append(block)
     return render_document(elements, workspace_path)
 
 

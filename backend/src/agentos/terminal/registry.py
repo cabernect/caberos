@@ -34,6 +34,7 @@ from ..models.terminal import TerminalSession
 from ..sandbox import get_backend
 from ..sandbox.base import SandboxBackend, SandboxLaunch, kill_process_group
 from ..sandbox.process import OUTPUT_CAP_BYTES, drain_output
+from ..terminal_environment import open_terminal_environment, prepare_terminal_runtimes
 from .resolution import resolve_terminal_backend
 from .transport import LOCAL_TRANSPORT, SpawnedProcess, TerminalTransport
 
@@ -106,12 +107,13 @@ class TerminalRegistry:
         backend = None
         launch = None
         binding_revision = None
+        await prepare_terminal_runtimes()
         if sandbox_mode == "open":
             argv = open_mode_shell(command)
-            env = None
+            env = open_terminal_environment()
         else:
             backend, binding_revision = await resolve_terminal_backend(db, native=get_backend)
-            launch = backend.plan_launch(workspace_path, command)
+            launch = backend.plan_launch(workspace_path, command, allow_network=True)
             argv, env = launch.argv, launch.env
 
         row = TerminalSession(

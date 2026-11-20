@@ -16,6 +16,7 @@ import csv
 import io
 import json
 import mimetypes
+import zipfile
 from pathlib import Path
 
 # Bounds — generous for real files, hard enough to keep panels snappy.
@@ -30,6 +31,26 @@ ELEMENT_IMAGES_MAX = 20
 ELEMENT_IMAGE_MAX_BYTES = 3 * 1024 * 1024
 PDF_PAGE_SCALE = 1.5
 
+# Bump when extraction/render semantics change so caches and consumers can
+# tell which preview implementation produced a payload.
+PREVIEW_VERSION = "2026-11-deck-motion-v1"
+
+# Office packages are ZIPs — the input cap bounds compressed bytes, but a
+# small archive can expand without limit inside the Office parsers. Bound
+# expansion before any docx/pptx/xlsx parse (preview, inspect, revise, and
+# agent read_file all share this guard).
+OFFICE_ZIP_MAX_ENTRIES = 512
+OFFICE_ZIP_MAX_ENTRY_BYTES = 64 * 1024 * 1024
+OFFICE_ZIP_MAX_TOTAL_BYTES = 256 * 1024 * 1024
+
+# Approximate Office previews are extracted-content views — stable limitation
+# codes per the preview contract; the operator-facing copy keys off these.
+OFFICE_LIMITATIONS = {
+    "docx": ["layout", "fonts", "fields", "omitted_features"],
+    "pptx": ["layout", "fonts", "effects", "omitted_features"],
+    "xlsx": ["formatting", "omitted_features", "formula_evaluation"],
+}
+
 _MARKDOWN = {".md", ".markdown", ".mdx"}
 _CODE = {
     ".py": "python",
@@ -39,6 +60,7 @@ _CODE = {
     ".tsx": "tsx",
     ".css": "css",
     ".html": "html",
+    ".htm": "html",
     ".xml": "xml",
     ".yaml": "yaml",
     ".yml": "yaml",
@@ -87,6 +109,8 @@ _MIME_OVERRIDES = {
 
 def classify(name: str) -> str:
     """Filename → preview kind."""
+    if name.lower().endswith(".deck.json"):
+        return "deck"
     suffix = Path(name).suffix.lower()
     if suffix in _MARKDOWN:
         return "markdown"
@@ -130,9 +154,75 @@ def preview_bytes(data: bytes, name: str) -> dict:
     """Bytes → bounded preview payload keyed by kind."""
     kind = classify(name)
     size = len(data)
-    base = {"kind": kind, "size": size, "name": Path(name).name}
+    base = {
+        "kind": kind,
+        "size": size,
+        "name": Path(name).name,
+        "preview_version": PREVIEW_VERSION,
+    }
     if size > PREVIEW_MAX_BYTES:
         return {**base, "kind": "unknown", "too_large": True, "mime": media_type(name)}
+
+    if kind == "deck":
+        # Canonical presentation source — the panel renders the spec
+        # directly; there is no generated-HTML admission step anymore.
+        import json as _json
+
+        from .artifacts.deck_spec import normalize as _norm_deck
+
+        text = data.decode("utf-8", errors="replace")
+        try:
+            raw = _json.loads(text)
+            spec = _norm_deck(raw)
+        except (ValueError, TypeError):
+            spec = None
+        if spec is None:
+            return {
+                **base,
+                "kind": "code",
+                "content": text[:TEXT_CHARS],
+                "truncated": len(text) > TEXT_CHARS,
+                "language": "json",
+            }
+        assets = raw.get("assets") or []
+        # Image snapshots are needed to render slides, but a deck can pin
+        # tens of MB — strip the payload past a sane preview budget and
+        # flag it rather than shipping a multi-MB JSON response.
+        encoded = sum(len(str(a.get("data_uri", ""))) for a in assets)
+        if encoded > 8 * 1024 * 1024:
+            assets = [
+                {k: v for k, v in a.items() if k != "data_uri"} | {"data_uri": ""} for a in assets
+            ]
+            spec["assets_truncated"] = True
+        spec["assets"] = assets
+        return {
+            **base,
+            "kind": "deck",
+            "spec": spec,
+            # Raw source for the panel's Source view — like every other
+            # text kind, capped at TEXT_CHARS (embedded image snapshots
+            # can push past it; `truncated` says so honestly).
+            "content": text[:TEXT_CHARS],
+            "truncated": len(text) > TEXT_CHARS,
+            "language": "json",
+        }
+
+    if name.lower().endswith((".html", ".htm")):
+        # Ordinary HTML is a static page preview — scripts, navigation and
+        # external/local asset loading are disabled by sanitizer + CSP.
+        from .html_preview import static_html_document
+
+        text = data.decode("utf-8", errors="replace")
+        truncated = len(text) > TEXT_CHARS
+        return {
+            **base,
+            "kind": "html",
+            "content": text[:TEXT_CHARS],
+            "language": "html",
+            "truncated": truncated,
+            # Never render a cut-off HTML token as if it were a complete page.
+            "html_document": None if truncated else static_html_document(text),
+        }
 
     if kind in ("markdown", "code", "text"):
         text = data.decode("utf-8", errors="replace")
@@ -160,15 +250,70 @@ def preview_bytes(data: bytes, name: str) -> dict:
         return {**base, "mime": media_type(name), "svg": name.lower().endswith(".svg")}
     if kind == "pdf":
         return {**base, **_preview_pdf(data)}
-    if kind == "document":
-        return {**base, "format": "docx", **_preview_office(data, "docx")}
-    if kind == "slides":
-        return {**base, "format": "pptx", **_preview_slides(data)}
-    if kind == "workbook":
-        return {**base, "format": "xlsx", **_preview_workbook(data)}
+    if kind in ("document", "slides", "workbook"):
+        return _office_preview(base, kind, data)
     if kind == "media":
         return {**base, "media": _media_kind(name), "mime": media_type(name)}
     return {**base, "mime": media_type(name)}
+
+
+def office_fidelity(fmt: str) -> dict:
+    """Office formats share the approximate-fidelity marker + stable codes.
+
+    Same contract on every consumer surface — operator preview payloads and
+    agent-facing extraction/inspection results declare the same mode and
+    limitation codes so neither overstates fidelity.
+    """
+    return {"mode": "approximate", "limitations": OFFICE_LIMITATIONS[fmt]}
+
+
+def office_zip_error(data: bytes) -> str | None:
+    """Bound Office package expansion before the ZIP reaches a parser.
+
+    Returns an error string when the archive exceeds safe bounds; None when
+    it is within limits or is not a ZIP at all — corrupt/non-ZIP input is
+    left for the real parser to report honestly.
+    """
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            infos = zf.infolist()
+    except zipfile.BadZipFile:
+        return None
+    if len(infos) > OFFICE_ZIP_MAX_ENTRIES:
+        return f"package has {len(infos)} entries (limit {OFFICE_ZIP_MAX_ENTRIES})"
+    total = 0
+    for info in infos:
+        if info.file_size > OFFICE_ZIP_MAX_ENTRY_BYTES:
+            return (
+                f"entry {info.filename!r} expands to {info.file_size} bytes "
+                f"(limit {OFFICE_ZIP_MAX_ENTRY_BYTES})"
+            )
+        total += info.file_size
+        if total > OFFICE_ZIP_MAX_TOTAL_BYTES:
+            return f"package expands beyond {OFFICE_ZIP_MAX_TOTAL_BYTES} bytes"
+    return None
+
+
+def _office_preview(base: dict, kind: str, data: bytes) -> dict:
+    """One Office preview seam — expansion guard, then the per-format
+    extractor. Error payloads keep the same shape the extractors use."""
+    fmt = {"document": "docx", "slides": "pptx", "workbook": "xlsx"}[kind]
+    err = office_zip_error(data)
+    if err:
+        return {
+            **base,
+            "format": fmt,
+            "elements": [],
+            "error": f"package exceeds safe bounds: {err}"[:300],
+            **office_fidelity(fmt),
+        }
+    if kind == "document":
+        body = _preview_office(data, "docx")
+    elif kind == "slides":
+        body = _preview_slides(data)
+    else:
+        body = _preview_workbook(data)
+    return {**base, "format": fmt, **office_fidelity(fmt), **body}
 
 
 def _preview_table(data: bytes, name: str) -> dict:
@@ -318,39 +463,96 @@ def _preview_slides(data: bytes) -> dict:
 
 
 def _preview_workbook(data: bytes) -> dict:
-    """XLSX → sheets with bounded row grids. Formula cells surface their
+    """XLSX → sheets as bounded styled grids. Formula cells surface their
     formula string — openpyxl never evaluates, same honesty contract as
-    the artifact inspect handler."""
+    the artifact inspect handler. Styles are a compact subset (bold, italic,
+    font/fill color, alignment, number format) — enough for a faithful cell
+    view, not a claim of Excel layout fidelity."""
     from openpyxl import load_workbook
+    from openpyxl.utils import get_column_letter
 
     try:
-        wb = load_workbook(io.BytesIO(data), read_only=True)
+        wb = load_workbook(io.BytesIO(data))
     except Exception as e:
         return {"sheets": [], "error": f"workbook unreadable: {e}"[:300]}
     sheets = []
     for ws in wb.worksheets:
-        # read_only worksheets may lack a declared dimension — fall back to
-        # the bound (rstrip removes the padding it produces).
-        max_col = min(ws.max_column, XLSX_MAX_COLS) if ws.max_column else XLSX_MAX_COLS
-        rows: list[list] = []
-        for row in ws.iter_rows(max_row=XLSX_MAX_ROWS, max_col=max_col):
-            vals = [_json_safe(c.value) for c in row]
-            while vals and vals[-1] is None:
-                vals.pop()  # rstrip trailing empties — jagged rows, not padding
-            rows.append(vals)
-        while rows and not rows[-1]:
-            rows.pop()  # drop empty tail rows
+        true_rows = ws.max_row or 0
+        true_cols = ws.max_column or 0
+        max_col = min(true_cols, XLSX_MAX_COLS) if true_cols else XLSX_MAX_COLS
+        grid: list[list] = []
+        for row in ws.iter_rows(
+            max_row=min(true_rows, XLSX_MAX_ROWS) or XLSX_MAX_ROWS, max_col=max_col
+        ):
+            cells = []
+            for c in row:
+                if c.value is None:
+                    cells.append(None)
+                    continue
+                entry: dict = {"v": _json_safe(c.value)}
+                style = _cell_style(c)
+                if style:
+                    entry["s"] = style
+                cells.append(entry)
+            # rstrip trailing empties — jagged rows, not padding
+            while cells and cells[-1] is None:
+                cells.pop()
+            grid.append(cells)
+        while grid and not grid[-1]:
+            grid.pop()
+        col_widths = {}
+        for col, dim in ws.column_dimensions.items():
+            if dim.width:
+                col_widths[get_column_letter(col) if isinstance(col, int) else col] = dim.width
+        features = {
+            "tables": sorted(ws.tables.keys()),
+            "charts": len(ws._charts),
+            "data_validations": len(ws.data_validations.dataValidation),
+            "conditional_formats": sum(len(r.rules) for r in ws.conditional_formatting),
+        }
         sheets.append(
             {
                 "name": ws.title,
-                "rows": rows,
-                "row_count": ws.max_row or 0,
-                "truncated": (ws.max_row or 0) > XLSX_MAX_ROWS
-                or (ws.max_column or 0) > XLSX_MAX_COLS,
+                "grid": grid,
+                "row_count": true_rows,
+                "col_count": true_cols,
+                "merges": [str(r) for r in ws.merged_cells.ranges],
+                "freeze": str(ws.freeze_panes) if ws.freeze_panes else None,
+                "col_widths": col_widths,
+                "features": features,
+                "truncated": true_rows > XLSX_MAX_ROWS or true_cols > XLSX_MAX_COLS,
             }
         )
     wb.close()
     return {"sheets": sheets, "formulas_recalculated": False}
+
+
+def _cell_style(cell) -> dict:
+    """Compact style dict for preview cells — only non-default attributes."""
+    s: dict = {}
+    f = cell.font
+    if f.bold:
+        s["b"] = True
+    if f.italic:
+        s["i"] = True
+    if f.sz and f.sz != 11:
+        s["sz"] = f.sz
+    if f.color and f.color.type == "rgb" and f.color.rgb not in (None, "00000000", "FF000000"):
+        rgb = str(f.color.rgb)
+        s["c"] = f"#{rgb[-6:]}"
+    fill = cell.fill
+    if fill and fill.fill_type == "solid" and fill.fgColor and fill.fgColor.type == "rgb":
+        rgb = str(fill.fgColor.rgb)
+        if rgb not in (None, "00000000"):
+            s["f"] = f"#{rgb[-6:]}"
+    if cell.alignment:
+        if cell.alignment.horizontal and cell.alignment.horizontal != "general":
+            s["a"] = cell.alignment.horizontal
+        if cell.alignment.wrap_text:
+            s["w"] = True
+    if cell.number_format and cell.number_format != "General":
+        s["n"] = cell.number_format
+    return s
 
 
 def _json_safe(value):

@@ -1,0 +1,5 @@
+@page { size: 1280px 720px; margin: 0; }
+html, body, #root { margin: 0; padding: 0; width: 1280px; background: white; }
+.deck-print-slide { width: 1280px; height: 720px; overflow: hidden; break-after: page; }
+.deck-print-slide:last-child { break-after: auto; }
+* { print-color-adjust: exact; -webkit-print-color-adjust: exact; }

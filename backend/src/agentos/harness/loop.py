@@ -92,6 +92,42 @@ def _is_context_overflow(err: Exception) -> bool:
     return any(p in msg for p in _CONTEXT_OVERFLOW_PATTERNS)
 
 
+# Backoff before each retry — one entry per retry, so 3 attempts total.
+_MODEL_RETRY_DELAYS_S = (2.0, 8.0)
+_TRANSIENT_ERROR_NAMES = frozenset(
+    {
+        "APIConnectionError",
+        "APITimeoutError",
+        "Timeout",
+        "ConnectError",
+        "ConnectTimeout",
+        "ReadTimeout",
+        "RemoteProtocolError",
+        "ReadError",
+        "WriteError",
+        "PoolTimeout",
+        "NetworkError",
+        "ServiceUnavailableError",
+        "InternalServerError",
+        "BadGatewayError",
+        "GatewayTimeout",
+    }
+)
+
+
+def _is_transient_model_error(err: BaseException) -> bool:
+    """Network/5xx/429 failures worth retrying — auth, context overflow and
+    request-shape errors are not. Timeout/connection classes are checked
+    before status_code: litellm.Timeout reports 408 and is not a builtin
+    TimeoutError."""
+    if isinstance(err, (TimeoutError, ConnectionError)):
+        return True
+    status = getattr(err, "status_code", None)
+    if isinstance(status, int):
+        return status in (408, 429) or status >= 500
+    return type(err).__name__ in _TRANSIENT_ERROR_NAMES
+
+
 class ApprovalBatch:
     """Barrier for all calls emitted by one model turn."""
 
@@ -416,6 +452,32 @@ class Harness:
         )
 
         _failed_auto_fingerprints: set[str] = set()
+        _compaction_runs: list[Any] = []
+
+        async def _mint_compaction_run() -> str | None:
+            """Auto/forced compaction is session maintenance, not parent-run
+            work — give its summary call a standalone compaction Run so
+            traces show it separately. Falls back to the parent run id when
+            no DB session is available (transient/sub-agent conversations)."""
+            from ..models.run import Run
+
+            _db = getattr(syscall_handler, "db", None)
+            sess_id = getattr(session, "id", None)
+            contact_id = getattr(session, "contact_id", None)
+            if _db is None or sess_id is None or not contact_id:
+                return run_id
+            compact_run = Run(
+                session_id=sess_id,
+                agent_id=agent_config.id,
+                contact_id=contact_id,
+                status="running",
+                trigger="compaction",
+            )
+            _db.add(compact_run)
+            await _db.flush()
+            await _db.commit()
+            _compaction_runs.append(compact_run)
+            return compact_run.id
 
         def _conv_fingerprint() -> str:
             h = hashlib.sha256()
@@ -457,11 +519,22 @@ class Harness:
                 resolved_model=resolved_model,
                 accounting=accounting,
                 reserved_tokens=reserved,
-                run_id=run_id,
                 session_id=getattr(session, "id", None),
                 source_ids=list(conversation.source_ids),
                 protected_tail_start=_protected_tail_index(),
+                run_id=None,
+                run_id_resolver=_mint_compaction_run,
             )
+            if _compaction_runs:
+                from datetime import UTC, datetime
+
+                _cdb = getattr(syscall_handler, "db", None)
+                for _cr in _compaction_runs:
+                    _cr.status = "failed" if cr.error else "completed"
+                    _cr.completed_at = datetime.now(UTC)
+                _compaction_runs.clear()
+                if _cdb is not None:
+                    await _cdb.commit()
             # The result always renders the summary exactly once + originals
             history = history[:1] + list(cr.messages)
             if cr.error:
@@ -640,10 +713,8 @@ class Harness:
                             agent_config, history, tool_schemas, event_emitter
                         )
                     else:
-                        response: ScriptedResponse = await self.model.complete(
-                            agent_model=agent_config.model,
-                            messages=history,
-                            tools=tool_schemas,
+                        response: ScriptedResponse = await self._complete_with_retry(
+                            agent_config, history, tool_schemas, event_emitter
                         )
                         # Emit thinking if present (non-streaming path)
                         if response.thinking and event_emitter:
@@ -1044,6 +1115,9 @@ class Harness:
                             "cost": response.cost,
                             "loaded_capabilities": list(result.loaded_capabilities),
                             "context_breakdown": dict(result.context_breakdown),
+                            "context_tokens": result.context_tokens,
+                            "max_context_tokens": result.max_context_tokens,
+                            "compacted": result.compacted,
                         },
                     )
 
@@ -1095,6 +1169,9 @@ class Harness:
                         "cost": response.cost,
                         "loaded_capabilities": list(result.loaded_capabilities),
                         "context_breakdown": dict(result.context_breakdown),
+                        "context_tokens": result.context_tokens,
+                        "max_context_tokens": result.max_context_tokens,
+                        "compacted": result.compacted,
                     },
                 )
 
@@ -1273,6 +1350,50 @@ class Harness:
             result = await result
         return result
 
+    async def _emit_model_retry(
+        self, event_emitter: EventEmitter, attempt: int, delay_s: float
+    ) -> None:
+        """Tell the UI a transient model-call failure is being retried."""
+        await self._emit(
+            event_emitter,
+            "model_retry",
+            {
+                "attempt": attempt + 2,
+                "max_attempts": len(_MODEL_RETRY_DELAYS_S) + 1,
+                "delay_s": delay_s,
+            },
+        )
+
+    async def _complete_with_retry(
+        self,
+        agent_config: AgentConfig,
+        history: list[dict[str, str]],
+        tool_schemas: list[dict[str, Any]],
+        event_emitter: EventEmitter,
+    ) -> ScriptedResponse:
+        """Non-streaming complete with bounded retry on transient errors.
+        Safe to retry — nothing is emitted or executed until it returns."""
+        for attempt in range(len(_MODEL_RETRY_DELAYS_S) + 1):
+            try:
+                return await self.model.complete(
+                    agent_model=agent_config.model,
+                    messages=history,
+                    tools=tool_schemas,
+                )
+            except Exception as e:
+                if attempt == len(_MODEL_RETRY_DELAYS_S) or not _is_transient_model_error(e):
+                    raise
+                delay = _MODEL_RETRY_DELAYS_S[attempt]
+                logger.warning(
+                    "Transient model error (attempt %d), retrying in %.0fs: %s",
+                    attempt + 1,
+                    delay,
+                    str(e)[:200],
+                )
+                await self._emit_model_retry(event_emitter, attempt, delay)
+                await asyncio.sleep(delay)
+        raise AssertionError("unreachable")
+
     async def _call_streaming(
         self,
         agent_config: AgentConfig,
@@ -1280,19 +1401,46 @@ class Harness:
         tool_schemas: list[dict[str, Any]],
         event_emitter: EventEmitter,
     ) -> ScriptedResponse:
-        """Call the model with streaming, emitting token/thinking events as they arrive."""
+        """Call the model with streaming, emitting token/thinking events as they arrive.
+
+        Retries transient failures only before the first delta reaches the
+        UI — once content has streamed, restarting would duplicate it."""
         response: ScriptedResponse | None = None
-        async for delta_type, content in self.model.complete_stream(
-            agent_model=agent_config.model,
-            messages=history,
-            tools=tool_schemas,
-        ):
-            if delta_type == "token" and event_emitter:
-                await self._emit(event_emitter, "token", {"content": content})
-            elif delta_type == "thinking" and event_emitter:
-                await self._emit(event_emitter, "thinking", {"content": content})
-            elif delta_type == "done":
-                response = content
+        emitted_output = False
+        for attempt in range(len(_MODEL_RETRY_DELAYS_S) + 1):
+            try:
+                async for delta_type, content in self.model.complete_stream(
+                    agent_model=agent_config.model,
+                    messages=history,
+                    tools=tool_schemas,
+                ):
+                    if delta_type in ("token", "thinking", "tool_call_progress"):
+                        emitted_output = True
+                    if delta_type == "token" and event_emitter:
+                        await self._emit(event_emitter, "token", {"content": content})
+                    elif delta_type == "thinking" and event_emitter:
+                        await self._emit(event_emitter, "thinking", {"content": content})
+                    elif delta_type == "tool_call_progress" and event_emitter:
+                        await self._emit(event_emitter, "tool_call_progress", content)
+                    elif delta_type == "done":
+                        response = content
+                break
+            except Exception as e:
+                if (
+                    emitted_output
+                    or attempt == len(_MODEL_RETRY_DELAYS_S)
+                    or not _is_transient_model_error(e)
+                ):
+                    raise
+                delay = _MODEL_RETRY_DELAYS_S[attempt]
+                logger.warning(
+                    "Transient model stream error (attempt %d), retrying in %.0fs: %s",
+                    attempt + 1,
+                    delay,
+                    str(e)[:200],
+                )
+                await self._emit_model_retry(event_emitter, attempt, delay)
+                await asyncio.sleep(delay)
 
         if response is None:
             raise RuntimeError("Streaming ended without a 'done' event")

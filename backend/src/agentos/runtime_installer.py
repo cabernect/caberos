@@ -327,7 +327,7 @@ class RuntimeInstaller:
                 )
             label = DEPENDENCIES.get(dep_id, {}).get("label", dep_id)
             unlocks = DEPENDENCIES.get(dep_id, {}).get("unlocks", "")
-            if existing.get("status") == "ready":
+            if existing.get("status") == "ready" and existing.get("source") == "managed":
                 row = {
                     "id": dep_id,
                     "label": label,

@@ -33,8 +33,12 @@ Prefer deep modules with small interfaces over per-caller path/policy logic.
 | Shared-folder authorization | Per-agent operator grant, not ambient path reuse | Second agent attachment |
 | Tabular query bounds | Typed predicates, exact counts, bounded pages | Lifting upload refusal |
 | Tools persistence | Reuse persisted-setting rules or a small dedicated table | Binding writes |
-| First modality/provider | TTS recommended, provider support unverified | Media transport |
+| First modality/provider | Image slice implemented; independent operator speech added in W10 | Speech adapter support verification |
 | Media accounting/artifact | Typed units and tracked binary output | Media publication |
+| Service credentials | Inline Tools setup with encrypted connection references (W9/W10/W11) | Search/speech/remote terminal configuration |
+| Speech authority | Authenticated dictation/read-aloud actions, not agent tools (W10) | Operator speech endpoints |
+| Terminal execution location | Local-only Auto or explicit pinned local/remote backend (W11) | Sync/background terminal admission |
+| Remote workspace/lifecycle | Consented staged copy, conflict-safe retrieval, owned resource leases (W11) | Enabling remote terminal adapters |
 | Private-network exceptions | Explicit scoped operator opt-in | Network policy rollout |
 
 Recommendations are not final decisions. Document selected behavior, rejected

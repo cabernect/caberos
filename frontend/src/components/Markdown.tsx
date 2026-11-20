@@ -5,6 +5,7 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import { Check, Copy } from "lucide-react";
 import { normalizeMathDelims } from "@/lib/mathDelims";
+import { openUrl } from "@/lib/openUrl";
 import "katex/dist/katex.min.css";
 
 /**
@@ -55,6 +56,22 @@ function WorkspaceAwareLink({
         onClick={(e) => {
           e.preventDefault();
           onWorkspaceLink(href!);
+        }}
+      >
+        {children}
+      </a>
+    );
+  }
+  const isExternal = !!href && /^https?:/i.test(href);
+  if (isExternal) {
+    return (
+      <a
+        href={href}
+        onClick={(e) => {
+          // In the Tauri webview a plain anchor navigates the app window
+          // itself — send external links to the system browser instead.
+          e.preventDefault();
+          void openUrl(href!);
         }}
       >
         {children}

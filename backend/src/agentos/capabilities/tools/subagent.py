@@ -176,6 +176,7 @@ async def _execute_subagent(
         sub_caps = [
             CapabilityGrant(name="read_file"),
             CapabilityGrant(name="write_file"),
+            CapabilityGrant(name="edit_file"),
             CapabilityGrant(name="search_files"),
             CapabilityGrant(name="datetime_now"),
         ]

@@ -73,6 +73,7 @@ Each load request accepts at most 10 new capability schemas, and a run can hold 
 | --- | --- | --- | --- |
 | `read_file` | Read a complete file or an inclusive line range from the workspace. Images require a vision-capable model. | No | No |
 | `write_file` | Write content to a workspace file and return the resulting change. | No | No |
+| `edit_file` | Replace one exact, unique text fragment in an existing file without resending the whole file. | No | No |
 | `search_files` | Search file contents, match names with globs, or list a directory. | No | No |
 | `terminal` | Run a command in the configured sandbox, synchronously or in the background. | Yes | Yes |
 | `read_terminal` | Read output and status from a background terminal session. | No | No |

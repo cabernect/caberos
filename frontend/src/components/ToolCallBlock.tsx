@@ -67,7 +67,7 @@ export function previewSourceFor(call: ToolCallData): PreviewSource | null {
       };
     }
   }
-  if (["read_file", "write_file"].includes(call.capability)) {
+  if (["read_file", "write_file", "edit_file"].includes(call.capability)) {
     const path = call.args.path as string | undefined;
     if (path) return { path };
   }
@@ -108,7 +108,7 @@ export function collectFileRefs(calls: ToolCallData[]): FileRef[] {
     const result = (call.result ?? {}) as Record<string, unknown>;
     if (typeof result.error === "string") continue;
 
-    if (call.capability === "write_file") {
+    if (call.capability === "write_file" || call.capability === "edit_file") {
       const path = (result.path ?? call.args.path) as string | undefined;
       if (path && result.action !== "unchanged") {
         add(`p:${path}`, { source: { path }, name: base(path), produced: true });
@@ -520,8 +520,8 @@ export function ToolCallBlock({ call, subagentStream, onPreview }: ToolCallBlock
         </div>
       )}
 
-      {/* Diff block for write_file results */}
-      {call.status === "complete" && call.capability === "write_file" && Boolean(call.result) &&
+      {/* Diff block for file-write results */}
+      {call.status === "complete" && (call.capability === "write_file" || call.capability === "edit_file") && Boolean(call.result) &&
         typeof call.result === "object" && call.result !== null &&
         "action" in (call.result as Record<string, unknown>) && (
         <DiffBlock
@@ -531,7 +531,7 @@ export function ToolCallBlock({ call, subagentStream, onPreview }: ToolCallBlock
         />
       )}
 
-      {/* Expanded result — hidden for write_file (diff block replaces it)
+      {/* Expanded result — hidden for file writes (diff block replaces it)
           and run_subagent (the nested sub-agent stream replaces it) */}
       {expanded && hasResult && call.status === "complete" &&
         TERMINAL_CAPS.has(call.capability) &&
@@ -540,7 +540,7 @@ export function ToolCallBlock({ call, subagentStream, onPreview }: ToolCallBlock
       )}
 
       {expanded && hasResult &&
-        !(call.capability === "write_file" && call.status === "complete" && typeof call.result === "object" && call.result !== null && "action" in (call.result as Record<string, unknown>)) &&
+        !((call.capability === "write_file" || call.capability === "edit_file") && call.status === "complete" && typeof call.result === "object" && call.result !== null && "action" in (call.result as Record<string, unknown>)) &&
         !(call.status === "complete" && TERMINAL_CAPS.has(call.capability) && typeof call.result === "object" && call.result !== null) &&
         !(isSubagent && subagentStream && (subagentStream.items.length > 0 || subagentStream.text)) && (
         <div
@@ -649,6 +649,8 @@ function describeCall(
       return { label: "Read file", detail: trunc(a.path) };
     case "write_file":
       return { label: "Write file", detail: trunc(a.path) };
+    case "edit_file":
+      return { label: "Edit file", detail: trunc(a.path) };
     case "search_files":
       return { label: "Search files", detail: trunc(a.pattern ?? a.query ?? a.path) };
     case "web_search":

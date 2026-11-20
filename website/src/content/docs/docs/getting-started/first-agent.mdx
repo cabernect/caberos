@@ -71,6 +71,7 @@ Open **Capabilities** and start with:
 | `read_file` | Always | Inspect a known workspace file. |
 | `search_files` | Always | List the workspace and find files. |
 | `write_file` | Not permitted initially | Add only after read-only behavior works. |
+| `edit_file` | Not permitted initially | Add with `write_file`; targeted edits need no full rewrite. |
 | `terminal` | Not permitted initially | Avoid shell execution during the first test. |
 | `datetime_now` | On demand or Always | Useful for timestamped summaries. |
 | Memory, web, MCP, and sub-agent tools | Not permitted initially | Add one workflow at a time. |

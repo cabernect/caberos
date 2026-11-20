@@ -13,7 +13,7 @@ DELETE /api/chat/{agent_id}/sessions/{sid}       — delete session
 import asyncio
 import json
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -262,27 +262,52 @@ async def compact_session(
             tool_schemas, model_str
         )
 
+        # Manual /compact is real work with real tokens — record an honest
+        # Run row so the summary call shows up in traces instead of
+        # floating run-less in the ledger.
+        compact_run = Run(
+            session_id=session.id,
+            agent_id=agent_id,
+            contact_id=session.contact_id,
+            status="running",
+            trigger="compaction",
+        )
+        db.add(compact_run)
+        await db.flush()
+        # Commit BEFORE the summary call — an uncommitted flush holds
+        # SQLite's single-writer lock across the whole LLM request and
+        # starves the capture/ledger writers (separate sessions), silently
+        # dropping the compaction's observability rows.
+        await db.commit()
+
         # Run compaction (force=True) against uncovered originals; the
         # summary already renders inside the result exactly once.
-        compaction_result = await compact_context(
-            messages=list(conversation.messages),
-            source_ids=list(conversation.source_ids),
-            agent_config=config,
-            model_str=model_str,
-            previous_summary=session.conversation_summary,
-            api_key=api_key,
-            base_url=base_url,
-            extra_params=extra_params,
-            force=True,
-            input_budget=input_budget,
-            resolved_model=resolved_model,
-            accounting=accounting,
-            reserved_tokens=reserved_tokens,
-            session_id=body.session_id,
-            # Manual /compact has no parent run — an honest blank, not a
-            # fabricated run_id.
-            run_id=None,
-        )
+        try:
+            compaction_result = await compact_context(
+                messages=list(conversation.messages),
+                source_ids=list(conversation.source_ids),
+                agent_config=config,
+                model_str=model_str,
+                previous_summary=session.conversation_summary,
+                api_key=api_key,
+                base_url=base_url,
+                extra_params=extra_params,
+                force=True,
+                input_budget=input_budget,
+                resolved_model=resolved_model,
+                accounting=accounting,
+                reserved_tokens=reserved_tokens,
+                session_id=body.session_id,
+                run_id=compact_run.id,
+            )
+        except Exception:
+            compact_run.status = "failed"
+            compact_run.completed_at = datetime.now(UTC)
+            await db.commit()
+            raise
+        compact_run.status = "completed"
+        compact_run.completed_at = datetime.now(UTC)
+        await db.commit()
 
         # Persist summary + coverage + version in one conditional write —
         # only after a valid compaction, even when the text is unchanged
@@ -313,6 +338,10 @@ async def compact_session(
                     detail="Conversation was compacted concurrently; retry",
                 )
 
+        # Post-compact breakdown so the UI meter doesn't keep showing the
+        # pre-compact split — compacted_tokens already includes reserved.
+        system_tokens = count_text_tokens(system_prompt, model_str)
+        tool_tokens = count_tool_tokens(tool_schemas, model_str)
         return {
             "compacted": compaction_result.compacted,
             "original_tokens": compaction_result.original_tokens,
@@ -323,6 +352,13 @@ async def compact_session(
             "tail_count": compaction_result.tail_count,
             "summary": compaction_result.summary,
             "error": compaction_result.error,
+            "context_breakdown": {
+                "system_prompt": system_tokens,
+                "conversation": max(
+                    0, compaction_result.compacted_tokens - system_tokens - tool_tokens
+                ),
+                "tools": tool_tokens,
+            },
         }
 
 
@@ -730,6 +766,107 @@ async def get_session_messages(
             for msg, run in rows
         ],
         "has_more": has_more,
+    }
+
+
+@router.get("/{agent_id}/sessions/{session_id}/context")
+async def get_session_context(
+    agent_id: str,
+    session_id: str,
+    operator: Operator = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Current context usage for a session — summary + uncovered messages
+    + reserved sections, counted with the same estimator runs report.
+
+    Computed live rather than replayed from the last run row: /compact
+    writes a summary without creating a run, so a run snapshot would go
+    stale the moment compaction lands.
+    """
+    from ..agent_service import get_active_config
+    from ..capabilities.catalog import CapabilityRunCatalog
+    from ..harness.compaction import count_text_tokens, count_tokens, count_tool_tokens
+    from ..harness.context import assemble_system_prompt, assemble_tool_schemas
+    from ..harness.conversation import Conversation
+    from ..memory.core import CoreConflict, load_or_pin_core
+    from ..providers import ProviderRegistry
+    from ..providers.catalog_policy import resolve_input_budget
+    from ..skills.resolution import resolve_effective_skills
+
+    result = await db.execute(
+        select(Session).where(Session.id == session_id, Session.agent_id == agent_id)
+    )
+    session = result.scalar_one_or_none()
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    config = await get_active_config(db, agent_id)
+    if not config:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    conversation = await Conversation.load(db, session)
+    if not conversation.messages and not conversation.summary:
+        return {"context": None}
+
+    model_str = "gpt-4o"
+    resolved_model: dict = {}
+    if config.model.is_configured:
+        try:
+            adapter = await ProviderRegistry(db).for_model(config.model.provider_id)
+            info = await adapter.get_model_info(config.model)
+            model_str = info["model_str"]
+            resolved_model = info.get("resolved_model") or {}
+        except Exception:
+            pass
+
+    try:
+        input_budget = resolve_input_budget(
+            resolved_model,
+            model_override=config.model.max_context_tokens,
+            run_override=config.limits.max_context_tokens,
+            output_tokens=config.model.max_tokens,
+        )["tokens"]
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    resolved_skills = await resolve_effective_skills(db, agent_id)
+    capability_catalog = CapabilityRunCatalog(agent_config=config, db=db)
+    # prepare() loads the permission-filtered metadata cache — without it
+    # model_capability_names() returns [] and tools count as zero.
+    await capability_catalog.prepare()
+    tool_schemas = assemble_tool_schemas(
+        config, capability_names=capability_catalog.model_capability_names()
+    )
+    try:
+        pinned_core = await load_or_pin_core(db, config, session)
+    except CoreConflict:
+        pinned_core = None
+    system_prompt = assemble_system_prompt(
+        config, "", resolved_skills=resolved_skills, core_snapshot=pinned_core
+    )
+
+    # Same rendered shape the run dispatches: stored summary once, then
+    # uncovered originals.
+    from ..harness.compaction import _summary_message
+
+    rendered = (
+        [_summary_message(conversation.summary, [], conversation.messages), *conversation.messages]
+        if conversation.summary
+        else list(conversation.messages)
+    )
+    breakdown = {
+        "system_prompt": count_text_tokens(system_prompt, model_str),
+        "conversation": count_tokens(rendered, model_str),
+        "tools": count_tool_tokens(tool_schemas, model_str),
+    }
+    return {
+        "context": {
+            "context_tokens": sum(breakdown.values()),
+            "max_context_tokens": input_budget,
+            "compacted": bool(conversation.summary),
+            "breakdown": breakdown,
+            "as_of": _iso_utc(datetime.now(UTC)),
+        }
     }
 
 

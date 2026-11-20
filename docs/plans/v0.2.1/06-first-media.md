@@ -1,10 +1,15 @@
 # First Media Capability
 
-Status: decided — **image generation** (`media.image`) is the first modality;
-`media.tts`, `media.stt`, `media.video` stay roadmap until a real backend
-exists — see [Tool bindings](05-tool-bindings.md#binding-key-roadmap).
+Status: image generation/editing (`media.image`) is implemented as the first
+agent-callable media slice. The original speech deferral is superseded by
+[W10: Speech Input And Output](10-speech-input-output.md), now in v0.2.1 scope
+as operator UI actions, not agent tools. Video remains deferred.
 
-## Decision Gate — Recorded
+## Decision Gate — Historical W6 Selection
+
+The evidence below records why image shipped first, not a current restriction
+against speech. Missing pricing/usage must remain unknown; it is not a reason
+to fabricate rates or require a catalog entry before enabling a verified API.
 
 | Question | Evidence |
 |---|---|
@@ -14,13 +19,14 @@ exists — see [Tool bindings](05-tool-bindings.md#binding-key-roadmap).
 | Transport | LiteLLM 1.106.6 `aimage_generation` → `ImageResponse`; `data[].b64_json` gives bytes directly (no URL fetch — satisfies "prefer bytes"); `usage.input_tokens/output_tokens` normalizes under the `chat` family. |
 | Output contract | `n=1` fixed (no multi-output billing), `size`/`quality`/`format` allowlists via binding options, `b64_json` response format, magic-byte + MIME validation, 16 MiB cap. |
 | Cancellation | Single `asyncio.wait_for` timeout; no automatic retry after ambiguous billable dispatch — timeout/error records the attempt honestly. |
-| Cancellation of TTS decision | TTS requires a catalog entry + reported-usage path that doesn't exist yet; adding hand-rolled pricing contradicts "bundled models.dev is pricing authority". |
+| Original TTS deferral (superseded) | Catalog/usage gaps favored image first. W10 permits honest unknown audio pricing/usage and adds separate speech adapters and accounting. |
 
 ## Goal
 
 Ship one complete mediated workflow: configured Model Offering -> approved
 request -> bounded provider output -> tracked artifact -> inspectable accounting.
-Do not implement several modalities or add placeholder handlers.
+This workstream covers images only; W10 separately covers speech. Do not claim
+other modalities work or add placeholder handlers.
 
 ## Decision Gate
 
@@ -29,10 +35,8 @@ transport behavior, formats, cancellation semantics, and pricing evidence.
 Inspect the provider abstraction and actual supported API documentation before
 selecting methods; no provider compatibility has been verified by this plan.
 
-For TTS, use explicit input text, bounded length, allowlisted voice/format options,
-and one output. No voice cloning, speaker uploads, or arbitrary callback URLs.
-If image generation is chosen, replace audio-specific acceptance scenarios
-explicitly rather than claiming both modalities.
+Audio-specific UI, authority, retention, and acceptance are now defined in W10.
+The remaining contracts in this document govern the mediated image tool path.
 
 ## Existing File Targets
 
@@ -95,6 +99,6 @@ attempt and reports the output failure honestly.
 ## Acceptance
 
 No provider call before required approval; no extra permissions from a binding.
-Success yields playable/downloadable tracked output. Correlation is exact.
+Success yields previewable/downloadable tracked image output. Correlation is exact.
 Oversize/invalid data, unavailable providers, timeouts, cancellation, publication
 failure, and unknown cost are covered without silent fallbacks or paid retries.

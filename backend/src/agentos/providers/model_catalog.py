@@ -29,7 +29,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models.model_catalog import ModelCatalogOffering, ModelCatalogRevision
+from ..models.model_catalog import ModelCatalogOffering
 from ..models.provider import Provider
 from ..secret_store import decrypt
 from ..ssl_utils import SSL_CERT_PATH as _SSL_CERT
@@ -494,16 +494,18 @@ def _resolved_envelope(
     }
 
 
-async def _journal(db: AsyncSession, offering: ModelCatalogOffering, envelope: dict) -> None:
-    db.add(
-        ModelCatalogRevision(
-            offering_id=offering.id,
-            revision=offering.revision,
-            resolved_json=json.dumps(envelope),
-            created_at=datetime.now(UTC),
-        )
-    )
-    await db.flush()
+def _resolved_semantic(resolved_json: str | None) -> Any:
+    """Resolved fields/provenance minus confirmation timestamps."""
+    try:
+        resolved = json.loads(resolved_json or "{}")
+    except (TypeError, ValueError):
+        return None
+    provenance = resolved.get("provenance")
+    if isinstance(provenance, dict):
+        for entry in provenance.values():
+            if isinstance(entry, dict):
+                entry.pop("as_of", None)
+    return resolved
 
 
 async def _upsert(
@@ -542,6 +544,15 @@ async def _upsert(
             offering = await _get_stored_offering(db, provider_id, model_id)
             if offering is None:
                 raise
+    prior = {
+        "resolved_json": offering.resolved_json,
+        "discovery_state": offering.discovery_state,
+        "discovery_error": offering.discovery_error,
+        "config_fingerprint": offering.config_fingerprint,
+        "catalog_provider_id": offering.catalog_provider_id,
+        "catalog_model_id": offering.catalog_model_id,
+        "catalog_mapping_explicit": offering.catalog_mapping_explicit,
+    }
     if observed is not None:
         offering.observations_json = json.dumps(observed)
     if overrides is not None:
@@ -588,10 +599,19 @@ async def _upsert(
         offering.discovered_at.isoformat() if offering.discovered_at else None,
     )
     new_resolved = json.dumps(envelope["resolved"])
-    if new_resolved != offering.resolved_json or discovery_state is not None:
+    changed = (
+        offering.revision == 0
+        or _resolved_semantic(new_resolved) != _resolved_semantic(prior["resolved_json"])
+        or offering.discovery_state != prior["discovery_state"]
+        or offering.discovery_error != prior["discovery_error"]
+        or offering.config_fingerprint != prior["config_fingerprint"]
+        or offering.catalog_provider_id != prior["catalog_provider_id"]
+        or offering.catalog_model_id != prior["catalog_model_id"]
+        or offering.catalog_mapping_explicit != prior["catalog_mapping_explicit"]
+    )
+    if changed:
         offering.resolved_json = new_resolved
         offering.revision += 1
-        await _journal(db, offering, envelope)
     return offering
 
 

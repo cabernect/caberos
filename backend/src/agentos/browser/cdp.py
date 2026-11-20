@@ -191,6 +191,14 @@ class BrowserSession:
         ]
         if not visible:
             args.insert(1, "--headless=new")
+        # The managed CfT build is adhoc-signed, so macOS Keychain doesn't
+        # trust it — every launch stalls ~10s on a Safe Storage prompt that
+        # headless runs never answer. Mock keychain keeps automation profiles
+        # working; signed system browsers keep the real one.
+        from .runtime import runtime_root
+
+        if Path(self._binary).resolve().is_relative_to(runtime_root()):
+            args.append("--use-mock-keychain")
         # Containers can't run Chrome's sandbox (no userns/CAP_SYS_ADMIN) and
         # /dev/shm is tiny — both are launch-fatal without these flags.
         if os.environ.get("AGENTOS_BROWSER_NO_SANDBOX"):
@@ -204,8 +212,6 @@ class BrowserSession:
         allowed_domains: list[str] | None = None,
         visible: bool = False,
     ) -> Observation:
-        import websockets
-
         if visible and not _display_available():
             raise BrowserError(
                 "visible mode needs a desktop session — this host has no "
@@ -221,6 +227,23 @@ class BrowserSession:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+        try:
+            return await self._open_attached(url, research, allowed_domains)
+        except BaseException:
+            # A failed open must not leak the browser — stray processes
+            # hold global Mach names and wedge later launches.
+            await self.close()
+            raise
+
+    async def _open_attached(
+        self,
+        url: str,
+        research: bool,
+        allowed_domains: list[str] | None,
+    ) -> Observation:
+        import websockets
+
+        port_file = self._profile_dir / "DevToolsActivePort"
         deadline = time.monotonic() + LOAD_TIMEOUT_S
         port = ws_path = ""
         while True:
@@ -309,10 +332,50 @@ class BrowserSession:
         await self._send("Page.navigate", {"url": url})
         await self._wait_load()
 
+    async def navigate_local(self, path: Path) -> None:
+        """Load a platform-local file:// document — for artifact capture.
+
+        Deliberately bypasses netpolicy: the only callers are platform code
+        rendering CaberOS's own admitted, CSP-isolated artifacts (decks
+        carry connect-src 'none', so the document itself cannot egress).
+        Never expose this to agent-controlled URLs.
+        """
+        await self._send("Page.navigate", {"url": path.resolve().as_uri()})
+        await self._wait_load()
+
+    async def set_viewport(self, width: int, height: int, scale: float = 1.0) -> None:
+        """Fixed device metrics — deterministic capture geometry."""
+        await self._send(
+            "Emulation.setDeviceMetricsOverride",
+            {
+                "width": width,
+                "height": height,
+                "deviceScaleFactor": scale,
+                "mobile": False,
+            },
+        )
+
+    async def evaluate_json(self, expression: str):
+        """Runtime.evaluate returning a JSON-serializable value."""
+        res = await self._send(
+            "Runtime.evaluate",
+            {
+                "expression": expression,
+                "returnByValue": True,
+                "awaitPromise": True,
+            },
+        )
+        return res.get("result", {}).get("value")
+
     async def close(self) -> None:
         for task in (self._intercept_task, self._reader_task):
             if task and not task.done():
                 task.cancel()
+        if self._ws is not None:
+            try:
+                await self._ws.close()
+            except Exception:
+                pass
         if self._proc:
             self._proc.terminate()
             try:

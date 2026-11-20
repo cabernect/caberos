@@ -9,7 +9,22 @@ CaberOS is an open-source, local-first AI Agent Operating System. It hosts perso
 **Repo structure:** Monorepo — `/backend`, `/frontend`, `/website`, `/docs`, `/skills`, `/sandbox`, `/scripts`, `/design-system`
 **Desktop shell:** Tauri 2 (Rust) — `frontend/src-tauri/`
 **Container:** Docker + docker-compose — `backend/Dockerfile`, `frontend/Dockerfile`, `docker-compose.yml`
-**Current line:** v0.2.1 "Honest Vault, Workspace & Tools" on `feat/v0.2.1`; release publication is separate from branch implementation.
+**Current line:** v0.2.2 "Artifact Craft & Preview" on `feat/v0.2.2`; release publication is separate from branch implementation.
+See `docs/plans/v0.2.2-release-plan.md` and `docs/plans/v0.2.2/README.md`.
+PPTX/DOCX/XLSX creation/editing, HTML presentations, revision-bound rendering,
+and visual quality are planned requirements, not shipped capabilities. PPTX
+preview may be static while native effects remain in the exported file; HTML
+playback must be isolated. Formula authoring is included; in-app calculation is
+a separate decision. LibreOffice is excluded: uploaded/generated Office files
+keep best-effort content previews with visible limitation alerts; no full Office
+layout engine is required. See `docs/plans/v0.2.2/preview-contract.md`.
+HTML capture/runtime policy still needs explicit decisions; a Canva-like editor
+and agent-authored apps remain future scope.
+
+W2 implementation scope: `.deck.json` is the canonical presentation source.
+Editing is agent-driven through targeted operations and base-revision checks;
+history and restore-as-new-revision remain. The manual slide editor and separate
+proposal-review/approval pipeline are removed/deferred, not current W2 gates.
 
 ## Where things are
 
@@ -88,6 +103,7 @@ Registered in `capabilities/builtin.py` (+ `run_subagent`/`read_subagent` in `to
 |---|---|---|---|
 | `read_file` | no | no | Read workspace file (text/docs/images w/ vision cap; 50k cap) |
 | `write_file` | no | no | Write workspace file (returns diff) |
+| `edit_file` | no | no | Replace one exact unique text fragment in an existing UTF-8 file (returns diff; refuses missing/ambiguous matches) |
 | `search_files` | no | no | `mode`: content (grep) / name (glob) / list |
 | `terminal` | yes | yes | Shell command in sandbox (persistent background session) |
 | `read_terminal` / `close_terminal` | no | no | Read/close a terminal session |
@@ -117,6 +133,21 @@ Registered in `capabilities/builtin.py` (+ `run_subagent`/`read_subagent` in `to
 
 ## Subsystem notes
 
+### Presentation authoring (v0.2.2 development)
+W2/W2H are consolidated in `docs/plans/v0.2.2/02-presentations.md`: one
+canonical `.deck.json` spec feeds the React slide renderer in PreviewPanel
+and the native PPTX export (`artifacts/deck_pptx.py`) — never reverse-parsed
+from HTML. Image blocks pin workspace rasters as embedded data-URI snapshots
+at build time; revisions never reread mutable workspace bytes. The old
+generated-HTML deck stack (formats/html.py, deck_capture.py, deck_export.py,
+/workspace/deck* endpoints) is removed. Ordinary HTML keeps the static,
+scrollable, scripts-disabled preview via `html_preview.py`. Structured deck
+revisions use targeted ops (set_title|set_theme|add_slide|remove_slide|
+set_slide|move_slide) by slide id or index. Image-fallback export for
+slides the native template can't express is planned, not shipped — export
+currently refuses those slides with a 422. Inline slide editing and
+structure controls are planned per the consolidated plan.
+
 ### Skills (governed library)
 DB is the resolution authority: `Skill`/`SkillRevision`/`SkillAssignment`. `resolve_effective_skills()` precedence: agent-local > global > built-in (global respects availability/assignments; disabled/archived agent-local rows suppress the live dir). Runs pin `skill_revision_ids` (`rev:<id>` or `live:<sha256>`) in the manifest — mid-run publishes can't wobble a run. Built-ins seed from `skills/builtins.py` (`BUILTIN_SKILLS`: browser-workflows, doc-coauthoring, evolve, frontend-design, office-documents, skill-creator); removed names are retired at startup. "Create Skill" opens a builder-mode session (`skill-creator` force-loaded, drafts land in `skill-drafts/`, no publish capability by construction). Imports (ZIP/repo URL) go through `skills/importer.py` hardening and land as drafts. Drafts are for *new* skills only: updates to an existing agent-local skill edit the live `skills/<name>/` dir and are pinned as revisions by `snapshot_agent_local_drift` at session close — a same-name `skill-drafts/` dir can never index or publish (unique name per scope+owner) and reconcile logs it as an orphan.
 
@@ -127,6 +158,24 @@ Structured extraction → per-block-type parent/child chunking → FTS5 lexical 
 Sessions pin their workspace root; changing the agent default affects new sessions. Resolve roots before creating the admitted run. Legacy sessions require unambiguous historical run evidence with no unknown roots; never silently use today's default. Artifact live roots come from the recorded root or revision source-run provenance; managed revisions remain independent. The web directory picker is home-confined; manually configured/native-picked external workspaces remain possible.
 
 Global `ToolBinding` configuration selects implementation, never authority. Search service credentials reuse encrypted Provider rows; `scope=search`/`speech` separates services from chat-model discovery. Image generation/editing are mediated capabilities. Speech is authenticated operator STT/TTS, not an agent tool: editable batch dictation and explicit Read Aloud, with cached audio and generation-guarded playback. Missing prices remain unknown. Local terminal backend selection and `TerminalTransport`/`LocalTransport` are implemented; SSH/Daytona/Modal, realtime Voice Mode, video generation, and agent-authored apps remain deferred.
+
+MCP and terminal default to `runtime_source=auto`: explicit binary override,
+healthy existing managed install, then a compatible standard public system
+install (e.g. Homebrew). Auto never searches arbitrary PATH/private-home managers
+and rejects public-bin symlinks resolving outside public runtime roots.
+`AGENTOS_RUNTIME_SOURCE=managed|system` pins one source without cross-source
+fallback; invalid managed pointers fail closed. No automatic installs. Terminal warms the
+bounded readiness cache, puts verified runtime dirs first, and never sources shell
+profiles or mutates gateway env. Strict grants read/execute only on selected
+managed version trees, never their parent store or app data. Runtimes are
+read-only; workspace/store overlap fails closed. Open remains full-user execution.
+Strict terminal networking is allowed by
+operator decision: workspace content may leave the machine, packages may download,
+and dev servers may listen. File-write/private-read rules remain; bwrap includes
+read-only public resolver/certificate configuration for networking. Package
+cache/prefix/temp defaults stay workspace-local. This is not an offline mode or
+data-loss prevention. Low-level sandbox APIs still default to no network unless
+the caller opts in; both sync and background terminal paths explicitly opt in.
 
 ### Observability
 `model_calls` is the unified ledger (chat/embedding/probe/extract/title; thinking tokens are reported-only). Correlation via `call_id`/`sub_agent_id` on audits/approvals/elicitations/artifacts — exact joins, never temporal. `GET /api/runs/{id}` returns a projected `timeline` (audit roots → tombstone tool_call → pending approval); `/api/spend?scope=platform` reads the ledger while agent scope keeps historic run totals — they are intentionally not algebraically equal. `redaction.py` is the shared read boundary; sensitive payloads fail closed. Traces page: span tree + waterfall + observation inspector.
@@ -147,7 +196,7 @@ Managed Chrome-for-Testing (explicit first-use install consent), CDP sessions, h
 Channels (Telegram/Discord/Zalo OA/Zalo Bot) route through the same pipeline and audit. MCP: stdio/HTTP client, registry, encrypted credentials, OAuth loopback + refresh, stdio PATH resolution (`CABEROS_MCP_RUNTIME_PATH`), per-tool `tool_filter` + deny overrides.
 
 ### Runtime readiness / dependencies
-Optional tools/runtimes live in global Settings → General. Direction: app-managed/private installs by default, fixed subprocess recipes, guided system install when unmanaged — all gated on explicit consent. No automatic downloads.
+Optional tools/runtimes live in global Settings → General. Reuse healthy managed or standard system installs before offering a consent-based managed download; no duplicate install is required for compatible Homebrew runtimes. Fixed installer recipes and guided setup remain operator-approved. No automatic downloads.
 
 ## Attachments & workspace layout
 
