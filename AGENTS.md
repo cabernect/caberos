@@ -9,7 +9,7 @@ CaberOS is an open-source, local-first AI Agent Operating System. It hosts perso
 **Repo structure:** Monorepo — `/backend`, `/frontend`, `/website`, `/docs`, `/skills`, `/sandbox`, `/scripts`, `/design-system`
 **Desktop shell:** Tauri 2 (Rust) — `frontend/src-tauri/`
 **Container:** Docker + docker-compose — `backend/Dockerfile`, `frontend/Dockerfile`, `docker-compose.yml`
-**Current line:** v0.2.2 "Artifact Craft & Preview" on `feat/v0.2.2`; release publication is separate from branch implementation.
+**Current line:** v0.2.3 "Context Hotfix" on `fix/context-replay-hotfix`; release publication is separate from branch implementation.
 See `docs/plans/v0.2.2-release-plan.md` and `docs/plans/v0.2.2/README.md`.
 PPTX/DOCX/XLSX creation/editing, HTML presentations, revision-bound rendering,
 and visual quality are planned requirements, not shipped capabilities. PPTX
