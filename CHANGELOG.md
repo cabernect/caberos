@@ -11,6 +11,13 @@ versions.
 
 ## [0.2.3] — 2026-11-20 "Context Hotfix"
 
+### Added
+
+- **Editable auto-compact threshold**: agent settings expose the compaction
+  threshold (percent of context window, default 70%) via `PUT
+  /api/agents/{id}` and the General settings tab; partial updates merge
+  with existing compaction settings and out-of-range values return 422.
+
 ### Fixed
 
 - **Runaway context from stored tool results**: stored `tool_call` rows

@@ -1289,6 +1289,51 @@ async def test_limits_patch_invalid_core_max_tokens_is_422(db, tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_compaction_patch_merges_and_validates(db, tmp_path, monkeypatch):
+    """PUT compaction merges with existing settings; out-of-range threshold → 422."""
+    import httpx
+
+    from agentos.auth import require_operator
+    from agentos.db import get_db
+    from agentos.main import app
+    from agentos.models.operator import Operator
+
+    _patch_env(monkeypatch, tmp_path)
+    await _make_agent(db)
+
+    async def override_db():
+        yield db
+
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[require_operator] = lambda: Operator(
+        id="op", username="t", password_hash="", must_change_password=False
+    )
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://t"
+        ) as c:
+            ok = await c.put(
+                "/api/agents/core-test",
+                json={"compaction": {"threshold": 0.5}},
+            )
+            assert ok.status_code == 200
+            agent = await c.get("/api/agents/core-test")
+            comp = agent.json()["compaction"]
+            assert comp["threshold"] == 0.5
+            # Untouched fields survive the partial merge.
+            assert comp["auto_compaction"] is True
+            assert comp["protect_last_n"] == 20
+
+            bad = await c.put(
+                "/api/agents/core-test",
+                json={"compaction": {"threshold": 1.5}},
+            )
+            assert bad.status_code == 422
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
 async def test_restore_legacy_unmarked_snapshot(db, tmp_path, monkeypatch):
     """A pre-wrap legacy file's recorded snapshot restores its curated body
     under the current managed identity."""

@@ -108,6 +108,7 @@ class UpdateAgentRequest(BaseModel):
     capabilities: list[dict[str, Any]] | None = None
     limits: dict[str, Any] | None = None
     heartbeat: dict[str, Any] | None = None
+    compaction: dict[str, Any] | None = None
     sandbox_mode: str | None = None
     yolo_mode: bool | None = None
     workspace: str | None = None
@@ -274,6 +275,7 @@ async def get_agent_route(
         else None,
         "limits": config.limits.model_dump(),
         "heartbeat": config.heartbeat.model_dump(),
+        "compaction": config.compaction.model_dump(),
         "workspace": config.workspace,
         "workspace_path": str(resolved_ws),
         "workspace_is_managed": wm.is_managed_root(agent_id, resolved_ws),
@@ -364,6 +366,17 @@ async def update_agent_route(
         from ..config_schema import HeartbeatConfig
 
         config.heartbeat = HeartbeatConfig(**req.heartbeat)
+    if req.compaction is not None:
+        from ..config_schema import CompactionConfig
+
+        # Merge with existing compaction settings — partial updates must not
+        # clobber the other fields. Invalid values → 422.
+        try:
+            config.compaction = CompactionConfig(
+                **{**config.compaction.model_dump(), **req.compaction}
+            )
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail="Invalid compaction update") from exc
     if req.workspace is not None:
         from ..models.run import Run
         from ..sandbox.workspace import WorkspaceManager

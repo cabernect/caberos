@@ -153,6 +153,7 @@ function GeneralTab({
   const [idleTimeout, setIdleTimeout] = useState(5);
   const [maxContext, setMaxContext] = useState<number | null>(null);
   const [coreMax, setCoreMax] = useState<number | null>(null);
+  const [compactThreshold, setCompactThreshold] = useState(70);
   const [sandboxMode, setSandboxMode] = useState<"strict" | "open">("strict");
   const [workspaceInput, setWorkspaceInput] = useState("");
   const [showFolderPicker, setShowFolderPicker] = useState(false);
@@ -176,6 +177,7 @@ function GeneralTab({
         setMaxContext(agent.limits.max_context_tokens);
         setCoreMax(agent.limits.core_max_tokens ?? 32768);
       }
+      setCompactThreshold(Math.round((agent.compaction?.threshold ?? 0.7) * 100));
       setSandboxMode(agent.sandbox_mode || "strict");
       setWorkspaceInput(agent.workspace || "");
       setThinkingEnabled(agent.thinking_enabled ?? null);
@@ -227,6 +229,7 @@ function GeneralTab({
           max_context_tokens: maxContext,
           core_max_tokens: coreMax ?? 32768,
         },
+        compaction: { threshold: compactThreshold / 100 },
       });
       onSaved();
       onClose();
@@ -468,6 +471,9 @@ function GeneralTab({
           </Field>
           <Field label="Core memory ceiling (tokens)">
             <NumberInput value={coreMax} onChange={(v) => setCoreMax(v ?? 32768)} placeholder="32768" />
+          </Field>
+          <Field label="Auto-compact at (% of context)">
+            <NumberInput value={compactThreshold} onChange={(v) => setCompactThreshold(Math.min(100, Math.max(1, v ?? 70)))} step={5} />
           </Field>
         </div>
         <p className="text-[12px] text-ink-3">
