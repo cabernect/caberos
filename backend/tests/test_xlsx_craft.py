@@ -267,25 +267,89 @@ def test_remove_conditional_format_roundtrip() -> None:
 _XDR = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
 
 
-def _with_drawing(data: bytes, inner: str) -> bytes:
+def _with_drawing(data: bytes, inner: str, part: str = "xl/drawings/drawing1.xml") -> bytes:
     drawing = (
         f'<xdr:wsDr xmlns:xdr="{_XDR}"><xdr:twoCellAnchor>{inner}'
         "<xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>"
     )
-    return _with_extra_part(data, "xl/drawings/drawing1.xml", drawing.encode())
+    return _with_extra_part(data, part, drawing.encode())
 
 
-def test_drawing_shapes_block_revise_until_acknowledged() -> None:
+_DRAWING_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing"
+_DRAWING_CT = "application/vnd.openxmlformats-officedocument.drawing+xml"
+
+
+def _with_referenced_drawing(data: bytes, part: str, inner: str) -> bytes:
+    """Wire a drawing into sheet1 the way Excel does — content-type
+    override, worksheet relationship and <drawing> element — so the part
+    is genuinely referenced, not a stray zip member."""
+    drawing = (
+        f'<xdr:wsDr xmlns:xdr="{_XDR}"><xdr:twoCellAnchor>{inner}'
+        "<xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>"
+    ).encode()
+    src = zipfile.ZipFile(BytesIO(data))
+    parts = {n: src.read(n) for n in src.namelist()}
+    sheet = "xl/worksheets/sheet1.xml"
+    sheet_xml = parts[sheet]
+    if b'xmlns:r="' not in sheet_xml:
+        sheet_xml = sheet_xml.replace(
+            b"<worksheet ",
+            b'<worksheet xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" ',
+            1,
+        )
+    parts[sheet] = sheet_xml.replace(b"</worksheet>", b'<drawing r:id="rIdDraw1"/></worksheet>')
+    rels = "xl/worksheets/_rels/sheet1.xml.rels"
+    rel = (
+        f'<Relationship Id="rIdDraw1" Type="{_DRAWING_REL}" '
+        f'Target="../drawings/{part.rsplit("/", 1)[-1]}"/>'
+    ).encode()
+    if rels in parts:
+        parts[rels] = parts[rels].replace(b"</Relationships>", rel + b"</Relationships>")
+    else:
+        parts[rels] = (
+            b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            + rel
+            + b"</Relationships>"
+        )
+    parts["[Content_Types].xml"] = parts["[Content_Types].xml"].replace(
+        b"</Types>",
+        f'<Override PartName="/{part}" ContentType="{_DRAWING_CT}"/></Types>'.encode(),
+    )
+    parts[part] = drawing
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for n, payload in parts.items():
+            zf.writestr(n, payload)
+    return buf.getvalue()
+
+
+@pytest.mark.parametrize("part", ["xl/drawings/drawing1.xml", "xl/drawings/shapes.xml"])
+def test_drawing_shapes_block_revise_until_acknowledged(part: str) -> None:
     """Text boxes / autoshapes in drawings are dropped by openpyxl's
-    round-trip — preflight must flag them like pivot tables."""
+    round-trip — preflight must flag them like pivot tables. Detection
+    follows the xdr:wsDr root, not the part filename."""
     data = xlsx_fmt.build({"sheets": [{"name": "S", "rows": [[1]]}]}, ".")
-    textbox = _with_drawing(data, '<xdr:sp macro="" textlink=""/>')
+    textbox = _with_drawing(data, '<xdr:sp macro="" textlink=""/>', part)
     assert xlsx_fmt._feature_inventory(textbox)["drops_on_edit"] == ["shapes"]
     with pytest.raises(ValueError, match="accept_feature_loss"):
         xlsx_fmt.revise(textbox, [{"op": "set_cell", "sheet": "S", "cell": "A1", "value": 2}], ".")
     # pictures and chart frames are preserved — no false positive
-    picture = _with_drawing(data, "<xdr:pic><xdr:nvPicPr/></xdr:pic>")
+    picture = _with_drawing(data, "<xdr:pic><xdr:nvPicPr/></xdr:pic>", part)
     assert xlsx_fmt._feature_inventory(picture)["drops_on_edit"] == []
+
+
+def test_referenced_drawing_with_textbox_blocks_revise() -> None:
+    """A drawing wired through real OPC relationships (content-type
+    override + sheet rel + <drawing> element) is still flagged — the
+    scanner keys on the xdr:wsDr document, not the part name."""
+    data = xlsx_fmt.build({"sheets": [{"name": "S", "rows": [[1]]}]}, ".")
+    risky = _with_referenced_drawing(
+        data, "xl/drawings/shapes.xml", '<xdr:sp macro="" textlink=""/>'
+    )
+    _wb(risky)  # wiring is valid — openpyxl loads it
+    assert xlsx_fmt._feature_inventory(risky)["drops_on_edit"] == ["shapes"]
+    with pytest.raises(ValueError, match="accept_feature_loss"):
+        xlsx_fmt.revise(risky, [{"op": "set_cell", "sheet": "S", "cell": "A1", "value": 2}], ".")
 
 
 def test_formulas_stay_unevaluated_and_counted() -> None:

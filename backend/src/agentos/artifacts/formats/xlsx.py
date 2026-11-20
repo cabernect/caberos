@@ -33,6 +33,7 @@ _DROP_PREFIXES = {
 
 
 _XDR = "{http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing}"
+_DRAWING_ROOT = f"{_XDR}wsDr"
 _UNSUPPORTED_DRAWING_TAGS = {f"{_XDR}sp", f"{_XDR}grpSp", f"{_XDR}cxnSp", f"{_XDR}contentPart"}
 
 
@@ -40,16 +41,23 @@ def _has_unsupported_drawing_shapes(data: bytes) -> bool:
     """True when a drawing part holds objects openpyxl cannot round-trip.
 
     Pictures, charts and tables survive load+save; shapes, text boxes,
-    connectors, groups and ink content parts are silently dropped."""
+    connectors, groups and ink content parts are silently dropped.
+    Drawing parts are found by their ``xdr:wsDr`` root, not filename —
+    OPC allows any part name (``drawing.xml``, ``shapes.xml``, ...)."""
     try:
         with zipfile.ZipFile(BytesIO(data)) as zf:
             for name in zf.namelist():
-                if not re.fullmatch(r"xl/drawings/drawing\d+\.xml", name):
+                if not name.endswith(".xml") or name.endswith(".rels"):
                     continue
-                root = ElementTree.fromstring(zf.read(name))
+                try:
+                    root = ElementTree.fromstring(zf.read(name))
+                except ElementTree.ParseError:
+                    continue
+                if root.tag != _DRAWING_ROOT:
+                    continue
                 if any(el.tag in _UNSUPPORTED_DRAWING_TAGS for el in root.iter()):
                     return True
-    except (zipfile.BadZipFile, ElementTree.ParseError):
+    except zipfile.BadZipFile:
         pass
     return False
 

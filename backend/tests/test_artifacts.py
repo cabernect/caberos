@@ -1307,7 +1307,12 @@ def test_fixture_manifest_covers_all_files():
     manifest = json.loads((FIXTURES / "manifest.json").read_text())
     on_disk = {p.name for p in FIXTURES.iterdir() if p.is_file() and p.name != "manifest.json"}
     recorded = {f["file"] for f in manifest["files"]}
-    assert on_disk == recorded | {"generate.py", "fixture_variants.py", "README.md"}
+    assert on_disk == recorded | {
+        "generate.py",
+        "fixture_variants.py",
+        "figure.png.b85",
+        "README.md",
+    }
     for entry in manifest["files"]:
         data = (FIXTURES / entry["file"]).read_bytes()
         assert hashlib.sha256(data).hexdigest() == entry["sha256"], entry["file"]
