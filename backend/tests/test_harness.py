@@ -175,6 +175,59 @@ async def test_transient_errors_exhaust_retries_then_fail(db, workspace, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_litellm_timeout_is_retried_on_both_paths(db, workspace, monkeypatch):
+    """litellm.Timeout carries status_code=408 and is not a builtin
+    TimeoutError — the classifier must still treat it as transient."""
+    monkeypatch.setattr("agentos.harness.loop._MODEL_RETRY_DELAYS_S", (0.0, 0.0))
+
+    def litellm_timeout():
+        return litellm.Timeout("timed out", model="m", llm_provider="openai")
+
+    class FlakyStream(ScriptedModel):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.calls = 0
+
+        async def complete_stream(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise litellm_timeout()
+                yield
+            async for event in super().complete_stream(**kwargs):
+                yield event
+
+    stream_model = FlakyStream([ScriptedResponse(content="stream ok")])
+    result = await Harness(model=stream_model).run(
+        agent_config=_retry_test_config(),
+        session=None,
+        message="hi",
+        syscall_handler=StubSyscallHandler(db=db, workspace_path=workspace),
+        run_id=str(uuid.uuid4()),
+    )
+    assert result.status == "completed" and stream_model.calls == 2
+
+    class FlakyComplete:
+        def __init__(self):
+            self.calls = 0
+
+        async def complete(self, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise litellm_timeout()
+            return ScriptedResponse(content="complete ok")
+
+    complete_model = FlakyComplete()
+    result = await Harness(model=complete_model).run(
+        agent_config=_retry_test_config(),
+        session=None,
+        message="hi",
+        syscall_handler=StubSyscallHandler(db=db, workspace_path=workspace),
+        run_id=str(uuid.uuid4()),
+    )
+    assert result.status == "completed" and complete_model.calls == 2
+
+
+@pytest.mark.asyncio
 async def test_non_transient_stream_error_is_not_retried(db, workspace, monkeypatch):
     monkeypatch.setattr("agentos.harness.loop._MODEL_RETRY_DELAYS_S", (0.0, 0.0))
 

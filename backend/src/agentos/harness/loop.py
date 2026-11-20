@@ -117,12 +117,14 @@ _TRANSIENT_ERROR_NAMES = frozenset(
 
 def _is_transient_model_error(err: BaseException) -> bool:
     """Network/5xx/429 failures worth retrying — auth, context overflow and
-    request-shape errors are not."""
-    status = getattr(err, "status_code", None)
-    if isinstance(status, int):
-        return status == 429 or status >= 500
+    request-shape errors are not. Timeout/connection classes are checked
+    before status_code: litellm.Timeout reports 408 and is not a builtin
+    TimeoutError."""
     if isinstance(err, (TimeoutError, ConnectionError)):
         return True
+    status = getattr(err, "status_code", None)
+    if isinstance(status, int):
+        return status in (408, 429) or status >= 500
     return type(err).__name__ in _TRANSIENT_ERROR_NAMES
 
 
