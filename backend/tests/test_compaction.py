@@ -571,6 +571,44 @@ class TestCompactContext:
         assert "big.md" == args["path"]
         assert "truncated by /compact" in args["content"]
 
+    async def test_forced_compact_tail_only_history_still_prunes(self):
+        """Regression: a fully-protected history (no middle) with a giant
+        tail payload used to report 'nothing to compact' because forced
+        tail pruning ran after the empty-middle early return."""
+        config = _make_agent_config(CompactionConfig(protect_first_n=5, protect_last_n=10))
+        msgs = _make_messages(10, chars=100)
+        msgs[-2] = {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "tc-huge",
+                    "type": "function",
+                    "function": {
+                        "name": "terminal",
+                        "arguments": json.dumps({"command": "shot", "result": "x" * 90000}),
+                    },
+                }
+            ],
+        }
+        msgs[-1] = {"role": "tool", "tool_call_id": "tc-huge", "content": "y" * 90000}
+
+        with (
+            patch("agentos.harness.compaction.generate_summary", new_callable=AsyncMock) as mock,
+            patch("agentos.harness.compaction.get_model_max_tokens", return_value=922_000),
+        ):
+            result = await compact_context(
+                msgs, config, "test-model", force=True, input_budget=922_000
+            )
+
+        mock.assert_not_called()  # no middle → no summary call
+        assert result.compacted
+        assert result.middle_count == 0
+        blob = json.dumps(result.messages)
+        assert "truncated by /compact" in blob
+        assert "x" * 90000 not in blob
+        assert "y" * 90000 not in blob
+
     async def test_summary_failure_returns_originals_with_error(self):
         """Provider failure must not fabricate a summary — the original
         history comes back unmodified with a generic error flag."""

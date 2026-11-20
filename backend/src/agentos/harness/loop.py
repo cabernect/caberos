@@ -20,6 +20,7 @@ from ..services.context_capture import capture_scope, current_capture_scope
 from ..services.tool_status import tool_event_status
 from ..syscall.protocol import SyscallHandler, SyscallResult, ToolCall
 from .context import (
+    TOOL_RESULT_MAX_CHARS,
     assemble_system_prompt,
     assemble_tool_schemas,
     attachment_lines,
@@ -61,11 +62,6 @@ class RunResult:
 
 # SSE event emitter type: async callable that takes (event_type: str, payload: dict)
 EventEmitter = Callable[[str, dict[str, Any]], Any] | None
-
-# Hard ceiling on a single tool result's serialized size in the history —
-# matches read_file/web_fetch's 50k budget so one call can never overflow
-# the context window on its own.
-TOOL_RESULT_MAX_CHARS = 50_000
 
 _CONTEXT_OVERFLOW_PATTERNS = (
     "context length",

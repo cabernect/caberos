@@ -766,25 +766,33 @@ async def compact_context(
     middle = messages[head_end:tail_start]
     tail = messages[tail_start:]
 
-    # If no middle to summarize, return as-is
+    # Forced /compact also shrinks the protected tail: giant tool args and
+    # outputs become explicit stubs (the bytes remain in the workspace).
+    # Auto-compaction keeps the tail fully verbatim. Runs before the
+    # empty-middle exit so a tail-only history can still be shrunk.
+    if force:
+        tail = prune_forced_tail(tail)
+
+    # If no middle to summarize, forced tail pruning is the only possible
+    # reduction — report it instead of claiming there is nothing to compact.
     if not middle:
+        kept = [*head, *tail]
+        pruned_rendered = (
+            [_summary_message(previous_summary, [], kept), *kept] if previous_summary else kept
+        )
+        pruned_tokens = reserved_tokens + count_tokens(pruned_rendered, model_str)
+        did_prune = pruned_tokens < original_tokens
         return CompactionResult(
-            messages=rendered,
+            messages=pruned_rendered,
             summary=previous_summary,
-            compacted=False,
+            compacted=did_prune,
             original_tokens=original_tokens,
-            compacted_tokens=original_tokens,
+            compacted_tokens=pruned_tokens if did_prune else original_tokens,
             head_count=len(head),
             middle_count=0,
             tail_count=len(tail),
-            retained_messages=[*head, *tail],
+            retained_messages=kept,
         )
-
-    # Forced /compact also shrinks the protected tail: giant tool args and
-    # outputs become explicit stubs (the bytes remain in the workspace).
-    # Auto-compaction keeps the tail fully verbatim.
-    if force:
-        tail = prune_forced_tail(tail)
 
     # Phase 1: Prune old tool results in head and middle
     # (tail is protected — no pruning)

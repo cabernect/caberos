@@ -213,6 +213,26 @@ def test_static_html_removes_active_markup_and_navigation():
     assert payload["content"] == source
 
 
+def test_static_html_renders_noscript_fallbacks():
+    from bs4 import BeautifulSoup
+
+    from agentos import previews
+
+    source = """
+    <html><body><div class="reveal">Hidden until JS</div>
+    <noscript><style>.reveal{opacity:1}</style><p>JS is off</p></noscript>
+    <noscript><script>alert(1)</script><em>still safe</em></noscript>
+    </body></html>
+    """
+    payload = previews.preview_bytes(source.encode(), "page.html")
+    doc = BeautifulSoup(payload["html_document"], "html.parser")
+    assert "opacity:1" in doc.style.text
+    assert doc.find("p").text == "JS is off"
+    assert doc.find("em").text == "still safe"
+    assert not doc.find("script")
+    assert not doc.find("noscript")
+
+
 def test_truncated_html_is_source_only():
     from agentos import previews
 
