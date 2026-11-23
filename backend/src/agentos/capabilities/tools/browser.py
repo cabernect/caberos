@@ -166,8 +166,8 @@ async def browser_open(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
 
 
 async def browser_observe(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
-    agent_id, _, run_id = _ids(kwargs)
-    session = browser_registry.get_owned(run_id, agent_id)
+    agent_id, session_id, run_id = _ids(kwargs)
+    session = browser_registry.get_owned(run_id, agent_id, session_id)
 
     if args.get("visual"):
         # On-demand visual observation (plan: screenshots are stored as
@@ -209,8 +209,8 @@ async def browser_observe(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]
 
 
 async def browser_act(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
-    agent_id, _, run_id = _ids(kwargs)
-    session = browser_registry.get_owned(run_id, agent_id)
+    agent_id, session_id, run_id = _ids(kwargs)
+    session = browser_registry.get_owned(run_id, agent_id, session_id)
     # Domain-scope widening: an out-of-scope navigation was blocked by the
     # profile's domain policy. Retrying with allow_domain=True widens the
     # session scope — the operator's approval of this call is the decision.
@@ -230,8 +230,8 @@ async def browser_act(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
 
 
 async def browser_extract(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
-    agent_id, _, run_id = _ids(kwargs)
-    session = browser_registry.get_owned(run_id, agent_id)
+    agent_id, session_id, run_id = _ids(kwargs)
+    session = browser_registry.get_owned(run_id, agent_id, session_id)
     data = await session.extract(args["expression"])
     ws = kwargs.get("workspace_path")
 
@@ -259,6 +259,6 @@ async def browser_extract(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]
 
 
 async def browser_close(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
-    _, _, run_id = _ids(kwargs)
-    closed = await browser_registry.close_for_run(run_id)
+    _, session_id, run_id = _ids(kwargs)
+    closed = await browser_registry.close_for_run(run_id, session_id)
     return {"closed": closed}
