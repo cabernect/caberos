@@ -4207,14 +4207,15 @@ function AboutTab() {
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            {updater.status === "idle" && (
+            {["idle", "up-to-date", "error", "checking"].includes(updater.status) && (
               <button
                 onClick={handleCheckUpdates}
-                className="flex items-center gap-1.5 rounded-lg border px-3 py-2 text-[12px] font-medium text-[var(--ink-2)] transition hover:bg-[var(--hover)]"
+                disabled={updater.status === "checking"}
+                className="flex items-center gap-1.5 rounded-lg border px-3 py-2 text-[12px] font-medium text-[var(--ink-2)] transition hover:bg-[var(--hover)] disabled:cursor-not-allowed disabled:opacity-60"
                 style={{ borderColor: "var(--border)" }}
               >
                 <RefreshCw className="h-3.5 w-3.5" />
-                Check for updates
+                {updater.status === "checking" ? "Checking…" : "Check for updates"}
               </button>
             )}
             {updater.status === "available" && (

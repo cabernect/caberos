@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Download, RotateCcw, X } from "lucide-react";
 import { api } from "@/lib/api";
 import {
@@ -14,18 +14,35 @@ import {
  * Shows a popup alert if a new version is available.
  * Does nothing in web mode.
  */
+const UPDATE_POLL_MS = 4 * 60 * 60 * 1000;
+
 export function UpdateChecker() {
   const updater = useUpdater();
   const [dismissed, setDismissed] = useState(false);
+  const statusRef = useRef(updater.status);
+  statusRef.current = updater.status;
 
   useEffect(() => {
     if (!isDesktopMode()) return;
-    // Check after a short delay so startup isn't blocked
-    const timer = setTimeout(() => {
+    const check = () => {
+      // Skip states where a re-check would clobber progress or a pending install.
+      const s = statusRef.current;
+      if (s === "checking" || s === "available" || s === "downloading" || s === "installing" || s === "ready") return;
       void refreshUpdates().catch(() => {});
-    }, 3000);
-    return () => clearTimeout(timer);
+    };
+    // Check after a short delay so startup isn't blocked, then poll periodically.
+    const timer = setTimeout(check, 3000);
+    const interval = setInterval(check, UPDATE_POLL_MS);
+    return () => {
+      clearTimeout(timer);
+      clearInterval(interval);
+    };
   }, []);
+
+  // Reshow the popup if a newer version appears after a dismissal.
+  useEffect(() => {
+    setDismissed(false);
+  }, [updater.info?.latestVersion]);
 
   // W9 — route through the notification pipeline so the event lands in
   // the inbox with dedup (one row per version) + prefs like every event.
