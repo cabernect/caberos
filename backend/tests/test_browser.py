@@ -221,6 +221,25 @@ async def test_live_registry_ownership_and_cleanup(tmp_path):
 
 
 @needs_browser
+async def test_session_scope_shares_browser_across_runs(tmp_path):
+    """Runs in one conversation session share the browser — a later run
+    continues on the page an earlier run left open. Other sessions get
+    their own browser."""
+    httpd, url = _serve(tmp_path / "srv")
+    reg = BrowserRegistry()
+    try:
+        s1, _ = await reg.get_or_open(url, agent_id="a", session_id="sess", run_id="r1")
+        s2, _ = await reg.get_or_open(url, agent_id="a", session_id="sess", run_id="r2")
+        assert s2 is s1
+        other, _ = await reg.get_or_open(url, agent_id="a", session_id="other", run_id="r3")
+        assert other is not s1
+        assert reg.get_owned("r2", "a", "sess") is s1
+    finally:
+        await reg.shutdown_all()
+        httpd.shutdown()
+
+
+@needs_browser
 async def test_live_browser_open_capability_roundtrip(tmp_path):
     """The capability path: open → act → close through the tool surface."""
     httpd, url = _serve(tmp_path / "srv")
@@ -647,7 +666,7 @@ async def test_profile_lock_refuses_second_run(tmp_path, monkeypatch):
             await reg.get_or_open(
                 url,
                 agent_id="a",
-                session_id="s",
+                session_id="s2",
                 run_id="r2",
                 profile="locked",
                 allowed_domains=None,
@@ -736,14 +755,14 @@ async def test_visible_session_survives_idle_reaper(tmp_path, monkeypatch):
     httpd, url = _serve(tmp_path / "srv")
     reg = BrowserRegistry()
     try:
-        await reg.get_or_open(url, agent_id="a", session_id="s", run_id="vis")
+        await reg.get_or_open(url, agent_id="a", session_id="s-vis", run_id="vis")
         # mark it visible post-hoc (same flag the real open path sets)
-        reg._sessions["vis"].visible = True
-        await reg.get_or_open(url, agent_id="a", session_id="s", run_id="head")
+        reg._sessions["s-vis"].visible = True
+        await reg.get_or_open(url, agent_id="a", session_id="s-head", run_id="head")
         await asyncio.sleep(0.6)  # several reap ticks past the timeout
-        assert "head" not in reg._sessions  # headless reaped
-        assert "vis" in reg._sessions  # visible survived
-        assert reg._sessions["vis"].session.alive()
+        assert "s-head" not in reg._sessions  # headless reaped
+        assert "s-vis" in reg._sessions  # visible survived
+        assert reg._sessions["s-vis"].session.alive()
     finally:
         await reg.shutdown_all()
         httpd.shutdown()

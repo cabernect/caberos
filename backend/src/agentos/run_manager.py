@@ -273,6 +273,8 @@ async def start_run(
             if rid:
                 # A cancelled run must not orphan its background terminals
                 # or browser sessions.
+                ctx = _active_runs.get(rid)
+                sid = (ctx.session_id if ctx else "") or None
                 try:
                     from .terminal.registry import terminal_registry
 
@@ -282,7 +284,7 @@ async def start_run(
                 try:
                     from .browser.registry import browser_registry
 
-                    await browser_registry.close_for_run(rid)
+                    await browser_registry.close_for_run(rid, session_id=sid)
                 except Exception:
                     pass
             if rid and rid in _active_runs:

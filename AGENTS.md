@@ -187,7 +187,7 @@ the caller opts in; both sync and background terminal paths explicitly opt in.
 `Schedule`/`ScheduleRevision`/`ScheduleOccurrence` — persisted `next_fire_at` is truth; restart recovery is a DB read + missed-run sweep (`skip`/`run_once`/`catch_up`, capped 25). Triggers: once/interval/cron (croniter) with IANA timezone; DST handled (nonexistent → first valid instant, ambiguous → once). Overlap: skip/queue/cancel_previous/allow_parallel. Failure: `no_retry`/`bounded_retry` (retries = new occurrences via `retry_of`). Heartbeat is a facade over a managed schedule row — old `/api/scheduler/heartbeat*` endpoints unchanged; managed rows reject edit/delete.
 
 ### Browser automation
-Managed Chrome-for-Testing (explicit first-use install consent), CDP sessions, headless/visible modes, domain-scoped opt-in persistent profiles, domain leash, approval-gated actions, takeover requests, download staging. `web_fetch` stays the non-interactive path.
+Managed Chrome-for-Testing (explicit first-use install consent), CDP sessions, headless/visible modes, domain-scoped opt-in persistent profiles, domain leash, approval-gated actions, takeover requests, download staging. Browser sessions are scoped to the conversation session — runs in the same session share one browser (sessionless runs fall back to run scope); idle headless sessions reap after 10 min. `web_fetch` stays the non-interactive path.
 
 ### Artifacts & previews
 `Artifact`/`ArtifactRevision`: stable identity, immutable revisions, restore-as-new, conflict detection on external edits, run/message provenance. Structured spec → bytes, never raw Office XML. `previews.py` classifies bytes → bounded renderers; workspace + skill preview endpoints accept path or `{artifact_id, revision_id}`.
