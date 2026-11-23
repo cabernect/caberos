@@ -74,3 +74,30 @@ hình search, image, speech và terminal local.
 5. Yêu cầu approval cho egress và consequential write.
 6. Test một task đại diện.
 7. Kiểm tra schema đã load và syscall trong [Observability](/vi/docs/guides/observability/).
+
+## Tiếp tục thao tác trên managed browser
+
+Các run trong cùng cuộc hội thoại dùng chung một managed browser. Để tiếp tục
+trang hiện tại, dùng `browser_observe` rồi `browser_act`; `browser_open` điều
+hướng tab và có thể làm mất trạng thái trang. Stop dừng agent nhưng giữ browser.
+`browser_close`, đóng cuộc hội thoại thành công hoặc tắt app sẽ đóng browser.
+Browser headless hết hạn sau mười phút không hoạt động; browser hiển thị vẫn mở
+để người dùng tiếp quản. Run không có cuộc hội thoại vẫn dùng browser riêng.
+
+Named profile lưu cookie trên đĩa, không giữ tab hay trạng thái trang qua lần
+khởi động lại app. Mỗi named profile chỉ được một cuộc hội thoại sử dụng tại
+một thời điểm.
+
+Các tab dùng chung profile của browser và được giữ qua các run khi browser còn mở:
+
+- `browser_observe` liệt kê ID, tiêu đề, URL và tab đang hoạt động.
+  Đặt `tabs_only: true` để chỉ liệt kê, không đọc nội dung trang.
+- `browser_act(action: "new_tab", value: "<url>")` mở và chọn tab mới.
+- `browser_act(action: "switch_tab", target: "<tab_id>")` chọn tab có sẵn.
+- `browser_act(action: "close_tab", target: "<tab_id>")` đóng một tab.
+  Bỏ `target` để đóng tab hiện tại; browser sẽ chọn một tab còn lại.
+
+`browser_open` vẫn điều hướng tab đang hoạt động. Dùng `browser_close` để đóng
+tab cuối cùng và toàn bộ browser. Element ref thuộc tab đã quan sát; dùng ref
+mới sau khi chuyển tab. Link có thể mở tab khác nhưng agent phải chọn tab đó
+một cách rõ ràng, không tự động chuyển.

@@ -403,6 +403,17 @@ async def close_session(
             await db.refresh(session)
             return
 
+        try:
+            from ..browser.registry import browser_registry
+
+            await browser_registry.close_owned("", session.agent_id, session.id)
+        except Exception as exc:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "session browser cleanup failed: %s", type(exc).__name__
+            )
+
         # Post-close maintenance: pin untracked skill-dir edits to history,
         # then reflect. Both are best-effort — they must never reopen the
         # session or roll back the committed close + learning.

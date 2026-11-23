@@ -96,6 +96,33 @@ Each load request accepts at most 10 new capability schemas, and a run can hold 
 
 Knowledge retrieval stays local until retrieved excerpts are included in a cloud model request. Web operations contact external services and are marked as egress.
 
+### Managed browser continuity
+
+Browser tools share one managed browser across runs in the same conversation.
+For a follow-up on the current page, use `browser_observe` then `browser_act`;
+`browser_open` navigates the tab and can reset page state. Stop halts agent work
+but preserves the conversation browser. `browser_close`, successful conversation
+closure, or app shutdown closes it. Headless browsers expire after ten idle
+minutes; visible browsers remain open for human takeover. Runs without a
+conversation keep run-scoped isolation.
+
+Named profiles retain cookies on disk, not live tabs or page state across app
+restarts. Only one conversation can use a named profile at a time.
+
+Tabs share that browser's profile and persist across runs while it stays open:
+
+- `browser_observe` lists tab IDs, titles, URLs, and which tab is active.
+  Set `tabs_only: true` to list without inspecting page content.
+- `browser_act(action: "new_tab", value: "<url>")` opens and selects a tab.
+- `browser_act(action: "switch_tab", target: "<tab_id>")` selects an existing tab.
+- `browser_act(action: "close_tab", target: "<tab_id>")` closes one tab.
+  Omit `target` to close the active tab; another remaining tab becomes active.
+
+`browser_open` still navigates the active tab. Closing the last tab requires
+`browser_close`, which closes the whole browser. Element refs belong to the
+observed tab; use fresh refs after switching. Links can open additional tabs,
+but the agent must explicitly select them rather than automatically switching.
+
 ## Global Tools bindings and media
 
 Global **Settings → Tools** selects implementation backends independently of

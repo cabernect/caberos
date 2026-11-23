@@ -9,6 +9,33 @@ Each GitHub release attaches the same desktop artifacts: a macOS Apple Silicon
 and `latest.json` — the manifest the in-app updater polls to discover new
 versions.
 
+## [Unreleased] — 0.2.4 "Browser Continuity & Updates"
+
+### Added
+
+- Desktop update polling every four hours, alongside the startup check.
+  Settings -> About keeps manual checking available after success or failure.
+- Context usage tooltips show cached tokens as a percentage of context used.
+- Multi-tab browsing through the existing tools: `browser_observe` lists tabs;
+  `browser_act` can open, switch, and close tabs without replacing other pages.
+  Tabs persist across runs in the same live conversation browser.
+
+### Changed
+
+- Managed browsers belong to the conversation rather than individual runs.
+  Follow-up runs can observe and act on the existing page; Stop preserves it.
+  Headless browsers expire after ten idle minutes. Explicit browser close,
+  successful conversation close, and app shutdown release the browser.
+
+### Fixed
+
+- Browser reuse and close enforce agent/session ownership; concurrent opens
+  cannot claim the same named profile or launch duplicate session browsers.
+  Actions on one browser are serialized to protect shared page state.
+- Concurrent update checks are deduplicated and cannot overwrite download,
+  installation, or restart-ready state. Failed downloads can be retried,
+  and update-check resources are released after use.
+
 ## [0.2.3] — 2026-11-20 "Context Hotfix"
 
 ### Added

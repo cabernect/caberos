@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from ...browser.cdp import BrowserError
+from ...browser.cdp import BrowserError, BrowserSession
 from ...browser.registry import browser_registry
 
 _MAX_EXTRACT_CHARS = 20_000
@@ -167,7 +167,16 @@ async def browser_open(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
 
 async def browser_observe(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     agent_id, session_id, run_id = _ids(kwargs)
-    session = browser_registry.get_owned(run_id, agent_id, session_id)
+    async with browser_registry.owned(run_id, agent_id, session_id) as session:
+        return await _observe(session, args, kwargs)
+
+
+async def _observe(
+    session: BrowserSession, args: dict[str, Any], kwargs: dict[str, Any]
+) -> dict[str, Any]:
+    tabs = await session.list_tabs()
+    if args.get("tabs_only"):
+        return {"tabs": tabs}
 
     if args.get("visual"):
         # On-demand visual observation (plan: screenshots are stored as
@@ -186,6 +195,7 @@ async def browser_observe(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]
         result: dict[str, Any] = {
             "screenshot": str(rel),
             "bytes": len(png),
+            "tabs": tabs,
         }
         if kwargs.get("supports_vision"):
             result["_model_content"] = [
@@ -200,7 +210,7 @@ async def browser_observe(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]
         return result
 
     obs = await session.observe(scope=args.get("scope"))
-    out: dict[str, Any] = {"observation": obs.serialize()}
+    out: dict[str, Any] = {"observation": obs.serialize(), "tabs": tabs}
     if session.downloads:
         out["downloads"] = [f"downloads/{d['filename']}" for d in session.downloads]
     if session.blocked_navigations:
@@ -210,20 +220,28 @@ async def browser_observe(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]
 
 async def browser_act(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     agent_id, session_id, run_id = _ids(kwargs)
-    session = browser_registry.get_owned(run_id, agent_id, session_id)
+    async with browser_registry.owned(run_id, agent_id, session_id) as session:
+        return await _act(session, args, kwargs)
+
+
+async def _act(
+    session: BrowserSession, args: dict[str, Any], kwargs: dict[str, Any]
+) -> dict[str, Any]:
     # Domain-scope widening: an out-of-scope navigation was blocked by the
     # profile's domain policy. Retrying with allow_domain=True widens the
     # session scope — the operator's approval of this call is the decision.
-    if args["action"] == "navigate" and args.get("allow_domain"):
+    if args["action"] in ("navigate", "new_tab") and args.get("allow_domain"):
         session.allow_domain_for(args.get("value") or args.get("target") or "")
     delta = await session.act(
         action=args["action"],
         ref=args.get("target", ""),
         value=args.get("value"),
     )
-    if landed := _delta_url(delta):
+    if landed := _delta_url(delta) or _observation_url(delta)[0]:
         await _persist_browser_source(landed, "", kwargs)
     out: dict[str, Any] = {"delta": delta}
+    if args["action"] in ("new_tab", "switch_tab", "close_tab"):
+        out["tabs"] = await session.list_tabs()
     if session.blocked_navigations:
         out["blocked_navigations"] = list(session.blocked_navigations)
     return out
@@ -231,7 +249,13 @@ async def browser_act(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
 
 async def browser_extract(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     agent_id, session_id, run_id = _ids(kwargs)
-    session = browser_registry.get_owned(run_id, agent_id, session_id)
+    async with browser_registry.owned(run_id, agent_id, session_id) as session:
+        return await _extract(session, args, kwargs)
+
+
+async def _extract(
+    session: BrowserSession, args: dict[str, Any], kwargs: dict[str, Any]
+) -> dict[str, Any]:
     data = await session.extract(args["expression"])
     ws = kwargs.get("workspace_path")
 
@@ -259,6 +283,6 @@ async def browser_extract(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]
 
 
 async def browser_close(args: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
-    _, session_id, run_id = _ids(kwargs)
-    closed = await browser_registry.close_for_run(run_id, session_id)
+    agent_id, session_id, run_id = _ids(kwargs)
+    closed = await browser_registry.close_owned(run_id, agent_id, session_id)
     return {"closed": closed}

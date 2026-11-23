@@ -271,10 +271,8 @@ async def start_run(
         except asyncio.CancelledError:
             rid = run_id_future.result() if run_id_future.done() else None
             if rid:
-                # A cancelled run must not orphan its background terminals
-                # or browser sessions.
-                ctx = _active_runs.get(rid)
-                sid = (ctx.session_id if ctx else "") or None
+                # Conversation browsers survive Stop for follow-up messages;
+                # sessionless browsers and background terminals are cleaned.
                 try:
                     from .terminal.registry import terminal_registry
 
@@ -284,7 +282,7 @@ async def start_run(
                 try:
                     from .browser.registry import browser_registry
 
-                    await browser_registry.close_for_run(rid, session_id=sid)
+                    await browser_registry.close_for_run(rid)
                 except Exception:
                     pass
             if rid and rid in _active_runs:

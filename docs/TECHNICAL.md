@@ -161,7 +161,19 @@ Tick: drain due queued occurrences → fire due schedules → commit → spawn r
 
 ## 10. Browser subsystem
 
-Chrome-for-Testing runtime — managed install gated on explicit consent. CDP session per agent run; headless default, visible mode for takeover. Domain leash bounds navigation; persistent profiles opt-in and domain-scoped (`BrowserProfile` rows). `browser_open` persists the landed URL (redirects resolved); `browser_act` persists URL transitions (clicks, submits, SPA navigations); blocked navigations persist nothing.
+Chrome-for-Testing runtime — managed install gated on explicit consent. CDP browser per conversation session, owned by its agent; sessionless calls remain run-scoped. Headless default, visible mode for takeover. Stop preserves conversation browsers, while sessionless run cancellation closes its browser. Explicit browser close, successful conversation close, and gateway shutdown release browsers; idle headless browsers expire after 10 minutes. To continue a page across runs, use `browser_observe` then `browser_act`; `browser_open` navigates the shared tab and can reset page state. Registry allocation/profile locks and per-browser operation locks serialize competing calls. Domain leash bounds navigation; persistent profiles opt-in and domain-scoped (`BrowserProfile` rows). `browser_open` persists the landed URL (redirects resolved); `browser_act` persists URL transitions (clicks, submits, SPA navigations); blocked navigations persist nothing.
+
+Tab management stays on the existing capability surface. `browser_observe`
+returns tab IDs, URLs, titles, and the agent-selected active tab;
+`tabs_only=true` skips page inspection. `browser_act` adds `new_tab` (URL in
+`value`), `switch_tab`, and `close_tab` (tab ID in `target`). Closing the active
+tab selects another remaining tab; closing the last requires `browser_close`.
+`browser_open` still navigates the active tab. Target sessions share the browser's
+profile and conversation lifetime. CDP auto-attachment pauses new page targets
+until their profile domain interception is installed; responses use the
+originating target session. The agent explicitly selects site-opened tabs.
+Element refs are scoped to their tab, so a stale ref from a different tab cannot
+act on a coincidentally matching DOM node.
 
 ## 11. References vs evidence
 

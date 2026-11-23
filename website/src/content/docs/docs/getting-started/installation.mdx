@@ -43,6 +43,13 @@ The installer is not yet signed with a widely trusted certificate. If Windows Sm
 
 Shell commands run inside bundled Microsoft Execution Containers (MXC) — no Docker or WSL needed, but this requires **Windows 11 24H2 (build 26100) or newer** and a one-time elevated setup: open **Observability → Health** and click **Enable shell sandbox**. On older builds everything else still works; only the `terminal` capability stays off. MXC is reported as *experimental*, not a verified security boundary — see `docs/platform-support.md` for the full matrix.
 
+### Checking for updates
+
+The desktop app checks shortly after launch and every four hours while open.
+Use **Settings -> About -> Check for updates** to check again manually, even
+after an "up to date" result. Downloading and restarting remain your choice;
+background checks do not install updates automatically.
+
 ## Option 2: Docker (any platform)
 
 Docker is the easiest way to run CaberOS on Linux, macOS, or Windows (via WSL2).

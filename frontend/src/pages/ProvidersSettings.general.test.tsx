@@ -1,7 +1,12 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, fireEvent } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { ThemeProvider } from "@/lib/theme";
+import { refreshUpdates, resetUpdater } from "@/lib/updater";
+
+const checkUpdates = vi.hoisted(() => vi.fn(async () => null));
+vi.mock("@tauri-apps/plugin-updater", () => ({ check: checkUpdates }));
+vi.mock("@tauri-apps/api/app", () => ({ getVersion: async () => "0.2.3" }));
 
 const apiMock = vi.hoisted(() => ({
   listProviders: vi.fn(),
@@ -74,6 +79,8 @@ vi.mock("@/lib/confirmHook", () => ({
 import { ProvidersSettings } from "./ProvidersSettings";
 
 beforeEach(() => {
+  resetUpdater();
+  checkUpdates.mockClear();
   vi.stubGlobal("matchMedia", (q: string) => ({
     matches: false,
     media: q,
@@ -114,6 +121,28 @@ afterEach(() => {
 });
 
 describe("General settings (W11 internal catalog)", () => {
+  it("About keeps a working manual check after an up-to-date result", async () => {
+    vi.stubGlobal("__TAURI_INTERNALS__", {});
+    await refreshUpdates();
+    render(
+      <MemoryRouter initialEntries={["/settings?tab=about"]}>
+        <ThemeProvider><ProvidersSettings /></ThemeProvider>
+      </MemoryRouter>,
+    );
+    await act(async () => {});
+    expect(screen.getByText(/You're up to date/)).toBeInTheDocument();
+    const button = screen.getByRole("button", { name: "Check for updates" });
+    let finish!: (value: null) => void;
+    checkUpdates.mockImplementationOnce(() =>
+      new Promise<null>((resolve) => { finish = resolve; }),
+    );
+    await act(async () => { fireEvent.click(button); });
+    expect(screen.getByRole("button", { name: /Checking/ })).toBeDisabled();
+    await act(async () => { finish(null); });
+    expect(checkUpdates).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("button", { name: "Check for updates" })).toBeEnabled();
+  });
+
   it("renders no Model Catalog card or refresh controls — catalog is internal", async () => {
     render(
       <MemoryRouter>

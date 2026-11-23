@@ -64,6 +64,21 @@ function readable(f: File): File {
 
 const sendButton = () => screen.getByTitle(/Send/) as HTMLButtonElement;
 
+it.each([false, true])("shows cache-hit percentage with breakdown=%s", (expanded) => {
+  mount({
+    contextTokens: 1000, cachedTokens: 750, maxContextTokens: 10000,
+    ...(expanded ? { contextBreakdown: { system_prompt: 100, conversation: 800, tools: 100 } } : {}),
+  });
+  fireEvent.mouseEnter(screen.getByTitle("Context window usage").parentElement!);
+  expect(screen.getByText(/75% cached/)).toBeInTheDocument();
+});
+
+it("does not divide by zero when context usage is empty", () => {
+  mount({ contextTokens: 0, cachedTokens: 0, maxContextTokens: 10000 });
+  fireEvent.mouseEnter(screen.getByTitle("Context window usage").parentElement!);
+  expect(screen.queryByText(/% cached/)).not.toBeInTheDocument();
+});
+
 const stage = async (ref: React.RefObject<ChatInputBarHandle | null>, files: File[]) => {
   await act(async () => {
     await ref.current!.addFiles(files);

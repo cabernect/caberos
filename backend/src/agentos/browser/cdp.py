@@ -1,7 +1,7 @@
 """Raw-CDP browser session — the Browser module's protocol core.
 
 Promoted from scripts/spike_browser/adapters.py, hardened for production:
-one browser process + one websocket + one page per session, event-driven
+one browser process + one websocket + multiple tabs per session, event-driven
 waits, role-filtered AX projection with a hard element cap, delta-by-line
 post-action observations. See the module docstring for the budget context.
 """
@@ -122,9 +122,12 @@ class Observation:
     url: str
     title: str
     elements: list[Element] = field(default_factory=list)
+    tab_id: str | None = None
 
     def serialize(self) -> str:
         lines = [f"url: {self.url}", f"title: {self.title}"]
+        if self.tab_id:
+            lines.append(f"tab: {self.tab_id}")
         lines += [e.line() for e in self.elements]
         return "\n".join(lines)
 
@@ -152,7 +155,7 @@ class BrowserError(Exception):
 
 
 class BrowserSession:
-    """One Chromium process + one page, driven over one CDP websocket."""
+    """One Chromium process and its tabs, driven over one CDP websocket."""
 
     def __init__(self, binary: Path, profile_dir: Path, staging_dir: Path | None = None) -> None:
         self._binary = binary
@@ -161,6 +164,15 @@ class BrowserSession:
         self._proc: subprocess.Popen | None = None
         self._ws = None
         self._session: str | None = None
+        self._target_id: str | None = None
+        self._tabs: dict[str, str] = {}
+        self._closed_tabs: set[str] = set()
+        self._tab_errors: dict[str, str] = {}
+        self._tab_queue: asyncio.Queue = asyncio.Queue()
+        self._tab_task: asyncio.Task | None = None
+        self._tab_ready = asyncio.Event()
+        self._refs: dict[tuple[str, int], str] = {}
+        self._ref_nodes: dict[str, tuple[str, int]] = {}
         self._msg_id = 0
         self._waiters: dict[int, asyncio.Future] = {}
         self._reader_task: asyncio.Task | None = None
@@ -263,6 +275,24 @@ class BrowserSession:
             f"ws://127.0.0.1:{port}{ws_path}", max_size=64 * 1024 * 1024
         )
         self._reader_task = asyncio.create_task(self._reader_loop())
+        self._research = research
+        if allowed_domains:
+            self._allowed_domains = {d.lower().lstrip("*.") for d in allowed_domains}
+        self._fetch_queue = asyncio.Queue()
+        self._intercept_task = asyncio.create_task(self._intercept_loop())
+        self._tab_task = asyncio.create_task(self._tab_loop())
+        # Pause new page targets until the same policy as the original tab
+        # is installed. This also covers links that open a new tab themselves.
+        await self._send(
+            "Target.setAutoAttach",
+            {
+                "autoAttach": True,
+                "waitForDebuggerOnStart": True,
+                "flatten": True,
+                "filter": [{"type": "page"}, {"exclude": True}],
+            },
+            session=False,
+        )
         # Chrome opens with an about:blank tab — attach to THAT target
         # instead of creating a second tab we'd just orphan.
         targets = await self._send("Target.getTargets", session=False)
@@ -273,14 +303,7 @@ class BrowserSession:
         if page is None:
             target = await self._send("Target.createTarget", {"url": "about:blank"}, session=False)
             page = {"targetId": target["targetId"]}
-        attached = await self._send(
-            "Target.attachToTarget",
-            {"targetId": page["targetId"], "flatten": True},
-            session=False,
-        )
-        self._session = attached["sessionId"]
-        await self._send("Page.enable")
-        await self._send("Runtime.enable")
+        await self.switch_tab(page["targetId"])
         if self._staging_dir:
             # Plan: downloads enter run staging and never execute automatically.
             self._staging_dir.mkdir(parents=True, exist_ok=True)
@@ -293,14 +316,6 @@ class BrowserSession:
                 },
                 session=False,
             )
-        self._research = research
-        if research:
-            await self._send("Network.enable")
-            await self._send("Network.setBlockedURLs", {"urls": RESEARCH_BLOCKLIST})
-        if allowed_domains:
-            # Arm interception before the first navigation — a redirect
-            # chain during initial load must not escape the profile scope.
-            await self.set_domain_scope(allowed_domains)
         try:
             await self.navigate(url)
         except BrowserError:
@@ -322,15 +337,111 @@ class BrowserSession:
         # (about:crash, chrome://version, ...). Chrome performs its own DNS,
         # so this closes scheme abuse and obvious private destinations — not
         # a hard guarantee against rebinding inside the browser.
-        from .. import netpolicy
-
-        if url.strip().lower() != "about:blank":
-            try:
-                await netpolicy.resolve_destination(url, allowlist=netpolicy.private_allowlist())
-            except netpolicy.DestinationError as e:
-                raise BrowserError(f"navigation blocked: {e}") from e
+        await self._validate_url(url)
+        self._pending = [
+            ev
+            for ev in self._pending
+            if not (
+                ev.get("sessionId") == self._session
+                and ev.get("method") in ("Page.loadEventFired", "Page.domContentEventFired")
+            )
+        ]
         await self._send("Page.navigate", {"url": url})
         await self._wait_load()
+
+    async def _validate_url(self, url: str) -> None:
+        from .. import netpolicy
+
+        if url.strip().lower() == "about:blank":
+            return
+        if not self.domain_allowed(url):
+            self.blocked_navigations.append(url)
+            raise BrowserError("navigation blocked by profile domain scope")
+        try:
+            await netpolicy.resolve_destination(url, allowlist=netpolicy.private_allowlist())
+        except netpolicy.DestinationError as e:
+            raise BrowserError(f"navigation blocked: {e}") from e
+
+    async def _tab_loop(self) -> None:
+        while True:
+            event = await self._tab_queue.get()
+            params = event["params"]
+            target_id = params["targetInfo"]["targetId"]
+            sid = params["sessionId"]
+            try:
+                await self._enable_domain_scope(sid)
+                if self._research:
+                    await self._send("Network.enable", session=sid)
+                    await self._send(
+                        "Network.setBlockedURLs", {"urls": RESEARCH_BLOCKLIST}, session=sid
+                    )
+                await self._send("Runtime.runIfWaitingForDebugger", session=sid)
+                await self._send("Page.enable", session=sid)
+                await self._send("Runtime.enable", session=sid)
+                self._tabs[target_id] = sid
+            except BrowserError as exc:
+                self._tab_errors[target_id] = str(exc)
+                try:
+                    await self._send("Target.closeTarget", {"targetId": target_id}, session=False)
+                except BrowserError:
+                    pass
+            finally:
+                self._tab_ready.set()
+
+    async def list_tabs(self) -> list[dict]:
+        self.last_activity = time.monotonic()
+        targets = await self._send("Target.getTargets", session=False)
+        return [
+            {
+                "tab_id": target["targetId"],
+                "url": target.get("url", ""),
+                "title": target.get("title", ""),
+                "active": target["targetId"] == self._target_id,
+            }
+            for target in targets["targetInfos"]
+            if target.get("type") == "page" and target["targetId"] not in self._closed_tabs
+        ]
+
+    async def switch_tab(self, tab_id: str) -> None:
+        if not any(tab["tab_id"] == tab_id for tab in await self.list_tabs()):
+            raise BrowserError(
+                "unknown or closed tab — list tabs with browser_observe(tabs_only=true)"
+            )
+        try:
+            async with asyncio.timeout(CMD_TIMEOUT_S):
+                while tab_id not in self._tabs:
+                    if tab_id in self._tab_errors:
+                        raise BrowserError(self._tab_errors[tab_id])
+                    self._tab_ready.clear()
+                    await self._tab_ready.wait()
+        except TimeoutError:
+            raise BrowserError("tab initialization timed out") from None
+        await self._send("Target.activateTarget", {"targetId": tab_id}, session=False)
+        self._target_id = tab_id
+        self._session = self._tabs[tab_id]
+        self._last_obs = None
+
+    async def new_tab(self, url: str = "about:blank") -> None:
+        await self._validate_url(url)
+        target = await self._send("Target.createTarget", {"url": "about:blank"}, session=False)
+        await self.switch_tab(target["targetId"])
+        await self.navigate(url)
+
+    async def close_tab(self, tab_id: str | None = None) -> None:
+        tab_id = tab_id or self._target_id
+        tabs = await self.list_tabs()
+        if not any(tab["tab_id"] == tab_id for tab in tabs):
+            raise BrowserError("unknown or closed tab")
+        if len(tabs) == 1:
+            raise BrowserError("last tab — use browser_close to close the whole browser")
+        result = await self._send("Target.closeTarget", {"targetId": tab_id}, session=False)
+        if not result.get("success"):
+            raise BrowserError("browser could not close the tab")
+        # Chrome acknowledges closing before the target disappears from getTargets.
+        self._closed_tabs.add(tab_id)
+        self._tabs.pop(tab_id, None)
+        if tab_id == self._target_id:
+            await self.switch_tab(next(tab["tab_id"] for tab in tabs if tab["tab_id"] != tab_id))
 
     async def navigate_local(self, path: Path) -> None:
         """Load a platform-local file:// document — for artifact capture.
@@ -368,7 +479,7 @@ class BrowserSession:
         return res.get("result", {}).get("value")
 
     async def close(self) -> None:
-        for task in (self._intercept_task, self._reader_task):
+        for task in (self._tab_task, self._intercept_task, self._reader_task):
             if task and not task.done():
                 task.cancel()
         if self._ws is not None:
@@ -400,6 +511,8 @@ class BrowserSession:
                     fut = self._waiters.pop(data["id"], None)
                     if fut is not None and not fut.done():
                         fut.set_result(data)
+                elif data.get("method") == "Target.attachedToTarget":
+                    self._tab_queue.put_nowait(data)
                 elif self._fetch_queue is not None and data.get("method") == "Fetch.requestPaused":
                     await self._fetch_queue.put(data)
                 else:
@@ -414,7 +527,9 @@ class BrowserSession:
             self._waiters.clear()
             self._event_flag.set()
 
-    async def _send(self, method: str, params: dict | None = None, session: bool = True) -> dict:
+    async def _send(
+        self, method: str, params: dict | None = None, session: bool | str = True
+    ) -> dict:
         if not self.alive():
             raise BrowserError("browser is not running")
         self._msg_id += 1
@@ -422,7 +537,9 @@ class BrowserSession:
         fut = asyncio.get_running_loop().create_future()
         self._waiters[mid] = fut
         msg: dict = {"id": mid, "method": method, "params": params or {}}
-        if session and self._session:
+        if isinstance(session, str):
+            msg["sessionId"] = session
+        elif session and self._session:
             msg["sessionId"] = self._session
         try:
             await self._ws.send(json.dumps(msg))
@@ -442,6 +559,8 @@ class BrowserSession:
         dom_ready_at: float | None = None
         while time.monotonic() < deadline:
             for i, ev in enumerate(self._pending):
+                if ev.get("sessionId") != self._session:
+                    continue
                 method = ev.get("method")
                 if method == "Page.loadEventFired":
                     self._pending.pop(i)
@@ -483,7 +602,12 @@ class BrowserSession:
 
     async def set_domain_scope(self, domains: list[str]) -> None:
         self._allowed_domains = {d.lower().lstrip("*.") for d in domains}
-        self._fetch_queue = asyncio.Queue()
+        for sid in self._tabs.values():
+            await self._enable_domain_scope(sid)
+
+    async def _enable_domain_scope(self, sid: str) -> None:
+        if self._allowed_domains is None:
+            return
         await self._send(
             "Fetch.enable",
             {
@@ -495,8 +619,8 @@ class BrowserSession:
                     }
                 ]
             },
+            session=sid,
         )
-        self._intercept_task = asyncio.create_task(self._intercept_loop())
 
     def domain_allowed(self, url: str) -> bool:
         if self._allowed_domains is None:
@@ -519,15 +643,18 @@ class BrowserSession:
             params = ev.get("params", {})
             rid = params.get("requestId")
             url = params.get("request", {}).get("url", "")
+            sid = ev["sessionId"]
             try:
-                if self.domain_allowed(url):
-                    await self._send("Fetch.continueRequest", {"requestId": rid})
-                else:
-                    self.blocked_navigations.append(url)
+                if not self.domain_allowed(url):
+                    if url not in self.blocked_navigations:
+                        self.blocked_navigations.append(url)
                     await self._send(
                         "Fetch.failRequest",
                         {"requestId": rid, "errorReason": "BlockedByClient"},
+                        session=sid,
                     )
+                else:
+                    await self._send("Fetch.continueRequest", {"requestId": rid}, session=sid)
             except Exception:
                 pass  # browser gone mid-intercept — shutdown handles it
 
@@ -557,7 +684,14 @@ class BrowserSession:
             name = (node.get("name") or {}).get("value", "")
             value = (node.get("value") or {}).get("value")
             backend = node.get("backendDOMNodeId")
-            ref = f"e{backend}" if backend else "-"
+            ref = "-"
+            if backend and self._target_id:
+                key = (self._target_id, backend)
+                if key not in self._refs:
+                    ref = f"e{len(self._ref_nodes) + 1}"
+                    self._refs[key] = ref
+                    self._ref_nodes[ref] = key
+                ref = self._refs[key]
             if len(elements) >= MAX_ELEMENTS:
                 omitted += 1
                 continue
@@ -572,7 +706,7 @@ class BrowserSession:
                     name=f"{omitted} elements omitted — call browser_observe(scope=…) to inspect",
                 )
             )
-        obs = Observation(url=url, title=title, elements=elements)
+        obs = Observation(url=url, title=title, elements=elements, tab_id=self._target_id)
         self._last_obs = obs
         return obs
 
@@ -616,7 +750,7 @@ class BrowserSession:
         """Scope string → backendDOMNodeId. Accepts an element ref (`e123`)
         or a CSS selector resolved against the live DOM."""
         if scope.startswith("e") and scope[1:].isdigit():
-            return int(scope[1:])
+            return self._backend_for_ref(scope)
         root = await self._send("DOM.getDocument", {"depth": 0})
         hit = await self._send(
             "DOM.querySelector",
@@ -627,13 +761,27 @@ class BrowserSession:
         described = await self._send("DOM.describeNode", {"nodeId": hit["nodeId"]})
         return described["node"]["backendNodeId"]
 
+    def _backend_for_ref(self, ref: str) -> int:
+        node = self._ref_nodes.get(ref)
+        if node is None or node[0] != self._target_id:
+            raise BrowserError("unknown element ref for this tab — re-observe the current tab")
+        return node[1]
+
     async def act(self, action: str, ref: str = "", value: str | None = None) -> str:
         self.last_activity = time.monotonic()
+        if action in ("new_tab", "switch_tab", "close_tab"):
+            if action == "new_tab":
+                await self.new_tab(value or "about:blank")
+            elif action == "switch_tab":
+                await self.switch_tab(ref or value or "")
+            else:
+                await self.close_tab(ref or value)
+            return (await self.observe()).serialize()
         oid = None
         if ref and action != "navigate":
             if not ref[1:].isdigit() or not ref.startswith("e"):
                 raise BrowserError(f"unknown element ref: {ref!r}")
-            backend_id = int(ref[1:])
+            backend_id = self._backend_for_ref(ref)
             node = await self._send("DOM.resolveNode", {"backendNodeId": backend_id})
             oid = node["object"]["objectId"]
         if action == "click":
@@ -646,6 +794,7 @@ class BrowserSession:
                     "functionDeclaration": (
                         "function(){(this.nodeType===1?this:this.parentElement).click()}"
                     ),
+                    "userGesture": True,
                 },
             )
         elif action == "type":
