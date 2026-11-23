@@ -9,7 +9,7 @@ Each GitHub release attaches the same desktop artifacts: a macOS Apple Silicon
 and `latest.json` — the manifest the in-app updater polls to discover new
 versions.
 
-## [Unreleased] — 0.2.4 "Browser Continuity & Updates"
+## [0.2.4] — 2026-11-23 "Browser Continuity & Updates"
 
 ### Added
 
@@ -403,7 +403,8 @@ versions.
   mediation, approvals, audit trail, chat UI, channels, and Tauri desktop app
   for macOS.
 
-[Unreleased]: https://github.com/cabernect/caberos/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/cabernect/caberos/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/cabernect/caberos/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/cabernect/caberos/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/cabernect/caberos/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/cabernect/caberos/compare/v0.2.0...v0.2.1

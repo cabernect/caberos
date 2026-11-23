@@ -62,6 +62,7 @@ and [v0.2.1 release plan](docs/plans/v0.2.1-release-plan.md).*
 - **v0.2.1 scope boundary** — the features above are implemented; remote SSH/Daytona/Modal execution, streaming STT, realtime Voice Mode, video generation, and agent-authored apps are not included.
 - **v0.2.2 — Connected Knowledge, Tasks & Richer Preview** — OneDrive/Google Drive connectors, Qdrant & external retrieval, durable tasks with triggers and channel approvals, plus rendered HTML preview and true visual renders for Office artifacts.
 - **v0.2.3 — Context Hotfix** — patch release: stored tool results replay under the same size bound the live path applied, `/compact` shrinks tail-only histories instead of reporting nothing to do, and `<noscript>` fallbacks render in the static HTML preview.
+- **v0.2.4 — Browser Continuity & Updates (release prepared)** — conversation-scoped browsers with tabs and Stop continuity, four-hour update polling with persistent manual checks, and cache-hit percentages in the context tooltip.
 
 ## Features
 
