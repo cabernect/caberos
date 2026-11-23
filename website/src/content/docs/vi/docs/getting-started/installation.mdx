@@ -43,6 +43,13 @@ Installer chưa được ký bằng chứng chỉ phổ biến. Nếu Windows Sm
 
 Shell command chạy trong Microsoft Execution Containers (MXC) đi kèm installer — không cần Docker hay WSL, nhưng yêu cầu **Windows 11 24H2 (build 26100) trở lên** và setup elevated một lần: mở **Observability → Health** và bấm **Enable shell sandbox**. Trên build cũ hơn mọi thứ khác vẫn hoạt động; chỉ capability `terminal` tắt. MXC được báo là *experimental*, không phải security boundary đã xác minh — xem `docs/platform-support.md` cho ma trận đầy đủ.
 
+### Kiểm tra cập nhật
+
+Desktop app kiểm tra ngay sau khi khởi động và mỗi bốn giờ khi đang mở.
+Vào **Settings -> About -> Check for updates** để kiểm tra lại thủ công,
+kể cả sau kết quả "up to date". Bạn vẫn quyết định tải và khởi động lại;
+kiểm tra nền không tự động cài bản cập nhật.
+
 ## Tùy chọn 2: Docker (mọi nền tảng)
 
 Docker là cách dễ nhất để chạy CaberOS trên Linux, macOS, hoặc Windows (qua WSL2).

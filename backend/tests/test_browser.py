@@ -209,12 +209,12 @@ async def test_live_registry_ownership_and_cleanup(tmp_path):
     try:
         session, result = await reg.get_or_open(url, agent_id="a1", session_id="s1", run_id="r1")
         assert "Count" in result
-        assert reg.get_owned("r1", "a1") is session
+        assert reg.get_owned("r1", "a1", "s1") is session
         with pytest.raises(BrowserError):
-            reg.get_owned("r1", "other-agent")
-        assert await reg.close_for_run("r1") is True
+            reg.get_owned("r1", "other-agent", "s1")
+        assert await reg.close_owned("r1", "a1", "s1") is True
         assert not session.alive()
-        assert await reg.close_for_run("r1") is False
+        assert await reg.close_owned("r1", "a1", "s1") is False
     finally:
         await reg.shutdown_all()
         httpd.shutdown()
@@ -236,6 +236,161 @@ async def test_session_scope_shares_browser_across_runs(tmp_path):
         assert reg.get_owned("r2", "a", "sess") is s1
     finally:
         await reg.shutdown_all()
+        httpd.shutdown()
+
+
+@needs_browser
+async def test_followup_run_continues_page_after_stop(tmp_path):
+    from agentos.browser import registry as module
+
+    httpd, url = _serve(tmp_path / "srv")
+    reg = module.browser_registry
+    try:
+        opened = await browser_open(
+            {"url": url}, agent_id="continuity", session_id="chat", run_id="first"
+        )
+        button = next(
+            line.split()[0] for line in opened["observation"].splitlines() if "Count" in line
+        )
+        await browser_act(
+            {"action": "click", "target": button},
+            agent_id="continuity",
+            session_id="chat",
+            run_id="first",
+        )
+        original = reg.get_owned("first", "continuity", "chat")
+        assert not await reg.close_for_run("first")
+        observed = await browser_observe(
+            {}, agent_id="continuity", session_id="chat", run_id="followup"
+        )
+        assert "Count: 1" in observed["observation"]
+        assert reg.get_owned("followup", "continuity", "chat") is original
+        button = next(
+            line.split()[0] for line in observed["observation"].splitlines() if "Count" in line
+        )
+        acted = await browser_act(
+            {"action": "click", "target": button},
+            agent_id="continuity",
+            session_id="chat",
+            run_id="followup",
+        )
+        assert "Count: 2" in acted["delta"]
+        assert await browser_close(
+            {}, agent_id="continuity", session_id="chat", run_id="followup"
+        ) == {"closed": True}
+    finally:
+        await reg.close_owned("followup", "continuity", "chat")
+        httpd.shutdown()
+
+
+@needs_browser
+async def test_tabs_preserve_page_state_across_switches_and_runs(tmp_path):
+    from agentos.browser.registry import browser_registry
+
+    httpd, url = _serve(tmp_path / "srv")
+    ids = {"agent_id": "tabs", "session_id": "tabs-chat", "run_id": "first"}
+    try:
+        opened = await browser_open({"url": url}, **ids)
+        first_ref = next(
+            line.split()[0] for line in opened["observation"].splitlines() if "Count" in line
+        )
+        await browser_act({"action": "click", "target": first_ref}, **ids)
+        first = (await browser_observe({"tabs_only": True}, **ids))["tabs"][0]["tab_id"]
+        created = await browser_act({"action": "new_tab", "value": url + "?second"}, **ids)
+        assert len(created["tabs"]) == 2
+        second = next(tab["tab_id"] for tab in created["tabs"] if tab["active"])
+        assert first != second
+        with pytest.raises(BrowserError, match="ref for this tab"):
+            await browser_act({"action": "click", "target": first_ref}, **ids)
+        with pytest.raises(BrowserError, match="unknown or closed tab"):
+            await browser_act({"action": "switch_tab", "target": "not-a-tab"}, **ids)
+
+        assert not await browser_registry.close_for_run("first")
+        ids["run_id"] = "followup"
+        followup = await browser_observe({}, **ids)
+        assert next(tab["tab_id"] for tab in followup["tabs"] if tab["active"]) == second
+        switched = await browser_act({"action": "switch_tab", "target": first}, **ids)
+        assert "Count: 1" in switched["delta"]
+        await browser_act({"action": "close_tab", "target": second}, **ids)
+        blank = await browser_act({"action": "new_tab"}, **ids)
+        assert "url: about:blank" in blank["delta"]
+        await browser_act({"action": "close_tab"}, **ids)
+        with pytest.raises(BrowserError, match="last tab"):
+            await browser_act({"action": "close_tab"}, **ids)
+        assert await browser_close({}, **ids) == {"closed": True}
+    finally:
+        await browser_registry.close_owned("followup", "tabs", "tabs-chat")
+        httpd.shutdown()
+
+
+@needs_browser
+async def test_site_opened_tab_is_listed_without_switching(live_session):
+    session, obs = live_session
+    original = (await session.list_tabs())[0]["tab_id"]
+    await session._send(
+        "Runtime.evaluate",
+        {
+            "expression": (
+                "const link = document.createElement('a'); link.textContent = 'Popup'; "
+                f"link.href = {json.dumps(obs.url + '?popup')}; link.target = '_blank'; "
+                "document.body.appendChild(link)"
+            )
+        },
+    )
+    link = next(
+        element for element in (await session.observe()).elements if element.name == "Popup"
+    )
+    await session.act("click", link.ref)
+    for _ in range(100):
+        tabs = await session.list_tabs()
+        if len(tabs) == 2:
+            break
+        await asyncio.sleep(0.02)
+    assert len(tabs) == 2
+    assert next(tab["tab_id"] for tab in tabs if tab["active"]) == original
+    popup = next(tab["tab_id"] for tab in tabs if tab["tab_id"] != original)
+    await session.switch_tab(popup)
+    assert (await session.observe()).tab_id == popup
+    await session.close_tab()
+    assert (await session.observe()).tab_id == original
+    for forbidden in ("file:///etc/passwd", "http://169.254.169.254/latest/meta-data"):
+        with pytest.raises(BrowserError, match="navigation blocked"):
+            await session.new_tab(forbidden)
+    assert len(await session.list_tabs()) == 1
+
+
+@needs_browser
+async def test_tabs_keep_domain_scope_on_background_popups(tmp_path):
+    httpd, url = _serve(tmp_path / "srv")
+    session = BrowserSession(_browser, tmp_path / "profile")
+    blocked = url.replace("127.0.0.1", "localhost")
+    try:
+        await session.open(url, allowed_domains=["127.0.0.1"])
+        with pytest.raises(BrowserError, match="profile domain scope"):
+            await session.new_tab(blocked)
+        with pytest.raises(BrowserError, match="navigation blocked"):
+            await session.new_tab("file:///etc/passwd")
+        assert len(await session.list_tabs()) == 1
+        await session.new_tab(url + "?second")
+        session.blocked_navigations.clear()
+        await session._send(
+            "Runtime.evaluate",
+            {
+                "expression": f"window.open({json.dumps(blocked)}, '_blank')",
+                "userGesture": True,
+            },
+        )
+        for _ in range(100):
+            if blocked in session.blocked_navigations:
+                break
+            await asyncio.sleep(0.02)
+        assert blocked in session.blocked_navigations
+        # Widening applies to all tabs, not just whichever tab is active.
+        session.allow_domain_for(blocked)
+        await session.new_tab(blocked)
+        assert "localhost" in (await session.observe()).url
+    finally:
+        await session.close()
         httpd.shutdown()
 
 
@@ -263,7 +418,7 @@ async def test_live_browser_open_capability_roundtrip(tmp_path):
     finally:
         from agentos.browser.registry import browser_registry
 
-        await browser_registry.close_for_run("cap-run")
+        await browser_registry.close_owned("cap-run", "a1", "s1")
         httpd.shutdown()
 
 
@@ -302,7 +457,7 @@ async def test_live_visual_observe_saves_artifact(tmp_path):
     finally:
         from agentos.browser.registry import browser_registry
 
-        await browser_registry.close_for_run("vis-run")
+        await browser_registry.close_owned("vis-run", "a1", "s1")
         httpd.shutdown()
 
 
@@ -662,7 +817,7 @@ async def test_profile_lock_refuses_second_run(tmp_path, monkeypatch):
             profile="locked",
             allowed_domains=None,
         )
-        with pytest.raises(BrowserError, match="in use by another run"):
+        with pytest.raises(BrowserError, match="in use by another session"):
             await reg.get_or_open(
                 url,
                 agent_id="a",
@@ -731,6 +886,7 @@ async def test_large_extract_stages_to_workspace(tmp_path):
         out = await browser_extract(
             {"expression": "Array(5000).fill('row-data-here').join(',')"},
             agent_id="a",
+            session_id="s",
             run_id="ext-run",
             workspace_path=str(ws),
         )
@@ -739,7 +895,7 @@ async def test_large_extract_stages_to_workspace(tmp_path):
         staged = ws / out["staged"]
         assert staged.exists() and len(staged.read_text()) > 20_000
     finally:
-        await browser_registry.close_for_run("ext-run")
+        await browser_registry.close_owned("ext-run", "a", "s")
         httpd.shutdown()
 
 
@@ -757,12 +913,12 @@ async def test_visible_session_survives_idle_reaper(tmp_path, monkeypatch):
     try:
         await reg.get_or_open(url, agent_id="a", session_id="s-vis", run_id="vis")
         # mark it visible post-hoc (same flag the real open path sets)
-        reg._sessions["s-vis"].visible = True
+        reg._sessions["session:s-vis"].visible = True
         await reg.get_or_open(url, agent_id="a", session_id="s-head", run_id="head")
         await asyncio.sleep(0.6)  # several reap ticks past the timeout
-        assert "s-head" not in reg._sessions  # headless reaped
-        assert "s-vis" in reg._sessions  # visible survived
-        assert reg._sessions["s-vis"].session.alive()
+        assert "session:s-head" not in reg._sessions  # headless reaped
+        assert "session:s-vis" in reg._sessions  # visible survived
+        assert reg._sessions["session:s-vis"].session.alive()
     finally:
         await reg.shutdown_all()
         httpd.shutdown()

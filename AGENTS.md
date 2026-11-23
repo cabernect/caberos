@@ -9,7 +9,7 @@ CaberOS is an open-source, local-first AI Agent Operating System. It hosts perso
 **Repo structure:** Monorepo — `/backend`, `/frontend`, `/website`, `/docs`, `/skills`, `/sandbox`, `/scripts`, `/design-system`
 **Desktop shell:** Tauri 2 (Rust) — `frontend/src-tauri/`
 **Container:** Docker + docker-compose — `backend/Dockerfile`, `frontend/Dockerfile`, `docker-compose.yml`
-**Current line:** v0.2.3 "Context Hotfix" on `fix/context-replay-hotfix`; release publication is separate from branch implementation.
+**Current line:** v0.2.4 "Browser Continuity & Updates" is prepared for release: conversation-scoped browsers and tabs, update polling/manual re-check, and cache-hit percentage. Manifests are bumped; v0.2.3 remains the latest published release until the v0.2.4 release workflow completes.
 See `docs/plans/v0.2.2-release-plan.md` and `docs/plans/v0.2.2/README.md`.
 PPTX/DOCX/XLSX creation/editing, HTML presentations, revision-bound rendering,
 and visual quality are planned requirements, not shipped capabilities. PPTX
@@ -187,7 +187,11 @@ the caller opts in; both sync and background terminal paths explicitly opt in.
 `Schedule`/`ScheduleRevision`/`ScheduleOccurrence` — persisted `next_fire_at` is truth; restart recovery is a DB read + missed-run sweep (`skip`/`run_once`/`catch_up`, capped 25). Triggers: once/interval/cron (croniter) with IANA timezone; DST handled (nonexistent → first valid instant, ambiguous → once). Overlap: skip/queue/cancel_previous/allow_parallel. Failure: `no_retry`/`bounded_retry` (retries = new occurrences via `retry_of`). Heartbeat is a facade over a managed schedule row — old `/api/scheduler/heartbeat*` endpoints unchanged; managed rows reject edit/delete.
 
 ### Browser automation
-Managed Chrome-for-Testing (explicit first-use install consent), CDP sessions, headless/visible modes, domain-scoped opt-in persistent profiles, domain leash, approval-gated actions, takeover requests, download staging. Browser sessions are scoped to the conversation session — runs in the same session share one browser (sessionless runs fall back to run scope); idle headless sessions reap after 10 min. `web_fetch` stays the non-interactive path.
+Managed Chrome-for-Testing (explicit first-use install consent), CDP sessions, headless/visible modes, domain-scoped opt-in persistent profiles, domain leash, approval-gated actions, takeover requests, download staging. Browser sessions are scoped to the conversation session with agent ownership checks (sessionless runs fall back to run scope); idle headless sessions reap after 10 min. Stop preserves the conversation browser; explicit browser close, successful conversation close, and gateway shutdown clean it up. To continue page state across runs use observe/act; browser_open navigates, even on reuse. Registry allocation/profile locking and per-browser operation locks prevent duplicate launches and concurrent page-state races. `web_fetch` stays the non-interactive path.
+
+Desktop update checks run 3 seconds after mount and every 4 hours while open. Settings -> About retains manual re-check after success/error. The shared updater deduplicates checks and protects downloading/installing/restart-ready states; polling never installs or restarts automatically.
+
+Browser tabs use the existing tools: `browser_observe` includes `tabs` (`tabs_only=true` skips page inspection); `browser_act` supports `new_tab` (URL in `value`), `switch_tab`, and `close_tab` (tab ID in `target`). `browser_open` navigates the active tab; `browser_close` closes the whole browser. Switching returns fresh refs; refs from another tab are rejected. Site-opened tabs are listed but never automatically selected. Each page target gets the same profile domain leash before resuming; Fetch responses and page-load events route to the correct CDP session.
 
 ### Artifacts & previews
 `Artifact`/`ArtifactRevision`: stable identity, immutable revisions, restore-as-new, conflict detection on external edits, run/message provenance. Structured spec → bytes, never raw Office XML. `previews.py` classifies bytes → bounded renderers; workspace + skill preview endpoints accept path or `{artifact_id, revision_id}`.

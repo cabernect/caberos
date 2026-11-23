@@ -8,6 +8,7 @@ the session closed, and concurrent/repeat closes stay idempotent.
 
 import json
 import uuid
+from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import select, text, update
@@ -307,7 +308,10 @@ async def test_wrong_scope_rejected(db, monkeypatch):
 @pytest.mark.asyncio
 async def test_empty_session_closes_without_model_calls(db, monkeypatch):
     from agentos.agent_service import create_agent
+    from agentos.browser.registry import browser_registry
 
+    close_browser = AsyncMock(return_value=True)
+    monkeypatch.setattr(browser_registry, "close_owned", close_browser)
     cfg = _cfg()
     await create_agent(db, cfg)
     db.add(Contact(id="c1", channel="dashboard", bot_id="qa-agent", external_user_id="u1"))
@@ -320,6 +324,7 @@ async def test_empty_session_closes_without_model_calls(db, monkeypatch):
     await db.refresh(session)
     assert session.closed is True
     assert adapter.calls == []
+    close_browser.assert_awaited_once_with("", "qa-agent", "empty-s")
 
 
 @pytest.mark.asyncio

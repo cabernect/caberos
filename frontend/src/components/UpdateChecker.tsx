@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Download, RotateCcw, X } from "lucide-react";
 import { api } from "@/lib/api";
 import {
@@ -10,7 +10,7 @@ import {
 } from "@/lib/updater";
 
 /**
- * Auto-check for updates on startup in desktop mode.
+ * Auto-check for updates on startup and every four hours in desktop mode.
  * Shows a popup alert if a new version is available.
  * Does nothing in web mode.
  */
@@ -18,16 +18,12 @@ const UPDATE_POLL_MS = 4 * 60 * 60 * 1000;
 
 export function UpdateChecker() {
   const updater = useUpdater();
-  const [dismissed, setDismissed] = useState(false);
-  const statusRef = useRef(updater.status);
-  statusRef.current = updater.status;
+  const [dismissedVersion, setDismissedVersion] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isDesktopMode()) return;
     const check = () => {
-      // Skip states where a re-check would clobber progress or a pending install.
-      const s = statusRef.current;
-      if (s === "checking" || s === "available" || s === "downloading" || s === "installing" || s === "ready") return;
+      // The shared updater deduplicates checks and protects install states.
       void refreshUpdates().catch(() => {});
     };
     // Check after a short delay so startup isn't blocked, then poll periodically.
@@ -38,11 +34,6 @@ export function UpdateChecker() {
       clearInterval(interval);
     };
   }, []);
-
-  // Reshow the popup if a newer version appears after a dismissal.
-  useEffect(() => {
-    setDismissed(false);
-  }, [updater.info?.latestVersion]);
 
   // W9 — route through the notification pipeline so the event lands in
   // the inbox with dedup (one row per version) + prefs like every event.
@@ -61,7 +52,7 @@ export function UpdateChecker() {
       .catch(() => {});
   }, [updater.info?.available, updater.info?.latestVersion]);
 
-  if (!updater.info?.available || dismissed) return null;
+  if (!updater.info?.available || dismissedVersion === updater.info.latestVersion) return null;
 
   const handleUpdate = async () => {
     try {
@@ -139,7 +130,7 @@ export function UpdateChecker() {
         {updater.status === "available" && (
           <div className="mt-2 flex gap-2">
             <button
-              onClick={() => setDismissed(true)}
+              onClick={() => setDismissedVersion(updater.info?.latestVersion ?? null)}
               className="rounded-md border px-3 py-1 text-[12px]"
               style={{ borderColor: "var(--border)", color: "var(--ink-2)" }}
             >
@@ -156,7 +147,7 @@ export function UpdateChecker() {
         )}
       </div>
       {!isBusy && updater.status !== "ready" && (
-        <button onClick={() => setDismissed(true)} className="rounded p-0.5" style={{ color: "var(--ink-3)" }}>
+        <button onClick={() => setDismissedVersion(updater.info?.latestVersion ?? null)} className="rounded p-0.5" style={{ color: "var(--ink-3)" }}>
           <X className="h-3.5 w-3.5" />
         </button>
       )}

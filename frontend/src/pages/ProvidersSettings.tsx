@@ -4166,7 +4166,7 @@ function AboutTab() {
       {/* CaberOS */}
       <section id="caberos">
         <div
-          className="flex items-center gap-4 rounded-xl p-5"
+          className="flex flex-wrap items-center gap-4 rounded-xl p-5"
           style={{
             border: "1px solid var(--border-soft)",
             background: "var(--surface)",
@@ -4185,7 +4185,7 @@ function AboutTab() {
             <p className="text-[12px] text-[var(--ink-3)]">
               Local-first AI Agent Operating System
             </p>
-            <p className="mt-1 flex items-center gap-1.5 text-[12px]">
+            <p className="mt-1 flex flex-wrap items-center gap-1.5 text-[12px]">
               <span className="font-mono font-medium text-[var(--ink)]">
                 v{version}
               </span>
@@ -4206,7 +4206,7 @@ function AboutTab() {
               </span>
             </p>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex w-full shrink-0 flex-wrap items-center gap-2 sm:w-auto">
             {["idle", "up-to-date", "error", "checking"].includes(updater.status) && (
               <button
                 onClick={handleCheckUpdates}

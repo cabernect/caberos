@@ -27,6 +27,7 @@ export interface UpdaterState {
 
 const initialState: UpdaterState = { info: null, status: "idle", progress: {}, error: "" };
 let state = initialState;
+let pendingCheck: Promise<UpdateInfo> | null = null;
 const listeners = new Set<() => void>();
 
 function setState(next: Partial<UpdaterState>) {
@@ -63,29 +64,41 @@ export async function checkForUpdates(): Promise<UpdateInfo> {
   const updater = await import("@tauri-apps/plugin-updater");
   const update = await updater.check();
   if (update) {
-    return {
-      available: true,
-      currentVersion: update.currentVersion,
-      latestVersion: update.version,
-      notes: update.body,
-    };
+    try {
+      return {
+        available: true,
+        currentVersion: update.currentVersion,
+        latestVersion: update.version,
+        notes: update.body,
+      };
+    } finally {
+      await update.close();
+    }
   }
 
   const app = await import("@tauri-apps/api/app");
   return { available: false, currentVersion: await app.getVersion() };
 }
 
-export async function refreshUpdates(): Promise<UpdateInfo> {
-  setState({ status: "checking", error: "" });
-  try {
-    const info = await checkForUpdates();
-    setState({ info, status: info.available ? "available" : "up-to-date" });
-    return info;
-  } catch (error) {
-    const message = String(error);
-    setState({ status: "error", error: message });
-    throw error;
+export function refreshUpdates(): Promise<UpdateInfo> {
+  if (pendingCheck) return pendingCheck;
+  if (["downloading", "installing", "ready"].includes(state.status)) {
+    return Promise.resolve(state.info ?? { available: false, currentVersion: "unknown" });
   }
+  setState({ status: "checking", error: "" });
+  pendingCheck = (async () => {
+    try {
+      const info = await checkForUpdates();
+      setState({ info, status: info.available ? "available" : "up-to-date" });
+      return info;
+    } catch (error) {
+      setState({ status: "error", error: String(error) });
+      throw error;
+    } finally {
+      pendingCheck = null;
+    }
+  })();
+  return pendingCheck;
 }
 
 /**
@@ -94,33 +107,40 @@ export async function refreshUpdates(): Promise<UpdateInfo> {
  */
 export async function downloadAndInstallUpdate(): Promise<void> {
   if (!isDesktopMode()) throw new Error("Auto-update is only available in desktop mode");
-
-  const updater = await import("@tauri-apps/plugin-updater");
-  const update = await updater.check();
-  if (!update) throw new Error("No update available");
+  if (pendingCheck) await pendingCheck;
+  if (["downloading", "installing", "ready"].includes(state.status)) return;
 
   let downloaded = 0;
   let total = 0;
   setState({ status: "downloading", progress: {}, error: "" });
-
-  await update.downloadAndInstall((event) => {
-    switch (event.event) {
-      case "Started":
-        total = event.data.contentLength ?? 0;
-        setState({ progress: { total, downloaded: 0 } });
-        break;
-      case "Progress":
-        downloaded += event.data.chunkLength;
-        setState({ progress: { total, downloaded } });
-        break;
-      case "Finished":
-        setState({ status: "installing", progress: { total, downloaded: total } });
-        break;
+  try {
+    const updater = await import("@tauri-apps/plugin-updater");
+    const update = await updater.check();
+    if (!update) throw new Error("No update available");
+    try {
+      await update.downloadAndInstall((event) => {
+        switch (event.event) {
+          case "Started":
+            total = event.data.contentLength ?? 0;
+            setState({ progress: { total, downloaded: 0 } });
+            break;
+          case "Progress":
+            downloaded += event.data.chunkLength;
+            setState({ progress: { total, downloaded } });
+            break;
+          case "Finished":
+            setState({ status: "installing", progress: { total, downloaded: total } });
+            break;
+        }
+      });
+    } finally {
+      await update.close();
     }
-  });
-
-  await update.close();
-  setState({ status: "ready", progress: { total, downloaded: total } });
+    setState({ status: "ready", progress: { total, downloaded: total } });
+  } catch (error) {
+    setState({ status: "error", error: String(error) });
+    throw error;
+  }
 }
 
 export async function restartApp(): Promise<void> {
@@ -134,5 +154,6 @@ export async function restartApp(): Promise<void> {
 }
 
 export function resetUpdater(): void {
+  if (pendingCheck || ["downloading", "installing", "ready"].includes(state.status)) return;
   setState(initialState);
 }

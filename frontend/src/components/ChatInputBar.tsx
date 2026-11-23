@@ -1528,7 +1528,8 @@ function ContextCircle({
                   <span style={{ color: "var(--ink-2)" }}>Total Used</span>
                   <span className="tabular-nums font-medium" style={{ color: isWarning ? color : "var(--ink)" }}>
                     {contextTokens.toLocaleString()}
-                    {cachedTokens != null && ` (${cachedTokens.toLocaleString()} cached)`}
+                    {cachedTokens != null && contextTokens > 0 &&
+                      ` (${Math.round((cachedTokens / contextTokens) * 100)}% cached)`}
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
@@ -1545,7 +1546,8 @@ function ContextCircle({
                 <span>Used</span>
                 <span className="tabular-nums" style={{ color: isWarning ? color : "var(--ink)" }}>
                   {contextTokens.toLocaleString()} tokens
-                  {cachedTokens != null && ` (${cachedTokens.toLocaleString()} cached)`}
+                  {cachedTokens != null && contextTokens > 0 &&
+                    ` (${Math.round((cachedTokens / contextTokens) * 100)}% cached)`}
                 </span>
               </div>
               <div className="flex justify-between">
