@@ -167,6 +167,76 @@ def _approval_batch_for(
     return ApprovalBatch([call.id for call in calls])
 
 
+def _call_purpose(trigger: str) -> str:
+    return "reflection" if trigger == "reflection" else "reasoning"
+
+
+@dataclass
+class _RunState:
+    """Shared mutable state for one harness run.
+
+    The loop phases — _assemble_context, _call_model,
+    _mediate_tool_calls, _finalize_answer — read and write through this
+    object instead of closing over ~20 locals, so each phase is a named,
+    independently readable unit.
+    """
+
+    # Inputs (set once by run())
+    agent_config: AgentConfig
+    session: Any
+    message: str
+    syscall_handler: SyscallHandler
+    run_id: str
+    recent_messages: list[Any] | None = None
+    conversation: Conversation | None = None
+    current_message_id: str | None = None
+    trigger: str = "user_message"
+    event_emitter: EventEmitter = None
+    attachments: list[Any] | None = None
+    skill: str | None = None
+    parent_config: AgentConfig | None = None
+    resolved_skills: list[Any] | None = None
+    core_snapshot: Any | None = None
+    system_prompt_override: str | None = None
+
+    # Step 7 outputs — assembled context
+    history: list[dict[str, Any]] = field(default_factory=list)
+    system_prompt: str = ""
+    tool_schemas: list[dict[str, Any]] = field(default_factory=list)
+    capability_catalog: Any = None
+    restrictions: Any = None
+    visible_capability_names: list[str] = field(default_factory=list)
+
+    # Model info + resolved input budget
+    model_str: str = "gpt-4o"  # fallback
+    api_key: Any = None
+    base_url: Any = None
+    extra_params: dict[str, Any] = field(default_factory=dict)
+    use_responses: bool = False
+    resolved_model: dict[str, Any] = field(default_factory=dict)
+    accounting: Any = None
+    resolved_input_budget: int = 0
+    context_budget_source: str | None = None
+
+    # Run result + per-turn loop state
+    result: RunResult = field(default_factory=RunResult)
+    call_receipts: dict[str, dict] = field(default_factory=dict)
+    current_user_row: Any = None
+    failed_auto_fingerprints: set[str] = field(default_factory=set)
+    compaction_runs: list[Any] = field(default_factory=list)
+    consecutive_tool_failures: int = 0
+    max_consecutive_failures: int = 5
+    overflow_retried: bool = False
+    # Set by _call_model when it returns None: "retry" redoes the turn after
+    # a successful forced compaction, "stop" breaks the loop, "abort" returns
+    # the failed result immediately.
+    turn_outcome: str | None = None
+    # Per-dispatch model-call bookkeeping for run()'s ok receipt.
+    call_started: float = 0.0
+    streamed_call: bool = False
+    capture_ref: Any = None
+
+
 class Harness:
     """The agent execution loop."""
 
@@ -195,13 +265,183 @@ class Harness:
     ) -> RunResult:
         """Execute the agent loop (D19 steps 7-11).
 
-        7. Assemble context
-        8. Reason (call model)
-        9. Mediate (tool calls through syscall layer)
+        7. Assemble context   → _assemble_context
+        8. Reason (call model) → _call_model
+        9. Mediate (tool calls through syscall layer) → _mediate_tool_calls
         10. Check limits
-        11. Iterate until final answer or limit hit
+        11. Iterate until final answer or limit hit → _finalize_answer
         """
-        # Step 7: Assemble context
+        ctx = _RunState(
+            agent_config=agent_config,
+            session=session,
+            message=message,
+            syscall_handler=syscall_handler,
+            run_id=run_id,
+            recent_messages=recent_messages,
+            conversation=conversation,
+            current_message_id=current_message_id,
+            trigger=trigger,
+            event_emitter=event_emitter,
+            attachments=attachments,
+            skill=skill,
+            parent_config=parent_config,
+            resolved_skills=resolved_skills,
+            core_snapshot=core_snapshot,
+            system_prompt_override=system_prompt_override,
+        )
+        result = ctx.result
+
+        # Step 7: Assemble context — returns False when the resolved model
+        # budget is a configuration error (run fails before any model call).
+        if not await self._assemble_context(ctx):
+            return result
+
+        # Inject spawn context into the syscall handler so run_subagent
+        # can access the harness, session, run_id, and event_emitter.
+        if hasattr(ctx.syscall_handler, "_spawn_context"):
+            ctx.syscall_handler._spawn_context = {
+                "harness": self,
+                "session": ctx.session,
+                "run_id": ctx.run_id,
+                "event_emitter": ctx.event_emitter,
+                "syscall_handler": ctx.syscall_handler,
+            }
+
+        max_turns = ctx.agent_config.limits.max_turns_per_run
+        max_cost = (
+            ctx.agent_config.heartbeat.max_cost_per_heartbeat
+            if ctx.trigger == "heartbeat"
+            else ctx.agent_config.limits.max_cost_per_run
+        )
+
+        # Steps 8-11: the loop
+        while result.total_turns < max_turns:
+            if result.total_cost >= max_cost:
+                result.status = "limit_exceeded"
+                result.error = "Run cost limit reached before model dispatch"
+                break
+            result.total_turns += 1
+            await self._refresh_capabilities(ctx)
+            # Per-dispatch full-budget gate: refreshed schemas + summary-aware
+            # conversation count; compact under threshold, never dispatch an
+            # oversized request.
+            gate_error = await self._budget_gate(ctx)
+            result.loaded_capabilities = sorted(ctx.capability_catalog.loaded)
+            if gate_error:
+                result.status = "failed"
+                result.error = gate_error
+                break
+
+            # Per-turn signal that a model call is being dispatched — the
+            # frontend renders the "thinking…" affordance from here until
+            # this turn's first streamed output (thinking/token/tool_call).
+            if ctx.event_emitter:
+                await self._emit(ctx.event_emitter, "typing", {})
+
+            # Step 8: Call model
+            response = await self._call_model(ctx)
+            if response is None:
+                outcome = ctx.turn_outcome
+                ctx.turn_outcome = None
+                if outcome == "abort":
+                    return result
+                if outcome == "retry":
+                    continue
+                break  # "stop" — compaction persist failure already recorded
+
+            # Accumulate tokens/cost
+            result.tokens_in += response.tokens_in
+            result.tokens_out += response.tokens_out
+            result.cached_tokens = response.cached_tokens
+            if response.thinking_tokens is not None:
+                result.thinking_tokens = (result.thinking_tokens or 0) + response.thinking_tokens
+            result.total_cost += response.cost
+
+            # Per-model-call accounting (v0.2 foundations)
+            await self._record_model_call(
+                ctx.syscall_handler,
+                run_id=ctx.run_id,
+                agent_config=ctx.agent_config,
+                session_id=getattr(ctx.session, "id", None),
+                purpose=_call_purpose(ctx.trigger),
+                turn=result.total_turns,
+                model_str=ctx.model_str,
+                streamed=ctx.streamed_call,
+                latency_ms=int((time.monotonic() - ctx.call_started) * 1000),
+                status="ok",
+                tokens_in=response.tokens_in,
+                tokens_out=response.tokens_out,
+                cached_tokens=response.cached_tokens,
+                thinking_tokens=response.thinking_tokens,
+                cost=response.cost,
+                cost_source=response.cost_source,
+                cost_receipt=getattr(response, "cost_receipt", None),
+                capture_ref=ctx.capture_ref or getattr(response, "request_capture", None),
+            )
+
+            # Step 9: Process tool calls, or Step 10/11: final answer
+            if response.tool_calls:
+                await self._mediate_tool_calls(ctx, response)
+                continue
+
+            await self._finalize_answer(ctx, response)
+
+            # Step 10: Check limits
+            if result.total_cost > max_cost:
+                result.status = "limit_exceeded"
+                result.final_answer = ctx.agent_config.fallback.on_limit_exceeded
+                break
+
+            break
+
+        # Step 11: Check if we hit the turn limit
+        if result.total_turns >= max_turns and not result.final_answer:
+            result.status = "limit_exceeded"
+            result.final_answer = "I've reached my turn limit for this run."
+
+        # A run must not silently finish with live terminals — surface them so
+        # the operator/model can read or close them.
+        try:
+            from ..terminal.registry import terminal_registry
+
+            active = await terminal_registry.active_for_run(ctx.run_id)
+            if active:
+                result.terminals_active = active
+                if ctx.event_emitter:
+                    await self._emit(
+                        ctx.event_emitter,
+                        "terminals_active",
+                        {"terminal_ids": active},
+                    )
+        except Exception:
+            pass
+
+        # Note: message_complete is emitted by runner.py after the pipeline
+        # finishes, with full context metadata (context_tokens, max_context_tokens,
+        # compacted, context_breakdown). Don't emit it here — the frontend closes
+        # the SSE connection on the first message_complete it receives.
+
+        return result
+
+    async def _assemble_context(self, ctx: _RunState) -> bool:
+        """Step 7: assemble system prompt, tool schemas, and history.
+
+        Returns False when the resolved model context/output budget is a
+        known configuration error — the run fails before any model call.
+        """
+        agent_config = ctx.agent_config
+        session = ctx.session
+        message = ctx.message
+        syscall_handler = ctx.syscall_handler
+        run_id = ctx.run_id
+        skill = ctx.skill
+        core_snapshot = ctx.core_snapshot
+        attachments = ctx.attachments
+        current_message_id = ctx.current_message_id
+        recent_messages = ctx.recent_messages
+        resolved_skills = ctx.resolved_skills
+        system_prompt_override = ctx.system_prompt_override
+
         # Load KG facts for this contact (D34 — subject-scoped, D10)
         # Startup retrieval removed (bounded-core slice): no KG/snippet/
         # archive searches on dispatch — the tools/stores remain available
@@ -233,28 +473,21 @@ class Harness:
         if hasattr(syscall_handler, "supports_vision"):
             syscall_handler.supports_vision = bool(supports_vision)
 
-        capability_catalog = CapabilityRunCatalog(
+        ctx.capability_catalog = CapabilityRunCatalog(
             agent_config=agent_config,
             db=getattr(syscall_handler, "db", None),
             run_id=run_id,
-            parent_config=parent_config,
+            parent_config=ctx.parent_config,
         )
-        await capability_catalog.prepare()
-        restrictions = getattr(syscall_handler, "restrictions", None)
-
-        def visible_capabilities():
-            names = capability_catalog.model_capability_names()
-            if restrictions is not None:
-                names = [name for name in names if name in restrictions.capability_names]
-            return names
-
-        visible_capability_names = visible_capabilities()
+        await ctx.capability_catalog.prepare()
+        ctx.restrictions = getattr(syscall_handler, "restrictions", None)
+        ctx.visible_capability_names = self._visible_capability_names(ctx)
 
         # Saved browser logins (W4): operator-managed persistent profiles the
         # agent can't enumerate itself — inject name + domain scope so
         # browser_open(profile=…) is usable without the user spelling it out.
         browser_profiles: list[dict] = []
-        if "browser_open" in visible_capability_names and getattr(syscall_handler, "db", None):
+        if "browser_open" in ctx.visible_capability_names and getattr(syscall_handler, "db", None):
             from sqlalchemy import select as _select
 
             from ..models.browser_profile import BrowserProfile
@@ -320,7 +553,7 @@ class Harness:
                     except Exception:
                         forced_skill_rendered = None
 
-        system_prompt = assemble_system_prompt(
+        ctx.system_prompt = assemble_system_prompt(
             agent_config,
             message,
             kg_facts=kg_facts,
@@ -328,7 +561,7 @@ class Harness:
             forced_skill=skill,
             past_sessions=past_sessions,
             supports_vision=supports_vision,
-            enabled_caps=visible_capability_names,
+            enabled_caps=ctx.visible_capability_names,
             browser_profiles=browser_profiles,
             resolved_skills=resolved_skills,
             forced_skill_rendered=forced_skill_rendered,
@@ -336,7 +569,7 @@ class Harness:
             core_snapshot=core_snapshot,
         )
         if system_prompt_override is not None:
-            system_prompt = system_prompt_override
+            ctx.system_prompt = system_prompt_override
         # A successfully rendered forced/slash skill is an activation —
         # recorded once after assembly, on an isolated session so a failed
         # write never poisons the run's shared session.
@@ -352,16 +585,17 @@ class Harness:
                     sub_agent_id=getattr(syscall_handler, "_sub_agent_id", None),
                 )
 
-        tool_schemas = assemble_tool_schemas(
+        ctx.tool_schemas = assemble_tool_schemas(
             agent_config,
-            capability_names=visible_capability_names,
+            capability_names=ctx.visible_capability_names,
         )
+        conversation = ctx.conversation
         if conversation is None:
             # Compat path for non-persistent callers (subagents, direct
             # harness tests): transient state, no coverage bookkeeping.
             conversation = Conversation(session_id="")
             history = build_message_history(
-                system_prompt, recent_messages or [], message, attachments
+                ctx.system_prompt, recent_messages or [], message, attachments
             )
             conversation.messages = history[1:]
             conversation.source_ids = [set() for _ in conversation.messages]
@@ -376,40 +610,32 @@ class Harness:
                 user_content = "\n".join([message, *attachment_lines(attachments)])
             user_row = {"role": "user", "content": user_content}
             conversation.append(user_row, {current_message_id} if current_message_id else set())
-            history = [{"role": "system", "content": system_prompt}] + conversation.render()
+            history = [{"role": "system", "content": ctx.system_prompt}] + conversation.render()
+        ctx.conversation = conversation
+        ctx.history = history
 
-        result = RunResult()
-        _call_receipts: dict[str, dict] = {}
         # Object reference for the current-turn user row — identity lookup
         # yields the protected tail index before every compaction.
-        _current_user_row = (
+        ctx.current_user_row = (
             conversation.messages[-1]
             if conversation.messages and conversation.messages[-1].get("role") == "user"
             else None
         )
 
-        # --- Context compaction + budget ---
         # Get model info for token counting + summary LLM call.
         # resolved_model + accounting come from the same frozen capture as
         # the execution calls — one resolved input budget for compaction,
         # the context bar, and any overflow retry.
-        model_str = "gpt-4o"  # fallback
-        api_key = None
-        base_url = None
-        extra_params: dict = {}
-        use_responses = False
-        resolved_model: dict = {}
-        accounting = None
         if hasattr(self.model, "get_model_info"):
             try:
                 info = await self.model.get_model_info(agent_config.model)
-                model_str = info["model_str"]
-                api_key = info["api_key"]
-                base_url = info["base_url"]
-                extra_params = info.get("extra_params") or {}
-                use_responses = bool(info.get("use_responses"))
-                accounting = info.get("accounting")
-                resolved_model = info.get("resolved_model") or {}
+                ctx.model_str = info["model_str"]
+                ctx.api_key = info["api_key"]
+                ctx.base_url = info["base_url"]
+                ctx.extra_params = info.get("extra_params") or {}
+                ctx.use_responses = bool(info.get("use_responses"))
+                ctx.accounting = info.get("accounting")
+                ctx.resolved_model = info.get("resolved_model") or {}
             except Exception:
                 pass
 
@@ -417,796 +643,719 @@ class Harness:
 
         try:
             _budget = resolve_input_budget(
-                resolved_model,
+                ctx.resolved_model,
                 model_override=(
                     agent_config.model.max_context_tokens if agent_config.model else None
                 ),
                 run_override=agent_config.limits.max_context_tokens,
                 output_tokens=(agent_config.model.max_tokens if agent_config.model else None),
             )
-            resolved_input_budget = _budget["tokens"]
-            context_budget_source = _budget["source"]
+            ctx.resolved_input_budget = _budget["tokens"]
+            ctx.context_budget_source = _budget["source"]
         except ValueError as exc:
             # A KNOWN-capacity model with a contradictory reservation/output
             # budget is a configuration error — never substitute a guessed
             # 32k budget and dispatch anyway. Genuine unknown-capacity models
             # fall through resolve_input_budget's own application_fallback.
-            result.status = "failed"
-            result.error = (
+            ctx.result.status = "failed"
+            ctx.result.error = (
                 f"Model context/output budget is invalid — check the agent's model limits: {exc}"
             )
-            return result
+            return False
 
-        # Shared helper: compact the conversation in place, rebuild history,
-        # persist coverage atomically (parent-session authority only — a
-        # transient Conversation has no session_id and never writes).
-        from .compaction import (
-            compact_context,
-            count_text_tokens,
-            count_tokens,
-            count_tool_tokens,
+        ctx.result.max_context_tokens = ctx.resolved_input_budget
+        ctx.result.context_budget_source = ctx.context_budget_source
+        return True
+
+    def _visible_capability_names(self, ctx: _RunState) -> list[str]:
+        names = ctx.capability_catalog.model_capability_names()
+        if ctx.restrictions is not None:
+            names = [name for name in names if name in ctx.restrictions.capability_names]
+        return names
+
+    async def _refresh_capabilities(self, ctx: _RunState) -> None:
+        """Re-prepare the catalog and rebuild tool schemas for this turn —
+        capabilities can appear mid-run (skill publish, profile add)."""
+        await ctx.capability_catalog.prepare(refresh=True)
+        ctx.visible_capability_names = self._visible_capability_names(ctx)
+        ctx.tool_schemas = assemble_tool_schemas(
+            ctx.agent_config,
+            capability_names=ctx.visible_capability_names,
         )
 
-        _failed_auto_fingerprints: set[str] = set()
-        _compaction_runs: list[Any] = []
+    async def _mint_compaction_run(self, ctx: _RunState) -> str | None:
+        """Auto/forced compaction is session maintenance, not parent-run
+        work — give its summary call a standalone compaction Run so
+        traces show it separately. Falls back to the parent run id when
+        no DB session is available (transient/sub-agent conversations)."""
+        from ..models.run import Run
 
-        async def _mint_compaction_run() -> str | None:
-            """Auto/forced compaction is session maintenance, not parent-run
-            work — give its summary call a standalone compaction Run so
-            traces show it separately. Falls back to the parent run id when
-            no DB session is available (transient/sub-agent conversations)."""
-            from ..models.run import Run
-
-            _db = getattr(syscall_handler, "db", None)
-            sess_id = getattr(session, "id", None)
-            contact_id = getattr(session, "contact_id", None)
-            if _db is None or sess_id is None or not contact_id:
-                return run_id
-            compact_run = Run(
-                session_id=sess_id,
-                agent_id=agent_config.id,
-                contact_id=contact_id,
-                status="running",
-                trigger="compaction",
-            )
-            _db.add(compact_run)
-            await _db.flush()
-            await _db.commit()
-            _compaction_runs.append(compact_run)
-            return compact_run.id
-
-        def _conv_fingerprint() -> str:
-            h = hashlib.sha256()
-            for m in conversation.messages:
-                h.update((m.get("role", "") + "|" + str(m.get("content", ""))[:200]).encode())
-            return h.hexdigest()
-
-        def _protected_tail_index() -> int | None:
-            if _current_user_row is None:
-                return None
-            for i, m in enumerate(conversation.messages):
-                if m is _current_user_row:
-                    return i
-            return None
-
-        async def _apply_compaction(*, force: bool) -> str | None:
-            """Compact the conversation when it helps. Returns an error string
-            when a *successful* summary could not be durably stored (CAS loss
-            or DB failure) — the caller must then fail the run instead of
-            dispatching on an unsaved summary."""
-            nonlocal history
-            reserved = count_text_tokens(system_prompt, model_str) + count_tool_tokens(
-                tool_schemas, model_str
-            )
-            fp = _conv_fingerprint()
-            if not force and fp in _failed_auto_fingerprints:
-                return None
-            cr = await compact_context(
-                messages=list(conversation.messages),
-                agent_config=agent_config,
-                model_str=model_str,
-                previous_summary=conversation.summary,
-                api_key=api_key,
-                base_url=base_url,
-                extra_params=extra_params,
-                force=force,
-                use_responses=use_responses,
-                input_budget=resolved_input_budget,
-                resolved_model=resolved_model,
-                accounting=accounting,
-                reserved_tokens=reserved,
-                session_id=getattr(session, "id", None),
-                source_ids=list(conversation.source_ids),
-                protected_tail_start=_protected_tail_index(),
-                run_id=None,
-                run_id_resolver=_mint_compaction_run,
-            )
-            if _compaction_runs:
-                from datetime import UTC, datetime
-
-                _cdb = getattr(syscall_handler, "db", None)
-                for _cr in _compaction_runs:
-                    _cr.status = "failed" if cr.error else "completed"
-                    _cr.completed_at = datetime.now(UTC)
-                _compaction_runs.clear()
-                if _cdb is not None:
-                    await _cdb.commit()
-            # The result always renders the summary exactly once + originals
-            history = history[:1] + list(cr.messages)
-            if cr.error:
-                if not force:
-                    _failed_auto_fingerprints.add(fp)
-                return None
-            if cr.compacted:
-                # Persist FIRST: a CAS loser or DB failure means the stored
-                # summary/coverage doesn't reflect this compaction — fail the
-                # run rather than continue on unsaved bookkeeping.
-                head_ids = conversation.source_ids[: cr.head_count]
-                tail_ids = conversation.source_ids[len(conversation.source_ids) - cr.tail_count :]
-                _db = getattr(syscall_handler, "db", None)
-                if (
-                    conversation.session_id
-                    and _db is not None
-                    and getattr(session, "id", None) == conversation.session_id
-                ):
-                    try:
-                        _head_ids = {
-                            sid
-                            for group in conversation.source_ids[: cr.head_count]
-                            for sid in (group or set())
-                        }
-                        _tail_ids = {
-                            sid
-                            for group in conversation.source_ids[
-                                len(conversation.source_ids) - cr.tail_count :
-                            ]
-                            for sid in (group or set())
-                        }
-                        stored = await conversation.store_summary(
-                            _db,
-                            cr.summary,
-                            conversation.covered_ids | cr.covered_ids,
-                            retained_head_ids=_head_ids,
-                            retained_tail_ids=_tail_ids,
-                        )
-                    except Exception:
-                        logger.warning(
-                            "conversation summary persist failed for session %s",
-                            conversation.session_id,
-                        )
-                        return "Context compaction could not be saved; the run stopped safely."
-                    if not stored:
-                        return (
-                            "Context compaction lost a concurrent write conflict; "
-                            "the run stopped safely."
-                        )
-                conversation.messages = list(cr.retained_messages)
-                conversation.source_ids = head_ids + tail_ids
-                # Local summary update — next render keeps the summary row.
-                conversation.summary = cr.summary
-                conversation.covered_ids = conversation.covered_ids | cr.covered_ids
-            result.compacted = result.compacted or cr.compacted
-            return None
-
-        async def _budget_gate() -> str | None:
-            """Per-dispatch full-budget gate. Returns an error message when
-            the dispatch must not happen, else None."""
-            nonlocal history
-            reserved = count_text_tokens(system_prompt, model_str) + count_tool_tokens(
-                tool_schemas, model_str
-            )
-            if reserved > resolved_input_budget:
-                # Fixed system/tool schemas alone exceed the hard input
-                # budget — no compaction can shrink a fixed section.
-                return "Request too large: system context and tool schemas alone exceed the model input budget."
-            if agent_config.compaction.auto_compaction:
-                persist_error = await _apply_compaction(force=False)
-                if persist_error:
-                    return persist_error
-            full = reserved + count_tokens(history[1:], model_str)
-            result.context_breakdown = {
-                "system_prompt": count_text_tokens(system_prompt, model_str),
-                "conversation": count_tokens(history[1:], model_str),
-                "tools": count_tool_tokens(tool_schemas, model_str),
-            }
-            result.context_tokens = sum(result.context_breakdown.values())
-            if full > resolved_input_budget:
-                return (
-                    "Context exceeds the model input budget and could not be "
-                    "compacted — summary generation unavailable."
-                )
-            return None
-
-        result.max_context_tokens = resolved_input_budget
-        result.context_budget_source = context_budget_source
-        # Inject spawn context into the syscall handler so run_subagent
-        # can access the harness, session, run_id, and event_emitter.
-        if hasattr(syscall_handler, "_spawn_context"):
-            syscall_handler._spawn_context = {
-                "harness": self,
-                "session": session,
-                "run_id": run_id,
-                "event_emitter": event_emitter,
-                "syscall_handler": syscall_handler,
-            }
-
-        max_turns = agent_config.limits.max_turns_per_run
-        max_cost = (
-            agent_config.heartbeat.max_cost_per_heartbeat
-            if trigger == "heartbeat"
-            else agent_config.limits.max_cost_per_run
+        _db = getattr(ctx.syscall_handler, "db", None)
+        sess_id = getattr(ctx.session, "id", None)
+        contact_id = getattr(ctx.session, "contact_id", None)
+        if _db is None or sess_id is None or not contact_id:
+            return ctx.run_id
+        compact_run = Run(
+            session_id=sess_id,
+            agent_id=ctx.agent_config.id,
+            contact_id=contact_id,
+            status="running",
+            trigger="compaction",
         )
-        consecutive_tool_failures = 0
-        max_consecutive_failures = 5
-        overflow_retried = False
+        _db.add(compact_run)
+        await _db.flush()
+        await _db.commit()
+        ctx.compaction_runs.append(compact_run)
+        return compact_run.id
 
-        # Steps 8-11: the loop
-        while result.total_turns < max_turns:
-            if result.total_cost >= max_cost:
-                result.status = "limit_exceeded"
-                result.error = "Run cost limit reached before model dispatch"
-                break
-            result.total_turns += 1
-            await capability_catalog.prepare(refresh=True)
-            visible_capability_names = visible_capabilities()
-            tool_schemas = assemble_tool_schemas(
-                agent_config,
-                capability_names=visible_capability_names,
-            )
-            # Per-dispatch full-budget gate: refreshed schemas + summary-aware
-            # conversation count; compact under threshold, never dispatch an
-            # oversized request.
-            gate_error = await _budget_gate()
-            result.loaded_capabilities = sorted(capability_catalog.loaded)
-            if gate_error:
-                result.status = "failed"
-                result.error = gate_error
-                break
+    def _conv_fingerprint(self, ctx: _RunState) -> str:
+        h = hashlib.sha256()
+        for m in ctx.conversation.messages:
+            h.update((m.get("role", "") + "|" + str(m.get("content", ""))[:200]).encode())
+        return h.hexdigest()
 
-            # Per-turn signal that a model call is being dispatched — the
-            # frontend renders the "thinking…" affordance from here until
-            # this turn's first streamed output (thinking/token/tool_call).
-            if event_emitter:
-                await self._emit(event_emitter, "typing", {})
+    def _protected_tail_index(self, ctx: _RunState) -> int | None:
+        if ctx.current_user_row is None:
+            return None
+        for i, m in enumerate(ctx.conversation.messages):
+            if m is ctx.current_user_row:
+                return i
+        return None
 
-            # Step 8: Call model
-            # Use streaming if the adapter supports it (LiteLLMAdapter);
-            # fall back to non-streaming for ScriptedModel
-            call_started = time.monotonic()
-            streamed_call = hasattr(self.model, "complete_stream")
-            capture_ref = None
-            _src_ids: list[str] = []
-            for _group in getattr(conversation, "source_ids", []) or []:
-                for _sid in _group or []:
-                    _src_ids.append(_sid)
-            _src_ids = sorted(set(_src_ids))
-            try:
-                with capture_scope(
-                    run_id=getattr(syscall_handler, "_parent_run_id", None) or run_id,
-                    session_id=getattr(session, "id", None),
-                    agent_id=agent_config.id,
-                    sub_agent_id=getattr(syscall_handler, "_sub_agent_id", None),
-                    turn=result.total_turns,
-                    purpose="reflection" if trigger == "reflection" else "reasoning",
-                    core_revision_id=getattr(core_snapshot, "revision_id", None)
-                    if core_snapshot
-                    else None,
-                    core_identity_source_version_id=getattr(
-                        core_snapshot, "identity_source_version_id", None
+    async def _apply_compaction(self, ctx: _RunState, *, force: bool) -> str | None:
+        """Compact the conversation when it helps. Returns an error string
+        when a *successful* summary could not be durably stored (CAS loss
+        or DB failure) — the caller must then fail the run instead of
+        dispatching on an unsaved summary."""
+        from .compaction import compact_context, count_text_tokens, count_tool_tokens
+
+        conversation = ctx.conversation
+        reserved = count_text_tokens(ctx.system_prompt, ctx.model_str) + count_tool_tokens(
+            ctx.tool_schemas, ctx.model_str
+        )
+        fp = self._conv_fingerprint(ctx)
+        if not force and fp in ctx.failed_auto_fingerprints:
+            return None
+        cr = await compact_context(
+            messages=list(conversation.messages),
+            agent_config=ctx.agent_config,
+            model_str=ctx.model_str,
+            previous_summary=conversation.summary,
+            api_key=ctx.api_key,
+            base_url=ctx.base_url,
+            extra_params=ctx.extra_params,
+            force=force,
+            use_responses=ctx.use_responses,
+            input_budget=ctx.resolved_input_budget,
+            resolved_model=ctx.resolved_model,
+            accounting=ctx.accounting,
+            reserved_tokens=reserved,
+            session_id=getattr(ctx.session, "id", None),
+            source_ids=list(conversation.source_ids),
+            protected_tail_start=self._protected_tail_index(ctx),
+            run_id=None,
+            run_id_resolver=lambda: self._mint_compaction_run(ctx),
+        )
+        if ctx.compaction_runs:
+            from datetime import UTC, datetime
+
+            _cdb = getattr(ctx.syscall_handler, "db", None)
+            for _cr in ctx.compaction_runs:
+                _cr.status = "failed" if cr.error else "completed"
+                _cr.completed_at = datetime.now(UTC)
+            ctx.compaction_runs.clear()
+            if _cdb is not None:
+                await _cdb.commit()
+        # The result always renders the summary exactly once + originals
+        ctx.history = ctx.history[:1] + list(cr.messages)
+        if cr.error:
+            if not force:
+                ctx.failed_auto_fingerprints.add(fp)
+            return None
+        if cr.compacted:
+            # Persist FIRST: a CAS loser or DB failure means the stored
+            # summary/coverage doesn't reflect this compaction — fail the
+            # run rather than continue on unsaved bookkeeping.
+            head_ids = conversation.source_ids[: cr.head_count]
+            tail_ids = conversation.source_ids[len(conversation.source_ids) - cr.tail_count :]
+            _db = getattr(ctx.syscall_handler, "db", None)
+            if (
+                conversation.session_id
+                and _db is not None
+                and getattr(ctx.session, "id", None) == conversation.session_id
+            ):
+                try:
+                    _head_ids = {
+                        sid
+                        for group in conversation.source_ids[: cr.head_count]
+                        for sid in (group or set())
+                    }
+                    _tail_ids = {
+                        sid
+                        for group in conversation.source_ids[
+                            len(conversation.source_ids) - cr.tail_count :
+                        ]
+                        for sid in (group or set())
+                    }
+                    stored = await conversation.store_summary(
+                        _db,
+                        cr.summary,
+                        conversation.covered_ids | cr.covered_ids,
+                        retained_head_ids=_head_ids,
+                        retained_tail_ids=_tail_ids,
                     )
-                    if core_snapshot
-                    else None,
-                    summary_version=getattr(conversation, "summary_version", None),
-                    conversation_summary_id=getattr(conversation, "summary_id", None),
-                    coverage_known=bool(getattr(conversation, "coverage_known", False)),
-                    source_message_ids=_src_ids[:200],
-                    source_message_ids_total=len(_src_ids),
-                    source_message_ids_truncated=len(_src_ids) > 200,
-                    component_budget=getattr(result, "context_breakdown", None) or None,
-                ):
-                    if streamed_call:
-                        response = await self._call_streaming(
-                            agent_config, history, tool_schemas, event_emitter
-                        )
-                    else:
-                        response: ScriptedResponse = await self._complete_with_retry(
-                            agent_config, history, tool_schemas, event_emitter
-                        )
-                        # Emit thinking if present (non-streaming path)
-                        if response.thinking and event_emitter:
-                            await self._emit(
-                                event_emitter, "thinking", {"content": response.thinking}
-                            )
-                    capture_ref = getattr(response, "request_capture", None) or (
-                        current_capture_scope().get("capture_ref")
-                    )
-            except asyncio.CancelledError:
-                await self._record_model_call(
-                    syscall_handler,
-                    run_id=run_id,
-                    agent_config=agent_config,
-                    session_id=getattr(session, "id", None),
-                    turn=result.total_turns,
-                    model_str=model_str,
-                    streamed=streamed_call,
-                    latency_ms=int((time.monotonic() - call_started) * 1000),
-                    status="interrupted",
-                    error="CancelledError",
-                    capture_ref=current_capture_scope().get("capture_ref"),
-                    purpose="reflection" if trigger == "reflection" else "reasoning",
-                )
-                raise
-            except Exception as e:
-                # Mid-run context overflow: a tool result or accumulated turns
-                # pushed the request over the window after the pre-loop
-                # compaction ran. Force-compact once and retry the call —
-                # the tail is protected, so if compaction can't shrink it,
-                # there is no recovery and the run must fail.
-                if restrictions is None and not overflow_retried and _is_context_overflow(e):
-                    overflow_retried = True
+                except Exception:
                     logger.warning(
-                        "Context window exceeded mid-run; forcing compaction and retrying once: %s",
-                        str(e)[:200],
+                        "conversation summary persist failed for session %s",
+                        conversation.session_id,
                     )
-                    _persist_err = await _apply_compaction(force=True)
-                    if _persist_err:
-                        result.status = "failed"
-                        result.error = _persist_err
-                        break
-                    if result.compacted:
-                        result.total_turns -= 1  # the retry reuses this turn
-                        continue
-                _safe_err = (
-                    type(e).__name__
-                    if getattr(e, "capture_ref", None) is not None or capture_ref is not None
-                    else str(e)
-                )
-                await self._record_model_call(
-                    syscall_handler,
-                    run_id=run_id,
-                    agent_config=agent_config,
-                    session_id=getattr(session, "id", None),
-                    purpose="reflection" if trigger == "reflection" else "reasoning",
-                    turn=result.total_turns,
-                    model_str=model_str,
-                    streamed=streamed_call,
-                    latency_ms=int((time.monotonic() - call_started) * 1000),
-                    status=(
-                        "timeout"
-                        if isinstance(e, (TimeoutError, asyncio.TimeoutError))
-                        else "error"
-                    ),
-                    error=_safe_err,
-                    capture_ref=getattr(e, "capture_ref", None) or capture_ref,
-                )
-                import logging as _log
+                    return "Context compaction could not be saved; the run stopped safely."
+                if not stored:
+                    return (
+                        "Context compaction lost a concurrent write conflict; "
+                        "the run stopped safely."
+                    )
+            conversation.messages = list(cr.retained_messages)
+            conversation.source_ids = head_ids + tail_ids
+            # Local summary update — next render keeps the summary row.
+            conversation.summary = cr.summary
+            conversation.covered_ids = conversation.covered_ids | cr.covered_ids
+        ctx.result.compacted = ctx.result.compacted or cr.compacted
+        return None
 
-                _log.getLogger("agentos.harness.loop").exception(
-                    "Model call failed: model=%s provider=%s",
-                    agent_config.model.name if agent_config.model else "?",
-                    agent_config.model.provider_id if agent_config.model else "?",
+    async def _budget_gate(self, ctx: _RunState) -> str | None:
+        """Per-dispatch full-budget gate. Returns an error message when
+        the dispatch must not happen, else None."""
+        from .compaction import count_text_tokens, count_tokens, count_tool_tokens
+
+        reserved = count_text_tokens(ctx.system_prompt, ctx.model_str) + count_tool_tokens(
+            ctx.tool_schemas, ctx.model_str
+        )
+        if reserved > ctx.resolved_input_budget:
+            # Fixed system/tool schemas alone exceed the hard input
+            # budget — no compaction can shrink a fixed section.
+            return "Request too large: system context and tool schemas alone exceed the model input budget."
+        if ctx.agent_config.compaction.auto_compaction:
+            persist_error = await self._apply_compaction(ctx, force=False)
+            if persist_error:
+                return persist_error
+        full = reserved + count_tokens(ctx.history[1:], ctx.model_str)
+        ctx.result.context_breakdown = {
+            "system_prompt": count_text_tokens(ctx.system_prompt, ctx.model_str),
+            "conversation": count_tokens(ctx.history[1:], ctx.model_str),
+            "tools": count_tool_tokens(ctx.tool_schemas, ctx.model_str),
+        }
+        ctx.result.context_tokens = sum(ctx.result.context_breakdown.values())
+        if full > ctx.resolved_input_budget:
+            return (
+                "Context exceeds the model input budget and could not be "
+                "compacted — summary generation unavailable."
+            )
+        return None
+
+    async def _call_model(self, ctx: _RunState):
+        """Step 8: dispatch one model call inside the capture scope.
+
+        Returns the response, or None when the turn ended without one —
+        ctx.turn_outcome then says how the loop should proceed:
+        "retry" (forced compaction succeeded — redo this turn),
+        "stop" (compaction could not be persisted — break the loop), or
+        "abort" (unrecoverable model error — return the failed result).
+        """
+        agent_config = ctx.agent_config
+        session = ctx.session
+        syscall_handler = ctx.syscall_handler
+        run_id = ctx.run_id
+        result = ctx.result
+        trigger = ctx.trigger
+        core_snapshot = ctx.core_snapshot
+        conversation = ctx.conversation
+
+        # Use streaming if the adapter supports it (LiteLLMAdapter);
+        # fall back to non-streaming for ScriptedModel
+        call_started = time.monotonic()
+        ctx.call_started = call_started
+        streamed_call = hasattr(self.model, "complete_stream")
+        ctx.streamed_call = streamed_call
+        capture_ref = None
+        _src_ids: list[str] = []
+        for _group in getattr(conversation, "source_ids", []) or []:
+            for _sid in _group or []:
+                _src_ids.append(_sid)
+        _src_ids = sorted(set(_src_ids))
+        try:
+            with capture_scope(
+                run_id=getattr(syscall_handler, "_parent_run_id", None) or run_id,
+                session_id=getattr(session, "id", None),
+                agent_id=agent_config.id,
+                sub_agent_id=getattr(syscall_handler, "_sub_agent_id", None),
+                turn=result.total_turns,
+                purpose=_call_purpose(trigger),
+                core_revision_id=getattr(core_snapshot, "revision_id", None)
+                if core_snapshot
+                else None,
+                core_identity_source_version_id=getattr(
+                    core_snapshot, "identity_source_version_id", None
                 )
-                result.status = "failed"
-                result.error = str(e)
-                # Show the actual error to the user instead of a generic message
-                error_msg = str(e)
-                if "429" in error_msg or "RateLimit" in error_msg or "rate" in error_msg.lower():
-                    result.final_answer = (
-                        "The model is rate-limited right now. Please try again in a moment, "
-                        "or select a different model."
-                    )
-                elif isinstance(e, TimeoutError):
-                    result.final_answer = (
-                        "I couldn't complete that request because the model connection "
-                        "timed out. Please try again."
-                    )
-                elif (
-                    "401" in error_msg
-                    or "Authentication" in error_msg
-                    or "auth" in error_msg.lower()
-                ):
-                    result.final_answer = (
-                        "Authentication failed — check that the provider API key is valid."
-                    )
-                elif (
-                    "tool use" in error_msg.lower()
-                    or "tool_use" in error_msg.lower()
-                    or "function" in error_msg.lower()
-                    and "not" in error_msg.lower()
-                ):
-                    result.final_answer = (
-                        "This model doesn't support tool use (function calling). "
-                        "Please select a model that supports tools, or use a different provider."
-                    )
-                elif _is_context_overflow(e):
-                    result.final_answer = (
-                        "I ran out of context — the conversation plus recent tool "
-                        "results exceeded the model's context window and could not "
-                        "be compacted far enough. Start a fresh session or use a "
-                        "model with a larger context window."
+                if core_snapshot
+                else None,
+                summary_version=getattr(conversation, "summary_version", None),
+                conversation_summary_id=getattr(conversation, "summary_id", None),
+                coverage_known=bool(getattr(conversation, "coverage_known", False)),
+                source_message_ids=_src_ids[:200],
+                source_message_ids_total=len(_src_ids),
+                source_message_ids_truncated=len(_src_ids) > 200,
+                component_budget=getattr(result, "context_breakdown", None) or None,
+            ):
+                if streamed_call:
+                    response = await self._call_streaming(
+                        agent_config, ctx.history, ctx.tool_schemas, ctx.event_emitter
                     )
                 else:
-                    # Include the actual error so the user can diagnose the issue
-                    short_err = error_msg[:200] if len(error_msg) > 200 else error_msg
-                    result.final_answer = f"I couldn't complete that request. Error: {short_err}"
-                # Note: message_complete is emitted by runner.py after the
-                # pipeline finishes, with full context metadata (context_tokens,
-                # max_context_tokens, etc.). Don't emit it here — the frontend
-                # closes the SSE connection on the first message_complete.
-                return result
-
-            # Accumulate tokens/cost
-            result.tokens_in += response.tokens_in
-            result.tokens_out += response.tokens_out
-            result.cached_tokens = response.cached_tokens
-            if response.thinking_tokens is not None:
-                result.thinking_tokens = (result.thinking_tokens or 0) + response.thinking_tokens
-            result.total_cost += response.cost
-
-            # Per-model-call accounting (v0.2 foundations)
+                    response: ScriptedResponse = await self._complete_with_retry(
+                        agent_config, ctx.history, ctx.tool_schemas, ctx.event_emitter
+                    )
+                    # Emit thinking if present (non-streaming path)
+                    if response.thinking and ctx.event_emitter:
+                        await self._emit(
+                            ctx.event_emitter, "thinking", {"content": response.thinking}
+                        )
+                capture_ref = getattr(response, "request_capture", None) or (
+                    current_capture_scope().get("capture_ref")
+                )
+        except asyncio.CancelledError:
             await self._record_model_call(
                 syscall_handler,
                 run_id=run_id,
                 agent_config=agent_config,
                 session_id=getattr(session, "id", None),
-                purpose="reflection" if trigger == "reflection" else "reasoning",
                 turn=result.total_turns,
-                model_str=model_str,
+                model_str=ctx.model_str,
                 streamed=streamed_call,
                 latency_ms=int((time.monotonic() - call_started) * 1000),
-                status="ok",
-                tokens_in=response.tokens_in,
-                tokens_out=response.tokens_out,
-                cached_tokens=response.cached_tokens,
-                thinking_tokens=response.thinking_tokens,
-                cost=response.cost,
-                cost_source=response.cost_source,
-                cost_receipt=getattr(response, "cost_receipt", None),
-                capture_ref=capture_ref or getattr(response, "request_capture", None),
+                status="interrupted",
+                error="CancelledError",
+                capture_ref=current_capture_scope().get("capture_ref"),
+                purpose=_call_purpose(trigger),
             )
+            raise
+        except Exception as e:
+            # Mid-run context overflow: a tool result or accumulated turns
+            # pushed the request over the window after the pre-loop
+            # compaction ran. Force-compact once and retry the call —
+            # the tail is protected, so if compaction can't shrink it,
+            # there is no recovery and the run must fail.
+            if ctx.restrictions is None and not ctx.overflow_retried and _is_context_overflow(e):
+                ctx.overflow_retried = True
+                logger.warning(
+                    "Context window exceeded mid-run; forcing compaction and retrying once: %s",
+                    str(e)[:200],
+                )
+                _persist_err = await self._apply_compaction(ctx, force=True)
+                if _persist_err:
+                    result.status = "failed"
+                    result.error = _persist_err
+                    ctx.turn_outcome = "stop"
+                    return None
+                if result.compacted:
+                    result.total_turns -= 1  # the retry reuses this turn
+                    ctx.turn_outcome = "retry"
+                    return None
+            _safe_err = (
+                type(e).__name__
+                if getattr(e, "capture_ref", None) is not None or capture_ref is not None
+                else str(e)
+            )
+            await self._record_model_call(
+                syscall_handler,
+                run_id=run_id,
+                agent_config=agent_config,
+                session_id=getattr(session, "id", None),
+                purpose=_call_purpose(trigger),
+                turn=result.total_turns,
+                model_str=ctx.model_str,
+                streamed=streamed_call,
+                latency_ms=int((time.monotonic() - call_started) * 1000),
+                status=(
+                    "timeout" if isinstance(e, (TimeoutError, asyncio.TimeoutError)) else "error"
+                ),
+                error=_safe_err,
+                capture_ref=getattr(e, "capture_ref", None) or capture_ref,
+            )
+            import logging as _log
 
-            # Step 9: Process tool calls
-            if response.tool_calls:
-                # Normalize call ids ONCE — the assistant history row and the
-                # ToolCall objects must share the same ids.
-                for tc in response.tool_calls:
-                    if not tc.get("id"):
-                        tc["id"] = str(uuid.uuid4())
-                # Add the assistant message with tool_calls to history FIRST
-                # (must precede the tool result messages for OpenAI API compliance)
-                _assistant_batch = {
-                    "role": "assistant",
-                    "content": response.content or "",
-                    "tool_calls": [
-                        {
-                            "id": tc["id"],
-                            "type": "function",
-                            "function": {
-                                "name": tc["name"],
-                                "arguments": json.dumps(tc.get("args", {})),
-                            },
-                        }
-                        for tc in response.tool_calls
-                    ],
+            _log.getLogger("agentos.harness.loop").exception(
+                "Model call failed: model=%s provider=%s",
+                agent_config.model.name if agent_config.model else "?",
+                agent_config.model.provider_id if agent_config.model else "?",
+            )
+            result.status = "failed"
+            result.error = str(e)
+            # Show the actual error to the user instead of a generic message
+            error_msg = str(e)
+            if "429" in error_msg or "RateLimit" in error_msg or "rate" in error_msg.lower():
+                result.final_answer = (
+                    "The model is rate-limited right now. Please try again in a moment, "
+                    "or select a different model."
+                )
+            elif isinstance(e, TimeoutError):
+                result.final_answer = (
+                    "I couldn't complete that request because the model connection "
+                    "timed out. Please try again."
+                )
+            elif "401" in error_msg or "Authentication" in error_msg or "auth" in error_msg.lower():
+                result.final_answer = (
+                    "Authentication failed — check that the provider API key is valid."
+                )
+            elif (
+                "tool use" in error_msg.lower()
+                or "tool_use" in error_msg.lower()
+                or "function" in error_msg.lower()
+                and "not" in error_msg.lower()
+            ):
+                result.final_answer = (
+                    "This model doesn't support tool use (function calling). "
+                    "Please select a model that supports tools, or use a different provider."
+                )
+            elif _is_context_overflow(e):
+                result.final_answer = (
+                    "I ran out of context — the conversation plus recent tool "
+                    "results exceeded the model's context window and could not "
+                    "be compacted far enough. Start a fresh session or use a "
+                    "model with a larger context window."
+                )
+            else:
+                # Include the actual error so the user can diagnose the issue
+                short_err = error_msg[:200] if len(error_msg) > 200 else error_msg
+                result.final_answer = f"I couldn't complete that request. Error: {short_err}"
+            # Note: message_complete is emitted by runner.py after the
+            # pipeline finishes, with full context metadata (context_tokens,
+            # max_context_tokens, etc.). Don't emit it here — the frontend
+            # closes the SSE connection on the first message_complete.
+            ctx.turn_outcome = "abort"
+            return None
+
+        ctx.capture_ref = capture_ref
+        return response
+
+    async def _mediate_tool_calls(self, ctx: _RunState, response: ScriptedResponse) -> None:
+        """Step 9: mediate this turn's tool calls through the syscall layer.
+
+        Normalizes call ids, appends the assistant row, emits pending/running
+        events, dispatches calls concurrently (bounded for restricted runs),
+        then folds results back into history/conversation in order.
+        """
+        agent_config = ctx.agent_config
+        session = ctx.session
+        syscall_handler = ctx.syscall_handler
+        run_id = ctx.run_id
+        result = ctx.result
+        trigger = ctx.trigger
+        conversation = ctx.conversation
+        history = ctx.history
+        event_emitter = ctx.event_emitter
+
+        # Normalize call ids ONCE — the assistant history row and the
+        # ToolCall objects must share the same ids.
+        for tc in response.tool_calls:
+            if not tc.get("id"):
+                tc["id"] = str(uuid.uuid4())
+        # Add the assistant message with tool_calls to history FIRST
+        # (must precede the tool result messages for OpenAI API compliance)
+        _assistant_batch = {
+            "role": "assistant",
+            "content": response.content or "",
+            "tool_calls": [
+                {
+                    "id": tc["id"],
+                    "type": "function",
+                    "function": {
+                        "name": tc["name"],
+                        "arguments": json.dumps(tc.get("args", {})),
+                    },
                 }
-                history.append(_assistant_batch)
-                conversation.append(_assistant_batch)
-                _batch_conv_idx = len(conversation.source_ids) - 1
+                for tc in response.tool_calls
+            ],
+        }
+        history.append(_assistant_batch)
+        conversation.append(_assistant_batch)
+        _batch_conv_idx = len(conversation.source_ids) - 1
 
-                # Build ToolCall objects
-                calls = [
-                    ToolCall(
-                        id=tc["id"],
-                        name=tc["name"],
-                        args=tc.get("args", {}),
-                    )
-                    for tc in response.tool_calls
-                ]
+        # Build ToolCall objects
+        calls = [
+            ToolCall(
+                id=tc["id"],
+                name=tc["name"],
+                args=tc.get("args", {}),
+            )
+            for tc in response.tool_calls
+        ]
 
-                # Emit pending + running events for all calls (in order, before any execution)
-                if event_emitter:
-                    for call in calls:
-                        await self._emit(
-                            event_emitter,
-                            "tool_call",
-                            {
-                                "id": call.id,
-                                "capability": call.name,
-                                "args": call.args,
-                                "status": "pending",
-                            },
-                        )
-                    for call in calls:
-                        await self._emit(
-                            event_emitter,
-                            "tool_call",
-                            {
-                                "id": call.id,
-                                "capability": call.name,
-                                "args": call.args,
-                                "status": "running",
-                            },
-                        )
-
-                # Release any open write txn before dispatch — tool calls can
-                # block for minutes (terminal sleep, MCP calls); a SQLite
-                # writer lock held across them starves every other run's
-                # writes under concurrency (B31).
-                _loop_db = getattr(syscall_handler, "db", None)
-                if _loop_db is not None:
-                    await _loop_db.commit()
-
-                # Dispatch all tool calls concurrently within this reasoning step.
-                # Restricted runs bound concurrency (not count) and skip the
-                # full-response approval barrier — the mediator denies
-                # approval-needing tools outright, and a barrier would
-                # deadlock while slots drain oversized batches.
-                approval_batch = (
-                    _approval_batch_for(agent_config, session, calls)
-                    if restrictions is None
-                    else None
+        # Emit pending + running events for all calls (in order, before any execution)
+        if event_emitter:
+            for call in calls:
+                await self._emit(
+                    event_emitter,
+                    "tool_call",
+                    {
+                        "id": call.id,
+                        "capability": call.name,
+                        "args": call.args,
+                        "status": "pending",
+                    },
                 )
-                _gate = (
-                    asyncio.Semaphore(max(1, restrictions.max_concurrent_tool_calls))
-                    if restrictions is not None
-                    else None
+            for call in calls:
+                await self._emit(
+                    event_emitter,
+                    "tool_call",
+                    {
+                        "id": call.id,
+                        "capability": call.name,
+                        "args": call.args,
+                        "status": "running",
+                    },
                 )
 
-                async def _mediate_one(call: ToolCall) -> SyscallResult:
-                    if _gate is not None:
-                        async with _gate:
-                            return await syscall_handler.mediate(
-                                call=call,
-                                session=session,
-                                agent_config=agent_config,
-                                run_id=run_id,
-                                event_emitter=event_emitter,
-                                capability_catalog=capability_catalog,
-                                approval_batch=approval_batch,
-                                trigger=trigger,
-                            )
+        # Release any open write txn before dispatch — tool calls can
+        # block for minutes (terminal sleep, MCP calls); a SQLite
+        # writer lock held across them starves every other run's
+        # writes under concurrency (B31).
+        _loop_db = getattr(syscall_handler, "db", None)
+        if _loop_db is not None:
+            await _loop_db.commit()
+
+        # Dispatch all tool calls concurrently within this reasoning step.
+        # Restricted runs bound concurrency (not count) and skip the
+        # full-response approval barrier — the mediator denies
+        # approval-needing tools outright, and a barrier would
+        # deadlock while slots drain oversized batches.
+        approval_batch = (
+            _approval_batch_for(agent_config, session, calls) if ctx.restrictions is None else None
+        )
+        _gate = (
+            asyncio.Semaphore(max(1, ctx.restrictions.max_concurrent_tool_calls))
+            if ctx.restrictions is not None
+            else None
+        )
+
+        async def _mediate_one(call: ToolCall) -> SyscallResult:
+            if _gate is not None:
+                async with _gate:
                     return await syscall_handler.mediate(
                         call=call,
                         session=session,
                         agent_config=agent_config,
                         run_id=run_id,
                         event_emitter=event_emitter,
-                        capability_catalog=capability_catalog,
+                        capability_catalog=ctx.capability_catalog,
                         approval_batch=approval_batch,
                         trigger=trigger,
                     )
+            return await syscall_handler.mediate(
+                call=call,
+                session=session,
+                agent_config=agent_config,
+                run_id=run_id,
+                event_emitter=event_emitter,
+                capability_catalog=ctx.capability_catalog,
+                approval_batch=approval_batch,
+                trigger=trigger,
+            )
 
-                syscall_results = await asyncio.gather(*[_mediate_one(c) for c in calls])
+        syscall_results = await asyncio.gather(*[_mediate_one(c) for c in calls])
 
-                # Process results in order (to maintain history ordering)
-                for call, syscall_result in zip(calls, syscall_results, strict=True):
-                    # Emit the outcome: complete, denied, failed, timeout,
-                    # or interrupted — the caller sees *how* a call ended.
-                    if event_emitter:
-                        _receipt = await self._emit(
-                            event_emitter,
-                            "tool_call",
-                            {
-                                "id": call.id,
-                                "capability": call.name,
-                                "args": call.args,
-                                "status": tool_event_status(syscall_result.status),
-                                "result": syscall_result.output,
-                                # denied_reason so the UI and the audit row
-                                # report the same failure/denial cause.
-                                "reason": syscall_result.denied_reason,
-                                "approval_batch_id": approval_batch.id if approval_batch else None,
-                                "approval_batch_size": approval_batch.size
-                                if approval_batch
-                                else None,
-                            },
-                        )
-                        if isinstance(_receipt, dict):
-                            _call_receipts[call.id] = _receipt
-
-                    result.tool_calls_made.append(
-                        {
-                            "id": call.id,
-                            "name": call.name,
-                            "args": call.args,
-                            "allowed": syscall_result.allowed,
-                            "status": syscall_result.status,
-                            "result": syscall_result.output,
-                        }
-                    )
-
-                    # Add tool result to history
-                    if syscall_result.allowed:
-                        output = syscall_result.output
-                        # Track consecutive failures (empty/error results)
-                        is_empty = (
-                            output is None
-                            or output == ""
-                            or (isinstance(output, dict) and output.get("results") == [])
-                        )
-                        if is_empty:
-                            consecutive_tool_failures += 1
-                        else:
-                            consecutive_tool_failures = 0
-                        content: Any = (
-                            syscall_result.model_content
-                            if syscall_result.model_content is not None
-                            else json.dumps(output)
-                            if output
-                            else ""
-                        )
-                        if isinstance(content, str) and len(content) > TOOL_RESULT_MAX_CHARS:
-                            content = (
-                                content[:TOOL_RESULT_MAX_CHARS]
-                                + f"\n\n[truncated — result was {len(content)} chars; "
-                                f"the {TOOL_RESULT_MAX_CHARS}-char limit applies. "
-                                "Narrow the call or page through the data.]"
-                            )
-                        _tool_row = {
-                            "role": "tool",
-                            "content": content,
-                            "tool_call_id": call.id,
-                            "name": call.name,
-                        }
-                        history.append(_tool_row)
-                        _rid = _call_receipts.get(call.id) or {}
-                        conversation.append(
-                            _tool_row,
-                            {_rid["tool_message_id"]} if _rid.get("tool_message_id") else set(),
-                        )
-                    else:
-                        consecutive_tool_failures += 1
-                        # Tell the model *how* the call ended — a denial is a
-                        # policy decision, an error/timeout is a failure.
-                        prefix = {
-                            "denied": "Denied",
-                            "timeout": "Timed out",
-                            "interrupted": "Interrupted",
-                        }.get(syscall_result.status, "Error")
-                        _tool_row = {
-                            "role": "tool",
-                            "content": f"{prefix}: {syscall_result.denied_reason}",
-                            "tool_call_id": call.id,
-                            "name": call.name,
-                        }
-                        history.append(_tool_row)
-                        _rid = _call_receipts.get(call.id) or {}
-                        conversation.append(
-                            _tool_row,
-                            {_rid["tool_message_id"]} if _rid.get("tool_message_id") else set(),
-                        )
-
-                # Coverage bookkeeping: the assistant batch row is covered by
-                # every persisted tool row plus the flushed narration row.
-                _batch_ids: set[str] = set()
-                for _cid in (c.id for c in calls):
-                    _rc = _call_receipts.get(_cid) or {}
-                    if _rc.get("tool_message_id"):
-                        _batch_ids.add(_rc["tool_message_id"])
-                    if _rc.get("assistant_message_id"):
-                        _batch_ids.add(_rc["assistant_message_id"])
-                if _batch_ids:
-                    conversation.source_ids[_batch_conv_idx] = _batch_ids
-
-                # Stop if too many consecutive tool failures
-                if consecutive_tool_failures >= max_consecutive_failures:
-                    _note_row = {
-                        "role": "user",
-                        "content": f"Note: {consecutive_tool_failures} consecutive tool calls returned empty or failed results. Stop calling tools and respond with what you know.",
-                    }
-                    history.append(_note_row)
-                    conversation.append(_note_row)
-
-                # Emit turn_complete
-                result.loaded_capabilities = sorted(capability_catalog.loaded)
-                if event_emitter:
-                    await self._emit(
-                        event_emitter,
-                        "turn_complete",
-                        {
-                            "turn_number": result.total_turns,
-                            "tokens_in": response.tokens_in,
-                            "tokens_out": response.tokens_out,
-                            "cached_tokens": response.cached_tokens,
-                            "cost": response.cost,
-                            "loaded_capabilities": list(result.loaded_capabilities),
-                            "context_breakdown": dict(result.context_breakdown),
-                            "context_tokens": result.context_tokens,
-                            "max_context_tokens": result.max_context_tokens,
-                            "compacted": result.compacted,
-                        },
-                    )
-
-                # Continue the loop (model will be called again)
-                continue
-
-            # No tool calls → this is the final answer
-            # Add the assistant message to history
-            _final_row = {"role": "assistant", "content": response.content or ""}
-            history.append(_final_row)
-            conversation.append(_final_row)
-            # Apply guardrails before emitting to the user (D2)
-            guardrail_result = apply_guardrails(response.content)
-            result.final_answer = guardrail_result.content
-            result.guardrail_warnings = guardrail_result.warnings
-            result.guardrail_redactions = guardrail_result.redactions
-
-            # Emit turn_complete for the final turn
-            # (tokens were already streamed via _call_streaming if streaming)
+        # Process results in order (to maintain history ordering)
+        for call, syscall_result in zip(calls, syscall_results, strict=True):
+            # Emit the outcome: complete, denied, failed, timeout,
+            # or interrupted — the caller sees *how* a call ended.
             if event_emitter:
-                if not hasattr(self.model, "complete_stream"):
-                    # Non-streaming path: emit the guardrailed content as one token event
-                    await self._emit(event_emitter, "token", {"content": guardrail_result.content})
-                else:
-                    # Streaming path: tokens were already emitted raw during streaming.
-                    # If guardrails modified the content, emit a correction event so
-                    # the frontend can replace the streamed output with the clean version.
-                    if guardrail_result.content != response.content:
-                        await self._emit(
-                            event_emitter,
-                            "guardrail_correction",
-                            {"content": guardrail_result.content},
-                        )
-                # Emit guardrail warnings (if any) so the UI can show a notice
-                if guardrail_result.warnings:
-                    await self._emit(
-                        event_emitter,
-                        "guardrail_warning",
-                        {"warnings": guardrail_result.warnings},
-                    )
-                await self._emit(
+                _receipt = await self._emit(
                     event_emitter,
-                    "turn_complete",
+                    "tool_call",
                     {
-                        "turn_number": result.total_turns,
-                        "tokens_in": response.tokens_in,
-                        "tokens_out": response.tokens_out,
-                        "cached_tokens": response.cached_tokens,
-                        "cost": response.cost,
-                        "loaded_capabilities": list(result.loaded_capabilities),
-                        "context_breakdown": dict(result.context_breakdown),
-                        "context_tokens": result.context_tokens,
-                        "max_context_tokens": result.max_context_tokens,
-                        "compacted": result.compacted,
+                        "id": call.id,
+                        "capability": call.name,
+                        "args": call.args,
+                        "status": tool_event_status(syscall_result.status),
+                        "result": syscall_result.output,
+                        # denied_reason so the UI and the audit row
+                        # report the same failure/denial cause.
+                        "reason": syscall_result.denied_reason,
+                        "approval_batch_id": approval_batch.id if approval_batch else None,
+                        "approval_batch_size": approval_batch.size if approval_batch else None,
                     },
                 )
+                if isinstance(_receipt, dict):
+                    ctx.call_receipts[call.id] = _receipt
 
-            # Step 10: Check limits
-            if result.total_cost > max_cost:
-                result.status = "limit_exceeded"
-                result.final_answer = agent_config.fallback.on_limit_exceeded
-                break
+            result.tool_calls_made.append(
+                {
+                    "id": call.id,
+                    "name": call.name,
+                    "args": call.args,
+                    "allowed": syscall_result.allowed,
+                    "status": syscall_result.status,
+                    "result": syscall_result.output,
+                }
+            )
 
-            break
+            # Add tool result to history
+            if syscall_result.allowed:
+                output = syscall_result.output
+                # Track consecutive failures (empty/error results)
+                is_empty = (
+                    output is None
+                    or output == ""
+                    or (isinstance(output, dict) and output.get("results") == [])
+                )
+                if is_empty:
+                    ctx.consecutive_tool_failures += 1
+                else:
+                    ctx.consecutive_tool_failures = 0
+                content: Any = (
+                    syscall_result.model_content
+                    if syscall_result.model_content is not None
+                    else json.dumps(output)
+                    if output
+                    else ""
+                )
+                if isinstance(content, str) and len(content) > TOOL_RESULT_MAX_CHARS:
+                    content = (
+                        content[:TOOL_RESULT_MAX_CHARS]
+                        + f"\n\n[truncated — result was {len(content)} chars; "
+                        f"the {TOOL_RESULT_MAX_CHARS}-char limit applies. "
+                        "Narrow the call or page through the data.]"
+                    )
+                _tool_row = {
+                    "role": "tool",
+                    "content": content,
+                    "tool_call_id": call.id,
+                    "name": call.name,
+                }
+                history.append(_tool_row)
+                _rid = ctx.call_receipts.get(call.id) or {}
+                conversation.append(
+                    _tool_row,
+                    {_rid["tool_message_id"]} if _rid.get("tool_message_id") else set(),
+                )
+            else:
+                ctx.consecutive_tool_failures += 1
+                # Tell the model *how* the call ended — a denial is a
+                # policy decision, an error/timeout is a failure.
+                prefix = {
+                    "denied": "Denied",
+                    "timeout": "Timed out",
+                    "interrupted": "Interrupted",
+                }.get(syscall_result.status, "Error")
+                _tool_row = {
+                    "role": "tool",
+                    "content": f"{prefix}: {syscall_result.denied_reason}",
+                    "tool_call_id": call.id,
+                    "name": call.name,
+                }
+                history.append(_tool_row)
+                _rid = ctx.call_receipts.get(call.id) or {}
+                conversation.append(
+                    _tool_row,
+                    {_rid["tool_message_id"]} if _rid.get("tool_message_id") else set(),
+                )
 
-        # Step 11: Check if we hit the turn limit
-        if result.total_turns >= max_turns and not result.final_answer:
-            result.status = "limit_exceeded"
-            result.final_answer = "I've reached my turn limit for this run."
+        # Coverage bookkeeping: the assistant batch row is covered by
+        # every persisted tool row plus the flushed narration row.
+        _batch_ids: set[str] = set()
+        for _cid in (c.id for c in calls):
+            _rc = ctx.call_receipts.get(_cid) or {}
+            if _rc.get("tool_message_id"):
+                _batch_ids.add(_rc["tool_message_id"])
+            if _rc.get("assistant_message_id"):
+                _batch_ids.add(_rc["assistant_message_id"])
+        if _batch_ids:
+            conversation.source_ids[_batch_conv_idx] = _batch_ids
 
-        # A run must not silently finish with live terminals — surface them so
-        # the operator/model can read or close them.
-        try:
-            from ..terminal.registry import terminal_registry
+        # Stop if too many consecutive tool failures
+        if ctx.consecutive_tool_failures >= ctx.max_consecutive_failures:
+            _note_row = {
+                "role": "user",
+                "content": f"Note: {ctx.consecutive_tool_failures} consecutive tool calls returned empty or failed results. Stop calling tools and respond with what you know.",
+            }
+            history.append(_note_row)
+            conversation.append(_note_row)
 
-            active = await terminal_registry.active_for_run(run_id)
-            if active:
-                result.terminals_active = active
-                if event_emitter:
+        # Emit turn_complete
+        result.loaded_capabilities = sorted(ctx.capability_catalog.loaded)
+        if event_emitter:
+            await self._emit(
+                event_emitter,
+                "turn_complete",
+                {
+                    "turn_number": result.total_turns,
+                    "tokens_in": response.tokens_in,
+                    "tokens_out": response.tokens_out,
+                    "cached_tokens": response.cached_tokens,
+                    "cost": response.cost,
+                    "loaded_capabilities": list(result.loaded_capabilities),
+                    "context_breakdown": dict(result.context_breakdown),
+                    "context_tokens": result.context_tokens,
+                    "max_context_tokens": result.max_context_tokens,
+                    "compacted": result.compacted,
+                },
+            )
+
+    async def _finalize_answer(self, ctx: _RunState, response: ScriptedResponse) -> None:
+        """No tool calls — this is the final answer: append the assistant row,
+        apply output guardrails, and emit the turn's closing events."""
+        result = ctx.result
+        event_emitter = ctx.event_emitter
+
+        # Add the assistant message to history
+        _final_row = {"role": "assistant", "content": response.content or ""}
+        ctx.history.append(_final_row)
+        ctx.conversation.append(_final_row)
+        # Apply guardrails before emitting to the user (D2)
+        guardrail_result = apply_guardrails(response.content)
+        result.final_answer = guardrail_result.content
+        result.guardrail_warnings = guardrail_result.warnings
+        result.guardrail_redactions = guardrail_result.redactions
+
+        # Emit turn_complete for the final turn
+        # (tokens were already streamed via _call_streaming if streaming)
+        if event_emitter:
+            if not hasattr(self.model, "complete_stream"):
+                # Non-streaming path: emit the guardrailed content as one token event
+                await self._emit(event_emitter, "token", {"content": guardrail_result.content})
+            else:
+                # Streaming path: tokens were already emitted raw during streaming.
+                # If guardrails modified the content, emit a correction event so
+                # the frontend can replace the streamed output with the clean version.
+                if guardrail_result.content != response.content:
                     await self._emit(
                         event_emitter,
-                        "terminals_active",
-                        {"terminal_ids": active},
+                        "guardrail_correction",
+                        {"content": guardrail_result.content},
                     )
-        except Exception:
-            pass
-
-        # Note: message_complete is emitted by runner.py after the pipeline
-        # finishes, with full context metadata (context_tokens, max_context_tokens,
-        # compacted, context_breakdown). Don't emit it here — the frontend closes
-        # the SSE connection on the first message_complete it receives.
-
-        return result
+            # Emit guardrail warnings (if any) so the UI can show a notice
+            if guardrail_result.warnings:
+                await self._emit(
+                    event_emitter,
+                    "guardrail_warning",
+                    {"warnings": guardrail_result.warnings},
+                )
+            await self._emit(
+                event_emitter,
+                "turn_complete",
+                {
+                    "turn_number": result.total_turns,
+                    "tokens_in": response.tokens_in,
+                    "tokens_out": response.tokens_out,
+                    "cached_tokens": response.cached_tokens,
+                    "cost": response.cost,
+                    "loaded_capabilities": list(result.loaded_capabilities),
+                    "context_breakdown": dict(result.context_breakdown),
+                    "context_tokens": result.context_tokens,
+                    "max_context_tokens": result.max_context_tokens,
+                    "compacted": result.compacted,
+                },
+            )
 
     async def _record_model_call(
         self,
@@ -1246,7 +1395,7 @@ class Harness:
         if getattr(syscall_handler, "db", None) is None:
             return
         try:
-            from ..db import async_session_factory, retry_locked_transaction
+            from ..db import persist_fresh_session
             from ..models.model_call import ModelCall
 
             record_run_id = getattr(syscall_handler, "_parent_run_id", None) or run_id
@@ -1292,43 +1441,39 @@ class Harness:
                 }
                 or None,
             )
-            async with async_session_factory() as session:
 
-                async def _persist() -> None:
-                    existing = await session.get(ModelCall, row.id)
-                    if existing is None:
-                        session.add(row)
-                    else:
-                        for field in (
-                            "run_id",
-                            "agent_id",
-                            "sub_agent_id",
-                            "turn",
-                            "kind",
-                            "purpose",
-                            "provider_id",
-                            "model_name",
-                            "model_str",
-                            "streamed",
-                            "tokens_in",
-                            "tokens_out",
-                            "cached_tokens",
-                            "thinking_tokens",
-                            "cost",
-                            "latency_ms",
-                            "status",
-                            "error",
-                            "detail",
-                        ):
-                            new_val = getattr(row, field)
-                            if new_val is None:
-                                continue
-                            setattr(existing, field, new_val)
-                    await session.commit()
+            async def _persist(db: Any) -> None:
+                existing = await db.get(ModelCall, row.id)
+                if existing is None:
+                    db.add(row)
+                else:
+                    for field in (
+                        "run_id",
+                        "agent_id",
+                        "sub_agent_id",
+                        "turn",
+                        "kind",
+                        "purpose",
+                        "provider_id",
+                        "model_name",
+                        "model_str",
+                        "streamed",
+                        "tokens_in",
+                        "tokens_out",
+                        "cached_tokens",
+                        "thinking_tokens",
+                        "cost",
+                        "latency_ms",
+                        "status",
+                        "error",
+                        "detail",
+                    ):
+                        new_val = getattr(row, field)
+                        if new_val is None:
+                            continue
+                        setattr(existing, field, new_val)
 
-                await retry_locked_transaction(
-                    _persist, session, f"model_call:{record_run_id}:{turn}"
-                )
+            await persist_fresh_session(_persist, f"model_call:{record_run_id}:{turn}")
         except Exception:
             import logging as _log
 

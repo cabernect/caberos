@@ -70,6 +70,27 @@ async def retry_locked_transaction[T](
     raise RuntimeError("Database transaction retry loop exhausted")
 
 
+async def persist_fresh_session[T](
+    write: Callable[[AsyncSession], Awaitable[T]],
+    operation_name: str,
+) -> T:
+    """Run ``write`` on a fresh session: it performs its ORM work, then the
+    helper commits — all inside one lock-retried transaction.
+
+    For background/failure-path writes that must not touch the caller's
+    session (which may be poisoned by a mid-flush error or holding the
+    SQLite write lock across a long operation).
+    """
+    async with async_session_factory() as db:
+
+        async def _op() -> T:
+            result = await write(db)
+            await db.commit()
+            return result
+
+        return await retry_locked_transaction(_op, db, operation_name)
+
+
 # Select the backend from the configured URL
 _backend = get_backend(settings.db_url)
 

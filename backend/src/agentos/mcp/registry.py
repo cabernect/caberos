@@ -324,52 +324,44 @@ async def _discover_tools(server: McpServer, client: McpClient) -> None:
     # availability/call time (catalog._is_mcp_available, mediator) so filtered
     # tools stay listed and can be re-enabled.
 
-    from ..db import retry_locked_transaction
+    from ..db import persist_fresh_session
 
-    async with async_session_factory() as db:
+    async def _persist_tools(db) -> None:
+        await db.execute(delete(McpTool).where(McpTool.mcp_server_id == server.id))
 
-        async def _persist_tools() -> None:
-            await db.execute(delete(McpTool).where(McpTool.mcp_server_id == server.id))
-
-            for tool in tools:
-                cap_name = _namespace(server.name, tool["name"])
-                schema_json = json.dumps(tool["inputSchema"])
-                tool_effects = effects_from_mcp_annotations(tool.get("annotations"))
-                db.add(
-                    McpTool(
-                        mcp_server_id=server.id,
-                        tool_name=tool["name"],
-                        capability_name=cap_name,
-                        parameters_schema=schema_json,
-                        description=tool["description"],
-                        egress=True,
-                        require_approval=server.require_approval,
-                        subject_scoped=True,
-                        effects=json.dumps(sorted(tool_effects)),
-                    )
+        for tool in tools:
+            cap_name = _namespace(server.name, tool["name"])
+            schema_json = json.dumps(tool["inputSchema"])
+            tool_effects = effects_from_mcp_annotations(tool.get("annotations"))
+            db.add(
+                McpTool(
+                    mcp_server_id=server.id,
+                    tool_name=tool["name"],
+                    capability_name=cap_name,
+                    parameters_schema=schema_json,
+                    description=tool["description"],
+                    egress=True,
+                    require_approval=server.require_approval,
+                    subject_scoped=True,
+                    effects=json.dumps(sorted(tool_effects)),
                 )
-                cap_registry.register(
-                    CapabilityDef(
-                        name=cap_name,
-                        kind="mcp_tool",
-                        description=tool["description"],
-                        parameters_schema=tool["inputSchema"],
-                        egress=True,
-                        require_approval=server.require_approval,
-                        subject_scoped=True,
-                        effects=tool_effects,
-                        execute=None,
-                    )
+            )
+            cap_registry.register(
+                CapabilityDef(
+                    name=cap_name,
+                    kind="mcp_tool",
+                    description=tool["description"],
+                    parameters_schema=tool["inputSchema"],
+                    egress=True,
+                    require_approval=server.require_approval,
+                    subject_scoped=True,
+                    effects=tool_effects,
+                    execute=None,
                 )
-                _tool_map[cap_name] = (server.id, tool["name"])
+            )
+            _tool_map[cap_name] = (server.id, tool["name"])
 
-            await db.commit()
-
-        await retry_locked_transaction(
-            _persist_tools,
-            db,
-            f"discover_mcp_tools:{server.id}",
-        )
+    await persist_fresh_session(_persist_tools, f"discover_mcp_tools:{server.id}")
 
     # Discovery registers metadata but does not modify agent permission grants.
     # Agents can grant the server or selected tools from the dashboard.

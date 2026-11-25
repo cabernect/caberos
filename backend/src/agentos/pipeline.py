@@ -5,7 +5,6 @@ scheduler (plan 12) call pipeline.handle_inbound() to trigger a run.
 The pipeline is channel-agnostic.
 """
 
-import asyncio
 import json
 import logging
 import uuid
@@ -19,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .agent_service import get_active_config
 from .capabilities.builtin import register_builtin_capabilities
+from .event_persistence import RunEventPersister
 from .harness.guardrails import apply_input_guardrails
 from .harness.loop import Harness, RunResult
 from .models.contact import Contact
@@ -166,6 +166,112 @@ async def _generate_session_title_from_history(
         return title if title else None
     except Exception:
         return None
+
+
+def _maybe_schedule_session_title(
+    session: Session, run: Run, agent_config: Any, result: RunResult
+) -> None:
+    """Generate an LLM session title once, 3 minutes after the session
+    started — avoids locking in a title from a "nothing" first message.
+    ``title_generated`` gates it to a single attempt-set per session.
+    Runs in the background so ``message_complete`` isn't blocked."""
+    if not (
+        result.final_answer and session.title and not session.title_generated and not run.is_test
+    ):
+        return
+    started = session.started_at
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=UTC)
+    if (datetime.now(UTC) - started).total_seconds() < 180:
+        return
+
+    import asyncio as _asyncio
+
+    from .db import async_session_factory
+
+    # Snapshot the PKs now — the session/run ORM objects are expired by the
+    # commit that follows, and attribute access inside the task would need
+    # a lazy refresh.
+    title_session_id = session.id
+    title_run_id = run.id
+
+    async def _bg_title() -> None:
+        try:
+            # Phase 1: read messages (short transaction)
+            async with async_session_factory() as bg_db:
+                stmt = (
+                    select(Message)
+                    .join(Run, Message.run_id == Run.id)
+                    .where(Run.session_id == title_session_id)
+                    .order_by(Message.created_at.desc())
+                    .limit(20)
+                )
+                rows = (await bg_db.execute(stmt)).scalars().all()
+                all_msgs = list(reversed(rows))
+            # Session is closed here — no transaction held during LLM call
+
+            # Phase 2: LLM call with a fresh short-lived session
+            # (LiteLLMAdapter needs db to load the provider, but we commit
+            # immediately so no write lock is held)
+            async with async_session_factory() as bg_db:
+                llm_title = await _generate_session_title_from_history(
+                    bg_db,
+                    agent_config,
+                    all_msgs,
+                    run_id=title_run_id,
+                    session_id=title_session_id,
+                )
+                await bg_db.commit()
+
+            if llm_title:
+                # Phase 3: write title + the once-only flag together (short
+                # transaction) — a failed generation leaves the flag unset
+                # so a later run may retry.
+                from sqlalchemy import update as sa_update
+
+                from .models.session import Session as SessionModel
+
+                async with async_session_factory() as bg_db:
+                    await bg_db.execute(
+                        sa_update(SessionModel)
+                        .where(SessionModel.id == title_session_id)
+                        .values(title=llm_title, title_generated=True)
+                    )
+                    await bg_db.commit()
+        except Exception:
+            logger.debug("Background title generation failed", exc_info=True)
+
+    _asyncio.create_task(_bg_title())
+
+
+async def _mark_run_failed(run_id: str) -> None:
+    """Mark a run failed through a fresh session.
+
+    The pipeline's session may be unusable after a mid-flush error, and the
+    run object may be expired — a fresh session keeps the failure mark
+    durable (otherwise the run stays 'pending'/'running' forever). Retries
+    under lock contention so a busy SQLite during a storm can't orphan the
+    run either (B31).
+    """
+    from sqlalchemy import update as _sa_update
+
+    from .db import persist_fresh_session
+
+    async def _write(db: AsyncSession) -> None:
+        await db.execute(
+            _sa_update(Run)
+            .where(Run.id == run_id)
+            .values(
+                status="failed",
+                error="The agent run failed due to an internal error.",
+                completed_at=datetime.now(UTC),
+            )
+        )
+
+    await persist_fresh_session(_write, f"mark_failed:{run_id}")
+    from .memory.episodic import poke_session_sweeper
+
+    poke_session_sweeper()
 
 
 @dataclass
@@ -619,15 +725,24 @@ class Pipeline:
                     )
                     await self.db.flush()
 
-                # Set up syscall handler
-                # Tools and their event callbacks share this AsyncSession.
-                # Both must serialize DB access, not just the tool writers.
-                run_db_lock = asyncio.Lock()
+                # Events and tool writes share the run's AsyncSession — one
+                # lock serializes both so parallel tool calls can't commit
+                # concurrently.
+                persister = RunEventPersister(
+                    db=self.db,
+                    run=run,
+                    event_emitter=event_emitter,
+                    agent_id=message.bot_id,
+                    session_id=session.id,
+                )
+
+                # Set up syscall handler — shares the persister's db_lock so
+                # event writes and tool writes serialize on one AsyncSession.
                 syscall_handler = SyscallHandler(
                     db=self.db,
                     workspace_path=str(workspace_path),
                     sandbox_mode=agent_config.sandbox_mode,
-                    db_lock=run_db_lock,
+                    db_lock=persister.db_lock,
                 )
 
                 # Scripted test runs are headless — the mediator auto-resolves
@@ -643,196 +758,6 @@ class Pipeline:
                     )
                     if _sched_ctx.get("max_cost") is not None:
                         agent_config.limits.max_cost_per_run = float(_sched_ctx["max_cost"])
-
-                # Wrap event_emitter to persist thinking, intermediate text, and
-                # tool_call events as Message rows, so they show up in conversation
-                # history. Uses a monotonically increasing seq counter to guarantee
-                # correct ordering: thinking → text → tool_call → assistant.
-                # Sub-agent events (tagged with subagent_id) get separate buffers
-                # and are persisted with subagent_id set on the Message.
-                _thinking_buffers: dict[str | None, list[str]] = {None: []}
-                _token_buffers: dict[str | None, list[str]] = {None: []}
-                _tool_calls_seen: set[str] = set()
-                _msg_seq = 1  # user message is seq=0
-
-                _tool_call_receipts: dict[str, dict] = {}
-                # Narration row id for the current tool batch, per scope —
-                # flushed at the first tool_call event, read when each
-                # call's terminal receipt is built.
-                _narration_ids: dict[str | None, str] = {}
-
-                async def _persist_event(event_type: str, payload: dict) -> dict | None:
-                    """Emit + persist; returns a receipt {assistant_message_id,
-                    tool_message_id} when a tool outcome was persisted, else
-                    None. Receipts are cached per call id — duplicate terminal
-                    emissions return the same ids."""
-                    nonlocal _msg_seq
-
-                    # Forward to the real emitter (SSE broadcast)
-                    if event_emitter:
-                        result_emit = event_emitter(event_type, payload)
-                        if hasattr(result_emit, "__await__"):
-                            await result_emit
-
-                    # Determine which buffer set to use (parent vs sub-agent)
-                    sub_id = payload.get("subagent_id")
-                    if sub_id not in _thinking_buffers:
-                        _thinking_buffers[sub_id] = []
-                    if sub_id not in _token_buffers:
-                        _token_buffers[sub_id] = []
-                    _tb = _thinking_buffers[sub_id]
-                    _tkb = _token_buffers[sub_id]
-
-                    receipt = None
-                    _tool_message_id: str | None = None
-
-                    # Persist thinking as a single Message when it's done
-                    # (we buffer chunks and flush on first token/tool_call)
-                    if event_type == "thinking":
-                        _tb.append(payload.get("content", ""))
-
-                    # Buffer text tokens — these are intermediate narration that
-                    # the model produces before tool calls. We flush them as an
-                    # assistant message when a tool_call arrives.
-                    if event_type == "token":
-                        _tkb.append(payload.get("content", ""))
-
-                    # Flush thinking buffer on first token/tool_call
-                    if event_type in ("token", "tool_call") and _tb:
-                        # Flush buffered thinking into one Message row
-                        thinking_text = "".join(_tb)
-                        _tb.clear()
-                        if thinking_text:
-                            self.db.add(
-                                Message(
-                                    id=str(uuid.uuid4()),
-                                    run_id=run.id,
-                                    role="thinking",
-                                    content=thinking_text,
-                                    seq=_msg_seq,
-                                    subagent_id=sub_id,
-                                )
-                            )
-                            _msg_seq += 1
-                            await self.db.commit()
-
-                    # Flush token buffer when a tool_call arrives — the model
-                    # produced narration text before the tool call, save it
-                    # as an assistant message so it survives message_complete reload.
-                    if event_type == "tool_call" and _tkb:
-                        text_content = "".join(_tkb)
-                        _tkb.clear()
-                        if text_content.strip():
-                            _narration_msg = Message(
-                                id=str(uuid.uuid4()),
-                                run_id=run.id,
-                                role="assistant",
-                                content=text_content,
-                                seq=_msg_seq,
-                                subagent_id=sub_id,
-                            )
-                            self.db.add(_narration_msg)
-                            _msg_seq += 1
-                            await self.db.commit()
-                            _narration_ids[sub_id] = _narration_msg.id
-
-                    # Persist tool_call events (only on final status to avoid duplicates)
-                    if event_type == "tool_call":
-                        tc_id = payload.get("id", "")
-                        status = payload.get("status", "")
-                        # Store the final state as a Message — every terminal
-                        # outcome, not just complete/denied.
-                        if tc_id in _tool_call_receipts:
-                            return _tool_call_receipts[tc_id]
-                        if (
-                            status in ("complete", "denied", "failed", "timeout", "interrupted")
-                            and tc_id not in _tool_calls_seen
-                        ):
-                            _tool_calls_seen.add(tc_id)
-                            import json as _json
-
-                            _tool_msg = Message(
-                                id=str(uuid.uuid4()),
-                                run_id=run.id,
-                                role="tool_call",
-                                content=_json.dumps(
-                                    {
-                                        "id": tc_id,
-                                        "capability": payload.get("capability", ""),
-                                        "args": payload.get("args", {}),
-                                        "status": status,
-                                        "result": payload.get("result"),
-                                        "denied_reason": payload.get("reason"),
-                                        "approval_id": payload.get("approval_id"),
-                                        "approval_batch_id": payload.get("approval_batch_id"),
-                                        "approval_batch_size": payload.get("approval_batch_size"),
-                                    }
-                                ),
-                                seq=_msg_seq,
-                                subagent_id=sub_id,
-                            )
-                            self.db.add(_tool_msg)
-                            _msg_seq += 1
-                            await self.db.commit()
-                            _tool_message_id = _tool_msg.id
-                            receipt = {
-                                "assistant_message_id": _narration_ids.get(sub_id),
-                                "tool_message_id": _tool_message_id,
-                            }
-                            _tool_call_receipts[tc_id] = receipt
-
-                    # Clear token buffer on guardrail correction — the corrected
-                    # content will be saved as the final assistant message.
-                    if event_type == "turn_complete":
-                        # Batch narration id is per-turn — a later tool batch
-                        # must not claim this turn's narration row.
-                        _narration_ids.pop(sub_id, None)
-
-                    if event_type == "guardrail_correction":
-                        _tkb.clear()
-
-                    # A parked approval flips the run to awaiting_approval so the
-                    # operator can discover it — persist it here (not in the
-                    # transport layer) so scheduled/channel runs behave the same.
-                    if event_type == "tool_call" and payload.get("status") == "pending_approval":
-                        run.status = "awaiting_approval"
-                        await self.db.commit()
-
-                        async def _notify_approval_required() -> None:
-                            try:
-                                from .db import async_session_factory as _sf
-                                from .notifications import call_brief, create_notification
-
-                                async with _sf() as ndb:
-                                    await create_notification(
-                                        ndb,
-                                        notification_type="approval_required",
-                                        severity="warning",
-                                        title="Approval required",
-                                        message=(f"Waiting to run {call_brief(payload)}."),
-                                        action_path=(
-                                            f"/agents/{message.bot_id}/chat?session={session.id}"
-                                        ),
-                                        entity_id=run.id,
-                                        entity_type="run",
-                                        agent_id=message.bot_id,
-                                    )
-                                    await ndb.commit()
-                            except Exception:
-                                logger.debug(
-                                    "approval_required notification failed",
-                                    exc_info=True,
-                                )
-
-                        import asyncio as _asyncio
-
-                        _asyncio.create_task(_notify_approval_required())
-
-                    return receipt
-
-                async def _persisting_emitter(event_type: str, payload: dict) -> dict | None:
-                    async with run_db_lock:
-                        return await _persist_event(event_type, payload)
 
                 # Commit all pre-loop writes (run status, manifest, workspace,
                 # attachments) so the SQLite write lock is released before the
@@ -851,199 +776,106 @@ class Pipeline:
                     current_message_id=user_msg.id,
                     core_snapshot=core_snapshot,
                     trigger=trigger,
-                    event_emitter=_persisting_emitter,
+                    event_emitter=persister.emit,
                     attachments=attachment_context,
                     skill=message.skill,
                     resolved_skills=resolved_skills,
                 )
 
-                # Store the assistant's response
-                assistant_msg = Message(
-                    id=str(uuid.uuid4()),
-                    run_id=run.id,
-                    role="assistant",
-                    content=result.final_answer,
-                    seq=_msg_seq,
-                )
-                self.db.add(assistant_msg)
-                await self.db.flush()
-                from .models.source import RunSource
-                from .models.web_source import WebSource
-
-                source_rows = (
-                    (await self.db.execute(select(RunSource).where(RunSource.run_id == run.id)))
-                    .scalars()
-                    .all()
-                )
-                for source in source_rows:
-                    source.message_id = assistant_msg.id
-                web_source_rows = (
-                    (await self.db.execute(select(WebSource).where(WebSource.run_id == run.id)))
-                    .scalars()
-                    .all()
-                )
-                for source in web_source_rows:
-                    source.message_id = assistant_msg.id
-
-                # Index in messages FTS5 (episodic — exact recall via search_history)
-                await index_message(
-                    self.db,
-                    assistant_msg.id,
-                    run.id,
-                    session.id,
-                    agent_config.id,
-                    result.final_answer,
-                )
-
-                # Step 13: Record — close the Run
-                run.status = result.status
-                run.tokens_in = result.tokens_in
-                run.tokens_out = result.tokens_out
-                run.cost = result.total_cost
-                run.completed_at = datetime.now(UTC)
-                run.latency_ms = (
-                    int((run.completed_at - run.started_at).total_seconds() * 1000)
-                    if run.started_at
-                    else 0
-                )
-                if result.error:
-                    run.error = result.error
-
-                # Context and capability metadata for the run trace
-                run.context_tokens = result.context_tokens
-                run.max_context_tokens = result.max_context_tokens
-                run.compacted = result.compacted
-                run.context_breakdown = json.dumps(result.context_breakdown)
-                run.loaded_capabilities = json.dumps(result.loaded_capabilities)
-
-                # Update session activity
-                session.last_activity_at = datetime.now(UTC)
-
-                # Generate LLM-based session title once, 3 minutes after the
-                # session started. This avoids locking in a title from a
-                # "nothing" first message (e.g. "hello") — by 3 min there's
-                # usually a real conversation. title_generated gates it to a
-                # single attempt-set per session — without it every completed
-                # run re-fires a title call. Run in background — don't block
-                # message_complete on this.
-                if (
-                    result.final_answer
-                    and session.title
-                    and not session.title_generated
-                    and not run.is_test
-                ):
-                    started = session.started_at
-                    if started.tzinfo is None:
-                        started = started.replace(tzinfo=UTC)
-                    session_age = (datetime.now(UTC) - started).total_seconds()
-                    if session_age >= 180:  # 3 minutes
-                        import asyncio as _asyncio
-
-                        from .db import async_session_factory
-
-                        # Snapshot the PKs now — the session/run ORM objects
-                        # are expired by the commit below, and attribute
-                        # access inside the task would need a lazy refresh.
-                        title_session_id = session.id
-                        title_run_id = run.id
-
-                        async def _bg_title():
-                            try:
-                                # Phase 1: read messages + load provider (short transaction)
-                                async with async_session_factory() as bg_db:
-                                    stmt = (
-                                        select(Message)
-                                        .join(Run, Message.run_id == Run.id)
-                                        .where(Run.session_id == title_session_id)
-                                        .order_by(Message.created_at.desc())
-                                        .limit(20)
-                                    )
-                                    rows = (await bg_db.execute(stmt)).scalars().all()
-                                    all_msgs = list(reversed(rows))
-                                # Session is closed here — no transaction held during LLM call
-
-                                # Phase 2: LLM call with a fresh short-lived session
-                                # (LiteLLMAdapter needs db to load the provider, but
-                                # we commit immediately so no write lock is held)
-                                async with async_session_factory() as bg_db:
-                                    llm_title = await _generate_session_title_from_history(
-                                        bg_db,
-                                        agent_config,
-                                        all_msgs,
-                                        run_id=title_run_id,
-                                        session_id=title_session_id,
-                                    )
-                                    await bg_db.commit()
-
-                                if llm_title:
-                                    # Phase 3: write title + the once-only
-                                    # flag together (short transaction) — a
-                                    # failed generation leaves the flag unset
-                                    # so a later run may retry.
-                                    from sqlalchemy import update as sa_update
-
-                                    from .models.session import Session as SessionModel
-
-                                    async with async_session_factory() as bg_db:
-                                        await bg_db.execute(
-                                            sa_update(SessionModel)
-                                            .where(SessionModel.id == title_session_id)
-                                            .values(title=llm_title, title_generated=True)
-                                        )
-                                        await bg_db.commit()
-                            except Exception:
-                                logger.debug("Background title generation failed", exc_info=True)
-
-                        _asyncio.create_task(_bg_title())
-
-                await self.db.commit()
-                # Run went terminal + last_activity moved — wake the idle
-                # scheduler (deadline refresh + skipped-reflection retry).
-                from .memory.episodic import poke_session_sweeper
-
-                poke_session_sweeper()
+                # Step 13: Record — persist the outcome and close the Run
+                await self._record_result(run, session, agent_config, result, persister)
 
             except Exception:
-                # Pipeline exception — mark run as failed. Rollback first: a
-                # mid-flush DB error leaves this session unusable, and the run
-                # object may be expired — so the failure mark goes through a
-                # fresh session (otherwise the run stays 'pending' forever).
+                # Pipeline exception — mark run as failed (see
+                # _mark_run_failed for why this goes through a fresh session).
                 logger.exception("Pipeline run failed")
                 rid = run.id
                 await self.db.rollback()
-                from sqlalchemy import update as _sa_update
-
-                from .db import (
-                    async_session_factory as _sf,
-                )
-                from .db import (
-                    retry_locked_transaction as _rlt,
-                )
-
-                async with _sf() as fail_db:
-
-                    async def _mark_failed() -> None:
-                        await fail_db.execute(
-                            _sa_update(Run)
-                            .where(Run.id == rid)
-                            .values(
-                                status="failed",
-                                error="The agent run failed due to an internal error.",
-                                completed_at=datetime.now(UTC),
-                            )
-                        )
-                        await fail_db.commit()
-
-                    # Retry under lock contention — a single-shot commit can
-                    # itself hit a busy SQLite during a storm, orphaning the
-                    # run as 'running' (B31).
-                    await _rlt(_mark_failed, fail_db, f"mark_failed:{rid}")
-                from .memory.episodic import poke_session_sweeper
-
-                poke_session_sweeper()
+                await _mark_run_failed(rid)
                 raise
 
         return run
+
+    async def _record_result(
+        self,
+        run: Run,
+        session: Session,
+        agent_config: Any,
+        result: RunResult,
+        persister: RunEventPersister,
+    ) -> None:
+        """Step 13: persist the assistant reply, close the Run, schedule
+        the deferred session title, and commit."""
+        # Store the assistant's response
+        assistant_msg = Message(
+            id=str(uuid.uuid4()),
+            run_id=run.id,
+            role="assistant",
+            content=result.final_answer,
+            seq=persister.next_seq,
+        )
+        self.db.add(assistant_msg)
+        await self.db.flush()
+        from .models.source import RunSource
+        from .models.web_source import WebSource
+
+        source_rows = (
+            (await self.db.execute(select(RunSource).where(RunSource.run_id == run.id)))
+            .scalars()
+            .all()
+        )
+        for source in source_rows:
+            source.message_id = assistant_msg.id
+        web_source_rows = (
+            (await self.db.execute(select(WebSource).where(WebSource.run_id == run.id)))
+            .scalars()
+            .all()
+        )
+        for source in web_source_rows:
+            source.message_id = assistant_msg.id
+
+        # Index in messages FTS5 (episodic — exact recall via search_history)
+        from .memory.episodic import index_message
+
+        await index_message(
+            self.db,
+            assistant_msg.id,
+            run.id,
+            session.id,
+            agent_config.id,
+            result.final_answer,
+        )
+
+        # Close the Run
+        run.status = result.status
+        run.tokens_in = result.tokens_in
+        run.tokens_out = result.tokens_out
+        run.cost = result.total_cost
+        run.completed_at = datetime.now(UTC)
+        run.latency_ms = (
+            int((run.completed_at - run.started_at).total_seconds() * 1000) if run.started_at else 0
+        )
+        if result.error:
+            run.error = result.error
+
+        # Context and capability metadata for the run trace
+        run.context_tokens = result.context_tokens
+        run.max_context_tokens = result.max_context_tokens
+        run.compacted = result.compacted
+        run.context_breakdown = json.dumps(result.context_breakdown)
+        run.loaded_capabilities = json.dumps(result.loaded_capabilities)
+
+        # Update session activity
+        session.last_activity_at = datetime.now(UTC)
+
+        _maybe_schedule_session_title(session, run, agent_config, result)
+
+        await self.db.commit()
+        # Run went terminal + last_activity moved — wake the idle
+        # scheduler (deadline refresh + skipped-reflection retry).
+        from .memory.episodic import poke_session_sweeper
+
+        poke_session_sweeper()
 
     async def _resolve_contact(self, message: InboundMessage) -> Contact:
         """Step 4: Look up or create a Contact by (channel, bot_id, external_user_id)."""
