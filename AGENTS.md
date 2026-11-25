@@ -97,7 +97,7 @@ Defaults: `max_turns_per_run` 200, `session_idle_timeout_min` 5, `max_cost_per_r
 
 ## Built-in capabilities
 
-Registered in `capabilities/builtin.py` (+ `run_subagent`/`read_subagent` in `tools/subagent.py`). Kinds: `tool`, `memory`. Egress/approval flags are the mediation contract.
+Registered in `capabilities/builtin/` (per-domain modules; `run_subagent`/`read_subagent` in `tools/subagent.py`). Kinds: `tool`, `memory`. Egress/approval flags are the mediation contract.
 
 | Capability | Egress | Approval | Description |
 |---|---|---|---|
