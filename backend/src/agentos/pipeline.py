@@ -736,7 +736,8 @@ class Pipeline:
                     session_id=session.id,
                 )
 
-                # Set up syscall handler
+                # Set up syscall handler — shares the persister's db_lock so
+                # event writes and tool writes serialize on one AsyncSession.
                 syscall_handler = SyscallHandler(
                     db=self.db,
                     workspace_path=str(workspace_path),
