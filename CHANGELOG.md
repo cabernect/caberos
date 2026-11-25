@@ -11,11 +11,35 @@ versions.
 
 ## [Unreleased]
 
+## [0.2.5] — 2026-11-25 "Cleanup & Stability"
+
+### Changed
+
+- Organize the harness and inbound pipeline into named phases; extract run-event
+  persistence with one database lock shared by events and tool transactions.
+- Split built-in capability registration by domain, settings by tab, and
+  conversation rendering into focused components without changing public APIs.
+- Consolidate frontend upload/download requests and backend fresh-session
+  persistence helpers.
+- Remove the unused shadcn CLI and its dependency tree from app dependencies.
+
 ### Fixed
 
 - Serialize parallel tool-approval event persistence with tool database
   transactions. Concurrent commits on the shared run session could otherwise
   fail cleanup, leave SQLite locked, and prevent subsequent runs from starting.
+- Preserve authentication headers when combining frontend request options.
+- Reset slideshow state before preview controls become interactive, preventing
+  a late mount effect from closing a newly opened slideshow.
+
+### Security
+
+- Update Soup Sieve to 4.1.3 for CSS-selector resource-exhaustion fixes.
+- Update Astro to 7.4.13 for HTML attribute-injection and image-endpoint path
+  containment fixes. Website builds now require Node.js 22.23.4 or newer.
+- Apply compatible Rust cookie, URL parser, and filesystem patches. Remaining
+  upstream maintenance and Linux GLib findings are documented in
+  `docs/plans/v0.2.5-dependency-audit.md`; no advisories are suppressed.
 
 ## [0.2.4] — 2026-11-23 "Browser Continuity & Updates"
 

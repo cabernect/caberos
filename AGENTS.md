@@ -9,7 +9,7 @@ CaberOS is an open-source, local-first AI Agent Operating System. It hosts perso
 **Repo structure:** Monorepo — `/backend`, `/frontend`, `/website`, `/docs`, `/skills`, `/sandbox`, `/scripts`, `/design-system`
 **Desktop shell:** Tauri 2 (Rust) — `frontend/src-tauri/`
 **Container:** Docker + docker-compose — `backend/Dockerfile`, `frontend/Dockerfile`, `docker-compose.yml`
-**Current line:** v0.2.4 "Browser Continuity & Updates" is prepared for release: conversation-scoped browsers and tabs, update polling/manual re-check, and cache-hit percentage. Manifests are bumped; v0.2.3 remains the latest published release until the v0.2.4 release workflow completes.
+**Current line:** v0.2.5 "Cleanup & Stability" is in preparation: named harness/pipeline phases, per-domain capability registration, smaller settings/conversation components, shared API/persistence helpers, and the parallel-approval database-lock fix. v0.2.4 is the latest published release; bumped manifests do not mean v0.2.5 is published.
 See `docs/plans/v0.2.2-release-plan.md` and `docs/plans/v0.2.2/README.md`.
 PPTX/DOCX/XLSX creation/editing, HTML presentations, revision-bound rendering,
 and visual quality are planned requirements, not shipped capabilities. PPTX

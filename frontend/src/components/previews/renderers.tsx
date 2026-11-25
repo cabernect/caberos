@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { createPortal, flushSync } from "react-dom";
 import { ChevronLeft, ChevronRight, FileWarning, Loader2, Presentation, X, ZoomIn, ZoomOut } from "lucide-react";
 import type { PreviewBackend, PreviewSource } from "@/lib/api";
@@ -1559,7 +1559,9 @@ function DeckView({
   const srcKey = `${source.path ?? ""}|${source.artifactId ?? ""}|${source.revisionId ?? ""}|${source.sessionId ?? ""}`;
   const clamped = Math.min(index, Math.max(0, slides.length - 1));
 
-  useEffect(() => {
+  // Reset before controls become interactive; a passive reset can close a
+  // slideshow opened immediately after the preview loads.
+  useLayoutEffect(() => {
     setIndex(0);
     setMode("Slides");
     setPresenting(false);

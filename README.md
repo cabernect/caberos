@@ -31,6 +31,18 @@ An operating system's job is identity, permissions, resource accounting, mediate
 
 Adding a new integration (Notion, GitHub, Slack) is a new capability, not a new subsystem. The design doesn't change.
 
+## v0.2.5 — Cleanup & Stability (In Preparation)
+
+- Fix overlapping database commits during parallel tool approvals, which could
+  leave SQLite locked and prevent new runs from starting.
+- Organize the harness and pipeline into named phases, split built-in capability
+  registration by domain, and extract settings tabs and conversation renderers.
+- Consolidate frontend upload/download helpers and fresh-session persistence.
+- Audit dependencies and remove the unused shadcn CLI from app dependencies.
+
+No new features or updater behavior changes are planned. Version manifests are
+prepared for v0.2.5; v0.2.4 remains the latest published release.
+
 ## What's new in v0.2.1 — *Honest Vault, Workspace & Tools*
 
 *Implemented on `feat/v0.2.1`; release publication is a separate step. See the
@@ -62,7 +74,7 @@ and [v0.2.1 release plan](docs/plans/v0.2.1-release-plan.md).*
 - **v0.2.1 scope boundary** — the features above are implemented; remote SSH/Daytona/Modal execution, streaming STT, realtime Voice Mode, video generation, and agent-authored apps are not included.
 - **v0.2.2 — Connected Knowledge, Tasks & Richer Preview** — OneDrive/Google Drive connectors, Qdrant & external retrieval, durable tasks with triggers and channel approvals, plus rendered HTML preview and true visual renders for Office artifacts.
 - **v0.2.3 — Context Hotfix** — patch release: stored tool results replay under the same size bound the live path applied, `/compact` shrinks tail-only histories instead of reporting nothing to do, and `<noscript>` fallbacks render in the static HTML preview.
-- **v0.2.4 — Browser Continuity & Updates (release prepared)** — conversation-scoped browsers with tabs and Stop continuity, four-hour update polling with persistent manual checks, and cache-hit percentages in the context tooltip.
+- **v0.2.4 — Browser Continuity & Updates (released)** — conversation-scoped browsers with tabs and Stop continuity, four-hour update polling with persistent manual checks, and cache-hit percentages in the context tooltip.
 
 ## Features
 
