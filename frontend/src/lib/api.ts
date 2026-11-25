@@ -207,14 +207,15 @@ function authHeaders(): Record<string, string> {
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const base = await baseReady;
+  const { headers: optionHeaders, ...rest } = options;
   const resp = await fetch(`${base}${path}`, {
     credentials: "include",
+    ...rest,
     headers: {
       "Content-Type": "application/json",
       ...authHeaders(),
-      ...options.headers,
+      ...optionHeaders,
     },
-    ...options,
   });
   if (!resp.ok) throw await apiError(resp);
   if (resp.status === 204) return undefined as T;
@@ -234,6 +235,36 @@ async function downloadFile(path: string, filename: string): Promise<void> {
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+// Multipart upload → JSON. No Content-Type header: the browser must set the
+// multipart boundary itself.
+async function uploadJson<T>(path: string, form: FormData): Promise<T> {
+  const base = await baseReady;
+  const resp = await fetch(`${base}${path}`, {
+    method: "POST",
+    credentials: "include",
+    headers: authHeaders(),
+    body: form,
+  });
+  if (!resp.ok) throw await apiError(resp);
+  return resp.json() as Promise<T>;
+}
+
+async function requestBlob(path: string, options: RequestInit = {}): Promise<Blob> {
+  const base = await baseReady;
+  const { headers: optionHeaders, ...rest } = options;
+  const resp = await fetch(`${base}${path}`, {
+    credentials: "include",
+    ...rest,
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders(),
+      ...optionHeaders,
+    },
+  });
+  if (!resp.ok) throw await apiError(resp);
+  return resp.blob();
 }
 
 function _runsQs(params?: RunFilters): URLSearchParams {
@@ -710,15 +741,10 @@ export const api = {
   ): Promise<PreviewPayload> => {
     const formData = new FormData();
     formData.append("file", file);
-    const base = await baseReady;
-    const resp = await fetch(`${base}/api/agents/${id}/attachments/preview`, {
-      method: "POST",
-      credentials: "include",
-      headers: { ...authHeaders() },
-      body: formData,
-    });
-    if (!resp.ok) throw await apiError(resp);
-    return resp.json();
+    return uploadJson<PreviewPayload>(
+      `/api/agents/${id}/attachments/preview`,
+      formData,
+    );
   },
   previewUrl: (id: string, url: string) =>
     request<{ url: string; domain: string; title: string | null }>(
@@ -730,18 +756,13 @@ export const api = {
     request<{ scopes: KnowledgeScope[] }>("/api/knowledge/overview"),
   listKnowledgeDocuments: () =>
     request<{ documents: KnowledgeDocument[] }>("/api/knowledge/documents"),
-  uploadKnowledgeDocument: async (file: File) => {
+  uploadKnowledgeDocument: (file: File) => {
     const form = new FormData();
     form.append("file", file);
-    const base = await baseReady;
-    const response = await fetch(`${base}/api/knowledge/documents/upload`, {
-      method: "POST",
-      credentials: "include",
-      headers: authHeaders(),
-      body: form,
-    });
-    if (!response.ok) throw await apiError(response);
-    return response.json() as Promise<KnowledgeDocument>;
+    return uploadJson<KnowledgeDocument>(
+      "/api/knowledge/documents/upload",
+      form,
+    );
   },
   searchKnowledge: (query: string, limit = 5) =>
     request<{ results: KnowledgeResult[] }>("/api/knowledge/search", {
@@ -756,21 +777,13 @@ export const api = {
     request<{ documents: KnowledgeDocument[] }>(
       `/api/knowledge/scopes/${scope}/documents`,
     ),
-  uploadKnowledgeScope: async (scope: string, file: File) => {
+  uploadKnowledgeScope: (scope: string, file: File) => {
     const form = new FormData();
     form.append("file", file);
-    const base = await baseReady;
-    const response = await fetch(
-      `${base}/api/knowledge/scopes/${scope}/documents/upload`,
-      {
-        method: "POST",
-        credentials: "include",
-        headers: authHeaders(),
-        body: form,
-      },
+    return uploadJson<KnowledgeDocument>(
+      `/api/knowledge/scopes/${scope}/documents/upload`,
+      form,
     );
-    if (!response.ok) throw await apiError(response);
-    return response.json() as Promise<KnowledgeDocument>;
   },
   searchKnowledgeScope: (scope: string, query: string, limit = 5) =>
     request<{ results: KnowledgeResult[] }>(
@@ -1162,19 +1175,11 @@ export const api = {
   },
 
   // Data migration
-  importBackup: async (file: File) => {
+  importBackup: (file: File) => {
     const form = new FormData();
     form.append("file", file);
     form.append("mode", "merge");
-    const base = await baseReady;
-    const response = await fetch(`${base}/api/data/import`, {
-      method: "POST",
-      credentials: "include",
-      headers: authHeaders(),
-      body: form,
-    });
-    if (!response.ok) throw await apiError(response);
-    return response.json() as Promise<{ status: string }>;
+    return uploadJson<{ status: string }>("/api/data/import", form);
   },
   deleteAllData: () =>
     request<{ status: string; requires_relogin: boolean }>(
@@ -1391,7 +1396,7 @@ export const api = {
     fetchBlob(
       `/api/skills/${id}/export${revision != null ? `?revision=${revision}` : ""}`,
     ),
-  importSkillZip: async (
+  importSkillZip: (
     file: File,
     opts: { owner_agent_id?: string; paths?: string[] } = {},
   ): Promise<SkillImportResult> => {
@@ -1400,16 +1405,7 @@ export const api = {
     if (opts.owner_agent_id)
       formData.append("owner_agent_id", opts.owner_agent_id);
     if (opts.paths) formData.append("paths", JSON.stringify(opts.paths));
-    const base = await baseReady;
-    return fetch(`${base}/api/skills/import`, {
-      method: "POST",
-      credentials: "include",
-      headers: { ...authHeaders() },
-      body: formData,
-    }).then(async (r) => {
-      if (!r.ok) throw await apiError(r);
-      return r.json();
-    });
+    return uploadJson<SkillImportResult>("/api/skills/import", formData);
   },
   importSkillUrl: (body: {
     url: string;
@@ -1941,35 +1937,25 @@ export function getSpeechStatus(): Promise<SpeechStatus> {
 }
 
 /** Read-aloud synthesis for a persisted assistant message → audio bytes. */
-export async function synthesizeSpeech(messageId: string): Promise<Blob> {
-  const base = await baseReady;
-  const resp = await fetch(`${base}/api/speech/synthesize`, {
+export function synthesizeSpeech(messageId: string): Promise<Blob> {
+  return requestBlob("/api/speech/synthesize", {
     method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify({ message_id: messageId }),
   });
-  if (!resp.ok) throw await apiError(resp);
-  return resp.blob();
 }
 
 /** Dictation transcription — recorded blob → transcript. */
-export async function transcribeAudio(file: Blob, filename = "recording.webm"): Promise<{
+export async function transcribeAudio(
+  file: Blob,
+  filename = "recording.webm",
+): Promise<{
   request_id: string;
   transcript: string;
   provider: string | null;
   model: string;
   audio_seconds: number | null;
 }> {
-  const base = await baseReady;
   const form = new FormData();
   form.append("file", file, filename);
-  const resp = await fetch(`${base}/api/speech/transcribe`, {
-    method: "POST",
-    credentials: "include",
-    headers: authHeaders(),
-    body: form,
-  });
-  if (!resp.ok) throw await apiError(resp);
-  return resp.json();
+  return uploadJson("/api/speech/transcribe", form);
 }
