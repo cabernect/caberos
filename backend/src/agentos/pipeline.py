@@ -5,6 +5,7 @@ scheduler (plan 12) call pipeline.handle_inbound() to trigger a run.
 The pipeline is channel-agnostic.
 """
 
+import asyncio
 import json
 import logging
 import uuid
@@ -619,10 +620,14 @@ class Pipeline:
                     await self.db.flush()
 
                 # Set up syscall handler
+                # Tools and their event callbacks share this AsyncSession.
+                # Both must serialize DB access, not just the tool writers.
+                run_db_lock = asyncio.Lock()
                 syscall_handler = SyscallHandler(
                     db=self.db,
                     workspace_path=str(workspace_path),
                     sandbox_mode=agent_config.sandbox_mode,
+                    db_lock=run_db_lock,
                 )
 
                 # Scripted test runs are headless — the mediator auto-resolves
@@ -656,7 +661,7 @@ class Pipeline:
                 # call's terminal receipt is built.
                 _narration_ids: dict[str | None, str] = {}
 
-                async def _persisting_emitter(event_type: str, payload: dict) -> dict | None:
+                async def _persist_event(event_type: str, payload: dict) -> dict | None:
                     """Emit + persist; returns a receipt {assistant_message_id,
                     tool_message_id} when a tool outcome was persisted, else
                     None. Receipts are cached per call id — duplicate terminal
@@ -824,6 +829,10 @@ class Pipeline:
                         _asyncio.create_task(_notify_approval_required())
 
                     return receipt
+
+                async def _persisting_emitter(event_type: str, payload: dict) -> dict | None:
+                    async with run_db_lock:
+                        return await _persist_event(event_type, payload)
 
                 # Commit all pre-loop writes (run status, manifest, workspace,
                 # attachments) so the SQLite write lock is released before the

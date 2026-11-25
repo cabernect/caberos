@@ -9,6 +9,14 @@ Each GitHub release attaches the same desktop artifacts: a macOS Apple Silicon
 and `latest.json` — the manifest the in-app updater polls to discover new
 versions.
 
+## [Unreleased]
+
+### Fixed
+
+- Serialize parallel tool-approval event persistence with tool database
+  transactions. Concurrent commits on the shared run session could otherwise
+  fail cleanup, leave SQLite locked, and prevent subsequent runs from starting.
+
 ## [0.2.4] — 2026-11-23 "Browser Continuity & Updates"
 
 ### Added
