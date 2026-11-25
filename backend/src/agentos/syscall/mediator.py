@@ -55,8 +55,8 @@ class _SessionWriteLock:
     of leaving it in a failed transaction (PendingRollbackError cascades).
     """
 
-    def __init__(self, session: AsyncSession) -> None:
-        self._lock = asyncio.Lock()
+    def __init__(self, session: AsyncSession, lock: asyncio.Lock | None = None) -> None:
+        self._lock = lock if lock is not None else asyncio.Lock()
         self._session = session
 
     async def __aenter__(self) -> "_SessionWriteLock":
@@ -95,6 +95,7 @@ class SyscallHandler:
         workspace_path: str,
         sandbox_mode: str = "strict",
         restrictions: ExecutionRestrictions | None = None,
+        db_lock: asyncio.Lock | None = None,
     ) -> None:
         self.db = db
         self.workspace_path = workspace_path
@@ -107,7 +108,7 @@ class SyscallHandler:
         # calls concurrently, but SQLAlchemy async sessions are not safe
         # for concurrent flush/commit. The lock also closes the write txn
         # on section exit so no transaction spans a slow sibling tool call.
-        self._db_lock = _SessionWriteLock(db)
+        self._db_lock = _SessionWriteLock(db, lock=db_lock)
 
     async def _write_audit(self, audit: AuditRecord) -> None:
         """Persist an audit row on its own session with lock-retry.
